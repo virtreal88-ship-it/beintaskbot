@@ -234,8 +234,13 @@ def _lock_accounts_capability_scope(cur, tenant):
                 (str(tenant) + ":operator-accounts-capability",))
 
 
-def first_company_batch_enabled():
-    return os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH") == "1"
+def first_company_batch_preview_enabled():
+    return os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_PREVIEW") == "1"
+
+
+def first_company_batch_confirm_enabled():
+    return (first_company_batch_preview_enabled()
+            and os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM") == "1")
 
 
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
@@ -260,7 +265,7 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "pending_auth_accounts_access_verified": bool(pending_auth_accounts_access_verified),
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "accounts_only_ready": bool(accounts_only_ready),
-        "first_company_batch_enabled": first_company_batch_enabled(),
+        "first_company_batch_preview_enabled": first_company_batch_preview_enabled(),
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
             if hasattr(pending_auth_received_at, "isoformat")
@@ -1233,8 +1238,13 @@ def imported_accounts(profile, *, search="", limit=100):
 def _dialog_company_route(cur, profile, channel, conversation, action):
     from tenant_operator_access import access, assert_route
     tenant, actor, policy = access(cur, profile, "dialogs", action)
+    from tenant_dialog_company_completion import enabled as company_completion_enabled
+    use_canonical = False
+    if company_completion_enabled(tenant):
+        from tenant_dialog_lifecycle import enabled as lifecycle_enabled
+        use_canonical = lifecycle_enabled(cur, tenant)
     route = assert_route(cur, tenant, policy, "connect", conversation=conversation,
-                         channel=channel, action=action)
+                         channel=channel, action=action, allow_merged=use_canonical)
     return tenant, actor, route
 
 

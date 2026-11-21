@@ -78,6 +78,7 @@ ASSETS = (
     ('/assets/browser-call-audio.js', 'browser-call-audio.js', 'no-store'),
     ('/assets/tenant-dialog-composer.js', 'tenant-dialog-composer.js', 'no-store'),
     ('/assets/tenant-dialog-reply-templates.js', 'tenant-dialog-reply-templates.js', 'no-store'),
+    ('/assets/tenant-personal-dialog-reminders.js', 'tenant-personal-dialog-reminders.js', 'no-store'),
     ('/assets/tenant-copilot-voice-audio.js', 'tenant-copilot-voice-audio.js', 'no-store'),
     ('/assets/tenant-copilot-voice-controller.js', 'tenant-copilot-voice-controller.js', 'no-store'),
     ('/assets/tenant-copilot-voice-channel.js', 'tenant-copilot-voice-channel.js', 'no-store'),

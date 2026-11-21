@@ -74,10 +74,20 @@ def _decode_first_batch_receipt(receipt):
     return claims
 
 
+def _require_first_batch_confirm_enabled(enabled=None):
+    if enabled is None:
+        enabled = operator.first_company_batch_confirm_enabled()
+    if not enabled:
+        raise operator.OperatorError("Создание компаний из первой выборки отключено.", 403)
+
+
 def first_company_batch(profile, *, receipt=None):
     """Explicit owner-only first batch; separate one-run consent from single-account grant."""
-    if not operator.first_company_batch_enabled():
+    if not operator.first_company_batch_preview_enabled():
         raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
+    preview_may_mint = operator.first_company_batch_confirm_enabled()
+    if receipt is not None:
+        _require_first_batch_confirm_enabled(preview_may_mint)
     claims = None if receipt is None else _decode_first_batch_receipt(receipt)
     tenant, actor, source, credentials = _selected_source_credentials(profile)
     if source != "accounts_only":
@@ -100,7 +110,8 @@ def first_company_batch(profile, *, receipt=None):
     accounts = _first_batch_payload(response)
     _selected_source_fence(profile, tenant, actor, source, credentials)
     return _apply_company_import(profile, tenant, actor, accounts, credentials,
-        first_batch=True, preview_receipt=receipt, preview_scope=scope)
+        first_batch=True, preview_receipt=receipt, preview_scope=scope,
+        preview_may_mint=preview_may_mint)
 
 
 
@@ -441,7 +452,8 @@ def _assert_first_batch_not_expired(cur, tenant, actor, credentials):
 
 
 def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
-                          first_batch=False, preview_receipt=None, preview_scope=None):
+                          first_batch=False, preview_receipt=None, preview_scope=None,
+                          preview_may_mint=True):
     try:
         instance_id = str(uuid.UUID(credentials["connection_instance_id"]))
     except (TypeError, ValueError, KeyError):
@@ -574,12 +586,17 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                 _assert_first_batch_not_expired(cur, tenant, actor, credentials)
                 digest = _first_batch_digest(plan)
                 if preview_receipt is None:
-                    payload = {"purpose": _FIRST_BATCH_PURPOSE, "nonce": str(uuid.uuid4()),
-                               "scope": preview_scope, "digest": digest}
-                    receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
-                    return {"receipt": receipt.decode("ascii"), "checked": len(accounts),
-                            "partial": True, "limit": FIRST_BATCH_LIMIT,
-                            "rows": [{"account": a["account"], "action": a["action"]} for a in plan]}
+                    preview = {"checked": len(accounts), "partial": True, "limit": FIRST_BATCH_LIMIT,
+                               "rows": [{"account": a["account"], "action": a["action"]} for a in plan]}
+                    # Preview-only mode never mints a receipt that could become
+                    # usable when confirmation is eventually turned on.
+                    if preview_may_mint and operator.first_company_batch_confirm_enabled():
+                        payload = {"purpose": _FIRST_BATCH_PURPOSE, "nonce": str(uuid.uuid4()),
+                                   "scope": preview_scope, "digest": digest}
+                        receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
+                        preview["receipt"] = receipt.decode("ascii")
+                    return preview
+                _require_first_batch_confirm_enabled()
                 claims = _decode_first_batch_receipt(preview_receipt)
                 if claims["scope"] != preview_scope or claims["digest"] != digest:
                     raise operator.OperatorError("Выборка или план изменились. Откройте новый предпросмотр.", 409)

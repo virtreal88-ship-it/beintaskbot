@@ -82,7 +82,7 @@
       const createCompaniesButton=connection.querySelector('[data-create-companies]');
       if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
       const firstBatchButton=connection.querySelector('[data-first-company-batch]');
-      if(firstBatchButton)firstBatchButton.hidden=!(state.first_company_batch_enabled &&
+      if(firstBatchButton)firstBatchButton.hidden=!(state.first_company_batch_preview_enabled &&
         state.accounts_only_ready && !state.configured && !state.connected);
     };
     renderStatus();
@@ -282,9 +282,16 @@
         const heading=document.createElement('p');
         heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
         const rows=document.createElement('ul');
-        const names={create:'Создать',reuse:'Уже есть, без изменений',manual_review:'Ручная проверка'};
+        const canConfirm=typeof preview.receipt==='string' && !!preview.receipt;
+        const names={create:canConfirm?'Создать':'Кандидат на создание',reuse:'Уже есть, без изменений',manual_review:'Ручная проверка'};
         for(const row of preview.rows){
           const item=document.createElement('li');item.textContent=row.account+' · '+names[row.action];rows.append(item);
+        }
+        if (!canConfirm) {
+          const note=document.createElement('p');
+          note.textContent='Доступен только предпросмотр. CRM-компании не создаются.';
+          batchHost.append(heading,rows,note);
+          return {message: note.textContent};
         }
         const confirm=document.createElement('button');confirm.type='button';
         confirm.dataset.firstBatchConfirm='';

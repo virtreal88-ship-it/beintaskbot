@@ -39,6 +39,7 @@ def state(monkeypatch):
         return psycopg.connect(dsn, row_factory=dict_row, options=f"-csearch_path={schema}")
 
     profile = {"role": "owner", "active": True, "tenant_id": tenant, "telegram_id": actor}
+    monkeypatch.setattr(batch.operator, "first_company_batch_confirm_enabled", lambda: True)
     monkeypatch.setattr(batch.operator, "_connect", connect)
     monkeypatch.setattr(batch.operator, "_ensure_schema", lambda *_: None)
     monkeypatch.setattr(batch.operator, "_current_profile", lambda *_: profile)
@@ -222,3 +223,19 @@ def test_capability_expires_while_waiting_for_import_lock(state, monkeypatch):
     with connect() as c:
         assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies").fetchone()["n"] == 0
         assert c.execute("SELECT count(*) AS n FROM saas_tenant_audit_events").fetchone()["n"] == 0
+
+
+def test_preview_only_cannot_mint_or_commit_a_previous_receipt(state, monkeypatch):
+    connect, run, _ = state
+    receipt = run(["new"])["receipt"]
+    monkeypatch.setattr(batch.operator, "first_company_batch_confirm_enabled", lambda: False)
+    preview = run(["new"])
+    assert preview["rows"] == [{"account": "new", "action": "create"}]
+    assert "receipt" not in preview
+    with pytest.raises(batch.operator.OperatorError) as err:
+        run(["new"], receipt)
+    assert err.value.status == 403
+    with connect() as c:
+        for table in ("saas_crm_native_companies", "saas_tenant_audit_events",
+                      "saas_beinsystems_operator_company_imports"):
+            assert c.execute(f"SELECT count(*) AS n FROM {table}").fetchone()["n"] == 0

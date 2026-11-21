@@ -23,11 +23,28 @@ class FirstBatchTests(unittest.TestCase):
                 batch._first_batch_payload(malformed)
 
     def test_disabled_gate_no_source_opened(self):
-        with patch.object(batch.operator, "first_company_batch_enabled", return_value=False), \
+        with patch.object(batch.operator, "first_company_batch_preview_enabled", return_value=False), \
                 patch.object(batch, "_selected_source_credentials") as source:
             with self.assertRaises(batch.operator.OperatorError):
                 batch.first_company_batch({})
             source.assert_not_called()
+
+    def test_preview_flag_never_admits_confirmation(self):
+        with patch.dict(batch.operator.os.environ, {
+            "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_PREVIEW": "1",
+            "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM": "0",
+        }), patch.object(batch, "_selected_source_credentials") as source:
+            self.assertTrue(batch.operator.first_company_batch_preview_enabled())
+            self.assertFalse(batch.operator.first_company_batch_confirm_enabled())
+            with self.assertRaises(batch.operator.OperatorError) as err:
+                batch.first_company_batch({}, receipt="opaque")
+            self.assertEqual(err.exception.status, 403)
+            source.assert_not_called()
+        with patch.dict(batch.operator.os.environ, {
+            "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_PREVIEW": "0",
+            "BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM": "1",
+        }):
+            self.assertFalse(batch.operator.first_company_batch_confirm_enabled())
 
     def test_only_verified_source_then_exact_documented_read(self):
         ident = "owner@example"
@@ -35,7 +52,7 @@ class FirstBatchTests(unittest.TestCase):
                 "generation": "new", "connection_instance_id": "instance",
                 "identity_fingerprint": batch._identifier_fingerprint(ident)}
         valid = {"status": "success", "data": {"identifier": ident, "role": "unlimited"}}
-        with patch.object(batch.operator, "first_company_batch_enabled", return_value=True), \
+        with patch.object(batch.operator, "first_company_batch_preview_enabled", return_value=True), \
                 patch.object(batch, "_selected_source_credentials", return_value=("t", 1, "accounts_only", cred)), \
                 patch.object(batch, "_selected_source_fence") as fence, \
                 patch.object(batch.operator, "_record_operator_read"), \
@@ -78,6 +95,8 @@ class FirstBatchTests(unittest.TestCase):
             stack.enter_context(patch.object(batch.operator, "_current_profile", return_value=profile))
             stack.enter_context(patch.object(batch.operator, "_fernet", return_value=Fernet(Fernet.generate_key())))
             stack.enter_context(patch.object(batch, "_assert_first_batch_not_expired"))
+            gate = stack.enter_context(patch.object(batch.operator, "first_company_batch_confirm_enabled",
+                                                    return_value=False))
             locked = stack.enter_context(patch.object(batch, "_lock_and_check_selected_source"))
             stack.enter_context(patch.object(batch, "current_access", return_value={}))
             stack.enter_context(patch.object(batch, "TenantPolicy")).return_value.has_scoped_access.return_value = False
@@ -89,6 +108,10 @@ class FirstBatchTests(unittest.TestCase):
             def mutations():
                 return [call.args[0] for call in cur.execute.call_args_list
                         if "INSERT INTO" in call.args[0]]
+            preview_only = run(["a"])
+            self.assertNotIn("receipt", preview_only)
+            self.assertEqual(preview_only["rows"], [{"account": "a", "action": "create"}])
+            gate.return_value = True
             preview = run(["a"])
             self.assertEqual(preview["rows"], [{"account": "a", "action": "create"}])
             self.assertTrue(preview["partial"])
@@ -104,7 +127,7 @@ class FirstBatchTests(unittest.TestCase):
             self.assertIn("ON CONFLICT(id) DO NOTHING", mutations()[0])
             self.assertIn("INSERT INTO saas_crm_native_companies", mutations()[1])
             mapping.assert_called_once()
-            self.assertEqual(locked.call_count, 4)
+            self.assertEqual(locked.call_count, 5)
             conn.commit.assert_called_once()
             cur.fetchone.return_value = None
             before = len(mutations())
