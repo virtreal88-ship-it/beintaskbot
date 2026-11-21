@@ -225,7 +225,7 @@
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl,restoreRetained=false;
         try{
-          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');if(photoAuto)query.set('auto_preview','1');let blob=mediaCache.get(cacheKey),contentLength='',servedFilename=host.dataset.mediaFilename||'';
+          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');if(photoAuto)query.set('auto_preview','1');let blob=mediaCache.get(cacheKey),servedFilename=host.dataset.mediaFilename||'';
           if(cachedOnly&&!blob)return;
           if(blob){mediaCache.delete(cacheKey);mediaCache.set(cacheKey,blob);}
           else{
@@ -234,7 +234,7 @@
             if(!valid()&&!canRetain())return;
             if(serverCacheOnly&&response.status===204){if(valid()){host.dataset.mediaPreviewState='unloaded';status.textContent='';}return 'cache_miss';}
             if(!response.ok){if(photoAuto&&[404,410].includes(response.status))host.dataset.photoAutoFailed='true';photoBackpressure(host,response);const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
-            servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));contentLength=response.headers.get('Content-Length')||'';
+            servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;
             while(true){
@@ -264,10 +264,15 @@
           }else if(['video/mp4','video/webm'].includes(type)){
             node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.preload='metadata';media=node;
           }else{
-            node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.target='_blank';node.rel='noopener';node.download=servedFilename||'attachment';node.textContent=servedFilename||text('downloadAttachment','Download attachment');
-            const meta=host.querySelector('[data-media-meta]');if(meta?.dataset)meta.textContent=[servedFilename,type==='application/pdf'?'PDF':type,formatSize(contentLength||blob.size)].filter(Boolean).join(' · ');
+            node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.target='_blank';node.rel='noopener';node.download=servedFilename||'attachment';
+            node.textContent=host.querySelector('[data-media-title]')?text('downloadAttachment','Download attachment'):servedFilename||text('downloadAttachment','Download attachment');
           }
-          const loadedMeta=host.querySelector('[data-media-meta]');if(loadedMeta)loadedMeta.textContent=[servedFilename,type==='application/pdf'?'PDF':'',formatSize(blob.size)].filter(Boolean).join(' · ');
+          const title=host.querySelector('[data-media-title]');
+          if(title&&window.tenantOperator?.attachmentLabel&&!host.querySelector('.operator-audio-duration')){
+            title.textContent=window.tenantOperator.attachmentLabel({message_type:expected,media_filename:host.dataset.mediaFilename,external_id:host.dataset.chatAttachment},servedFilename,type);
+          }
+          const loadedMeta=host.querySelector('[data-media-meta]');
+          if(loadedMeta)loadedMeta.textContent=title?formatSize(blob.size):[servedFilename,type==='application/pdf'?'PDF':'',formatSize(blob.size)].filter(Boolean).join(' · ');
           if(node.tagName!=='A'){
             media.onerror=()=>{previews.delete(blobUrl);if(valid()){void failAudio(host,intentBinding,415);stop(media);loadedKeys.delete(cacheKey);const invalidBlob=mediaCache.get(cacheKey);if(invalidBlob===blob){cacheBytes-=invalidBlob.size;mediaCache.delete(cacheKey);}if(node.classList?.contains('operator-native-audio')){node.removeAttribute('src');node.load?.();delete node.dataset.mediaPreview;}else node.remove();host.dataset.mediaPreviewState='invalid';button.hidden=!!host.querySelector('.operator-native-audio');status.textContent=' '+text('mediaInvalid','Fayl açıla bilmədi. Yenidən yoxlayın.');updateMediaMenu(host);}URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);};
             if(media.tagName!=='AUDIO')media.src=blobUrl;

@@ -47,6 +47,9 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(dialog_sources,profile)
                 elif resource=='group_participants':
                     result=await get_participants(profile,dict(query))
+                elif resource=='transfer_details':
+                    from tenant_dialog_lifecycle import transfer_details
+                    result=await asyncio.to_thread(transfer_details,profile,dict(query))
                 elif resource=='contact_phone':
                     from tenant_contact_phone import get_phone
                     result=await get_phone(profile,dict(query))
