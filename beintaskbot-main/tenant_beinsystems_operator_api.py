@@ -198,25 +198,32 @@ def dialog_company_handler(member: Callable, origin: str, logger):
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
         try:
+            from tenant_dialog_company_binding import binding as exact_binding
+            legacy = {"channel_id", "conversation_id"}
+            exact = legacy | {"provider", "lead_id"}
             if request.method == "GET":
                 query = dict(request.query)
                 _context(query, profile)
-                binding = await asyncio.to_thread(operator.dialog_company_binding, profile,
-                    channel_id=query.get("channel_id", ""),
-                    conversation_id=query.get("conversation_id", ""))
-                return _json_response({"binding": binding})
+                fields = set(query) - {"expected_tenant_id", "expected_user_id"}
+                if fields == exact:
+                    found = await asyncio.to_thread(exact_binding, profile,
+                        **{key: query[key] for key in exact})
+                elif fields == legacy:
+                    found = await asyncio.to_thread(operator.dialog_company_binding, profile,
+                        channel_id=query["channel_id"], conversation_id=query["conversation_id"])
+                else:
+                    raise operator.OperatorError("Поля привязки компании некорректны.")
+                return _json_response({"binding": found})
             data = await _body(request, profile, origin)
-            expected = {"channel_id", "conversation_id"}
-            if set(data) == expected:
-                company_id = None
-            elif set(data) == expected | {"company_id"}:
-                company_id = data.get("company_id")
+            if set(data) == exact | {"company_id"}:
+                found = await asyncio.to_thread(exact_binding, profile, **data)
+            elif set(data) in (legacy, legacy | {"company_id"}):
+                found = await asyncio.to_thread(operator.set_dialog_company_binding, profile,
+                    channel_id=data["channel_id"], conversation_id=data["conversation_id"],
+                    company_id=data.get("company_id"))
             else:
                 raise operator.OperatorError("Поля привязки компании некорректны.")
-            binding = await asyncio.to_thread(operator.set_dialog_company_binding, profile,
-                channel_id=data["channel_id"], conversation_id=data["conversation_id"],
-                company_id=company_id)
-            return _json_response({"binding": binding})
+            return _json_response({"binding": found})
         except operator.OperatorError as error:
             return web.json_response({"success": False, "error": str(error)}, status=error.status,
                                      headers={"Cache-Control": "no-store"})

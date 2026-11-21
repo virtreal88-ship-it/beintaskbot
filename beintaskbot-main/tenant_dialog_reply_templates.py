@@ -55,6 +55,20 @@ def migrate(cur):
       WHERE deleted_at IS NULL""")
 
 
+def provision_schema(cur):
+    """Try to install only absent template objects; never repair an existing one."""
+    if not _schema_ready(cur):
+        # Creating the FKs will need these existing parent-table locks.
+        # Fail before any template DDL instead of queueing behind live writes.
+        cur.execute("""LOCK TABLE saas_tenant_members,saas_tenant_departments
+                        IN SHARE ROW EXCLUSIVE MODE NOWAIT""")
+        # An independently authorized preflight could have created the
+        # relation after the first look. Never modify an existing shape.
+        if not _schema_ready(cur):
+            migrate(cur)
+    verify_provisioned_schema(cur)
+
+
 _EXPECTED_COLUMNS = (
     ("tenant_id", "uuid", True, None),
     ("id", "uuid", True, None),
