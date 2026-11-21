@@ -3,9 +3,9 @@
   'use strict';
   const endpoint='/api/platform/ai/dialogs/reply-templates';
   const words={
-    ru:{button:'Шаблоны',manage:'Управлять шаблонами',title:'Шаблоны ответов',new:'Новый шаблон',use:'Вставить в черновик',edit:'Изменить',remove:'Удалить',close:'Закрыть',name:'Название',body:'Текст шаблона',visibility:'Доступ',personal:'Личный',team:'Команде',shared:'Общий',save:'Сохранить',cancel:'Отмена',loading:'Загружаю шаблоны…',empty:'Пока нет доступных шаблонов.',hint:'Выбор только вставит текст в черновик. Отправка остаётся за вами.',saved:'Шаблон сохранён.',deleted:'Шаблон удалён.',error:'Не удалось загрузить или сохранить шаблоны.',suggestions:'Похожие шаблоны',unavailable:'Управление шаблонами недоступно.'},
-    az:{button:'Şablonlar',manage:'Şablonları idarə et',title:'Cavab şablonları',new:'Yeni şablon',use:'Qaralamaya əlavə et',edit:'Dəyişdir',remove:'Sil',close:'Bağla',name:'Ad',body:'Şablon mətni',visibility:'Giriş',personal:'Şəxsi',team:'Komanda',shared:'Ümumi',save:'Yadda saxla',cancel:'Ləğv et',loading:'Şablonlar yüklənir…',empty:'Əlçatan şablon yoxdur.',hint:'Seçim mətni yalnız redaktə edilə bilən qaralamaya əlavə edir. Göndərmə sizin qərarınızdır.',saved:'Şablon saxlanıldı.',deleted:'Şablon silindi.',error:'Şablonları yükləmək və ya saxlamaq mümkün olmadı.',suggestions:'Oxşar şablonlar',unavailable:'Şablonların idarə edilməsi əlçatan deyil.'},
-    en:{button:'Templates',manage:'Manage templates',title:'Reply templates',new:'New template',use:'Insert into draft',edit:'Edit',remove:'Delete',close:'Close',name:'Name',body:'Template text',visibility:'Access',personal:'Personal',team:'Team',shared:'Shared',save:'Save',cancel:'Cancel',loading:'Loading templates…',empty:'No templates are available yet.',hint:'Selecting a template only inserts text into the editable draft. You decide when to send.',saved:'Template saved.',deleted:'Template deleted.',error:'Could not load or save templates.',suggestions:'Similar templates',unavailable:'Template management is unavailable.'}
+    ru:{button:'Шаблоны',manage:'Управлять шаблонами',title:'Шаблоны ответов',new:'Новый шаблон',use:'Вставить в черновик',edit:'Изменить',remove:'Удалить',close:'Закрыть',name:'Название',body:'Текст шаблона',visibility:'Доступ',personal:'Личный',team:'Команде',shared:'Общий',save:'Сохранить',cancel:'Отмена',loading:'Загружаю шаблоны…',empty:'Пока нет доступных шаблонов.',replace:'Заменить',hint:'Шаблон добавляется к черновику. Отправка остаётся за вами.',saved:'Шаблон сохранён.',deleted:'Шаблон удалён.',error:'Не удалось загрузить или сохранить шаблоны.',suggestions:'Похожие шаблоны',unavailable:'Управление шаблонами недоступно.'},
+    az:{button:'Şablonlar',manage:'Şablonları idarə et',title:'Cavab şablonları',new:'Yeni şablon',use:'Qaralamaya əlavə et',edit:'Dəyişdir',remove:'Sil',close:'Bağla',name:'Ad',body:'Şablon mətni',visibility:'Giriş',personal:'Şəxsi',team:'Komanda',shared:'Ümumi',save:'Yadda saxla',cancel:'Ləğv et',loading:'Şablonlar yüklənir…',empty:'Əlçatan şablon yoxdur.',replace:'Əvəz et',hint:'Şablon qaralamaya əlavə olunur. Göndərməyə siz qərar verirsiniz.',saved:'Şablon saxlanıldı.',deleted:'Şablon silindi.',error:'Şablonları yükləmək və ya saxlamaq mümkün olmadı.',suggestions:'Oxşar şablonlar',unavailable:'Şablonların idarə edilməsi əlçatan deyil.'},
+    en:{button:'Templates',manage:'Manage templates',title:'Reply templates',new:'New template',use:'Insert into draft',edit:'Edit',remove:'Delete',close:'Close',name:'Name',body:'Template text',visibility:'Access',personal:'Personal',team:'Team',shared:'Shared',save:'Save',cancel:'Cancel',loading:'Loading templates…',empty:'No templates are available yet.',replace:'Replace',hint:'The template is added to the draft. You decide when to send.',saved:'Template saved.',deleted:'Template deleted.',error:'Could not load or save templates.',suggestions:'Similar templates',unavailable:'Template management is unavailable.'}
   };
   const copy=key=>(words[window.tenantI18n?.language]||words.az)[key]||key;
   const icons={
@@ -35,6 +35,10 @@
     '.operator-reply-template-suggestions>strong{display:block;padding:7px 9px;color:var(--muted,#64776f);font-size:12px}',
     '.operator-reply-template-suggestions button{display:grid;width:100%;min-height:44px;gap:3px;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;white-space:normal}',
     '.operator-reply-template-suggestions button:hover,.operator-reply-template-suggestions button:focus-visible{background:var(--paper,#f4f8f5)}',
+    '.operator-reply-template-suggestion{display:flex;align-items:center;gap:4px}',
+    '.operator-reply-template-suggestion>button:first-child{flex:1;min-width:0}',
+    '.operator-reply-template-suggestion>button:first-child span{overflow-wrap:anywhere}',
+    '.operator-reply-template-suggestion .operator-reply-template-replace{display:block;flex:0 0 auto;width:auto;min-width:44px;font-size:12px;color:var(--brand-deep,#14523c);white-space:nowrap}',
     '.operator-reply-template-suggestions small{overflow:hidden;color:var(--muted,#64776f);text-overflow:ellipsis;white-space:nowrap}',
   ].join('')+`
     #operatorReplyTemplatesOpen,
@@ -143,11 +147,26 @@
   const composerRoot=()=>document.querySelector('#view-dialogs.active #operatorConversationContent [data-operator-dialog] .operator-composer');
   const canInsert=state=>state===mounted&&identity()?.key===state.identity&&window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates===true&&
     state.input.isConnected&&state.root===composerRoot()&&!state.input.disabled&&!state.input.readOnly;
-  function insert(item,state){
+  function completesPrefix(current,body,input){
+    const prefix=current.normalize('NFC');
+    // Offer an explicit replacement only for a bare short fragment that
+    // actually starts the first word. Even a matching fragment can be a
+    // deliberate short word, so it is never discarded by ordinary insertion.
+    if(!/^\p{L}{2,4}$/u.test(prefix)||input.selectionStart!==current.length||input.selectionEnd!==current.length)return false;
+    const firstWord=body.normalize('NFC').match(/^\p{L}+/u)?.[0];
+    if(!firstWord)return false;
+    const language=window.tenantI18n?.language;
+    const locale=language==='ru'||language==='en'?language:'az';
+    const typed=prefix.toLocaleLowerCase(locale),start=firstWord.toLocaleLowerCase(locale);
+    return start.length>typed.length&&start.startsWith(typed);
+  }
+  function insert(item,state,replacePrefix=null){
     if(!canInsert(state))return false;
-    // A selected reply template is the complete draft, not an addition to a
-    // partially typed search prefix (for example "Sa" before "Salam").
-    state.input.value=item.body;
+    const {input}=state,current=input.value,body=String(item.body||'');
+    if(!body)return false;
+    if(replacePrefix!==null&&(current!==replacePrefix||!completesPrefix(current,body,input)))return false;
+    input.value=!current||replacePrefix!==null
+      ?body:current+(current.endsWith('\n')?'':'\n')+body;
     state.input.dispatchEvent(new Event('input',{bubbles:true}));
     state.input.focus();
     try{state.input.setSelectionRange(state.input.value.length,state.input.value.length);}catch{}
@@ -181,11 +200,22 @@
     if(!matches.length){state.suggestions.hidden=true;return;}
     const title=document.createElement('strong');title.textContent=copy('suggestions');state.suggestions.append(title);
     for(const {item} of matches){
+      const row=document.createElement('div');row.className='operator-reply-template-suggestion';
       const button=document.createElement('button');button.type='button';
       const name=document.createElement('span');name.textContent=item.name;
       const snippet=document.createElement('small');snippet.textContent=String(item.body||'').replace(/\s+/g,' ').slice(0,140);
       button.append(name,snippet);button.setAttribute('aria-label',copy('use')+': '+item.name);
-      button.addEventListener('click',()=>insert(item,state));state.suggestions.append(button);
+      button.addEventListener('click',()=>insert(item,state));row.append(button);
+      const prefix=state.input.value;
+      if(completesPrefix(prefix,String(item.body||''),state.input)){
+        const replace=document.createElement('button');replace.type='button';
+        replace.className='operator-reply-template-replace';replace.dataset.replyTemplateReplace='';
+        replace.textContent=copy('replace')+' «'+prefix+'»';
+        replace.setAttribute('aria-label',replace.textContent+': '+item.name);
+        replace.addEventListener('click',()=>{if(!insert(item,state,prefix))renderSuggestions(state);});
+        row.append(replace);
+      }
+      state.suggestions.append(row);
     }
     state.suggestions.hidden=false;
   }
