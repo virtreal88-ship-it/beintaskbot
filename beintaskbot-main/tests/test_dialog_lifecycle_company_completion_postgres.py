@@ -79,20 +79,32 @@ def test_explicit_no_company_is_scoped_fingerprinted_and_needs_no_crm_access(com
     db.commit()
 
 
-def test_explicit_none_preserves_concurrently_added_company_without_disclosure(companies, monkeypatch):
+@pytest.mark.parametrize('view,explicit',[('none',True),('all',True),('all',False)])
+def test_optional_close_preserves_concurrently_added_company_without_disclosure(companies, monkeypatch,view,explicit):
     from test_tenant_support_inbox import A, CA
     import tenant_dialog_company_completion as completion
     import tenant_dialog_lifecycle as lifecycle
 
     db, company, *_ = companies
     monkeypatch.delenv(completion.ENV)
-    grant(db, monkeypatch, view='none', update='none')
+    grant(db, monkeypatch, view=view, update='none')
     command(actor=33)
     db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
        (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
        VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,company))
     db.commit()
-    request = payload('close', 1, company_choice='none')
+    if view=='all':
+        from tenant_scoped_access_store import read_access_profile
+        from tenant_policy import TenantPolicy
+        route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+        with db.cursor() as cur:
+            policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+            preview=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+        db.commit()
+        assert preview['lifecycle']['company_completion']=={
+            'status':'ready','required':False,'can_choose':False,'can_skip':False,
+        }
+    request = payload('close',1,**({'company_choice':'none'} if explicit else {}))
     result = lifecycle.mutate(STAFF, request)
     assert result['lifecycle']['state'] == 'closed'
     assert company not in str(result)
@@ -187,7 +199,7 @@ def test_scoped_operator_may_choose_only_accessible_company_and_never_overwrite(
         with pytest.raises(TenantLinearError) as unavailable:
             lifecycle.mutate(STAFF,payload('close',1,company_id=denied))
         assert unavailable.value.status==422
-        assert 'недоступна по вашим правам' in str(unavailable.value)
+        assert str(unavailable.value)=='Компания недоступна для привязки по вашим правам.'
         assert denied not in str(unavailable.value)
     if bound:
         with pytest.raises(TenantLinearError) as unsupported:
