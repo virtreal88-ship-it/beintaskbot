@@ -192,21 +192,24 @@
   async function loadTemplates(state){
     const serial=++state.loadSerial,owner=identity();
     if(!owner||owner.key!==state.identity)return;
-    state.button.hidden=true;
-    state.loaded=false;state.loading=true;state.error='';
+    state.loading=true;state.error='';
+    let changed=false;
     try{
       const result=await request('GET',null,owner);
       if(state!==mounted||serial!==state.loadSerial||identity()?.key!==state.identity)return;
-      state.templates=Array.isArray(result.templates)?result.templates:[];
-      state.allowed=Array.isArray(result.allowed_visibility)?result.allowed_visibility:[];
-      state.available=result.available===true;state.button.hidden=!state.available;state.loaded=true;state.error='';
+      if(result.available!==true){teardown();return;}
+      const templates=Array.isArray(result.templates)?result.templates:[];
+      const allowed=Array.isArray(result.allowed_visibility)?result.allowed_visibility:[];
+      changed=!state.loaded||JSON.stringify([state.templates,state.allowed])!==JSON.stringify([templates,allowed]);
+      state.templates=templates;state.allowed=allowed;state.button.hidden=false;state.loaded=true;
     }catch(error){
       if(state!==mounted||serial!==state.loadSerial||identity()?.key!==state.identity)return;
-      if(error?.status===404){teardown();return;}
-      state.templates=[];state.allowed=[];state.available=false;state.button.hidden=true;state.loaded=true;state.error=error?.message||copy('error');
+      if([401,403,404,409].includes(error?.status)||!state.loaded){teardown();return;}
+      // Keep an already loaded list during a temporary service/network failure.
     }finally{
       if(state===mounted&&serial===state.loadSerial){
-        state.loading=false;renderSuggestions(state);state.renderManager?.();
+        state.loading=false;
+        if(changed){renderSuggestions(state);state.renderManager?.();}
       }
     }
   }
@@ -302,7 +305,7 @@
     function renderList(){
       if(closed)return;
       list.replaceChildren();
-      if(state.loading){list.textContent=copy('loading');return;}
+      if(state.loading&&!state.loaded){list.textContent=copy('loading');return;}
       if(state.error){list.textContent=state.error;return;}
       if(!state.templates.length){list.textContent=copy('empty');return;}
       for(const item of state.templates){
@@ -339,12 +342,6 @@
     }
     state.renderManager=renderList;
     renderList();showEditor();close.focus();
-  }
-  function clearContext(state){
-    state.templates=[];state.allowed=[];state.loaded=false;state.error='';
-    state.loadSerial++;
-    state.suggestions.hidden=true;state.suggestions.replaceChildren();
-    modalClose?.();renderSuggestions(state);
   }
   function teardown(){
     if(!mounted)return;
@@ -384,7 +381,11 @@
     const next=event.detail?.member;
     const key=next?.tenant_id!=null&&next?.telegram_id!=null?String(next.tenant_id)+':'+String(next.telegram_id):'';
     if(key!==mounted.identity){teardown();void attach();return;}
-    clearContext(mounted);void loadTemplates(mounted);
+    if(!mounted.loading)void loadTemplates(mounted);
+  });
+  document.addEventListener('tenant-dialog-reauthorized',()=>{
+    if(!mounted){void attach();return;}
+    if(!mounted.loading)void loadTemplates(mounted);
   });
   for(const event of ['tenant-chat-close','tenant-auth-invalid','tenant-auth-pending'])document.addEventListener(event,teardown);
   document.addEventListener('tenant-view',event=>{

@@ -845,7 +845,12 @@
       const result=await api(key);if(version!==epoch||revision!==listRevision)return;
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
-      $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');if(currentDialog?.lifecycle_enabled)await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true});else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);else if(currentDialog&&!options.suppressRead)void markDialogReadIfVisible(currentPage);return result;
+      $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
+      if(currentDialog&&!pendingDialogRoute&&(currentDialog.lifecycle_enabled||options.revalidateSelected)){
+        await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true,revalidateAccess:options.revalidateSelected===true});
+      }else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);
+      else if(currentDialog&&!options.suppressRead)void markDialogReadIfVisible(currentPage);
+      return result;
     }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
     finally{if(version===epoch&&revision===listRevision){listFlight=null;$('operatorRows').setAttribute('aria-busy','false');}}})();
     listFlight={key,promise};return promise;
@@ -1129,7 +1134,9 @@
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
     try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
-    catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
+    catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;
+      if(options.revalidateAccess&&error.status===404){removeLifecycleDialog(route);notice(error.message);return false;}
+      if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
     finally{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
   const clientCardText=key=>({title:{ru:'Карточка диалога',az:'Dialoq kartı',en:'Dialogue details'},save:{ru:'Сохранить имя',az:'Adı yadda saxla',en:'Save name'},close:{ru:'Закрыть',az:'Bağla',en:'Close'},open:{ru:'Открыть карточку клиента',az:'Müştəri kartını aç',en:'Open customer details'}}[key]?.[i18n.language]||'');
@@ -1194,6 +1201,19 @@
       const details=document.createElement('details');details.className='operator-roster-meta';const summary=document.createElement('summary');summary.textContent=groupParticipantsText('snapshot');const timestamp=document.createElement('p');timestamp.textContent=new Date(result.observed_at).toLocaleString();const note=document.createElement('p');note.textContent=groupParticipantsText('note');details.append(summary,timestamp,note);host.append(details);
     }catch{if(current()&&card.open)status.textContent=groupParticipantsText('unavailable');}finally{host.dataset.loading='false';}
   }
+  function mountDialogCompany(route){
+    if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
+    const host=$('operatorConversationHeader')?.querySelector('.operator-dialog-head-main'),owner=identity(member);
+    const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
+      owner===identity(member)&&host?.isConnected&&sameDialog(route,currentDialog);
+    window.tenantDialogueCompany?.mount({host,route,member,isCurrent:current,
+      onChanged:()=>current()?openDialog(route,true):undefined});
+  }
+  function restoreDialogCompany(){
+    if(currentDialog&&sameDialog(displayedPage?.dialog,currentDialog)&&$('view-dialogs')?.classList.contains('active')){
+      mountDialogCompany(currentDialog);
+    }
+  }
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader');if(!head)return;
     const editable=route.provider==='connect',name=dialogTitle(route),phone=displayDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
@@ -1206,13 +1226,7 @@
     const titleText=$('operatorDialogTitleText');if(titleText&&editable){const trigger=document.createElement('button');trigger.type='button';trigger.id='operatorClientCardOpen';trigger.setAttribute('aria-label',clientCardText('open'));trigger.title=clientCardText('open');trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-controls','operatorClientCard');trigger.setAttribute('aria-expanded','false');const avatar=document.createElement('span');avatar.className='operator-row-avatar operator-header-avatar';avatar.setAttribute('aria-hidden','true');avatar.textContent=route.customer_kind==='group'?'◉':name.slice(0,1).toLocaleUpperCase();avatar.insertAdjacentHTML('beforeend',avatarMarkup(route,true));trigger.append(avatar);titleText.before(trigger);hydrateAvatars();}
     hydrateContactPhone(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
-    if(capabilities.dialog_company_binding===true){
-      const mountedHost=head.querySelector('.operator-dialog-head-main');
-      const sharedCurrent=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
-        owner===identity(member)&&mountedHost?.isConnected&&sameDialog(route,currentDialog);
-      window.tenantDialogueCompany?.mount({host:mountedHost,route,member,isCurrent:sharedCurrent,
-        onChanged:()=>sharedCurrent()?openDialog(route,true):undefined});
-    }else window.tenantDialogueCompany?.clear();
+    mountDialogCompany(route);
     const card=$('operatorClientCard'),trigger=$('operatorClientCardOpen');if(!card||!trigger)return;
     const form=$('operatorConversationName'),input=$('operatorConversationNameInput'),save=$('operatorSaveConversationName'),error=card.querySelector('[data-client-card-error]'),listeners=[];
     $('operatorClientDeveloperHost').append(...developerNodes);$('operatorClientDeveloperStatus').append(...developerStatus);
@@ -1743,7 +1757,7 @@
   }
   function profileChanged(data){
     if($('operatorDialogs'))$('operatorDialogs').style.visibility='';
-    const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
+    const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||next?.department_id!==member?.department_id||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
     permissionScope=JSON.stringify(data.role_permissions);
     operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
@@ -1752,13 +1766,24 @@ if(changed){filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSav
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
-  document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
+  document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
-  document.addEventListener('visibilitychange',()=>{if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}else{refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}});
-  window.addEventListener('focus',()=>{updateBrowserNoticeButton();if(!document.hidden)void markDialogReadIfVisible(currentPage);});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
+  document.addEventListener('tenant-dialog-reauthorized',()=>{
+    // A list issued before the fresh profile may still be in flight.
+    listFlight=null;
+    const pending=pendingDialogRoute;
+    if(pending)void openDialog(pending,true,'',{revalidateAccess:true});
+    void refresh(false,false,{revalidateSelected:!pending});
+    scheduleAutoRefresh();
+  });
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}
+    else if(!window.tenantRequestCoordinator){refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}
+  });
+  window.addEventListener('focus',()=>{updateBrowserNoticeButton();if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute)closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
@@ -1846,7 +1871,7 @@ if(changed){filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSav
     const article=[...document.querySelectorAll('#chatRows [data-message-id]')].find(node=>node.dataset.messageId===String(id));
     const footer=article?.querySelector('[data-message-footer-actions]');if(footer)footer.innerHTML=deliveryMarkup(message)+copyControlMarkup(message);
   }
-  window.tenantOperator={messageMarkup,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,updateCustomerVoiceDelivery,get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
+  window.tenantOperator={messageMarkup,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,updateCustomerVoiceDelivery,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();
 
