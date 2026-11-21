@@ -8,6 +8,19 @@
     en:{button:'Templates',manage:'Manage templates',title:'Reply templates',new:'New template',use:'Insert into draft',edit:'Edit',remove:'Delete',close:'Close',name:'Name',body:'Template text',visibility:'Access',personal:'Personal',team:'Team',shared:'Shared',save:'Save',cancel:'Cancel',loading:'Loading templates…',empty:'No templates are available yet.',hint:'Selecting a template only inserts text into the editable draft. You decide when to send.',saved:'Template saved.',deleted:'Template deleted.',error:'Could not load or save templates.',suggestions:'Similar templates',unavailable:'Template management is unavailable.'}
   };
   const copy=key=>(words[window.tenantI18n?.language]||words.az)[key]||key;
+  const icons={
+    templates:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
+    close:'<path d="m6 6 12 12M18 6 6 18"/>',
+    edit:'<path d="m14 5 5 5M4 20l4-.8L20 7a2.8 2.8 0 0 0-4-4L4 15.9 4 20Z"/>',
+    remove:'<path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/>'
+  };
+  function iconButton(icon,label){
+    const button=document.createElement('button');
+    button.type='button';button.className='operator-reply-template-icon';
+    button.title=label;button.setAttribute('aria-label',label);
+    button.innerHTML='<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">'+icons[icon]+'</svg>';
+    return button;
+  }
   const identity=()=>{
     const member=window.tenantProfileSnapshot?.member;
     if(!member?.tenant_id||member?.telegram_id==null)return null;
@@ -23,26 +36,86 @@
     '.operator-reply-template-suggestions button{display:grid;width:100%;min-height:44px;gap:3px;padding:8px 10px;border:0;border-radius:8px;background:transparent;color:inherit;text-align:left;white-space:normal}',
     '.operator-reply-template-suggestions button:hover,.operator-reply-template-suggestions button:focus-visible{background:var(--paper,#f4f8f5)}',
     '.operator-reply-template-suggestions small{overflow:hidden;color:var(--muted,#64776f);text-overflow:ellipsis;white-space:nowrap}',
-    '.operator-reply-template-modal{position:fixed;z-index:1500;inset:0;display:grid;place-items:center;padding:12px;background:#071d1688}',
-    '.operator-reply-template-modal[hidden]{display:none!important}',
-    '.operator-reply-template-card{box-sizing:border-box;width:min(560px,100%);max-height:min(84dvh,760px);overflow:auto;overscroll-behavior:contain;padding:16px;border:1px solid var(--line,#d9e3de);border-radius:16px;background:var(--card,#fff);color:var(--ink,#18332c);box-shadow:0 16px 48px #0004}',
-    '.operator-reply-template-head,.operator-reply-template-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}',
-    '.operator-reply-template-head h2{margin:0;font-size:20px}',
-    '.operator-reply-template-card button,.operator-reply-template-card input,.operator-reply-template-card textarea,.operator-reply-template-card select{box-sizing:border-box;min-height:44px;font:inherit}',
-    '.operator-reply-template-card button{padding:9px 12px;border:1px solid var(--line,#ccdcd3);border-radius:9px;background:var(--card,#fff);color:inherit}',
-    '.operator-reply-template-card button.primary{background:var(--brand-deep,#14523c);border-color:var(--brand-deep,#14523c);color:#fff}',
-    '.operator-reply-template-card button:disabled{opacity:.55}',
-    '.operator-reply-template-card label{display:grid;gap:6px;margin:12px 0;font-weight:600}',
-    '.operator-reply-template-card input,.operator-reply-template-card textarea,.operator-reply-template-card select{width:100%;min-width:0;padding:9px 10px;border:1px solid var(--line,#ccdcd3);border-radius:9px;background:var(--paper,#f8faf9);color:inherit;font-weight:400}',
-    '.operator-reply-template-card textarea{min-height:140px;resize:vertical}',
-    '.operator-reply-template-card [role=status]{min-height:1.3em;color:var(--muted,#64776f);overflow-wrap:anywhere}',
-    '.operator-reply-template-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:10px 0;border-bottom:1px solid var(--line,#d9e3de)}',
-    '.operator-reply-template-row strong,.operator-reply-template-row small{display:block;overflow-wrap:anywhere}',
-    '.operator-reply-template-row small{margin-top:3px;color:var(--muted,#64776f);white-space:pre-wrap}',
-    '.operator-reply-template-row-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px}',
-    '.operator-reply-template-hint{color:var(--muted,#64776f);font-size:13px}',
-    '@media(max-width:600px){.operator-reply-template-modal{align-items:end;padding:8px}.operator-reply-template-card{max-height:calc(100dvh - 16px);padding:14px;border-radius:16px}.operator-reply-template-row{grid-template-columns:minmax(0,1fr)}.operator-reply-template-row-actions{justify-content:flex-start}}'
-  ].join('');
+  ].join('')+`
+    #operatorReplyTemplatesOpen,
+    .operator-reply-template-card .operator-reply-template-icon {
+      display:inline-grid; place-items:center; width:44px; height:44px;
+      min-width:44px; min-height:44px; padding:0; border:0; border-radius:10px;
+      flex:none; background:transparent; color:var(--ink,#18332c);
+    }
+    #operatorReplyTemplatesOpen[hidden] { display:none!important }
+    #operatorReplyTemplatesOpen svg,.operator-reply-template-icon svg {
+      display:block; width:20px; height:20px; pointer-events:none;
+    }
+    #operatorReplyTemplatesOpen:hover,
+    .operator-reply-template-card .operator-reply-template-icon:hover { background:var(--paper,#f4f8f5) }
+    .operator-reply-template-card .operator-reply-template-delete { color:var(--danger,#b42318) }
+    .operator-reply-template-modal {
+      position:fixed; z-index:1500; inset:0; display:grid; place-items:center;
+      padding:10px; background:#071d165e;
+    }
+    .operator-reply-template-card {
+      display:flex; flex-direction:column; gap:10px; box-sizing:border-box;
+      width:min(464px,100%); max-height:calc(100dvh - 20px);
+      overflow:auto; overscroll-behavior:contain; padding:14px 16px 16px;
+      border:1px solid var(--line,#d9e3de); border-radius:18px;
+      background:var(--card,#fff); color:var(--ink,#18332c); box-shadow:0 16px 44px #071d1633;
+    }
+    .operator-reply-template-head,.operator-reply-template-actions {
+      display:flex; align-items:center; justify-content:space-between; gap:8px;
+    }
+    .operator-reply-template-head h2 { margin:0; font-size:18px; line-height:1.3 }
+    .operator-reply-template-hint,.operator-reply-template-notice {
+      margin:0; color:var(--muted,#64776f); font-size:13px; overflow-wrap:anywhere;
+    }
+    .operator-reply-template-list {
+      display:grid; align-content:start; gap:8px; min-height:min(100px,22dvh);
+      max-height:min(300px,38dvh); overflow:auto; overscroll-behavior:contain;
+      scrollbar-width:thin; padding:2px 4px 2px 2px;
+    }
+    .operator-reply-template-list:empty { min-height:0 }
+    .operator-reply-template-row {
+      display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px;
+      align-items:start; border:1px solid var(--line,#d9e3de);
+      border-radius:12px; background:var(--card,#fff);
+    }
+    .operator-reply-template-row:has(.operator-reply-template-use:enabled:is(:hover,:focus-visible)) {
+      background:var(--paper,#f4f8f5); border-color:var(--brand,#0a926e);
+    }
+    .operator-reply-template-row .operator-reply-template-use {
+      display:grid; gap:4px; min-width:0; min-height:58px; width:100%; text-align:start;
+      padding:10px 12px; border:0; border-radius:11px; background:transparent;
+      color:inherit; font:inherit; white-space:normal;
+    }
+    .operator-reply-template-use strong { font-size:14px; overflow-wrap:anywhere }
+    .operator-reply-template-use small {
+      color:var(--muted,#64776f); overflow-wrap:anywhere; white-space:pre-line;
+      font-size:13px; line-height:1.35; display:-webkit-box;
+      -webkit-box-orient:vertical; -webkit-line-clamp:3; overflow:hidden;
+    }
+    .operator-reply-template-use .operator-reply-template-scope { color:var(--muted,#64776f); font-size:11px }
+    .operator-reply-template-row-actions { display:flex; padding:2px 2px 0 0 }
+    .operator-reply-template-editor { border-top:1px solid var(--line,#d9e3de); padding-top:10px }
+    .operator-reply-template-editor:empty { display:none }
+    .operator-reply-template-editor form { display:grid; gap:8px; margin:0 }
+    .operator-reply-template-editor h3 { margin:0; font-size:15px }
+    .operator-reply-template-editor input,.operator-reply-template-editor textarea,.operator-reply-template-editor select {
+      box-sizing:border-box; width:100%; min-width:0; min-height:40px; margin:0;
+      padding:8px 10px; border:1px solid var(--line,#ccdcd3); border-radius:9px;
+      background:var(--card,#fff); color:inherit; font:inherit;
+    }
+    .operator-reply-template-editor textarea { min-height:70px; max-height:180px; resize:vertical }
+    .operator-reply-template-editor label { display:flex; align-items:center; gap:8px; color:var(--muted,#64776f); font-size:13px }
+    .operator-reply-template-editor select { width:auto; max-width:100%; min-height:36px }
+    .operator-reply-template-actions { justify-content:flex-end }
+    .operator-reply-template-actions button { min-height:44px }
+    .operator-reply-template-card :is(button,input,textarea,select):focus-visible {
+      outline:2px solid var(--brand,#0a926e); outline-offset:1px;
+    }
+    @media(max-height:500px) {
+      .operator-reply-template-list { min-height:96px; max-height:150px; flex:none }
+    }
+  `;
   document.head.append(style);
   function request(method,data,owner){
     const params=new URLSearchParams({expected_tenant_id:owner.tenant,expected_user_id:owner.user});
@@ -146,32 +219,48 @@
     card.className='operator-reply-template-card';card.setAttribute('role','dialog');card.setAttribute('aria-modal','true');card.setAttribute('aria-labelledby','operatorReplyTemplateTitle');
     const header=document.createElement('div');header.className='operator-reply-template-head';
     const title=document.createElement('h2');title.id='operatorReplyTemplateTitle';title.textContent=copy('title');
-    const close=document.createElement('button');close.type='button';close.textContent=copy('close');
+    const close=iconButton('close',copy('close'));
     header.append(title,close);
     const hint=document.createElement('p');hint.className='operator-reply-template-hint';hint.textContent=copy('hint');
-    const notice=document.createElement('p');notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');
-    const list=document.createElement('div'),editor=document.createElement('div'),add=document.createElement('button');
-    add.type='button';add.className='primary';add.textContent=copy('new');
-    card.append(header,hint,notice,add,list,editor);modal.append(card);document.body.append(modal);
+    const notice=document.createElement('p');notice.className='operator-reply-template-notice';notice.setAttribute('role','status');
+    const list=document.createElement('div'),editor=document.createElement('div');
+    list.className='operator-reply-template-list';editor.className='operator-reply-template-editor';
+    card.append(header,hint,list,editor,notice);modal.append(card);document.body.append(modal);
     let closed=false;
-    const finish=()=>{
+    const owner=()=>{
+      const current=identity();
+      return !closed&&state===mounted&&state.root===composerRoot()&&current?.key===state.identity&&
+        window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates===true?current:null;
+    };
+    const finish=(restoreFocus=true)=>{
       if(closed)return;closed=true;modal.remove();document.removeEventListener('keydown',key,true);
       if(modalClose===finish)modalClose=null;
-      if(restore?.isConnected)restore.focus({preventScroll:true});
+      state.renderManager=null;
+      state.button.setAttribute('aria-expanded','false');
+      if(restoreFocus&&restore?.isConnected)restore.focus({preventScroll:true});
     };
-    const key=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();finish();}};
-    modalClose=finish;document.addEventListener('keydown',key,true);close.addEventListener('click',finish);
+    const key=event=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();finish();return;}
+      if(event.key!=='Tab')return;
+      const controls=[...card.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled)')];
+      const first=controls[0],last=controls.at(-1),focused=document.activeElement;
+      if(!card.contains(focused)||event.shiftKey&&focused===first||!event.shiftKey&&focused===last){
+        event.preventDefault();(event.shiftKey?last:first)?.focus();
+      }
+    };
+    modalClose=finish;state.button.setAttribute('aria-expanded','true');
+    document.addEventListener('keydown',key,true);close.addEventListener('click',()=>finish());
     modal.addEventListener('pointerdown',event=>{if(event.target===modal)finish();});
-    function showEditor(item=null){
-      editor.replaceChildren();notice.textContent='';
-      if(!state.allowed.length){notice.textContent=state.error||copy('unavailable');return;}
-      const form=document.createElement('form');form.noValidate=false;
-      const nameLabel=document.createElement('label'),nameText=document.createElement('span'),name=document.createElement('input');
-      nameText.textContent=copy('name');name.name='name';name.maxLength=120;name.required=true;name.value=item?.name||'';
-      nameLabel.append(nameText,name);
-      const bodyLabel=document.createElement('label'),bodyText=document.createElement('span'),body=document.createElement('textarea');
-      bodyText.textContent=copy('body');body.name='body';body.maxLength=4000;body.required=true;body.value=item?.body||'';
-      bodyLabel.append(bodyText,body);
+    function showEditor(item=null,focus=false){
+      editor.replaceChildren();
+      if(!state.allowed.length)return;
+      const form=document.createElement('form'),heading=document.createElement('h3');
+      heading.textContent=copy(item?'edit':'new');
+      const name=document.createElement('input'),body=document.createElement('textarea');
+      name.name='name';name.maxLength=120;name.required=true;name.value=item?.name||'';
+      name.placeholder=copy('name');name.setAttribute('aria-label',copy('name'));
+      body.name='body';body.maxLength=4000;body.required=true;body.value=item?.body||'';
+      body.placeholder=copy('body');body.setAttribute('aria-label',copy('body'));
       const visibilityLabelNode=document.createElement('label'),visibilityText=document.createElement('span'),visibility=document.createElement('select');
       visibilityText.textContent=copy('visibility');visibility.name='visibility';visibility.required=true;
       const choices=state.allowed.slice();
@@ -182,52 +271,74 @@
       const actions=document.createElement('div');actions.className='operator-reply-template-actions';
       const save=document.createElement('button');save.type='submit';save.className='primary';save.textContent=copy('save');
       const cancel=document.createElement('button');cancel.type='button';cancel.textContent=copy('cancel');
-      actions.append(save,cancel);form.append(nameLabel,bodyLabel,visibilityLabelNode,notice,actions);editor.append(form);
-      cancel.addEventListener('click',()=>{editor.replaceChildren();notice.textContent='';});
-      name.focus();
+      if(item)actions.append(cancel);
+      actions.append(save);form.append(heading,name,body,visibilityLabelNode,actions);editor.append(form);
+      let saving=false;
+      const updateSave=()=>{save.disabled=saving||!name.value.trim()||!body.value.trim();};
+      form.addEventListener('input',updateSave);updateSave();
+      cancel.addEventListener('click',()=>{notice.textContent='';showEditor(null,true);});
+      if(focus)name.focus();
       form.addEventListener('submit',async event=>{
-        event.preventDefault();if(!form.reportValidity())return;
-        save.disabled=true;cancel.disabled=true;notice.textContent=copy('loading');
+        event.preventDefault();
+        const current=owner();
+        if(!current||!form.isConnected||saving||!name.value.trim()||!body.value.trim()||!form.reportValidity())return;
+        saving=true;updateSave();cancel.disabled=true;notice.textContent=copy('loading');
         const payload=item
           ?{action:'update',template_id:item.id,version:item.version,name:name.value,body:body.value,visibility:visibility.value}
           :{action:'create',request_id:makeId(),name:name.value,body:body.value,visibility:visibility.value};
         try{
-          await request('POST',payload,identity());
-          if(state!==mounted||identity()?.key!==state.identity){finish();return;}
-          notice.textContent=copy('saved');editor.replaceChildren();await loadTemplates(state);
-        }catch(error){notice.textContent=error?.message||copy('error');save.disabled=false;cancel.disabled=false;}
+          await request('POST',payload,current);
+          if(state===mounted&&identity()?.key===state.identity){
+            if(!closed){
+              notice.textContent=copy('saved');
+              if(form.isConnected)showEditor();
+            }
+            await loadTemplates(state);
+          }
+        }catch(error){if(!closed)notice.textContent=error?.message||copy('error');}
+        finally{saving=false;updateSave();cancel.disabled=false;}
       });
     }
     function renderList(){
+      if(closed)return;
       list.replaceChildren();
-      if(state.loading){list.textContent=copy('loading');add.disabled=true;return;}
-      add.disabled=!state.allowed.length;
+      if(state.loading){list.textContent=copy('loading');return;}
       if(state.error){list.textContent=state.error;return;}
       if(!state.templates.length){list.textContent=copy('empty');return;}
       for(const item of state.templates){
         const row=document.createElement('article');row.className='operator-reply-template-row';
-        const details=document.createElement('div'),name=document.createElement('strong'),description=document.createElement('small');
-        name.textContent=item.name+' · '+visibilityLabel(item.visibility);description.textContent=item.body;
-        details.append(name,description);
+        const name=document.createElement('strong'),description=document.createElement('small'),scope=document.createElement('span');
+        name.textContent=item.name;description.textContent=item.body;
+        scope.className='operator-reply-template-scope';scope.textContent=visibilityLabel(item.visibility);
         const controls=document.createElement('div');controls.className='operator-reply-template-row-actions';
-        const use=document.createElement('button');use.type='button';use.textContent=copy('use');
-        use.dataset.replyTemplateInsert='';use.disabled=!canInsert(state);use.addEventListener('click',()=>{if(insert(item,state))finish();});
-        controls.append(use);
+        const use=document.createElement('button');use.type='button';use.className='operator-reply-template-use';
+        use.setAttribute('aria-label',copy('use')+': '+item.name);
+        use.append(name,description,scope);
+        use.dataset.replyTemplateInsert='';use.disabled=!canInsert(state);use.addEventListener('click',()=>{if(insert(item,state))finish(false);});
+        row.append(use);
         if(item.can_edit){
-          const edit=document.createElement('button');edit.type='button';edit.textContent=copy('edit');edit.addEventListener('click',()=>showEditor(item));controls.append(edit);
-          const remove=document.createElement('button');remove.type='button';remove.textContent=copy('remove');remove.addEventListener('click',async()=>{
-            if(!window.confirm(copy('remove')+'?'))return;
+          const edit=iconButton('edit',copy('edit')+': '+item.name);
+          edit.addEventListener('click',()=>{notice.textContent='';showEditor(item,true);});
+          const remove=iconButton('remove',copy('remove')+': '+item.name);
+          remove.classList.add('operator-reply-template-delete');remove.addEventListener('click',async()=>{
+            const current=owner();
+            if(!current||remove.disabled||!window.confirm(copy('remove')+': '+item.name+'?'))return;
             remove.disabled=true;notice.textContent=copy('loading');
-            try{await request('POST',{action:'delete',template_id:item.id,version:item.version},identity());notice.textContent=copy('deleted');await loadTemplates(state);}
-            catch(error){notice.textContent=error?.message||copy('error');remove.disabled=false;}
-          });controls.append(remove);
+            try{
+              await request('POST',{action:'delete',template_id:item.id,version:item.version},current);
+              if(state===mounted&&identity()?.key===state.identity){
+                if(!closed)notice.textContent=copy('deleted');
+                await loadTemplates(state);
+              }
+            }catch(error){if(!closed)notice.textContent=error?.message||copy('error');remove.disabled=false;}
+          });
+          controls.append(edit,remove);row.append(controls);
         }
-        row.append(details,controls);list.append(row);
+        list.append(row);
       }
     }
     state.renderManager=renderList;
-    add.addEventListener('click',()=>showEditor());
-    renderList();close.focus();
+    renderList();showEditor();close.focus();
   }
   function clearContext(state){
     state.templates=[];state.allowed=[];state.loaded=false;state.error='';
@@ -249,7 +360,9 @@
     if(mounted?.actions===actions&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
     root.classList.add('operator-reply-template-root');
-    const button=document.createElement('button');button.type='button';button.hidden=true;button.id='operatorReplyTemplatesOpen';button.className='outline';button.textContent=copy('button');button.title=copy('manage');button.setAttribute('aria-label',copy('manage'));
+    const button=iconButton('templates',copy('button'));
+    button.hidden=true;button.id='operatorReplyTemplatesOpen';
+    button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
     const state={actions,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
     state.onInput=()=>renderSuggestions(state);
