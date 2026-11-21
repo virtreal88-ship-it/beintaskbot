@@ -31,7 +31,9 @@
       ...(post?{headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}:{})
     });
     const payload=await result.json();
-    if(!result.ok||payload?.success!==true)throw Error(t('error'));
+    if(!result.ok||payload?.success!==true){
+      const error=new Error(t('error'));error.status=result.status;throw error;
+    }
     return payload;
   }
   function paint(s,binding){
@@ -41,6 +43,17 @@
     const name=binding?.company_id&&binding.company_name?String(binding.company_name):binding?t('unknown'):t('unavailable');
     s.value.textContent=name;s.value.title=name;
     s.edit.hidden=binding?.can_manage!==true;
+    if(!binding?.can_manage&&s.panel){
+      s.abortSearch?.();s.panel.remove();s.panel=null;
+    }
+  }
+  function refresh(s=state){
+    if(!s||!current(s)||s.read||s.writing)return;
+    const read=new AbortController();s.read=read;
+    void request(endpoint,s.member,s.route,false,read.signal)
+      .then(payload=>{if(s.read===read)paint(s,payload.binding);},error=>{
+        if(s.read===read&&(!s.binding||[401,403,404,409].includes(error.status)))paint(s,null);
+      }).finally(()=>{if(s.read===read)s.read=null;});
   }
   function openLocal(s){
     if(!current(s)||s.binding?.can_manage!==true||s.panel?.isConnected)return;
@@ -67,7 +80,7 @@
     function resetChoices(){choices.replaceChildren(new Option(t('choose'),''));choices.disabled=true;save.disabled=true;}
     async function mutate(companyId){
       if(!active()||writing||s.binding?.can_manage!==true||companyId==='')return;
-      writing=true;searchRequest?.abort();serial++;status.textContent=t('loading');
+      writing=true;s.writing=true;searchRequest?.abort();s.read?.abort();s.read=null;serial++;status.textContent=t('loading');
       for(const ctrl of [input,search,save,remove,cancel,choices])ctrl.disabled=true;
       try{
         const payload=await request(endpoint,s.member,{...s.route,company_id:companyId},true);
@@ -80,7 +93,7 @@
           status.textContent=t('error');input.disabled=false;search.disabled=false;cancel.disabled=false;remove.disabled=false;
           choices.disabled=choices.options.length<=1;save.disabled=!choices.value;
         }
-      }finally{writing=false;}
+      }finally{writing=false;s.writing=false;}
     }
     resetChoices();
     input.oninput=()=>{searchRequest?.abort();serial++;resetChoices();status.textContent='';};
@@ -204,20 +217,20 @@
     const exact={provider:String(route.provider),lead_id:String(route.lead_id),
       channel_id:route.channel_id,conversation_id:route.conversation_id};
     const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),exact]);
-    // A poll may rebuild the entire header for a changed conversation state.
-    // Keep the current search and selection only for the same authorized key.
-    if(state?.key===key&&(state.panel?.isConnected||state.operator?.isConnected)){
+    // The authorized route owns these controls across same-route renders.
+    if(state?.key===key){
       state.isCurrent=isCurrent;state.onChanged=onChanged;state.member=member;
-      host.append(state.section);state.positionOperator?.();return;
+      if(state.section.parentElement!==host)host.append(state.section);
+      state.positionOperator?.();return;
     }
     clear();
     const section=node('div'),label=node('span',t('label')+':'),value=node('span',t('loading'));
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
-    const s={section,value,member,isCurrent,onChanged,route:exact,key,read:new AbortController()};
+    const s={section,value,member,isCurrent,onChanged,route:exact,key,read:null};
     s.edit=button(t('edit'),()=>openOperator(s));s.edit.hidden=true;s.edit.className='outline';s.edit.setAttribute('aria-haspopup','dialog');
     section.append(label,value,s.edit);host.append(section);state=s;
-    void request(endpoint,member,s.route,false,s.read.signal).then(payload=>paint(s,payload.binding),()=>paint(s,null));
+    refresh(s);
   }
   const style=node('style');
   style.textContent=`
@@ -254,5 +267,6 @@
         String(next.tenant_id)!==String(state.member.tenant_id)||String(next.telegram_id)!==String(state.member.telegram_id))clear();
   });
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
+  document.addEventListener('tenant-dialog-reauthorized',()=>refresh());
   window.tenantDialogueCompany={mount,clear};
 })();
