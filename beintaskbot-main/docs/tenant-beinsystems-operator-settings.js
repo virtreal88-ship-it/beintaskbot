@@ -82,8 +82,15 @@
       const createCompaniesButton=connection.querySelector('[data-create-companies]');
       if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
       const firstBatchButton=connection.querySelector('[data-first-company-batch]');
-      if(firstBatchButton)firstBatchButton.hidden=!(state.first_company_batch_preview_enabled &&
-        state.accounts_only_ready && !state.configured && !state.connected);
+      if(firstBatchButton){
+        const available=state.first_company_batch_preview_enabled===true &&
+          !state.configured && !state.connected &&
+          (state.pending_auth_received===true || state.accounts_only_ready===true);
+        firstBatchButton.hidden=!available;
+        firstBatchButton.disabled=!available || state.accounts_only_ready!==true;
+        const prerequisite=connection.querySelector('[data-first-batch-prerequisite]');
+        if(prerequisite)prerequisite.hidden=!available || !firstBatchButton.disabled;
+      }
     };
     renderStatus();
     if (data.member.role === 'owner') {
@@ -268,13 +275,19 @@
       });
       const batchButton=document.createElement('button');
       batchButton.type='button'; batchButton.dataset.firstCompanyBatch='';
-      batchButton.textContent='Предпросмотр первой выборки: до 100 аккаунтов';
+      batchButton.textContent='Предпросмотр партии до 100 аккаунтов';
       batchButton.hidden=true;
+      const batchPrerequisite=document.createElement('p');
+      batchPrerequisite.id='operatorFirstBatchPrerequisite';
+      batchPrerequisite.dataset.firstBatchPrerequisite='';
+      batchPrerequisite.hidden=true;
+      batchPrerequisite.textContent='Сначала нажмите «Проверить личность для аккаунтного доступа» и подтвердите свою учётную запись Operator. Затем станет доступен предпросмотр.';
+      batchButton.setAttribute('aria-describedby',batchPrerequisite.id);
       const batchHost=document.createElement('div');batchHost.dataset.firstBatchPreview='';batchHost.setAttribute('aria-live','polite');
-      connection.append(batchButton,batchHost);
+      connection.append(batchButton,batchPrerequisite,batchHost);
       renderStatus();
-      batchButton.onclick=event=>run(event.currentTarget,async()=>{
-        if (batchButton.hidden) return {};
+      batchButton.onclick=event=>batchButton.hidden || batchButton.disabled ? undefined :
+        run(event.currentTarget,async()=>{
         batchHost.replaceChildren();
         const result=await request('/api/platform/operator/accounts',{action:'preview_first_company_batch'});
         if(current!==revision || batchButton.hidden) return {};
@@ -310,6 +323,8 @@
         batchHost.append(heading,rows,confirm,cancel);
         return {message: preview.rows.length ? 'Проверьте выборку перед подтверждением.' :
           'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога.'};
+      }).finally(()=>{
+        if(current===revision)renderStatus();
       });
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
