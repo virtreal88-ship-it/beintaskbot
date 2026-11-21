@@ -184,6 +184,52 @@ def _read(cur, tenant, actor, route, can_manage):
     return {**empty,'company_id':binding['company_id'],'company_name':visible['name']} if visible else empty
 
 
+def attach_list_company_names(cur, tenant, actor, cards):
+    """Enrich the visible page from exact dialogue routes and current CRM grants."""
+    if not cards or not is_operator_workspace(tenant):
+        return
+    from tenant_crm_native_access import CRMAccessError, current_access, scoped_sql
+    try:
+        view = current_access(cur, tenant, actor, 'companies', 'view')
+    except CRMAccessError:
+        return
+
+    def route_key(row):
+        try:
+            return _key(row.get('provider'), row.get('lead_id'), row.get('channel_id'), row.get('conversation_id'))
+        except OperatorError:
+            return None
+
+    keys_by_card = [[route_key(row) for row in card.get('group_sources', [card])] for card in cards]
+    keys = {key for routes in keys_by_card for key in routes if key is not None}
+    where, scope = scoped_sql(view, 'companies', 'view', 'c')
+    companies = {}
+    for provider, table, match in (
+        ('connect', CONNECT, 'b.channel_id=r.channel_id::uuid'),
+        ('kommo', KOMMO, 'b.lead_id=r.lead_id AND b.channel_id=r.channel_id'),
+    ):
+        routes = [(lead, channel, peer) for kind, lead, channel, peer in keys if kind == provider]
+        if not routes or not _ready(cur, table):
+            continue
+        lead_ids, channels, peers = zip(*routes)
+        cur.execute(f"""WITH routes(lead_id, channel_id, conversation_id) AS (
+                SELECT * FROM unnest(%s::bigint[], %s::text[], %s::text[]))
+            SELECT r.lead_id,r.channel_id,r.conversation_id,c.id::text AS company_id,c.name
+            FROM routes r JOIN {table} b
+              ON b.tenant_id=%s::uuid AND {match} AND b.conversation_id=r.conversation_id
+            JOIN {COMPANIES} c ON c.tenant_id=b.tenant_id AND c.id=b.company_id
+            WHERE c.archived_at IS NULL AND ({where})""",
+            [list(lead_ids), list(channels), list(peers), tenant, *scope])
+        for row in cur.fetchall():
+            companies[(provider, row['lead_id'], row['channel_id'], row['conversation_id'])] = (row['company_id'], row['name'])
+
+    for card, routes in zip(cards, keys_by_card):
+        # A folded group shows a name only when its visible routes agree on one company.
+        linked = {companies.get(key) for key in routes}
+        if len(linked) == 1 and None not in linked:
+            card['dialog_company_name'] = linked.pop()[1]
+
+
 _NO_WRITE = object()
 
 

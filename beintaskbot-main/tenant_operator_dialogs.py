@@ -942,7 +942,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
         from tenant_connect_transport import _schema as ensure_connect_schema
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
-            tenant,_,policy=access(cur,profile,'dialogs')
+            tenant,actor,policy=access(cur,profile,'dialogs')
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
@@ -1067,6 +1067,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             rows=_fold_group_routes(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
+            if not all_rows and not completion_preview:
+                from tenant_dialog_company_binding import attach_list_company_names
+                attach_list_company_names(cur,tenant,actor,rows[:50])
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,

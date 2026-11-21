@@ -4,6 +4,7 @@ import uuid
 import pytest
 
 import tenant_dialog_company_binding as store
+import tenant_operator_dialogs as dialogs
 from tenant_beinsystems_operator import OperatorError
 from test_connect_channel_multiprocess import database
 from test_dialog_lifecycle_company_completion import STAFF, bindings, companies
@@ -17,6 +18,7 @@ OWNER_B = {'tenant_id':B,'telegram_id':22}
 def local(companies,monkeypatch):
     database,*_ = companies
     monkeypatch.setattr(store,'_connect',lambda:database)
+    monkeypatch.setattr(dialogs,'_connect',lambda:database)
     # Test only. The serving handler must not provision anything.
     yield companies
 
@@ -42,6 +44,9 @@ def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypa
         'company_id':company,'company_name':'Synthetic company','can_manage':True,
     }
     assert [entry['company_id'] for entry in bindings(database)] == [company]
+    visible = dialogs.listing(PROFILE, lifecycle='all')['dialogs']
+    assert next(row for row in visible if row['lead_id'] == 41)['dialog_company_name'] == 'Synthetic company'
+    assert all('dialog_company_name' not in row for row in dialogs.listing(OWNER_B, lifecycle='all')['dialogs'])
     for invalid in ({'lead_id':42},{'channel_id':CB},{'conversation_id':'fabricated'}):
         with pytest.raises(OperatorError) as denied:
             store.binding(PROFILE,**{**route,**invalid})
@@ -75,6 +80,10 @@ def test_group_binding_targets_only_the_selected_source(local):
     assert store.binding(PROFILE,**exact,company_id=company)['company_id']==company
     assert store.binding(PROFILE,**_route('connect',52,right,group))['company_id'] is None
     assert [(r['channel_id'],r['conversation_id']) for r in bindings(database)]==[(left,group)]
+    combined = dialogs.listing(PROFILE, lifecycle='all')['dialogs']
+    assert 'dialog_company_name' not in next(row for row in combined if row['conversation_id'] == group)
+    one_source = dialogs.listing(PROFILE, channel='connect:'+left, lifecycle='all')['dialogs']
+    assert next(row for row in one_source if row['conversation_id'] == group)['dialog_company_name'] == 'Synthetic company'
 
 
 def test_kommo_requires_visible_exact_source_and_explicit_schema(local):
@@ -119,11 +128,14 @@ def test_kommo_binding_reads_mask_out_of_scope_company_and_denied_source(local,m
         database.commit()
     rights('all')
     assert store.binding(STAFF,**route)=={'company_id':None,'company_name':None,'can_manage':False}
+    listed = lambda: next(row for row in dialogs.listing(STAFF, lifecycle='all')['dialogs'] if row['lead_id'] == route['lead_id'])
+    assert 'dialog_company_name' not in listed()
     with pytest.raises(OperatorError) as denied:
         store.binding(STAFF,**route,company_id=company)
     assert denied.value.status==403
     store.binding(PROFILE,**route,company_id=company)
     assert store.binding(STAFF,**route)['company_id']==company
+    assert listed()['dialog_company_name']=='Synthetic company'
     rights('self')
     with pytest.raises(OperatorError) as denied:
         store.binding(STAFF,**route)
