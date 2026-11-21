@@ -252,7 +252,7 @@ def test_choose_close_still_rechecks_source_revision_and_whatsapp_identity(compa
     assert state(database)['state']=='accepted'
 
 
-def test_bulk_link_preview_is_not_whatsapp_identity_verification(companies):
+def test_bulk_link_preview_is_not_whatsapp_identity_verification(companies,monkeypatch):
     database, company, _, _, _=companies
     command(actor=33)
     database.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
@@ -263,8 +263,9 @@ def test_bulk_link_preview_is_not_whatsapp_identity_verification(companies):
     with database.cursor() as cur:
         assert completion.bulk_prelinked_routes(cur,A,33)=={(CA,'client')}
     database.commit()
-    from tenant_operator_dialogs import listing
-    routes=listing(STAFF,completion_preview=True)['dialogs']
+    import tenant_operator_dialogs
+    monkeypatch.setattr(tenant_operator_dialogs,'_connect',lambda:database)
+    routes=tenant_operator_dialogs.listing(STAFF,completion_preview=True)['dialogs']
     route=next(row for row in routes if row['lead_id']==41)
     assert route['lifecycle']['bulk_company_gate']=='prelinked_unverified'
     with pytest.raises(TenantLinearError) as unresolved:
