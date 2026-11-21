@@ -8,6 +8,7 @@ import time
 
 _RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001", "55P03", "25P04"}
 _STARTUP_SCHEMA_LOCK='tenant-service-startup-schema'
+_KOMMO_BINDING_PROVISION_ENV='BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'
 
 
 def _retryable_migration_error(exc: Exception) -> bool:
@@ -85,6 +86,8 @@ def prepare_database() -> None:
             conn.commit()
         elif os.environ.get('DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP', '').lower() == 'true':
             _observe_reply_template_schema(conn)
+        if os.environ.get(_KOMMO_BINDING_PROVISION_ENV, '').lower() == 'true':
+            _prepare_optional_kommo_dialog_company(conn)
 
 
 def _observe_reply_template_schema(conn):
@@ -108,6 +111,32 @@ def _observe_reply_template_schema(conn):
             # Do not emit detailed exceptions, SQL data, or identifiers.
             outcome = 'unverified'
     logging.getLogger(__name__).info('Reply template schema observation: %s', outcome)
+
+
+def _prepare_optional_kommo_dialog_company(conn):
+    """Bounded by the retained startup lock; unavailable Kommo must not block boot."""
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_dialog_company_binding import provision_kommo
+    ready=False
+    try:
+        if configured_workspace_id():
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout='4000ms'")
+                provision_kommo(cur)
+            conn.commit()
+            ready=True
+    except Exception:
+        # Closing the dedicated startup connection handles a terminated backend.
+        try:
+            if not conn.closed:
+                conn.rollback()
+        except Exception:
+            pass
+    log=logging.getLogger(__name__)
+    if ready:
+        log.info('Optional Kommo dialogue company schema ready')
+    else:
+        log.warning('Optional Kommo dialogue company schema unverified')
 
 
 def ensure_pilot_case_schema(conn) -> None:
