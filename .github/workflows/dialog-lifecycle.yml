@@ -3,6 +3,9 @@ on:
   pull_request:
     paths:
       - 'beintaskbot-main/tenant_dialog_lifecycle.py'
+      - 'beintaskbot-main/tenant_dialog_company_binding.py'
+      - 'beintaskbot-main/tenant_dialog_company_completion.py'
+      - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_dialog_presence.py'
       - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'

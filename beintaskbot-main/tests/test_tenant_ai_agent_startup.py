@@ -78,6 +78,17 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         self.assertNotIn('verified',events)
         self.assertNotIn('simulation',events)
 
+    def test_optional_kommo_binding_startup_runs_only_when_enabled(self):
+        from tenant_ai_agent_startup import _KOMMO_BINDING_PROVISION_ENV
+        for setting, expected in (({},0),({_KOMMO_BINDING_PROVISION_ENV:'true'},1)):
+            events=[]
+            with (self.subTest(setting=setting), patch.dict('os.environ',setting,clear=True),
+                  patch.dict('sys.modules',self._bootstrap_modules(events)),
+                  patch('tenant_ai_agent_startup._prepare_optional_kommo_dialog_company') as optional):
+                prepare_database()
+                self.assertEqual(optional.call_count,expected)
+                self.assertIn('verified',events)
+
     def test_pre_17_server_fails_closed_before_any_sql(self):
         events=[]
         with patch.dict('sys.modules',self._bootstrap_modules(events,server_version=160006)):
