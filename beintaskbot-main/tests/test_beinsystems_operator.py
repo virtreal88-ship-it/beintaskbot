@@ -302,6 +302,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             ({"action": "preview_first_company_batch"}, {}, "company_batch_preview"),
             ({"action": "preview_first_company_batch_plan"}, {"plan": True}, "company_batch_preview"),
             ({"action": "confirm_first_company_batch", "receipt": "opaque"}, {"receipt": "opaque"}, "company_import"),
+            ({"action": "preview_company_import_plan"}, {"plan": True,"catalogue": True}, "company_batch_preview"),
+            ({"action": "confirm_company_import_batch", "receipt": "opaque"}, {"receipt": "opaque","catalogue": True}, "company_import"),
         )
         for body, arguments, key in actions:
             with self.subTest(action=body["action"]), patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
@@ -456,6 +458,12 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertTrue(fake.closed)
         self.assertTrue(response.closed)
         self.assertEqual(response.chunk_size, 64 * 1024)
+
+    def test_accounts_request_always_sends_the_default_limit(self):
+        with patch.object(operator, "api_base_url", return_value=operator.OPERATOR_API_BASE_URL), \
+             patch.object(operator, "_request_accounts_with_requests", return_value=b'{"status":"success","data":[]}') as call:
+            operator._request_operator("accounts", {}, token="synthetic-jwt")
+        self.assertEqual(call.call_args.args[1], {"limit": 1000})
 
     def test_me_read_uses_confirmed_get_host_path_and_bearer_only(self):
         fake = FakeOpener({"status":"success","data":{
@@ -1419,7 +1427,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             operator._request_operator("accounts", {"search": "abc"}, token="jwt",
                                        base_url="https://operator.example",
                                        opener=FakeOpener({}))
-        for invalid_limit in (0, 101, True, 1.0, "1"):
+        for invalid_limit in (0, 1001, True, 1.0, "1"):
             with self.subTest(limit=invalid_limit), self.assertRaises(operator.OperatorError):
                 operator._request_operator("accounts", {
                     "search": "known-account", "limit": invalid_limit,

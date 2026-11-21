@@ -160,16 +160,26 @@ def accounts_handler(member: Callable, origin: str, logger):
             if data == {"action": "preview_first_company_batch"}:
                 result = await asyncio.to_thread(company_import.first_company_batch, profile)
                 return _json_response({"company_batch_preview": result})
+            if data == {"action": "preview_company_import_plan"}:
+                result = await asyncio.to_thread(company_import.first_company_batch, profile, plan=True, catalogue=True)
+                return _json_response({"company_batch_preview": result})
             if data == {"action": "preview_first_company_batch_plan"}:
                 result = await asyncio.to_thread(
                     company_import.first_company_batch, profile, plan=True)
                 return _json_response({"company_batch_preview": result})
+            if (set(data) == {"action", "receipt"} and action == "confirm_company_import_batch"
+                    and isinstance(data["receipt"], str)):
+                result = await asyncio.to_thread(
+                    company_import.first_company_batch, profile, receipt=data["receipt"], catalogue=True)
+                return _json_response({"company_import": result})
             if (set(data) == {"action", "receipt"} and action == "confirm_first_company_batch"
                     and isinstance(data["receipt"], str) and data["receipt"]):
                 result = await asyncio.to_thread(
                     company_import.first_company_batch, profile, receipt=data["receipt"])
                 return _json_response({"company_import": result})
             if data == {"action": "create_companies"}:
+                if operator.first_company_batch_plan_enabled(profile.get("tenant_id")):
+                    raise operator.OperatorError("Сначала откройте предпросмотр импорта компаний.", 409)
                 result = await asyncio.to_thread(company_import.create_companies, profile)
                 return _json_response({"company_import": result})
             if set(data) == {"action", "account_id"} and data.get("action") == "add_account_company":
@@ -187,7 +197,8 @@ def accounts_handler(member: Callable, origin: str, logger):
                                      headers={"Cache-Control": "no-store"})
         except Exception:
             if action in {"create_companies", "preview_first_company_batch",
-                          "preview_first_company_batch_plan", "confirm_first_company_batch"}:
+                          "preview_first_company_batch_plan", "confirm_first_company_batch",
+                          "preview_company_import_plan", "confirm_company_import_batch"}:
                 logger.error("Operator company creation failed")
             else:
                 logger.exception("Operator account request failed")

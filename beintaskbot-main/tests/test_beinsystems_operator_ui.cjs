@@ -29,8 +29,8 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
-  else if(options.method==='POST'&&['preview_first_company_batch','preview_first_company_batch_plan'].includes(JSON.parse(options.body).action)){
-    const planning=JSON.parse(options.body).action==='preview_first_company_batch_plan';
+  else if(options.method==='POST'&&['preview_first_company_batch','preview_company_import_plan'].includes(JSON.parse(options.body).action)){
+    const planning=JSON.parse(options.body).action==='preview_company_import_plan';
     if(batchPreviewMode==='403')return await new Promise(resolve=>{
       finishBatchError=()=>resolve({ok:false,status:403,json:async()=>({
         success:false,error:'Для безопасного импорта нужен полный доступ к CRM-компаниям.'
@@ -40,11 +40,13 @@ window.fetch=async(path,options={})=>{
     if(batchPreviewMode==='non-json')return {ok:false,status:502,json:async()=>{throw new SyntaxError('redacted marker');}};
     const rows=batchPreviewMode==='empty'?[]:[planning?{account:'<img src=x>',action:'create'}:{account:'<img src=x>'}];
     result={success:true,company_batch_preview:{partial:true,checked:rows.length,limit:100,
+      ...(planning?{received:2,already:0,remaining:rows.length,request_limit:1000,
+        limit_reached:false,conflicts:[{account:'archived',reason:'archived_company'}]}:{}),
       ...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
       mode:planning?'company_plan':'accounts_only',rows}};
   }
-  else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
-    result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
+  else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_company_import_batch'){
+    result={success:true,company_import:{partial:true,checked:2,received:2,already:0,created:1,remaining:0,reused:0,manual_review:1}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='create_companies'){
     companyImports.push(JSON.parse(options.body));
@@ -414,7 +416,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const batchButton=batchPanel.querySelector('[data-first-company-batch]');
   const batchPreview=batchPanel.querySelector('[data-first-batch-preview]');
   const batchPosts=()=>requests.filter(row=>row.options.method==='POST').map(row=>JSON.parse(row.options.body))
-    .filter(body=>body.action==='confirm_first_company_batch');
+    .filter(body=>body.action==='confirm_company_import_batch');
   assert.equal(batchButton.hidden,false);
   assert.equal(batchButton.disabled,false);
   assert.equal(batchPanel.querySelector('[data-first-batch-prerequisite]').hidden,true);
@@ -459,7 +461,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   const planPreview=planPanel.querySelector('[data-first-batch-preview]');
   await planButton.onclick({currentTarget:planButton});
   assert.equal(batchPosts().length,0,'preview must never confirm automatically');
-  assert(planPreview.textContent.includes('не полный каталог'));
+  assert(planPreview.textContent.includes('Полнота каталога Operator не подтверждена'));
+  assert(planPreview.textContent.includes('Компания удалена из CRM'));
   assert(planPreview.textContent.includes('<img src=x>'));
   assert.equal(planPreview.querySelector('img'),null);
   const cancelled=planPreview.querySelector('[data-first-batch-confirm]');
@@ -469,9 +472,9 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   await planButton.onclick({currentTarget:planButton});
   const confirmBatch=planPreview.querySelector('[data-first-batch-confirm]');
   await confirmBatch.onclick({currentTarget:confirmBatch});
-  assert.deepEqual(batchPosts(),[{action:'confirm_first_company_batch',receipt:'opaque-receipt',
+  assert.deepEqual(batchPosts(),[{action:'confirm_company_import_batch',receipt:'opaque-receipt',
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id}]);
-  assert(planPanel.querySelector('[data-message]').textContent.includes('Первая выборка (не весь каталог)'));
+  assert(planPanel.querySelector('[data-message]').textContent.includes('создано в партии: 1'));
   assert.equal(planPreview.textContent,'');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};

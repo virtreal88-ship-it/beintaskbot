@@ -27,6 +27,7 @@ from tenant_platform_core import (
 from tenant_policy import TenantPolicy
 
 MAX_RESPONSE_BYTES = 1_000_000
+ACCOUNTS_REQUEST_LIMIT = 1000
 MAX_AUTH_RESPONSE_BYTES = 64_000
 REQUEST_TIMEOUT_SECONDS = 8
 AUTH_LOGIN_URL = "https://auth.beinsystems.az/auth/login"
@@ -702,7 +703,8 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         raise OperatorError("Операция Operator пока не поддерживается.")
     if requests_me and (endpoint != "me" or opener is not None):
         raise OperatorError("Операция Operator пока не поддерживается.")
-    if first_batch_accounts and (endpoint != "accounts" or payload != {"search": "", "limit": 100}):
+    if first_batch_accounts and (endpoint != "accounts" or payload not in (
+            {"search": "", "limit": 100}, {"search": "", "limit": ACCOUNTS_REQUEST_LIMIT})):
         raise OperatorError("Параметры запроса первой выборки Operator некорректны.")
     path, fields = READ_ENDPOINTS[endpoint]
     if not isinstance(payload, dict) or set(payload) - fields:
@@ -716,15 +718,12 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
             raise OperatorError("Поиск Operator требует не менее четырёх символов.")
         if len(search) > 120:
             raise OperatorError("Слишком длинный поисковый запрос.")
-        has_limit = "limit" in payload
-        limit = payload.get("limit")
-        if has_limit and (type(limit) is not int or not 1 <= limit <= 100):
-            raise OperatorError("Размер списка Operator должен быть от 1 до 100.")
-        payload = {}
+        limit = payload.get("limit", ACCOUNTS_REQUEST_LIMIT)
+        if type(limit) is not int or not 1 <= limit <= ACCOUNTS_REQUEST_LIMIT:
+            raise OperatorError("Размер списка Operator должен быть от 1 до 1000.")
+        payload = {"limit": limit}
         if search or first_batch_accounts:
             payload["search"] = search
-        if has_limit:
-            payload["limit"] = limit
     if "account" in payload:
         account = str(payload.get("account") or "").strip()
         if not account or len(account) > 240 or any(ord(char) < 32 for char in account):

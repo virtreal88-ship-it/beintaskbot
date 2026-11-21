@@ -170,15 +170,46 @@ def update_company(tenant_id,company_id,name,phone='',email='',description='',re
     return row
 
 
+def _require_no_company_dependents(cur, tenant, company):
+    from tenant_dialog_company_binding import CONNECT, KOMMO
+    cur.execute("""SELECT to_regclass(%s) IS NOT NULL AS connect_bindings,
+        to_regclass(%s) IS NOT NULL AS kommo_bindings,
+        to_regclass('saas_support_tickets') IS NOT NULL AS support_tickets""", (CONNECT, KOMMO))
+    relations = cur.fetchone()
+    if relations['connect_bindings'] and relations['support_tickets']:
+        cur.execute(f"""SELECT 1 FROM {CONNECT} b JOIN saas_support_tickets t
+            ON (t.tenant_id, t.channel_id, t.conversation_id) = (b.tenant_id, b.channel_id, b.conversation_id)
+            WHERE b.tenant_id=%s::uuid AND b.company_id=%s::uuid LIMIT 1""", (tenant,company))
+        if cur.fetchone():
+            raise CRMAccessError('company_has_linked_cases',409)
+    for table, available, reason in (
+        (CONNECT, relations['connect_bindings'], 'company_has_linked_dialogues'),
+        (KOMMO, relations['kommo_bindings'], 'company_has_linked_dialogues'),
+        ('saas_crm_native_deals', True, 'company_has_linked_deals'),
+    ):
+        if available:
+            cur.execute(f"""SELECT 1 FROM {table}
+                WHERE tenant_id=%s::uuid AND company_id=%s::uuid LIMIT 1""", (tenant,company))
+            if cur.fetchone():
+                raise CRMAccessError(reason,409)
+
+
 def archive_company(tenant_id,company_id,*,actor_id=None):
+    ident = _id(company_id)
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
+            # Lock order matches import, company names and the dialogue chooser.
+            lock_name_writes(cur,tenant_id)
             profile = current_access(cur, tenant_id, actor_id, 'companies', 'delete')
-            if actor_id is not None and not locked_resource(cur, profile, 'companies', 'delete',
-                    'saas_crm_native_companies', tenant_id, _id(company_id)):
-                return False
-            cur.execute("UPDATE saas_crm_native_companies SET archived_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id",(tenant_id,_id(company_id)))
+            if actor_id is not None:
+                if not locked_resource(cur, profile, 'companies', 'delete',
+                        'saas_crm_native_companies', tenant_id, ident):
+                    return False
+                _require_no_company_dependents(cur, tenant_id, ident)
+            cur.execute("""UPDATE saas_crm_native_companies SET archived_at=now(),updated_at=now()
+                WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL RETURNING id""",
+                (tenant_id,ident))
             row=cur.fetchone()
         conn.commit()
     return row is not None

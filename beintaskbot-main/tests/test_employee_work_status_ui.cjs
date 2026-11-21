@@ -18,7 +18,7 @@ async function domTest(){
    w.tenantProfileSnapshot=profile;w.tenantI18n={language:'az'};w.document.querySelector('#view-'+view).classList.add('active');return w;};
  const w=init(fixture.worker,'profile'),results=[];let stored=null,release;
  w.fetch=async(url,options={})=>{
-   const u=new URL(url,w.location.origin);assert.equal(u.pathname,'/api/platform/profile/availability');
+   const u=new URL(url,w.location.origin);assert.equal(u.pathname,'/api/platform/ai/profile/availability');
    if(options.method==='POST'){
      const input=JSON.parse(options.body);results.push(input);stored=input.status;
      if(stored==='away')return new Promise(resolve=>{release=()=>resolve(response(snapshot(stored)));});
@@ -71,7 +71,7 @@ async function browserTest(){
    await tab.route('https://profile.test/**',async route=>{
     const url=new URL(route.request().url());
     if(url.pathname==='/app')return route.fulfill({contentType:'text/html',body:html+'<style>'+read('tenant-members-ui.css')+'</style>'});
-    if(url.pathname==='/api/platform/profile/availability'){
+    if(url.pathname==='/api/platform/ai/profile/availability'){
      if(route.request().method()==='POST'){posted++;stored=route.request().postDataJSON().status;}
      return route.fulfill({json:snapshot(stored)});
     }

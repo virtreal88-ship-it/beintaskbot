@@ -82,7 +82,10 @@
       const testButton=connection.querySelector('[data-test]');
       if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
       const createCompaniesButton=connection.querySelector('[data-create-companies]');
-      if(createCompaniesButton)createCompaniesButton.disabled=!(state.connected||state.configured);
+      if(createCompaniesButton){
+        createCompaniesButton.hidden=state.first_company_batch_plan_enabled===true;
+        createCompaniesButton.disabled=!(state.connected||state.configured);
+      }
       const firstBatchButton=connection.querySelector('[data-first-company-batch]');
       if(firstBatchButton){
         const available=state.first_company_batch_preview_enabled===true &&
@@ -93,7 +96,7 @@
         firstBatchButton.disabled=!ready || batchReadBusy;
         const plan=connection.querySelector('[data-first-company-batch-plan]');
         if(plan){
-          plan.hidden=!ready || state.first_company_batch_plan_enabled!==true;
+          plan.hidden=!(ready||state.connected||state.configured) || state.first_company_batch_plan_enabled!==true;
           plan.disabled=plan.hidden || batchReadBusy;
         }
         const prerequisite=connection.querySelector('[data-first-batch-prerequisite]');
@@ -194,6 +197,12 @@
             void loadCatalog();
           } else if (result?.company_import) {
             const counts=result.company_import;
+            if(Number.isInteger(counts.received)){
+              message.textContent='Получено: '+counts.received+' · уже было: '+counts.already+
+                ' · создано в партии: '+counts.created+' · конфликты: '+counts.manual_review+
+                ' · осталось к созданию: '+counts.remaining+' · ошибки: 0.';
+              return;
+            }
             const collisionCount=Number.isFinite(Number(counts.name_collision_count))
               ? Math.max(0,Number(counts.name_collision_count)) : 0;
             const collisionAccounts=(Array.isArray(counts.name_collision_accounts)
@@ -287,7 +296,7 @@
       batchButton.hidden=true;
       const batchPlanButton=document.createElement('button');
       batchPlanButton.type='button'; batchPlanButton.dataset.firstCompanyBatchPlan='';
-      batchPlanButton.textContent='Предпросмотр импорта первой партии';
+      batchPlanButton.textContent='Предпросмотр импорта компаний';
       batchPlanButton.hidden=true;
       const batchPrerequisite=document.createElement('p');
       batchPrerequisite.id='operatorFirstBatchPrerequisite';
@@ -308,7 +317,7 @@
         let preview;
         try {
           const result=await request('/api/platform/operator/accounts',{
-            action:plan?'preview_first_company_batch_plan':'preview_first_company_batch'
+            action:plan?'preview_company_import_plan':'preview_first_company_batch'
           });
           preview=result?.company_batch_preview;
           if (!Array.isArray(preview?.rows) || !Number.isInteger(preview.checked) ||
@@ -327,7 +336,10 @@
         if(current!==revision || !batchHost.isConnected || clicked.hidden) return {};
         batchHost.replaceChildren();
         const heading=document.createElement('p');
-        heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
+        heading.textContent=plan
+          ? 'Получено из Operator: '+preview.received+' · уже связано: '+preview.already+
+              ' · к созданию: '+preview.remaining+' · в этой партии: '+preview.rows.length
+          : 'Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
         const rows=document.createElement('ul');
         if (!plan) {
           for(const row of preview.rows){
@@ -340,6 +352,22 @@
           batchHost.append(heading,note,rows);
           return {message:note.textContent};
         }
+        const completeness=document.createElement('p');
+        completeness.textContent=preview.limit_reached
+          ? 'Получено 1000 аккаунтов. В Operator могут оставаться аккаунты за пределами выдачи.'
+          : 'Результаты относятся к полученной выборке. Полнота каталога Operator не подтверждена.';
+        batchHost.append(heading,completeness);
+        if(Array.isArray(preview.conflicts)&&preview.conflicts.length){
+          const conflicts=document.createElement('details'),summary=document.createElement('summary'),values=document.createElement('ul');
+          summary.textContent='Конфликты: '+preview.conflicts.length;
+          const reasons={archived_company:'Компания удалена из CRM. Автоматически не восстановится',
+            name_collision:'Название уже используется',prior_identity_conflict:'Несовпадающие связи с CRM',
+            identity_conflict:'Требуется сверить связь с CRM'};
+          for(const item of preview.conflicts){
+            const row=document.createElement('li');row.textContent=item.account+' · '+(reasons[item.reason]||reasons.identity_conflict);values.append(row);
+          }
+          conflicts.append(summary,values);batchHost.append(conflicts);
+        }
         const canConfirm=typeof preview.receipt==='string' && !!preview.receipt;
         const names={create:canConfirm?'Создать':'Кандидат на создание',reuse:'Уже есть, без изменений',manual_review:'Ручная проверка'};
         for(const row of preview.rows){
@@ -347,14 +375,14 @@
         }
         if (!canConfirm) {
           const note=document.createElement('p');
-          note.textContent=preview.rows.length ? 'Доступен только предпросмотр. CRM-компании не создаются.' :
-            'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога. CRM-компании не создаются.';
-          batchHost.append(heading,rows,note);
+          note.textContent=preview.received ? 'В полученной выборке нет новых компаний для создания.' :
+            'Operator не вернул аккаунтов в этой выборке.';
+          batchHost.append(rows,note);
           return {message: note.textContent};
         }
         const confirm=document.createElement('button');confirm.type='button';
         confirm.dataset.firstBatchConfirm='';
-        confirm.textContent='Подтвердить создание новых компаний из этой выборки';
+        confirm.textContent='Создать компании из этой партии';
         confirm.disabled=!preview.rows.some(row=>row.action==='create');
         const cancel=document.createElement('button');cancel.type='button';cancel.textContent='Отменить';
         cancel.dataset.firstBatchCancel='';
@@ -362,11 +390,18 @@
         confirm.onclick=event=>run(event.currentTarget,async()=>{
           if(current!==revision || !batchHost.contains(confirm) || batchPlanButton.hidden || batchReadBusy) return {};
           batchHost.replaceChildren();
-          return request('/api/platform/operator/accounts',{
-            action:'confirm_first_company_batch',receipt:preview.receipt
+          const result=await request('/api/platform/operator/accounts',{
+            action:'confirm_company_import_batch',receipt:preview.receipt
           });
+          if(current===revision&&batchHost.isConnected&&result?.company_import?.remaining>0){
+            const next=document.createElement('button');
+            next.type='button';next.textContent='Предпросмотр следующей партии';
+            next.onclick=()=>batchPlanButton.click();
+            batchHost.append(next);
+          }
+          return result;
         });
-        batchHost.append(heading,rows,confirm,cancel);
+        batchHost.append(rows,confirm,cancel);
         return {message: preview.rows.length ? 'Проверьте выборку перед подтверждением.' :
           'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога.'};
       }).finally(()=>{

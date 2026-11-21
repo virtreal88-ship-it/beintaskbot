@@ -31,11 +31,11 @@ FIRST_BATCH_PREVIEW_TTL = 300
 _FIRST_BATCH_PURPOSE = "operator_first_company_batch_v2"
 
 
-def _first_batch_payload(response):
+def _first_batch_payload(response, limit=FIRST_BATCH_LIMIT):
     if (not isinstance(response, dict) or set(response) != {"status", "data"}
             or response.get("status") != "success"
             or not isinstance(response.get("data"), list)
-            or len(response["data"]) > FIRST_BATCH_LIMIT):
+            or len(response["data"]) > limit):
         raise operator.OperatorError("Operator не вернул допустимую первую выборку аккаунтов.", 409)
     result, seen = [], set()
     for row in response["data"]:
@@ -56,9 +56,9 @@ def _first_batch_digest(data):
 
 def _first_batch_scope(tenant, actor, credentials):
     # No credential or account identifiers are shipped in the opaque receipt.
-    return _first_batch_digest([tenant, actor, _revision(credentials["received_at"]),
+    return _first_batch_digest([tenant, actor, _revision(credentials.get("received_at")),
         credentials["generation"], credentials["connection_instance_id"],
-        credentials["identity_fingerprint"], credentials["base_url"],
+        credentials.get("identity_fingerprint"), credentials["base_url"],
         hashlib.sha256(credentials["token"].encode("utf-8")).hexdigest()])
 
 
@@ -84,7 +84,7 @@ def _require_first_batch_plan_enabled(tenant):
         raise operator.OperatorError("Создание компаний из первой выборки отключено.", 403)
 
 
-def first_company_batch(profile, *, receipt=None, plan=False):
+def first_company_batch(profile, *, receipt=None, plan=False, catalogue=False):
     """Keep the source list read-only; only a separate guarded plan can mint a receipt."""
     if not operator.first_company_batch_preview_enabled():
         raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
@@ -93,29 +93,28 @@ def first_company_batch(profile, *, receipt=None, plan=False):
         _require_first_batch_plan_enabled((profile or {}).get("tenant_id"))
     claims = None if receipt is None else _decode_first_batch_receipt(receipt)
     tenant, actor, source, credentials = _selected_source_credentials(profile)
-    if source != "accounts_only":
+    if not catalogue and source != "accounts_only":
         raise operator.OperatorError("Первая выборка доступна только для режима accounts-only.", 409)
-    scope = _first_batch_scope(tenant, actor, credentials)
+    if catalogue:
+        scope = _first_batch_digest(["catalogue", source, _first_batch_scope(tenant, actor, credentials)])
+    else:
+        scope = _first_batch_scope(tenant, actor, credentials)
     if claims is not None and claims["scope"] != scope:
         raise operator.OperatorError("Доступ Operator изменился. Откройте новый предпросмотр.", 409)
 
-    operator._record_operator_read(profile, "me", {})
-    _selected_source_fence(profile, tenant, actor, source, credentials)
-    identity = operator.operator_me_payload(operator._request_operator(
-        "me", {}, token=credentials["token"], base_url=credentials["base_url"], requests_me=True))
-    _selected_source_fence(profile, tenant, actor, source, credentials)
-    if _identifier_fingerprint(identity["identifier"]) != credentials["identity_fingerprint"]:
-        raise operator.OperatorError("Подтверждённый профиль Operator изменился.", 409)
+    _verify_selected_identity(profile, tenant, actor, source, credentials)
     operator._record_operator_read(profile, "accounts", {})
     _selected_source_fence(profile, tenant, actor, source, credentials)
-    response = operator._request_operator("accounts", {"search": "", "limit": FIRST_BATCH_LIMIT},
+    request_limit = operator.ACCOUNTS_REQUEST_LIMIT if catalogue else FIRST_BATCH_LIMIT
+    response = operator._request_operator("accounts", {"search": "", "limit": request_limit},
         token=credentials["token"], base_url=credentials["base_url"], first_batch_accounts=True)
-    accounts = _first_batch_payload(response)
+    accounts = _first_batch_payload(response, request_limit) if catalogue else _first_batch_payload(response)
     _selected_source_fence(profile, tenant, actor, source, credentials)
     if not planning:
         return _preview_operator_accounts_only(profile, tenant, actor, accounts, credentials)
+    options = {"catalogue_source": source} if catalogue else {}
     return _apply_company_import(profile, tenant, actor, accounts, credentials,
-        first_batch=True, preview_receipt=receipt, preview_scope=scope)
+        first_batch=True, preview_receipt=receipt, preview_scope=scope, **options)
 
 
 
@@ -314,9 +313,11 @@ def _fresh_active_accounts(profile, tenant, actor):
     ))
     operator._record_operator_read(profile, "accounts", {})
     response = operator._request_operator(
-        "accounts", {}, token=credentials["token"], base_url=credentials["base_url"]
+        "accounts", {"limit": FIRST_BATCH_LIMIT}, token=credentials["token"], base_url=credentials["base_url"]
     )
     accounts = operator.accounts_import_payload(response)
+    if len(accounts) > FIRST_BATCH_LIMIT:
+        raise operator.OperatorError("Operator превысил размер партии. Откройте предпросмотр импорта.", 409)
 
     fresh = operator._credentials(tenant, allow_configured=True)
     if not _same_credentials(credentials, fresh):
@@ -485,8 +486,44 @@ def _preview_operator_accounts_only(profile, tenant, actor, accounts, credential
             "mode": "accounts_only", "rows": [{"account": row["account"]} for row in accounts]}
 
 
+def _catalogue_links(cur, tenant, accounts, credentials):
+    cur.execute("""SELECT external_id, local_entity_id::text AS company_id
+        FROM saas_beinsystems_operator_links
+        WHERE tenant_id=%s::uuid AND local_entity_type='company'
+          AND external_entity_type='account' AND external_scope_id=''
+          AND connection_generation=%s AND connection_instance_id=%s::uuid
+          AND revoked_at IS NULL AND external_id=ANY(%s::text[])
+        FOR UPDATE""", (tenant, credentials["generation"], credentials["connection_instance_id"], accounts))
+    links = {}
+    for row in cur.fetchall():
+        links.setdefault(row["external_id"], []).append(row["company_id"])
+    return links
+
+
+def _catalogue_archived(cur, tenant, targets):
+    candidates = sorted({company for ids in targets.values() for company in ids})
+    if not candidates:
+        return set()
+    cur.execute("""SELECT id::text AS company_id FROM saas_crm_native_companies
+        WHERE tenant_id=%s::uuid AND id=ANY(%s::uuid[]) AND archived_at IS NOT NULL""",
+        (tenant, candidates))
+    return {row["company_id"] for row in cur.fetchall()}
+
+
+def _catalogue_plan(plan):
+    creates = [row for row in plan if row["action"] == "create"]
+    conflicts = [{"account": row["account"], "reason": row.get("reason", "identity_conflict")}
+                 for row in plan if row["action"] == "manual_review"]
+    batch = creates[:FIRST_BATCH_LIMIT]
+    return batch, {"request_limit": operator.ACCOUNTS_REQUEST_LIMIT,
+                   "received": len(plan), "already": len(plan)-len(creates)-len(conflicts),
+                   "conflicts": conflicts, "remaining": len(creates),
+                   "limit_reached": len(plan) >= operator.ACCOUNTS_REQUEST_LIMIT}
+
+
 def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
-                          first_batch=False, preview_receipt=None, preview_scope=None):
+                          first_batch=False, preview_receipt=None, preview_scope=None, catalogue_source=None):
+    catalogue = catalogue_source is not None
     try:
         instance_id = str(uuid.UUID(credentials["connection_instance_id"]))
     except (TypeError, ValueError, KeyError):
@@ -505,7 +542,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
             current = operator._current_profile(cur, tenant, actor)
             _owner(profile, current)
             if first_batch:
-                _lock_and_check_selected_source(cur, tenant, actor, "accounts_only", credentials)
+                _lock_and_check_selected_source(cur, tenant, actor, catalogue_source or "accounts_only", credentials)
             else:
                 integration = operator._operator_row(cur, tenant, lock=True)
                 if not _connection_is_current(integration, credentials, locked=True):
@@ -573,6 +610,8 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
             if account_ids:
                 if first_batch:
                     mappings, prior_targets = _first_batch_prior_identity(cur, tenant, account_ids)
+                    if catalogue:
+                        confirmed_links = _catalogue_links(cur, tenant, account_ids, credentials)
                 else:
                     cur.execute(
                         """SELECT external_account,company_id::text AS company_id
@@ -633,13 +672,21 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
             plan = _plan_company_import(
                 accounts, mappings, confirmed_links, visible_company_ids, existing_name_keys
             )
+            batch = plan
+            catalogue_report = {}
             if first_batch:
+                archived_targets = _catalogue_archived(cur, tenant, prior_targets) if catalogue else set()
+                if archived_targets:
+                    plan = [{**row, "action": "manual_review", "reason": "archived_company"}
+                            if archived_targets.intersection(prior_targets.get(row["account"], ()))
+                            else row for row in plan]
+                existing_actions = {"reuse", "bind"} if catalogue else {"reuse"}
                 # Historical links and case variants can prevent a duplicate but
                 # cannot authorize reusing or rebinding a CRM company. A stable exact
                 # mapping can be reused without touching it only if all prior targets agree.
                 plan = [
-                    action if not prior_targets.get(action["account"]) or (
-                        action["action"] == "reuse"
+                    action if action.get("reason") == "archived_company" or not prior_targets.get(action["account"]) or (
+                        action["action"] in existing_actions
                         and prior_targets[action["account"]] == {action["company_id"]})
                     else {"account": action["account"], "action": "manual_review",
                           "reason": "prior_identity_conflict"}
@@ -650,21 +697,27 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                 for index, action in enumerate(plan):
                     account = action["account"]
                     try:
-                        if action["action"] == "reuse":
+                        if action["action"] in existing_actions:
                             require_unreserved_account_pair(cur, tenant, account, action["company_id"])
                         elif action["action"] == "create":
                             require_unreserved_name(cur, tenant, account, str(uuid.uuid4()))
                     except CRMAccessError:
                         plan[index] = {"account": account, "action": "manual_review",
                                        "reason": "prior_identity_conflict"}
-                _assert_first_batch_not_expired(cur, tenant, actor, credentials)
+                if catalogue_source != "active":
+                    _assert_first_batch_not_expired(cur, tenant, actor, credentials)
                 _require_first_batch_plan_enabled(tenant)
+                if catalogue:
+                    batch, catalogue_report = _catalogue_plan(plan)
+                else:
+                    batch = plan
                 digest = _first_batch_digest(plan)
                 if preview_receipt is None:
                     preview = {"checked": len(accounts), "partial": True, "limit": FIRST_BATCH_LIMIT,
                                "mode": "company_plan",
-                               "rows": [{"account": a["account"], "action": a["action"]} for a in plan]}
-                    if any(action["action"] == "create" for action in plan):
+                               "rows": [{"account": a["account"], "action": a["action"]} for a in batch],
+                               **catalogue_report}
+                    if any(action["action"] == "create" for action in batch):
                         payload = {"purpose": _FIRST_BATCH_PURPOSE, "nonce": str(uuid.uuid4()),
                                    "scope": preview_scope, "digest": digest}
                         receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
@@ -685,7 +738,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                     raise operator.OperatorError("Эта выборка уже подтверждена. Откройте новый предпросмотр.", 409)
             collision_summary = _name_collision_summary(plan)
             created = reused = manual_review = 0
-            for action in plan:
+            for action in batch:
                 account = action["account"]
                 kind = action["action"]
                 if kind == "manual_review":
@@ -720,13 +773,18 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                 else:
                     reused += 1
 
+            if catalogue:
+                reused = catalogue_report["already"]
+                manual_review = len(catalogue_report["conflicts"])
+                catalogue_report["remaining"] -= created
             cur.execute(
                 """INSERT INTO saas_tenant_audit_events
                   (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'operator_companies_imported',
                     'operator_company_import',%s,%s::jsonb)""",
                 (str(uuid.uuid4()), tenant, actor,
-                 "first_bounded_accounts" if first_batch else "fresh_active_accounts", operator._json({
+                 ("catalogue_batch" if catalogue else "first_bounded_accounts" if first_batch
+                  else "fresh_active_accounts"), operator._json({
                     "checked": len(accounts), "created": created,
                     "reused": reused, "manual_review": manual_review,
                     "connection_generation": credentials["generation"],
@@ -737,6 +795,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
         "checked": len(accounts), "created": created,
         "reused": reused, "manual_review": manual_review,
         **collision_summary,
+        **catalogue_report,
         **({"partial": True, "limit": FIRST_BATCH_LIMIT} if first_batch else {}),
     }
 
