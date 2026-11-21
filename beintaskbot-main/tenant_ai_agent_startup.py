@@ -83,6 +83,9 @@ def prepare_database() -> None:
             _prepare_optional_kommo_dialog_company(conn)
         if os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
             _provision_personal_reminders(conn)
+        from tenant_dialog_presence import STATUS_PROVISION_ENV
+        if os.environ.get(STATUS_PROVISION_ENV, '').strip().lower() == 'true':
+            _provision_employee_status(conn)
 
 
 def _provision_reply_template_schema(conn):
@@ -168,6 +171,21 @@ def _provision_personal_reminders(conn):
         logger.warning('Personal reminders schema preflight: unverified')
     else:
         logger.info('Personal reminders schema preflight: ready')
+
+
+def _provision_employee_status(conn):
+    from tenant_dialog_presence import provision_status_schema
+    logger = logging.getLogger(__name__)
+    try:
+        # Last optional operation under the existing startup session lock.
+        # A failed transaction (including a terminated connection) cannot
+        # interrupt the base schema already committed before this point.
+        with conn.transaction(), conn.cursor() as cur:
+            created = provision_status_schema(cur)
+    except Exception:
+        logger.warning('Employee status schema preflight: unverified')
+    else:
+        logger.info('Employee status schema preflight: %s', 'created' if created else 'ready')
 
 
 def ensure_pilot_case_schema(conn) -> None:

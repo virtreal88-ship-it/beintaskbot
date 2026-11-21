@@ -115,6 +115,7 @@ ASSETS = (
     ('/assets/tenant-crm-save-receipt.js', 'tenant-crm-save-receipt.js', 'no-store'),
     ('/assets/tenant-crm-sync-history.js', 'tenant-crm-sync-history.js', 'no-store'),
     ('/assets/tenant-dialog-source-members.js', 'tenant-dialog-source-members.js', 'no-cache, max-age=0, must-revalidate'),
+    ('/assets/tenant-profile-work-status.js', 'tenant-profile-work-status.js', 'no-store'),
     ('/assets/tenant-members-ui.js', 'tenant-members-ui.js', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-members-ui.css', 'tenant-members-ui.css', 'no-cache, max-age=0, must-revalidate'),
     ('/assets/tenant-hot-order-settings.js', 'tenant-hot-order-settings.js', 'no-store'),

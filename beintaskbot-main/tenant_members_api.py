@@ -79,7 +79,15 @@ def handlers(context: MemberApiContext) -> dict[str, Callable]:
                         return web.json_response({'success': False, 'code': 'member_creation_unavailable'}, status=503)
                     options = await asyncio.to_thread(context.employee_creation_options, tenant_id=tenant_id, owner_id=owner_id)
                     return web.json_response({'success': True, 'creation_options': options}, headers={'Cache-Control':'no-store','Vary':'Cookie'})
-                rows = await asyncio.to_thread(context.list_members, tenant_id=tenant_id, owner_id=owner_id)
+                include_work_status = request.query.get("include") == "work-status"
+                options = {}
+                if include_work_status:
+                    if (str(request.query.get("expected_tenant_id") or "") != str(tenant_id)
+                            or str(request.query.get("expected_user_id") or "") != str(owner_id)):
+                        return web.json_response({"success": False, "code": "member_scope_changed"}, status=409,
+                                                 headers={"Cache-Control": "no-store", "Vary": "Cookie"})
+                    options["include_work_status"] = True
+                rows = await asyncio.to_thread(context.list_members, tenant_id=tenant_id, owner_id=owner_id, **options)
             except context.platform_error as exc:
                 return failure(exc)
             return web.json_response({"success": True, "members": rows},headers={'Cache-Control':'no-store','Vary':'Cookie'})
