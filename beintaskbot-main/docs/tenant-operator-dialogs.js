@@ -917,23 +917,24 @@
   async function appendNewMessages(route,suppressRead=false){
     const chat=$('chatRows'),page=currentPage,version=epoch,serial=++historyUpdateSerial;if(!chat||!page||!sameDialog(route,currentDialog))return;
     try{
-      const latest=await api('dialogs/history?'+historyQuery(route));
-      if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!sameDialog(route,currentDialog)||!chat.isConnected)return;
+      const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
+      if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
       updateDeliveryEvidence(latest,route);
       updateAudioEvidence(latest,route);
       updateVisualEvidence(latest,route);
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
-      if(!added.length){if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
-      const follow=atBottom(chat),oldHeight=chat.scrollHeight,oldTop=chat.scrollTop;
+      retainOperatorEvents(currentPage,latest);
+      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',messageMarkup(added,route));
-      currentPage.messages=(currentPage.messages||[]).concat(added);currentPage.dialog=latest.dialog||currentPage.dialog;if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;rememberDialogPage(route,currentPage);
+      currentPage.messages=(currentPage.messages||[]).concat(added);const timelinePlaced=placeOperatorEvents(chat,currentPage);currentPage.dialog=latest.dialog||currentPage.dialog;if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;rememberDialogPage(route,currentPage);
       document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
       const newArticles=[...chat.querySelectorAll('[data-message-id]')].filter(node=>added.some(message=>String(message.id)===node.dataset.messageId));
       newArticles.forEach(node=>{node.classList.add('operator-message-enter');setTimeout(()=>node.classList.remove('operator-message-enter'),180);});
-      if(follow){chat.scrollTop=chat.scrollHeight;if(!suppressRead)void markDialogReadIfVisible(currentPage);}
-      else {chat.scrollTop=oldTop;const button=$('operatorNewMessages');if(button)button.hidden=false;}
+      if(follow){setTimelineScroll(chat,chat.scrollHeight,timelinePlaced);if(!suppressRead)void markDialogReadIfVisible(currentPage);}
+      else {setTimelineScroll(chat,timelineScrollTop(oldTop,anchor),timelinePlaced);const button=$('operatorNewMessages');if(button)button.hidden=false;}
       const error=$('operatorChatError');if(error)error.textContent='';
     }catch(error){if(version===epoch&&sameDialog(route,currentDialog)&&lifecycleUnavailable(error,route))return;const status=$('operatorChatError');if(status&&serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog))status.textContent=error.message;}
   }
@@ -1003,8 +1004,114 @@
     renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||sources[0]||row);} );
   }
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...(route.source_message_id?{anchor:route.source_message_id}:{})});
+  function timelineHistoryQuery(route,knownPage=null){
+    const query=historyQuery(route);
+    if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id&&!(knownPage?.operatorEventsRetryAt>Date.now())){
+      query.set('operator_events','1');query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
+      if(Number.isSafeInteger(knownPage?.operator_events_revision))query.set('operator_events_revision',knownPage.operator_events_revision);
+    }
+    return query;
+  }
+  const timelineStamp=value=>Date.parse(value||'');
+  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
+  const operatorEventOrder=(a,b)=>timelineStamp(a.at)-timelineStamp(b.at)||a.at.localeCompare(b.at)||a.id.localeCompare(b.id);
+  const OPERATOR_TIMELINE_LIMIT=180;
+  function noteOperatorEventOmission(page,at){
+    if(typeof at==='string'&&Number.isFinite(timelineStamp(at))&&
+       (!page.operator_events_omitted_at||timelineStamp(at)>timelineStamp(page.operator_events_omitted_at)))page.operator_events_omitted_at=at;
+  }
+  function boundedOperatorEvents(page,items){
+    const ordered=[...new Map(items.filter(validOperatorEvent).map(event=>[event.id,event])).values()].sort(operatorEventOrder);
+    if(ordered.length>OPERATOR_TIMELINE_LIMIT)noteOperatorEventOmission(page,ordered[ordered.length-OPERATOR_TIMELINE_LIMIT].at);
+    return ordered.slice(-OPERATOR_TIMELINE_LIMIT);
+  }
+  const operatorEventRetry=delay=>Number.isSafeInteger(delay)&&delay>=250&&delay<=30000;
+  function retainOperatorEventRetry(page,fresh){
+    const delay=fresh.operator_events_retry_after_ms;
+    if(operatorEventRetry(delay))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,Date.now()+delay);
+  }
+  function retainOperatorEvents(page,fresh,{older=false}={}){
+    retainOperatorEventRetry(page,fresh);
+    if(Number.isSafeInteger(fresh.operatorEventsRetryAt))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,fresh.operatorEventsRetryAt);
+    if(!Array.isArray(fresh.operator_events))return;
+    noteOperatorEventOmission(page,fresh.operator_events_omitted_at);
+    const updates=fresh.operator_events.filter(validOperatorEvent).map(event=>({id:event.id,kind:event.kind,at:event.at,
+      employee_name:typeof event.employee_name==='string'?event.employee_name:''}));
+    page.operator_events=boundedOperatorEvents(page,[...(page.operator_events||[]),...updates]);
+    // An older response must not suppress a new lifecycle revision in polling.
+    if(!older&&Number.isSafeInteger(fresh.operator_events_revision))page.operator_events_revision=fresh.operator_events_revision;
+  }
+  function restoreOperatorEventsWindow(page,known){
+    retainOperatorEventRetry(page,page);
+    if(!known||Array.isArray(page.operator_events)||!page.dialog?.lifecycle_enabled||page.anchor_message_id)return;
+    const oldest=page.next_before?timelineStamp(page.messages?.[0]?.happened_at||page.messages?.[0]?.created_at):-Infinity;
+    // Preserve only events that belong to the newly rendered window on a
+    // full redraw. The incremental path retains already paged history.
+    retainOperatorEvents(page,{operator_events:(known.operator_events||[]).filter(event=>timelineStamp(event.at)>=oldest),
+      operator_events_omitted_at:timelineStamp(known.operator_events_omitted_at)>=oldest?known.operator_events_omitted_at:null,
+      operator_events_revision:known.operator_events_revision});
+    page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,known.operatorEventsRetryAt||0);
+  }
+  function timelineViewportAnchor(chat){
+    const top=chat.getBoundingClientRect().top;
+    const node=[...chat.children].find(item=>item.dataset.messageId&&item.getBoundingClientRect().bottom>top+1);
+    return node?{node,top:node.getBoundingClientRect().top}:null;
+  }
+  const timelineScrollTop=(saved,anchor)=>saved+(anchor?.node.isConnected?anchor.node.getBoundingClientRect().top-anchor.top:0);
+  const timelineScrollMarks=new WeakMap();
+  function setTimelineScroll(chat,top,suppressRead){
+    chat.scrollTop=top;
+    if(!suppressRead)return;
+    const mark={top:chat.scrollTop};timelineScrollMarks.set(chat,mark);
+    afterLayout(()=>{if(timelineScrollMarks.get(chat)===mark)timelineScrollMarks.delete(chat);});
+  }
+  function timelineOnlyScroll(chat){
+    const mark=timelineScrollMarks.get(chat);
+    if(!mark)return false;
+    timelineScrollMarks.delete(chat);
+    return Math.abs(chat.scrollTop-mark.top)<1;
+  }
+
+  function placeOperatorEvents(chat,page){
+    const events=boundedOperatorEvents(page,page.operator_events||[]);
+    page.operator_events=events;
+    const omission=timelineStamp(page.operator_events_omitted_at);
+    if(!events.length&&!Number.isFinite(omission))return false;
+    const messageTimes=new Map((page.messages||[]).map(m=>[String(m.id),timelineStamp(m.happened_at||m.created_at)]));
+    const text={
+      ru:{accept:'Диалог принят',start:'Начал(а) диалог',transfer:'Диалог передан',acceptUnknown:'Диалог принят сотрудником',startUnknown:'Диалог начат сотрудником',transferUnknown:'Диалог передан сотруднику'},
+      az:{accept:'Dialoq qəbul edildi',start:'Dialoqa başladı',transfer:'Dialoq ötürüldü',acceptUnknown:'Dialoq əməkdaş tərəfindən qəbul edildi',startUnknown:'Dialoq əməkdaş tərəfindən başladıldı',transferUnknown:'Dialoq əməkdaşa ötürüldü'},
+      en:{accept:'Dialog accepted',start:'Started dialog',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'}
+    }[i18n.language]||{accept:'Dialog accepted',start:'Started dialog',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'};
+    const existing=new Map([...chat.children].filter(node=>node.dataset.operatorTimelineEvent).map(node=>[node.dataset.operatorTimelineEvent,node]));
+    const kept=new Set(events.map(event=>event.id));for(const [id,node] of existing)if(!kept.has(id))node.remove();
+    let omitted=chat.querySelector('[data-operator-timeline-omissions]');
+    if(!Number.isFinite(omission))omitted?.remove();
+    const messages=[...chat.children].filter(node=>node.dataset.messageId);
+    if(!messages.length)for(const child of [...chat.childNodes])if(child.nodeType===3&&child.textContent.trim()===t('emptyHistory'))child.remove();
+    for(const event of events){
+      const at=timelineStamp(event.at);
+      const node=existing.get(event.id)||document.createElement('div');
+      if(!node.isConnected){node.className='operator-timeline-event';node.dataset.operatorTimelineEvent=event.id;node.setAttribute('role','note');node.append(document.createElement('span'),document.createElement('time'));}
+      const name=typeof event.employee_name==='string'?event.employee_name.trim():'';
+      node.firstElementChild.textContent=name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
+      node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
+      const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
+      if(next)next.before(node);else chat.append(node);
+    }
+    if(Number.isFinite(omission)){
+      if(!omitted){omitted=document.createElement('div');omitted.className='operator-timeline-event';omitted.dataset.operatorTimelineOmissions='true';omitted.setAttribute('role','note');}
+      omitted.textContent=({ru:'Часть системных событий не показана',az:'Sistem hadisələrinin bir hissəsi göstərilmir',en:'Some system events are not shown'})[i18n.language]||'Some system events are not shown';
+      const nextEvent=events.find(event=>timelineStamp(event.at)>=omission);
+      const nextMessage=messages.find(message=>messageTimes.get(message.dataset.messageId)>=omission);
+      const next=nextEvent&&(!nextMessage||timelineStamp(nextEvent.at)<messageTimes.get(nextMessage.dataset.messageId))?existing.get(nextEvent.id):nextMessage;
+      if(next)next.before(omitted);else chat.append(omitted);
+    }
+    return true;
+  }
+
   const pageCacheKey=route=>identity(member)+'|'+dialogKey(route);
-  function cloneDialogPage(page){try{return JSON.parse(JSON.stringify(page));}catch{return null;}}
+  function cloneDialogPage(page){try{const {operator_events,operator_events_revision,operator_events_omitted_at,operator_events_retry_after_ms,operatorEventsRetryAt,...cacheable}=page;return JSON.parse(JSON.stringify(cacheable));}catch{return null;}}
   function rememberDialogPage(route,page){const copy=cloneDialogPage(page);if(!copy)return;delete copy.scroll_to_latest;if(copy.dialog)delete copy.dialog.compose_draft;const key=pageCacheKey(route);dialogPageCache.delete(key);dialogPageCache.set(key,copy);while(dialogPageCache.size>DIALOG_PAGE_CACHE_LIMIT)dialogPageCache.delete(dialogPageCache.keys().next().value);}
   function cachedDialogPage(route){const key=pageCacheKey(route),page=dialogPageCache.get(key);if(!page||page.dialog?.lifecycle_enabled||!sameDialog(page.dialog,route)){dialogPageCache.delete(key);return null;}dialogPageCache.delete(key);dialogPageCache.set(key,page);return cloneDialogPage(page);}
   function renderComposerSourcePicker(){
@@ -1156,6 +1263,7 @@
     route={...route};delete route.compose_draft;
     if(currentDialog&&!sameDialog(currentDialog,route))closeDialog(false);
     const retained=!!displayedPage&&sameDialog(currentDialog,route)&&!!$('chatRows'),revision=retained?openRevision:++openRevision,readSerial=++dialogReadSerial,version=epoch;
+    const knownTimeline=retained&&!route.source_message_id&&sameDialog(displayedPage?.dialog,route)?displayedPage:null;
     const verifyingDisplayed=options.revalidateAccess&&retained&&!pendingDialogRoute;
     if(!verifyingDisplayed){
       cancelCaseLink();
@@ -1171,7 +1279,7 @@
     if(cached){cached.dialog={...cached.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
+    try{const page=await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);restoreOperatorEventsWindow(page,knownTimeline);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
     catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;
       if(options.revalidateAccess&&error.status===404){removeLifecycleDialog(route);notice(error.message);return false;}
       if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
@@ -1675,7 +1783,7 @@
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
     currentPage=old;old.messages ||= [];
-    const follow=atBottom(chat),top=chat.scrollTop;
+    const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
     // Only a complete, unanchored history proves absence. A newest-page read
     // must not remove older messages explicitly loaded by the employee.
     if(latest.next_before===null&&!latest.anchor_message_id){
@@ -1690,9 +1798,10 @@
       if(!prior){if(!(old.messages||[]).length&&chat.textContent.trim()===t('emptyHistory'))chat.replaceChildren();chat.insertAdjacentHTML('beforeend',messageMarkup([message],latest.dialog));old.messages.push(message);byId.set(String(message.id),message);}
       else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
     }
-    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id'].includes(key))old[key]=value;
+    retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
+    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt'].includes(key))old[key]=value;
     currentDialog=old.dialog;displayedPage=old;rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
-    chat.scrollTop=follow?chat.scrollHeight:top;
+    setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
   }
@@ -1931,8 +2040,39 @@
     if(interactionState?.quote){if(interactionState.quote.pending)restorePendingReply(interactionState.quote);else showReplyQuote(interactionState.quote);}
     window.tenantChatSend?.clearDiagnostics?.();if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,getQuote:()=>replyTarget,onPending:restorePendingReply,onDiscard:clearReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:text=>{clearReply();if((sessionStorage.getItem(sendDraftKey)||'').trim()===text)sessionStorage.removeItem(sendDraftKey);},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     renderComposerSourcePicker();
-    const chat=$('chatRows'),draftKey=contextKey('draft',route),composer=$('chatText'),composerSurface=composer.closest('.operator-composer'),dialogBody=$('operatorDialogBody'),newMessages=$('operatorNewMessages');const scrollKey=contextKey('scroll',route),savedScroll=sessionStorage.getItem(scrollKey);chat.scrollTop=savedScroll===null||page.scroll_to_latest?chat.scrollHeight:Number(savedScroll);chat.addEventListener('scroll',()=>{sessionStorage.setItem(scrollKey,String(chat.scrollTop));if(atBottom(chat))void markDialogReadIfVisible(currentPage);});composer.value=interactionState?.draft??sessionStorage.getItem(draftKey)??'';const updateComposerHeight=()=>{const rect=composerSurface.getBoundingClientRect(),style=window.getComputedStyle(composerSurface),marginBottom=parseFloat(style.marginBottom)||0;dialogBody.style.setProperty('--operator-composer-height',`${Math.ceil(rect.height+marginBottom)}px`);};const autosize=()=>{composer.style.height='auto';const height=Math.max(40,Math.min(180,composer.scrollHeight||40));composer.style.height=height+'px';composer.style.overflowY=composer.scrollHeight>composer.clientHeight?'auto':'hidden';updateComposerHeight();};autosize();composer.addEventListener('input',()=>{sessionStorage.setItem(draftKey,composer.value);autosize();});newMessages.onclick=()=>{const behavior=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';if(typeof chat.scrollTo==='function')chat.scrollTo({top:chat.scrollHeight,behavior});else chat.scrollTop=chat.scrollHeight;newMessages.hidden=true;if(behavior==='auto')void markDialogReadIfVisible(currentPage);};
-    $('operatorEarlier').onclick=async()=>{const button=$('operatorEarlier');button.disabled=true;try{const query=historyQuery(route);query.set('before',page.next_before);const earlier=await api('dialogs/history?'+query);if(!same())return;const height=chat.scrollHeight,top=chat.scrollTop,viewportTop=chat.getBoundingClientRect().top,anchor=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>viewportTop+1),anchorTop=anchor?.getBoundingClientRect().top;page.messages=earlier.messages.concat(page.messages);chat.insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages));page.next_before=earlier.next_before;button.hidden=!page.next_before;if(anchor?.isConnected&&Number.isFinite(anchorTop)){const moved=anchor.getBoundingClientRect().top-anchorTop;if(moved)chat.scrollTop+=moved;}else chat.scrollTop=top+(chat.scrollHeight-height);document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));}catch(error){if(same())$('operatorChatError').textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
+    const chat=$('chatRows'),timelinePlaced=placeOperatorEvents(chat,page);
+    const draftKey=contextKey('draft',route),composer=$('chatText'),composerSurface=composer.closest('.operator-composer'),dialogBody=$('operatorDialogBody'),newMessages=$('operatorNewMessages');const scrollKey=contextKey('scroll',route),savedScroll=sessionStorage.getItem(scrollKey);setTimelineScroll(chat,savedScroll===null||page.scroll_to_latest?chat.scrollHeight:Number(savedScroll),timelinePlaced);chat.addEventListener('scroll',()=>{sessionStorage.setItem(scrollKey,String(chat.scrollTop));if(!timelineOnlyScroll(chat)&&atBottom(chat))void markDialogReadIfVisible(currentPage);});composer.value=interactionState?.draft??sessionStorage.getItem(draftKey)??'';const updateComposerHeight=()=>{const rect=composerSurface.getBoundingClientRect(),style=window.getComputedStyle(composerSurface),marginBottom=parseFloat(style.marginBottom)||0;dialogBody.style.setProperty('--operator-composer-height',`${Math.ceil(rect.height+marginBottom)}px`);};const autosize=()=>{composer.style.height='auto';const height=Math.max(40,Math.min(180,composer.scrollHeight||40));composer.style.height=height+'px';composer.style.overflowY=composer.scrollHeight>composer.clientHeight?'auto':'hidden';updateComposerHeight();};autosize();composer.addEventListener('input',()=>{sessionStorage.setItem(draftKey,composer.value);autosize();});newMessages.onclick=()=>{const behavior=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';if(typeof chat.scrollTo==='function')chat.scrollTo({top:chat.scrollHeight,behavior});else chat.scrollTop=chat.scrollHeight;newMessages.hidden=true;if(behavior==='auto')void markDialogReadIfVisible(currentPage);};
+    $('operatorEarlier').onclick=async()=>{
+      const button=$('operatorEarlier'),before=page.next_before;if(button.disabled||!before)return;
+      button.disabled=true;
+      try{
+        const query=timelineHistoryQuery(route),timelineRequested=query.get('operator_events')==='1'&&page.dialog?.lifecycle_enabled===true;
+        const clientDeferred=timelineRequested&&page.operatorEventsRetryAt>Date.now();
+        if(clientDeferred)for(const key of ['operator_events','expected_tenant_id','expected_user_id'])query.delete(key);
+        query.set('before',before);
+        const earlier=await api('dialogs/history?'+query);
+        if(!same()||currentPage!==page||!button.isConnected||!sameDialog(earlier.dialog,route))return;
+        const height=chat.scrollHeight,top=chat.scrollTop,viewportTop=chat.getBoundingClientRect().top,
+          anchor=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>viewportTop+1),
+          anchorTop=anchor?.getBoundingClientRect().top;
+        if(timelineRequested&&(clientDeferred||operatorEventRetry(earlier.operator_events_retry_after_ms))){
+          // Message paging is independent: tell the operator that this
+          // historical activity window was skipped instead of hiding that fact.
+          const boundary=(page.messages||[]).find(message=>String(message.id)===String(before))||earlier.messages?.at(-1);
+          noteOperatorEventOmission(page,boundary?.happened_at||boundary?.created_at);
+        }
+        page.messages=earlier.messages.concat(page.messages);
+        chat.insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages,route));
+        retainOperatorEvents(page,earlier,{older:true});const timelinePlaced=placeOperatorEvents(chat,page);
+        page.next_before=earlier.next_before;button.hidden=!page.next_before;
+        if(anchor?.isConnected&&Number.isFinite(anchorTop)){
+          const moved=anchor.getBoundingClientRect().top-anchorTop;
+          if(moved||timelinePlaced)setTimelineScroll(chat,chat.scrollTop+moved,timelinePlaced);
+        }else setTimelineScroll(chat,top+(chat.scrollHeight-height),timelinePlaced);
+        document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
+      }catch(error){if(same())$('operatorChatError').textContent=error.message;}
+      finally{if(button.isConnected)button.disabled=false;}
+    };
     restoreCaseDraft(route,composer);
     copilotPanel.dataset.helperType=interactionState?.helperType||'Helper';
     if(interactionState){

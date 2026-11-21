@@ -66,7 +66,14 @@ def handler(member_from_request,origin,logger,resource):
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     case_only=query.get('support_case_only')=='1'
-                    read=partial(history,support_case_only=True) if case_only else history
+                    read=history
+                    # The compact right-panel read never enriches messages or
+                    # selects staff timeline metadata, even with both flags.
+                    if case_only:
+                        read=partial(history,support_case_only=True)
+                    elif query.get('operator_events')=='1':
+                        _expected(query,profile)
+                        read=partial(history,include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
                     if not case_only:
