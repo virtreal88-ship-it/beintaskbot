@@ -39,10 +39,14 @@ def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypa
     database, company, _, foreign, _ = local
     route = _route('connect',41,CA,'client')
     assert store.binding(PROFILE,**route)['can_manage'] is False  # waiting
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding']['can_manage'] is False
     command()
-    assert store.binding(PROFILE,**route,company_id=company) == {
-        'company_id':company,'company_name':'Synthetic company','can_manage':True,
-    }
+    accepted = dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding']
+    assert accepted['can_manage'] is True
+    assert accepted['company_id'] is None
+    expected = {'company_id':company,'company_name':'Synthetic company','can_manage':True}
+    assert store.binding(PROFILE,**route,company_id=company) == expected
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding'] == expected
     assert [entry['company_id'] for entry in bindings(database)] == [company]
     visible = dialogs.listing(PROFILE, lifecycle='all')['dialogs']
     assert next(row for row in visible if row['lead_id'] == 41)['dialog_company_name'] == 'Synthetic company'

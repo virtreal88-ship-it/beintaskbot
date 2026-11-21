@@ -43,6 +43,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard'),field=page.locator('#operatorConversationNameInput'),menu=page.locator('#operatorMoreActions');
     assert.equal(await page.locator('#operatorEditConversationName').count(),0);assert.equal(await card.isVisible(),false);assert.equal(await menu.locator('.operator-menu-agent').count(),0,'agent details have one home in the avatar card');
     assert.equal(await page.locator('#operatorClientDeveloperHost #dialogDeveloperMarker').count(),1);assert.equal(await page.locator('#operatorClientDeveloperStatus #dialogDeveloperBadge').count(),1);assert.equal(await page.locator('#operatorDialogTitleSlot #dialogDeveloperBadge').count(),0);
+    assert.equal(await page.locator('#operatorClientDeveloperHost').evaluate(node=>getComputedStyle(node).marginTop),'4px');
     const bell=page.locator('#dialogConsultationBell');assert.equal(await bell.count(),1,'global bell remains in place');assert.equal(await page.locator('#dialogConsultationMobileBell,#operatorDialogNotificationsHost').count(),0,'no duplicate global bell or new scoped bell is inserted in the dialogue');
     // Measure settled layout, not the 170ms conversation entrance translation.
     await page.locator('.operator-conversation-pane').evaluate(async node=>{await Promise.all(node.getAnimations({subtree:true}).filter(a=>Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a=>a.finished.catch(()=>{})))});
@@ -50,7 +51,10 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await page.locator('#operatorConversationHeader .operator-channel-label').count(),0);
     const number=avatar.locator('.operator-client-phone');
     assert.match(await number.innerText(),/994501234567/);
-    assert.ok((await number.boundingBox()).y>=(await avatar.locator('.operator-header-avatar').boundingBox()).y,'phone is under the avatar');
+    const avatarPicture=await avatar.locator('.operator-header-avatar').boundingBox();
+    const phoneBox=await number.boundingBox(),titleBox=await page.locator('#operatorDialogTitleText').boundingBox();
+    assert(phoneBox.y>=avatarPicture.y+avatarPicture.height+2,'the phone has a gap below the avatar');
+    assert(Math.abs((titleBox.y+titleBox.height/2)-(avatarPicture.y+avatarPicture.height/2))<=2,JSON.stringify({width, titleBox, avatarPicture, titleLayout: await page.locator('#operatorDialogTitleSlot').evaluate(e=>({height:e.offsetHeight, minHeight:getComputedStyle(e).minHeight, alignItems:getComputedStyle(e).alignItems}))}));
     if(language==='az')assert.match(await page.locator('[data-operator-create-ticket]').innerText(),/\+\s*sorğu/);
     const pdfLabel={ru:'Документ PDF',az:'PDF sənədi',en:'PDF document'}[language];
     const cards=page.locator('#chatRows article').filter({has:page.locator('[data-media-title]')});

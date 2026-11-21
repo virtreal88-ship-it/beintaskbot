@@ -231,19 +231,75 @@ def attach_list_company_names(cur, tenant, actor, cards):
 
 
 _NO_WRITE = object()
+_UNCHECKED = object()
 
 
-def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_id=_NO_WRITE):
+def normalize_company_id(value):
+    if value is not None:
+        try:
+            if type(value) is not str or str(uuid.UUID(value)) != value:
+                raise ValueError
+        except ValueError:
+            raise OperatorError('Выберите CRM-компанию из списка.') from None
+    return value
+
+
+def assert_expected_company(actual, expected):
+    if expected is not _UNCHECKED and actual != expected:
+        raise OperatorError('Компания диалога изменилась. Обновите диалог.',409)
+
+
+def write_binding(cur, route, table, pred, keys, company, actor, expected=_UNCHECKED):
+    """An inline edit never clears a newer company selected elsewhere."""
+    if company is None:
+        condition, params = ('', keys) if expected is _UNCHECKED else (' AND company_id=%s::uuid', (*keys,expected))
+        cur.execute(f'DELETE FROM {table} WHERE {pred}{condition}',params)
+    elif expected is not None and expected is not _UNCHECKED:
+        cur.execute(f"""UPDATE {table} SET company_id=%s::uuid,updated_by=%s,updated_at=now()
+            WHERE {pred} AND company_id=%s::uuid""",(company,actor,*keys,expected))
+    else:
+        fields='tenant_id,channel_id,conversation_id' if route[0]=='connect' else 'tenant_id,lead_id,channel_id,conversation_id'
+        values='%s::uuid,%s::uuid,%s' if route[0]=='connect' else '%s::uuid,%s,%s,%s'
+        conflict = ('UPDATE SET company_id=EXCLUDED.company_id,updated_by=EXCLUDED.updated_by,updated_at=now()'
+                    if expected is _UNCHECKED else 'NOTHING')
+        cur.execute(f"""INSERT INTO {table} ({fields},company_id,created_by,updated_by)
+            VALUES({values},%s::uuid,%s,%s) ON CONFLICT({fields}) DO {conflict}""",
+            (*keys,company,actor,actor))
+    if expected is not _UNCHECKED and cur.rowcount != 1:
+        raise OperatorError('Компания диалога изменилась. Обновите диалог.',409)
+
+
+def read_dialogue_binding(cur, tenant, actor, policy, route):
+    """The history route was already verified. Reuse the company endpoint's grants."""
+    if not is_operator_workspace(tenant):
+        return None
+    try:
+        exact = _key(route['provider'],route['lead_id'],route['channel_id'],route['conversation_id'])
+    except OperatorError:
+        return None
+    table,_,_ = _pred(tenant,exact)
+    if not _ready(cur,table):
+        return None
+    return _binding_snapshot(cur,tenant,actor,policy,exact,_manage(cur,tenant,actor,policy,exact,write=False))
+
+
+def _binding_snapshot(cur, tenant, actor, policy, route, can_manage):
+    result = _read(cur,tenant,actor,route,can_manage)
+    if can_manage and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
+        result['can_search_operator'] = True
+    return result
+
+
+def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_id=_NO_WRITE,
+            expected_company_id=_UNCHECKED):
     if not is_operator_workspace(profile.get('tenant_id')):
         raise OperatorError('Диалоги этого рабочего пространства недоступны.',404)
     route = _key(provider,lead_id,channel_id,conversation_id)
     write = company_id is not _NO_WRITE
-    if write and company_id is not None:
-        try:
-            if type(company_id) is not str or str(uuid.UUID(company_id)) != company_id:
-                raise ValueError
-        except ValueError:
-            raise OperatorError('Выберите CRM-компанию из списка.') from None
+    if write:
+        normalize_company_id(company_id)
+    if expected_company_id is not _UNCHECKED:
+        normalize_company_id(expected_company_id)
     from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
     from tenant_operator_access import access
     try:
@@ -261,22 +317,14 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                 table, pred, keys = _pred(tenant,route)
                 if not _ready(cur,table):
                     raise OperatorError('Привязка компании для этого источника недоступна.',503)
-                if write and company_id is None:
-                    cur.execute(f'DELETE FROM {table} WHERE {pred}',keys)
-                elif write:
+                if write and company_id is not None:
                     for action in ('view','update'):
                         rights = current_access(cur,tenant,actor,'companies',action)
                         if not locked_resource(cur,rights,'companies',action,COMPANIES,tenant,company_id):
                             raise CRMAccessError()
-                    fields = 'tenant_id,channel_id,conversation_id' if provider=='connect' else 'tenant_id,lead_id,channel_id,conversation_id'
-                    values = '%s::uuid,%s::uuid,%s' if provider=='connect' else '%s::uuid,%s,%s,%s'
-                    cur.execute(f"""INSERT INTO {table} ({fields},company_id,created_by,updated_by)
-                          VALUES({values},%s::uuid,%s,%s) ON CONFLICT({fields}) DO UPDATE SET
-                          company_id=EXCLUDED.company_id,updated_by=EXCLUDED.updated_by,updated_at=now()""",
-                          (*keys,company_id,actor,actor))
-                result = _read(cur,tenant,actor,route,allow_manage)
-                if allow_manage and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
-                    result['can_search_operator']=True
+                if write:
+                    write_binding(cur,route,table,pred,keys,company_id,actor,expected_company_id)
+                result = _binding_snapshot(cur,tenant,actor,policy,route,allow_manage)
             conn.commit()
             return result
     except TenantLinearError as error:

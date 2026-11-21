@@ -551,6 +551,7 @@
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       // A successful receipt is authoritative even while history is refreshing.
       if(action==='accept'||action==='start'||action==='close')button.remove();
+      if(action==='accept'||action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'||action==='dismiss'){
         if(action==='transfer'||queueMode()==='active')removeLifecycleDialog(route);
         else if(currentPage){currentDialog={...currentDialog,can_send:false,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_accept:false,can_dismiss:false,can_close:false,can_transfer:false}};currentPage.dialog=currentDialog;renderDialog(currentPage);}
@@ -998,7 +999,7 @@
     return lifecycleBadge(route);
   }
   function renderRows(){
-    $('operatorRows').innerHTML=rows.map((row,index)=>{const sources=row.group_sources?.length?activeGroupSources(row):null,name=dialogTitle(row),preview=dialogPreview(row),selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row)),unread=Math.max(0,Number(row.unread_count)||0);return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}"><span class="operator-row-avatar" aria-hidden="true">${row.customer_kind==='group'?'◉':esc(name.slice(0,1).toLocaleUpperCase())}${avatarMarkup(row)}</span><span class="operator-row-copy"><span class="operator-row-title" data-user-content>${esc(name)}</span><span class="operator-row-sub" data-user-content>${esc(sources?(sources.map(source=>source.channel_name).join(' · ')||({ru:'Источник отключён',az:'Mənbə deaktivdir',en:'Source disabled'})[i18n.language]||'Source disabled'):dialogIdentity(row))}</span><span class="operator-row-preview" data-user-content>${esc(preview)}</span>${capabilities.dialog_company_binding===true?(row.dialog_company_name?`<span class="operator-state operator-row-company" title="${esc(row.dialog_company_name)}" data-user-content>${esc(row.dialog_company_name)}</span>`:''):`<span class="operator-state operator-row-status" data-state="${esc(row.agent_status||row.display_state)}">${esc(agentModeLabel(row))}</span>`}</span><span class="operator-row-meta"><span class="operator-row-indicators">${cardLifecycleBadge(row)}${unread?`<span class="operator-unread-count" aria-label="${unread} ${esc(({ru:'непрочитанных',az:'oxunmamış',en:'unread'})[i18n.language]||'unread')}" title="${unread}">${unread>99?'99+':unread}</span>`:''}</span><time class="operator-row-time">${esc(i18n.date(row.last_message_at))}</time></span></button>`;}).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
+    $('operatorRows').innerHTML=rows.map((row,index)=>{const sources=row.group_sources?.length?activeGroupSources(row):null,name=dialogTitle(row),preview=dialogPreview(row),selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row)),unread=Math.max(0,Number(row.unread_count)||0);return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}"><span class="operator-row-avatar" aria-hidden="true">${row.customer_kind==='group'?'◉':esc(name.slice(0,1).toLocaleUpperCase())}${avatarMarkup(row)}</span><span class="operator-row-copy"><span class="operator-row-title" data-user-content>${esc(name)}</span><span class="operator-row-sub" data-user-content>${esc(sources?(sources.map(source=>source.channel_name).join(' · ')||({ru:'Источник отключён',az:'Mənbə deaktivdir',en:'Source disabled'})[i18n.language]||'Source disabled'):dialogIdentity(row))}</span>${capabilities.dialog_company_binding===true?(row.dialog_company_name?`<span class="operator-state operator-row-company" title="${esc(row.dialog_company_name)}" data-user-content>${esc(row.dialog_company_name)}</span>`:''):''}<span class="operator-row-preview" data-user-content>${esc(preview)}</span>${capabilities.dialog_company_binding===true?'':`<span class="operator-state operator-row-status" data-state="${esc(row.agent_status||row.display_state)}">${esc(agentModeLabel(row))}</span>`}</span><span class="operator-row-meta"><span class="operator-row-indicators">${cardLifecycleBadge(row)}${unread?`<span class="operator-unread-count" aria-label="${unread} ${esc(({ru:'непрочитанных',az:'oxunmamış',en:'unread'})[i18n.language]||'unread')}" title="${unread}">${unread>99?'99+':unread}</span>`:''}</span><time class="operator-row-time">${esc(i18n.date(row.last_message_at))}</time></span></button>`;}).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
     hydrateAvatars();
     renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||sources[0]||row);} );
   }
@@ -1032,7 +1033,9 @@
   }
   function renderDialogSkeleton(route){
     const header=$('operatorConversationHeader'),content=$('operatorConversationContent');
-    if(header)header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head"><div class="operator-dialog-title" role="heading" aria-level="2"><span class="operator-dialog-title-text" data-user-content>${esc(dialogTitle(route))}</span></div><div class="operator-dialog-head-row"><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span></div></div></div><span class="sub" role="status">${esc(t('loading'))}</span>`;
+    const company=capabilities.dialog_company_binding===true
+      ? (route.company_binding?.company_name||route.dialog_company_name||''):'';
+    if(header)header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head"><div class="operator-dialog-title" role="heading" aria-level="2"><span class="operator-dialog-title-text" data-user-content>${esc(dialogTitle(route))}</span>${company?`<span id="operatorDialogCompanyName" title="${esc(company)}" data-user-content>${esc(company)}</span>`:''}</div><div class="operator-dialog-head-row"><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span></div></div></div><span class="sub" role="status">${esc(t('loading'))}</span>`;
     if(content)content.innerHTML=`<section class="operator-dialog-shell operator-dialog-loading" role="status" aria-live="polite"><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-label">${esc(t('loading'))}</span></section>`;
   }
   async function markDialogReadIfVisible(page=currentPage){
@@ -1168,7 +1171,7 @@
     try{sessionStorage.setItem(contextKey('route',route),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));}catch{}
     if(workspace)workspace.dataset.selected='true';if(operatorHost)operatorHost.dataset.conversationOpen='true';
     const cached=retained||route.lifecycle_enabled?null:cachedDialogPage(route);
-    if(cached){cached.dialog={...cached.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
+    if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
     try{const page=await api('dialogs/history?'+historyQuery(route));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
@@ -1187,15 +1190,15 @@
   const clientCardStyle=document.createElement('style');clientCardStyle.textContent=`
     #operatorConversationLayout{position:relative;display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
     #operatorConversationLayout>.operator-conversation-content{min-width:0}
-    #operatorConversationHeader .operator-dialog-head-main{display:flex;flex-wrap:nowrap;min-width:0;gap:8px}
-    #operatorConversationHeader .operator-dialog-title{flex:1;min-width:0;max-width:none}
+    #operatorConversationHeader .operator-dialog-head-main{display:flex;align-items:flex-start;flex-wrap:nowrap;min-width:0;gap:8px}
+    #operatorConversationHeader #operatorDialogTitleSlot{flex:1;min-width:0;max-width:none;min-height:29px}
     #operatorDialogCompanyName{flex:0 1 auto;min-width:0;max-width:min(180px,42%);padding-inline:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;font-size:11px;font-weight:600;line-height:16px;color:#1d4ed8;background:#e8f1ff}
     #operatorDialogCompanyName[hidden]{display:none!important}
     [data-theme="dark"] #operatorDialogCompanyName{color:#bfdbfe;background:#1e3a5f}
     @media(max-width:900px){#operatorDialogCompanyName{font-size:10px}}
     #operatorConversationHeader .operator-client-phone{display:block;min-height:11px;font-size:10px;line-height:11px;max-width:104px}
     #operatorClientCardOpen,#operatorDialogTitleText{box-sizing:border-box;border:0;background:transparent;color:inherit;cursor:pointer;padding:0}
-    #operatorClientCardOpen{display:grid;justify-items:center;align-content:center;flex:none;min-width:44px;min-height:44px;gap:1px;margin:0;border-radius:8px}
+    #operatorClientCardOpen{display:grid;justify-items:center;align-content:start;flex:none;min-width:44px;min-height:44px;gap:3px;margin:0;border-radius:8px}
     #operatorClientCardOpen .operator-header-avatar{margin:0;width:29px;height:29px;font-size:15px}
     #operatorClientCardOpen:focus-visible,#operatorDialogTitleText:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}
     #operatorDialogTitleText{font:inherit;text-align:start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;margin:0}
@@ -1228,6 +1231,7 @@
     #operatorClientCard .operator-dialog-agent-status{justify-self:start;width:auto}
     #operatorClientCard .operator-agent-label{display:block!important;max-width:none!important;white-space:normal;overflow-wrap:anywhere}
     #operatorClientDeveloperHost{display:grid;gap:6px}
+    #operatorClientDeveloperHost:not(:empty){margin-top:4px}
     #operatorClientDeveloperHost:empty,#operatorClientDeveloperStatus:empty,#operatorClientCard [data-client-card-error]:empty{display:none}
     #operatorClientDeveloperStatus{font-size:12px;color:var(--muted)}
     #operatorClientCard [data-client-card-error]{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger,#ad2831)}
@@ -1263,17 +1267,21 @@
       const details=document.createElement('details');details.className='operator-roster-meta';const summary=document.createElement('summary');summary.textContent=groupParticipantsText('snapshot');const timestamp=document.createElement('p');timestamp.textContent=new Date(result.observed_at).toLocaleString();const note=document.createElement('p');note.textContent=groupParticipantsText('note');details.append(summary,timestamp,note);host.append(details);
     }catch{if(current()&&card.open)status.textContent=groupParticipantsText('unavailable');}finally{host.dataset.loading='false';}
   }
-  function mountDialogCompany(route){
+  function mountDialogCompany(route,useSnapshot=true){
     if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
     const host=$('operatorClientCompanyHost'),owner=identity(member);
     const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
       owner===identity(member)&&host?.isConnected&&sameDialog(route,currentDialog);
-    window.tenantDialogueCompany?.mount({host,nameHost:$('operatorDialogCompanyName'),route,member,isCurrent:current,
-      onChanged:async()=>{if(listFlight)await listFlight.promise;if(current())await refresh(false,false,{revalidateSelected:true,suppressRead:true});}});
+    window.tenantDialogueCompany?.mount({host,nameHost:$('operatorDialogCompanyName'),route:useSnapshot?route:{...route,company_binding:undefined},member,isCurrent:current,
+      onChanged:async binding=>{
+        if(current()){currentDialog.company_binding=binding;if(displayedPage?.dialog)displayedPage.dialog.company_binding=binding;}
+        if(listFlight)await listFlight.promise;
+        if(current())await refresh(false,false,{revalidateSelected:true,suppressRead:true});
+      }});
   }
   function restoreDialogCompany(){
     if(currentDialog&&sameDialog(displayedPage?.dialog,currentDialog)&&$('view-dialogs')?.classList.contains('active')){
-      mountDialogCompany(currentDialog);
+      mountDialogCompany(currentDialog,false);
     }
   }
   function supportCaseBlock(route,block){
@@ -1352,6 +1360,7 @@
       if(snapshot?.error)error.textContent=snapshot.error;
     }
     const groupBlock=card.querySelector('[data-group-participants]')?.closest('details');
+    const dialogueBlock=card.querySelector('#operatorClientDeveloperHost').closest('details');
     let authorized=true,opener=trigger;
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
     const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
@@ -1397,9 +1406,9 @@
       card.style.setProperty('--operator-client-available-height',Math.max(1,bottom-Math.max(top,layout.getBoundingClientRect().top))+'px');
       syncChatInteraction();
     };
-    const open=(button=trigger)=>{
+    const open=(button=trigger,restore=false)=>{
       if(!current()||card.open)return;
-      opener=button;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
+      opener=button;if(!restore)dialogueBlock.open=true;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
       void refreshCase(true);
       loadRoster();void showClientTransfer(route,card,current);
@@ -1457,7 +1466,7 @@
     }
     if(snapshot){
       [...card.querySelectorAll('.operator-client-panel-block')].forEach((block,index)=>{if(index<snapshot.blocks.length)block.open=snapshot.blocks[index];});
-      open();if(snapshot.focus&&card.contains($(snapshot.focus)))$(snapshot.focus).focus({preventScroll:true});
+      open(trigger,true);if(snapshot.focus&&card.contains($(snapshot.focus)))$(snapshot.focus).focus({preventScroll:true});
       if(input&&snapshot.start!==undefined)try{input.setSelectionRange(snapshot.start,snapshot.end);}catch{}
       card.querySelector('.operator-client-panel-content').scrollTop=snapshot.scroll||0;
     }
@@ -1670,7 +1679,7 @@
   }
   // Keep the mounted editor/media subtree for a refreshed snapshot of the
   // same route and permissions. Mutate the page object captured by handlers.
-  const dialogRenderScope=route=>JSON.stringify(Object.entries(route||{}).filter(([key])=>!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at'].includes(key)).sort(([a],[b])=>a.localeCompare(b)));
+  const dialogRenderScope=route=>JSON.stringify(Object.entries(route||{}).filter(([key])=>!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name'].includes(key)).sort(([a],[b])=>a.localeCompare(b)));
   function patchDialogPage(latest){
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
@@ -1691,7 +1700,7 @@
       else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
     }
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id'].includes(key))old[key]=value;
-    currentDialog=old.dialog;displayedPage=old;rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
+    currentDialog=old.dialog;displayedPage=old;mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
     chat.scrollTop=follow?chat.scrollHeight:top;
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;

@@ -146,11 +146,12 @@ def _bind_once(cur,route,table,pred,key,company,actor):
         raise operator.OperatorError('Компания диалога изменилась. Обновите диалог.',409)
 
 
-def _choose(cur,route,tenant,actor,source,credentials,account):
+def _choose(cur,route,tenant,actor,source,credentials,account,expected):
     table,pred,key=dialogue._pred(tenant,route)
     bound=_current_binding(cur,table,pred,key)
+    dialogue.assert_expected_company(bound,expected)
     company=_resolve(cur,tenant,account,credentials)
-    if bound and bound!=company:
+    if expected is dialogue._UNCHECKED and bound and bound!=company:
         raise operator.OperatorError('У диалога уже есть компания. Текущая привязка не изменена.',409)
     created=False
     if not company:
@@ -174,8 +175,11 @@ def _choose(cur,route,tenant,actor,source,credentials,account):
         if not locked_resource(cur,grant,'companies',action,dialogue.COMPANIES,tenant,company):
             raise CRMAccessError()
     _assert_fresh(cur,tenant,actor,source,credentials)
-    if not bound:
-        _bind_once(cur,route,table,pred,key,company,actor)
+    if bound!=company:
+        if expected is dialogue._UNCHECKED:
+            _bind_once(cur,route,table,pred,key,company,actor)
+        else:
+            dialogue.write_binding(cur,route,table,pred,key,company,actor,expected)
         account_hash=hashlib.sha256(account.encode('utf-8')).hexdigest()
         cur.execute("""INSERT INTO saas_tenant_audit_events
           (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
@@ -185,12 +189,15 @@ def _choose(cur,route,tenant,actor,source,credentials,account):
     return {**dialogue._read(cur,tenant,actor,route,True),'can_search_operator':True}
 
 
-def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, choice=False):
+def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, choice=False,
+            expected_company_id=dialogue._UNCHECKED):
     tenant=operator._tenant(profile)
     if not dialogue_chooser_enabled(tenant):
         raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
     route=dialogue._key(provider,lead_id,channel_id,conversation_id)
     term=_term(term,exact=choice)
+    if expected_company_id is not dialogue._UNCHECKED:
+        dialogue.normalize_company_id(expected_company_id)
     try:
         tenant,actor,source,credentials,accounts=_read_live(profile,route,term,choice=choice)
         with dialogue._connect() as conn:
@@ -199,7 +206,7 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
                     raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
                 _fenced_local(cur,profile,route,tenant,actor,source,credentials)
                 if choice:
-                    result={'binding':_choose(cur,route,tenant,actor,source,credentials,term)}
+                    result={'binding':_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id)}
                 else:
                     _assert_fresh(cur,tenant,actor,source,credentials)
                     result={'accounts':[{'account':account} for account in accounts]}
