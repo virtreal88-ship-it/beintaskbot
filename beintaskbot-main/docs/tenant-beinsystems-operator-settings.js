@@ -69,6 +69,7 @@
     const status = $(panel, '[data-status]'), message = $(panel, '[data-message]'), connection = $(panel, '[data-connection]');
     if (!operatorLinkAllowed()) $(panel, '[data-link-controls]').hidden = true;
     if (data.member.role !== 'owner') employeeControls.hidden = true;
+    let batchReadBusy=false;
     const renderStatus = () => {
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
@@ -88,9 +89,15 @@
           !state.configured && !state.connected &&
           (state.pending_auth_received===true || state.accounts_only_ready===true);
         firstBatchButton.hidden=!available;
-        firstBatchButton.disabled=!available || state.accounts_only_ready!==true;
+        const ready=available && state.accounts_only_ready===true;
+        firstBatchButton.disabled=!ready || batchReadBusy;
+        const plan=connection.querySelector('[data-first-company-batch-plan]');
+        if(plan){
+          plan.hidden=!ready || state.first_company_batch_plan_enabled!==true;
+          plan.disabled=plan.hidden || batchReadBusy;
+        }
         const prerequisite=connection.querySelector('[data-first-batch-prerequisite]');
-        if(prerequisite)prerequisite.hidden=!available || !firstBatchButton.disabled;
+        if(prerequisite)prerequisite.hidden=!available || ready;
       }
     };
     renderStatus();
@@ -278,6 +285,10 @@
       batchButton.type='button'; batchButton.dataset.firstCompanyBatch='';
       batchButton.textContent='Предпросмотр партии до 100 аккаунтов';
       batchButton.hidden=true;
+      const batchPlanButton=document.createElement('button');
+      batchPlanButton.type='button'; batchPlanButton.dataset.firstCompanyBatchPlan='';
+      batchPlanButton.textContent='Предпросмотр импорта первой партии';
+      batchPlanButton.hidden=true;
       const batchPrerequisite=document.createElement('p');
       batchPrerequisite.id='operatorFirstBatchPrerequisite';
       batchPrerequisite.dataset.firstBatchPrerequisite='';
@@ -286,20 +297,26 @@
       batchButton.setAttribute('aria-describedby',batchPrerequisite.id);
       const batchHost=document.createElement('div');batchHost.dataset.firstBatchPreview='';batchHost.setAttribute('aria-live','polite');
       batchHost.setAttribute('role','status');
-      connection.append(batchButton,batchPrerequisite,batchHost);
+      connection.append(batchButton,batchPlanButton,batchPrerequisite,batchHost);
       renderStatus();
-      batchButton.onclick=event=>batchButton.hidden || batchButton.disabled ? undefined :
-        run(event.currentTarget,async()=>{
+      const loadBatch=(event,plan)=>{
+        const clicked=event.currentTarget;
+        if(clicked.hidden || clicked.disabled || batchReadBusy)return;
+        batchReadBusy=true;renderStatus();
+        return run(clicked,async()=>{
         batchHost.textContent='Загружаем предпросмотр аккаунтов Operator…';
         let preview;
         try {
-          const result=await request('/api/platform/operator/accounts',{action:'preview_first_company_batch'});
+          const result=await request('/api/platform/operator/accounts',{
+            action:plan?'preview_first_company_batch_plan':'preview_first_company_batch'
+          });
           preview=result?.company_batch_preview;
-          if (!Array.isArray(preview?.rows) || !Number.isInteger(preview.checked)) {
+          if (!Array.isArray(preview?.rows) || !Number.isInteger(preview.checked) ||
+              (plan && preview.mode!=='company_plan')) {
             throw new Error('Сервер вернул некорректный ответ предпросмотра.');
           }
         } catch(error) {
-          if(current!==revision || !batchHost.isConnected || batchButton.hidden) return {};
+          if(current!==revision || !batchHost.isConnected || clicked.hidden) return {};
           const detail=error?.name==='SyntaxError' ? 'Сервер вернул некорректный ответ предпросмотра.' :
             (error?.message || 'Не удалось получить предпросмотр.');
           const feedback='Не удалось открыть предпросмотр: '+detail+
@@ -307,12 +324,12 @@
           batchHost.textContent=feedback;
           return {message:feedback};
         }
-        if(current!==revision || !batchHost.isConnected || batchButton.hidden) return {};
+        if(current!==revision || !batchHost.isConnected || clicked.hidden) return {};
         batchHost.replaceChildren();
         const heading=document.createElement('p');
         heading.textContent='Первая выборка Operator: '+preview.checked+' из максимум 100. Это не полный каталог.';
         const rows=document.createElement('ul');
-        if (preview.mode==='accounts_only') {
+        if (!plan) {
           for(const row of preview.rows){
             const item=document.createElement('li');item.textContent=row.account;rows.append(item);
           }
@@ -343,7 +360,7 @@
         cancel.dataset.firstBatchCancel='';
         cancel.onclick=()=>batchHost.replaceChildren();
         confirm.onclick=event=>run(event.currentTarget,async()=>{
-          if(current!==revision || !batchHost.contains(confirm) || batchButton.hidden) return {};
+          if(current!==revision || !batchHost.contains(confirm) || batchPlanButton.hidden || batchReadBusy) return {};
           batchHost.replaceChildren();
           return request('/api/platform/operator/accounts',{
             action:'confirm_first_company_batch',receipt:preview.receipt
@@ -353,8 +370,12 @@
         return {message: preview.rows.length ? 'Проверьте выборку перед подтверждением.' :
           'Operator не вернул аккаунтов в этой выборке. Это не проверка полноты каталога.'};
       }).finally(()=>{
+        batchReadBusy=false;
         if(current===revision)renderStatus();
       });
+      };
+      batchButton.onclick=event=>loadBatch(event,false);
+      batchPlanButton.onclick=event=>loadBatch(event,true);
       $(panel,'[data-disconnect]').onclick = event => run(event.currentTarget, async () => {
         if (!window.confirm('Отключить Operator? Подтверждённые ссылки станут устаревшими.')) return {message:'Отменено.'};
         return request('/api/platform/integrations/beinsystems-operator', {action:'disconnect'});

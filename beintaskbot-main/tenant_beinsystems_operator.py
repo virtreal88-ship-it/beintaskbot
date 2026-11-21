@@ -19,7 +19,7 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from cryptography.fernet import InvalidToken
 
 from tenant_beinsystems_operator_access import (
-    OPERATOR_API_BASE_URL, PROVIDER, api_base_url, is_operator_workspace,
+    OPERATOR_API_BASE_URL, PROVIDER, api_base_url, dialogue_chooser_enabled, is_operator_workspace,
 )
 from tenant_platform_core import (
     TenantPlatformError, _connect, _ensure_schema, _fernet, _json,
@@ -243,9 +243,13 @@ def first_company_batch_confirm_enabled():
             and os.environ.get("BEINSYSTEMS_OPERATOR_FIRST_COMPANY_BATCH_CONFIRM") == "1")
 
 
+def first_company_batch_plan_enabled(tenant):
+    return first_company_batch_confirm_enabled() and dialogue_chooser_enabled(tenant)
+
+
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
             pending_auth_me_verified=False, pending_auth_accounts_access_verified=False,
-            legacy_pending_auth_received=False, accounts_only_ready=False):
+            legacy_pending_auth_received=False, accounts_only_ready=False, batch_plan_enabled=False):
     row = row or {}
     return {
         "provider": PROVIDER,
@@ -266,6 +270,7 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "accounts_only_ready": bool(accounts_only_ready),
         "first_company_batch_preview_enabled": first_company_batch_preview_enabled(),
+        "first_company_batch_plan_enabled": batch_plan_enabled,
         "pending_auth_received_at": (
             pending_auth_received_at.isoformat()
             if hasattr(pending_auth_received_at, "isoformat")
@@ -307,6 +312,7 @@ def status(profile):
         pending_auth_accounts_access_verified=bool((pending or {}).get("accounts_access_verified_at")),
         legacy_pending_auth_received=bool(legacy_pending),
         accounts_only_ready=accounts_only_ready,
+        batch_plan_enabled=(current.get("role") == "owner" and first_company_batch_plan_enabled(tenant)),
     )
 
 

@@ -14,6 +14,8 @@ from psycopg.conninfo import conninfo_to_dict
 from psycopg.rows import dict_row
 
 import tenant_beinsystems_operator_company_import as batch
+import tenant_crm_native_companies as native
+from tenant_crm_native_access import CRMAccessError
 
 
 @pytest.fixture
@@ -39,7 +41,13 @@ def state(monkeypatch):
         return psycopg.connect(dsn, row_factory=dict_row, options=f"-csearch_path={schema}")
 
     profile = {"role": "owner", "active": True, "tenant_id": tenant, "telegram_id": actor}
+    monkeypatch.setenv("BEINSYSTEMS_OPERATOR_TENANT_ID", tenant)
+    monkeypatch.setenv("BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED", "true")
     monkeypatch.setattr(batch.operator, "first_company_batch_confirm_enabled", lambda: True)
+    monkeypatch.setattr(native, "_connect", connect)
+    monkeypatch.setattr(native, "_ensure_schema", lambda *_: None)
+    monkeypatch.setattr(native, "current_access", lambda *_: profile)
+    monkeypatch.setattr(native, "authorize_create", lambda *_: None)
     monkeypatch.setattr(batch.operator, "_connect", connect)
     monkeypatch.setattr(batch.operator, "_ensure_schema", lambda *_: None)
     monkeypatch.setattr(batch.operator, "_current_profile", lambda *_: profile)
@@ -48,11 +56,6 @@ def state(monkeypatch):
     monkeypatch.setattr(batch, "current_access", lambda *_: profile)
     monkeypatch.setattr(batch, "authorize_create", lambda *_: None)
 
-    class Full:
-        def __init__(self, _): pass
-        def has_scoped_access(self, _): return False
-
-    monkeypatch.setattr(batch, "TenantPolicy", Full)
     with psycopg.connect(dsn, autocommit=True) as admin:
         admin.execute(f'CREATE SCHEMA "{schema}"')
         try:
@@ -62,7 +65,8 @@ def state(monkeypatch):
                   entity_type text,entity_id text,payload jsonb)""")
                 c.execute("""CREATE TABLE saas_crm_native_companies (
                   id uuid PRIMARY KEY,tenant_id uuid,name text,phone text,email text,
-                  description text,responsible_id bigint,access_responsible_id bigint,archived_at timestamptz)""")
+                  description text,responsible_id bigint,access_responsible_id bigint,archived_at timestamptz,
+                  created_at timestamptz DEFAULT now())""")
                 c.execute("""CREATE TABLE saas_beinsystems_operator_company_imports (
                   tenant_id uuid,external_account text,company_id uuid,created_by bigint,
                   updated_by bigint,last_seen_connection_instance_id uuid,last_seen_generation text,
@@ -149,19 +153,20 @@ def test_mapping_rollback_clears_nonce_and_rotation_rejects_old_receipt(state, m
 def test_historical_company_identity_blocks_duplicates_without_rebinding(state):
     connect, run, tenant = state
     old_instance, foreign_tenant = str(uuid.uuid4()), str(uuid.uuid4())
-    original, conflict = str(uuid.uuid4()), str(uuid.uuid4())
+    original, conflict, stable_company = (str(uuid.uuid4()) for _ in range(3))
     with connect() as c:
-        for company, name in ((original, "Existing CRM company"), (conflict, "Other CRM company")):
+        for company, name in ((original, "Existing CRM company"), (conflict, "Other CRM company"),
+                              (stable_company, "Stable CRM company")):
             c.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name) VALUES(%s,%s,%s)",
                       (company, tenant, name))
-        for account, company in (("stable", original), ("CASE-ALT", original), ("clash", original)):
+        for account, company in (("stable", stable_company), ("CASE-ALT", original), ("clash", original)):
             c.execute("""INSERT INTO saas_beinsystems_operator_company_imports
               (tenant_id,external_account,company_id,last_seen_connection_instance_id,last_seen_generation)
               VALUES(%s,%s,%s,%s,'old')""", (tenant, account, company, old_instance))
         for owner, account, company, revoked in (
                 (tenant, "old-link", original, False),
                 (tenant, "UPPER-LINK", original, False),
-                (tenant, "stable", original, False),
+                (tenant, "stable", stable_company, False),
                 (tenant, "CLASH", conflict, False),
                 (tenant, "revoked", original, True),
                 (foreign_tenant, "foreign", original, False)):
@@ -183,7 +188,7 @@ def test_historical_company_identity_blocks_duplicates_without_rebinding(state):
         assert c.execute("SELECT count(*) AS n FROM saas_beinsystems_operator_links").fetchone()["n"] == 6
         assert c.execute('SELECT name FROM saas_crm_native_companies ORDER BY name COLLATE "C"').fetchall() == [
             {"name": "Existing CRM company"}, {"name": "Other CRM company"},
-            {"name": "foreign"}, {"name": "revoked"}]
+            {"name": "Stable CRM company"}, {"name": "foreign"}, {"name": "revoked"}]
 
     preview_late = run(["late"])
     assert preview_late["rows"][0]["action"] == "create"
@@ -201,13 +206,13 @@ def test_capability_expires_while_waiting_for_import_lock(state, monkeypatch):
     connect, run, tenant = state
     r = run(["new"])
     early_check = Event()
-    original = batch._lock_and_check_selected_source
+    original = batch.lock_name_writes
 
-    def check(*args):
-        original(*args)
+    def check(*args, **kwargs):
         early_check.set()
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(batch, "_lock_and_check_selected_source", check)
+    monkeypatch.setattr(batch, "lock_name_writes", check)
     with connect() as c:
         c.execute("""UPDATE saas_beinsystems_operator_accounts_capabilities
           SET expires_at=clock_timestamp()+interval '3 seconds'""")
@@ -231,9 +236,12 @@ def test_preview_only_cannot_mint_or_commit_a_previous_receipt(state, monkeypatc
     connect, run, _ = state
     receipt = run(["new"])["receipt"]
     monkeypatch.setattr(batch.operator, "first_company_batch_confirm_enabled", lambda: False)
-    preview = run(["new"])
-    assert preview["rows"] == [{"account": "new", "action": "create"}]
+    monkeypatch.setattr(batch.operator, "first_company_batch_preview_enabled", lambda: True)
+    preview = run(["new"], source_only=True)
+    assert preview["rows"] == [{"account": "new"}]
     assert "receipt" not in preview
+    with pytest.raises(batch.operator.OperatorError):
+        run(["new"])
     with pytest.raises(batch.operator.OperatorError) as err:
         run(["new"], receipt)
     assert err.value.status == 403
@@ -262,3 +270,96 @@ def test_source_preview_has_no_crm_table_dependency_and_rechecks_pending_rotatio
     with pytest.raises(batch.operator.OperatorError) as err:
         run(["one"], source_only=True)
     assert err.value.status == 409
+
+
+@pytest.mark.parametrize("writer", ["manual", "ai"])
+@pytest.mark.parametrize("first", ["batch", "ordinary"])
+def test_guarded_first_batch_and_real_native_writer_serialize_both_orders(state, monkeypatch, writer, first):
+    connect, run, tenant = state
+    preview = run(["same-name"])
+    assert preview["mode"] == "company_plan"
+    entered, release, waiting = Event(), Event(), Event()
+
+    def write():
+        if writer == "manual":
+            return native.create_company(tenant, "SAME-NAME", actor_id=7)
+        return native.find_or_create_company(tenant, "SAME-NAME")
+
+    def confirm():
+        return run(["same-name"], preview["receipt"])
+
+    if first == "batch":
+        orig = batch._put_mapping
+
+        def hold(*args):
+            entered.set()
+            assert release.wait(15)
+            return orig(*args)
+
+        monkeypatch.setattr(batch, "_put_mapping", hold)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ahead = pool.submit(confirm)
+            try:
+                assert entered.wait(10)
+                behind = pool.submit(write)
+                with pytest.raises(CRMAccessError) as busy:
+                    behind.result(10)
+                assert busy.value.code == "company_name_busy"
+            finally:
+                release.set()
+            assert ahead.result(15)["created"] == 1
+    else:
+        orig_native = native.require_unreserved_name
+        orig_batch = batch.lock_name_writes
+
+        def hold(*args):
+            orig_native(*args)
+            entered.set()
+            assert release.wait(15)
+
+        def observe(*args, **kwargs):
+            waiting.set()
+            return orig_batch(*args, **kwargs)
+
+        monkeypatch.setattr(native, "require_unreserved_name", hold)
+        monkeypatch.setattr(batch, "lock_name_writes", observe)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            ahead = pool.submit(write)
+            try:
+                assert entered.wait(10)
+                behind = pool.submit(confirm)
+                assert waiting.wait(10)
+            finally:
+                release.set()
+            assert ahead.result(15)["name"] == "SAME-NAME"
+            with pytest.raises(batch.operator.OperatorError) as changed:
+                behind.result(15)
+            assert changed.value.status == 409
+        after = run(["same-name"])
+        assert after["rows"] == [{"account": "same-name", "action": "manual_review"}]
+        assert "receipt" not in after
+    with connect() as c:
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies").fetchone()["n"] == 1
+        expected_mappings = int(first == "batch")
+        assert c.execute("SELECT count(*) AS n FROM saas_beinsystems_operator_company_imports").fetchone()["n"] == expected_mappings
+        assert c.execute("""SELECT count(*) AS n FROM saas_tenant_audit_events
+          WHERE action='operator_first_company_batch'""").fetchone()["n"] == expected_mappings
+
+
+def test_same_target_case_alias_and_reverse_manual_link_block_exact_reuse(state):
+    connect, run, tenant = state
+    receipt = run(["real", "other"])["receipt"]
+    assert run(["real", "other"], receipt)["created"] == 2
+    with connect() as c:
+        c.execute("""INSERT INTO saas_beinsystems_operator_links
+          SELECT tenant_id,'company','account','','REAL',company_id,'old',
+            last_seen_connection_instance_id,NULL
+          FROM saas_beinsystems_operator_company_imports WHERE external_account='real'""")
+        c.execute("""INSERT INTO saas_beinsystems_operator_links
+          SELECT tenant_id,'company','account','','different',company_id,'old',
+            last_seen_connection_instance_id,NULL
+          FROM saas_beinsystems_operator_company_imports WHERE external_account='other'""")
+    after = run(["real", "other"])
+    assert after["rows"] == [{"account": "real", "action": "manual_review"},
+                             {"account": "other", "action": "manual_review"}]
+    assert "receipt" not in after

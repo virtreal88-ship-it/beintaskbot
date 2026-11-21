@@ -9,7 +9,7 @@ const {window}=dom;
 let viewDemand,requests=[],companyImports=[],confirmMessages=[];
 let mockIntegration={status:'connected',connected:true,configured:true,api_ready:false,
   pending_auth_received:false,pending_auth_access_confirmed:null};
-let batchConfirmable=false,batchSourceOnly=false,batchPreviewMode='ok',finishBatchError;
+let batchConfirmable=false,batchPreviewMode='ok',finishBatchError;
 let loginMode='success';
 let probeMode='empty';
 let directorySource='pending',directoryReady=false,companyAddOutcome='create';
@@ -29,7 +29,8 @@ window.fetch=async(path,options={})=>{
   }
   else if(path==='/api/platform/operator/employee-links')result={success:true,links:employeeLinks};
   else if(path==='/api/platform/integrations/beinsystems-operator'&&options.method!=='POST')result={success:true,integration:{...mockIntegration}};
-  else if(options.method==='POST'&&JSON.parse(options.body).action==='preview_first_company_batch'){
+  else if(options.method==='POST'&&['preview_first_company_batch','preview_first_company_batch_plan'].includes(JSON.parse(options.body).action)){
+    const planning=JSON.parse(options.body).action==='preview_first_company_batch_plan';
     if(batchPreviewMode==='403')return await new Promise(resolve=>{
       finishBatchError=()=>resolve({ok:false,status:403,json:async()=>({
         success:false,error:'Для безопасного импорта нужен полный доступ к CRM-компаниям.'
@@ -37,10 +38,10 @@ window.fetch=async(path,options={})=>{
     });
     if(batchPreviewMode==='malformed')return {ok:true,json:async()=>({success:true})};
     if(batchPreviewMode==='non-json')return {ok:false,status:502,json:async()=>{throw new SyntaxError('redacted marker');}};
-    const rows=batchPreviewMode==='empty'?[]:[batchSourceOnly?{account:'<img src=x>'}:{account:'<img src=x>',action:'create'}];
+    const rows=batchPreviewMode==='empty'?[]:[planning?{account:'<img src=x>',action:'create'}:{account:'<img src=x>'}];
     result={success:true,company_batch_preview:{partial:true,checked:rows.length,limit:100,
       ...(batchConfirmable?{receipt:'opaque-receipt'}:{}),
-      ...(batchSourceOnly?{mode:'accounts_only'}:{}),rows}};
+      mode:planning?'company_plan':'accounts_only',rows}};
   }
   else if(options.method==='POST'&&JSON.parse(options.body).action==='confirm_first_company_batch'){
     result={success:true,company_import:{partial:true,checked:1,created:1,reused:0,manual_review:0}};
@@ -419,7 +420,7 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(batchPanel.querySelector('[data-first-batch-prerequisite]').hidden,true);
   await batchButton.onclick({currentTarget:batchButton});
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null,'preview-only offers no commit');
-  assert(batchPreview.textContent.includes('CRM-компании не создаются'));
+  assert(batchPreview.textContent.includes('Компании CRM не проверялись и не создавались'));
   batchPreviewMode='403';
   const failedPreview=batchButton.onclick({currentTarget:batchButton});
   assert(batchPreview.textContent.includes('Загружаем предпросмотр'));
@@ -440,8 +441,8 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert(batchPreview.textContent.includes('Operator не вернул аккаунтов в этой выборке'));
   assert.equal(batchPosts().length,0);
   batchPreviewMode='ok';
-  batchSourceOnly=true;
-  batchConfirmable=true; // malformed server combination must never create a control in source-only mode
+  assert.equal(batchPanel.querySelector('[data-first-company-batch-plan]').hidden,true);
+  batchConfirmable=true; // an unexpected source-only receipt must never create a control
   await batchButton.onclick({currentTarget:batchButton});
   assert(batchPreview.textContent.includes('Показаны только аккаунты Operator'));
   assert(batchPreview.textContent.includes('Компании CRM не проверялись и не создавались'));
@@ -449,23 +450,29 @@ window.eval(fs.readFileSync('docs/tenant-beinsystems-operator-settings.js','utf8
   assert.equal(batchPreview.querySelector('img'),null);
   assert.equal(batchPreview.querySelector('[data-first-batch-confirm]'),null);
   assert.equal(batchPosts().length,0);
-  batchSourceOnly=false;
-  await batchButton.onclick({currentTarget:batchButton});
+  mockIntegration={...mockIntegration,first_company_batch_plan_enabled:true};
+  await viewDemand.activate(profile);
+  const planPanel=window.document.querySelector('#operatorIntegrationSettings');
+  const planButton=planPanel.querySelector('[data-first-company-batch-plan]');
+  assert.equal(planButton.hidden,false);
+  assert.equal(planButton.disabled,false);
+  const planPreview=planPanel.querySelector('[data-first-batch-preview]');
+  await planButton.onclick({currentTarget:planButton});
   assert.equal(batchPosts().length,0,'preview must never confirm automatically');
-  assert(batchPreview.textContent.includes('не полный каталог'));
-  assert(batchPreview.textContent.includes('<img src=x>'));
-  assert.equal(batchPreview.querySelector('img'),null);
-  const cancelled=batchPreview.querySelector('[data-first-batch-confirm]');
-  batchPreview.querySelector('[data-first-batch-cancel]').click();
+  assert(planPreview.textContent.includes('не полный каталог'));
+  assert(planPreview.textContent.includes('<img src=x>'));
+  assert.equal(planPreview.querySelector('img'),null);
+  const cancelled=planPreview.querySelector('[data-first-batch-confirm]');
+  planPreview.querySelector('[data-first-batch-cancel]').click();
   await cancelled.onclick({currentTarget:cancelled});
   assert.equal(batchPosts().length,0,'cancelled receipt is not submitted');
-  await batchButton.onclick({currentTarget:batchButton});
-  const confirmBatch=batchPreview.querySelector('[data-first-batch-confirm]');
+  await planButton.onclick({currentTarget:planButton});
+  const confirmBatch=planPreview.querySelector('[data-first-batch-confirm]');
   await confirmBatch.onclick({currentTarget:confirmBatch});
   assert.deepEqual(batchPosts(),[{action:'confirm_first_company_batch',receipt:'opaque-receipt',
     expected_tenant_id:profile.member.tenant_id,expected_user_id:profile.member.telegram_id}]);
-  assert(batchPanel.querySelector('[data-message]').textContent.includes('Первая выборка (не весь каталог)'));
-  assert.equal(batchPreview.textContent,'');
+  assert(planPanel.querySelector('[data-message]').textContent.includes('Первая выборка (не весь каталог)'));
+  assert.equal(planPreview.textContent,'');
   const readOnlyProfile={member:{...profile.member,role:'manager',permissions:['operator_data:view']},
     integrations:profile.integrations};
   await viewDemand.activate(readOnlyProfile);
