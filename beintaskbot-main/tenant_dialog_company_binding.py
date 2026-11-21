@@ -10,7 +10,6 @@ from tenant_policy import TenantPolicy
 CONNECT = 'saas_beinsystems_operator_dialog_company_bindings'
 KOMMO = 'public.saas_beinsystems_kommo_dialog_company_bindings'
 COMPANIES = 'saas_crm_native_companies'
-PROVISION_ENV = 'BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'
 
 
 def feature_for(profile):

@@ -8,6 +8,7 @@ import time
 
 _RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001", "55P03", "25P04"}
 _STARTUP_SCHEMA_LOCK='tenant-service-startup-schema'
+_KOMMO_BINDING_PROVISION_ENV='BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'
 
 
 def _retryable_migration_error(exc: Exception) -> bool:
@@ -38,8 +39,6 @@ def prepare_database() -> None:
     from tenant_ai_administrator_observations import ensure_schema as ensure_observations_schema
     from tenant_ai_administrator_apply import ensure_schema as ensure_apply_schema
     from tenant_connect_health import prepare_database as prepare_connect_health
-
-    from tenant_dialog_company_binding import PROVISION_ENV
 
     _fernet()
     # This is a dedicated, non-pooled startup connection. Closing it releases
@@ -85,7 +84,7 @@ def prepare_database() -> None:
                 migrate(cur)
                 verify_provisioned_schema(cur)
             conn.commit()
-        if os.environ.get(PROVISION_ENV, '').lower() == 'true':
+        if os.environ.get(_KOMMO_BINDING_PROVISION_ENV, '').lower() == 'true':
             _prepare_optional_kommo_dialog_company(conn)
 
 
