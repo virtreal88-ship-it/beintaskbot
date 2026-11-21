@@ -177,7 +177,15 @@
     return article;
   }
   function paintNotificationBadge(node){if(!node)return;node.querySelector('.notification-unread-badge')?.remove();const count=Number(notificationUnreadCount);if(!Number.isFinite(count)||count<=0)return;const badge=el('span',count>99?'99+':String(count));badge.className='notification-unread-badge';badge.setAttribute('aria-hidden','true');node.append(badge);}
-  function render(){if(bell){bell.textContent='🔔'+(notificationError?'!':'');bell.setAttribute('aria-label',`${notificationCopy('title')}; ${notificationCountLabel()} ${notificationUnreadCount===null?t('loading'):notificationUnreadCount}${notificationError?'; '+notificationCopy('failure'):''}`);bell.title=bell.getAttribute('aria-label');paintNotificationBadge(bell);}
+  function render(){if(bell){
+      const reminders=window.tenantSharedReminders,count=reminders?.notificationCount?.();
+      bell.textContent='🔔'+(notificationError?'!':'');
+      bell.setAttribute('aria-label',`${notificationCopy('title')}; ${notificationCountLabel()} ${notificationUnreadCount===null?t('loading'):notificationUnreadCount}${notificationError?'; '+notificationCopy('failure'):''}${count>0?'; '+reminders.notificationLabel(count):''}`);
+      bell.title=bell.getAttribute('aria-label');paintNotificationBadge(bell);
+      if(count>0){
+        const badge=el('span',count>99?'99+':String(count));badge.className='notification-unread-badge notification-reminder-badge';badge.setAttribute('aria-hidden','true');bell.append(badge);
+      }
+    }
 
     if(menu&&!menu.hidden){bell?.setAttribute('aria-expanded','true');
       const previous=document.activeElement?.closest?.('[data-notification-focus]')?.dataset.notificationFocus;
@@ -186,6 +194,8 @@
       const filters=el('div');filters.className='notification-filters';filters.setAttribute('aria-label',notificationCopy('title'));
       for(const status of ['unread','all']){const filter=button(notificationCopy(status),()=>{notificationStatus=status;notificationBefore=null;notifications=[];notificationLoaded=false;notificationActionError='';notificationActionCode='';notificationActionTechnical='';void loadNotifications();});filter.className=status===notificationStatus?'primary':'outline';filter.dataset.notificationFilter=status;filter.dataset.notificationFocus='filter:'+status;filter.setAttribute('aria-pressed',String(status===notificationStatus));filters.append(filter);}
       menu.replaceChildren(header,filters);
+      const reminders=window.tenantSharedReminders?.notificationEntry?.(bell,()=>closeNotificationMenu(false));
+      if(reminders){const bar=el('div');bar.className='notification-reminder-entry';bar.append(reminders);menu.append(bar);}
       if(notificationActionError||notificationActionCode){const error=el('p',notificationActionCode?notificationCopy(notificationActionCode):notificationActionError);error.id='notificationActionError';error.className='notification-error';error.tabIndex=-1;error.setAttribute('role','alert');menu.append(error);if(notificationActionTechnical){const details=el('details');details.className='notification-error';details.append(el('summary',notificationCopy('technical')),el('p',notificationActionTechnical));menu.append(details);}}
       const list=el('div');list.className='notification-list';
       if(notificationError){const error=el('p',notificationCopy('failure')+': '+notificationError);error.setAttribute('role','alert');list.append(error,button(t('retry'),()=>void loadNotifications()));}
@@ -312,6 +322,8 @@
     .dialog-consultation-menu{border:1px solid var(--line,#d7e2dd);border-radius:14px;display:flex;flex-direction:column;overflow:hidden;width:min(460px,calc(100vw - 24px));max-height:calc(100dvh - 84px)}
     .notification-header{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 16px 10px;flex:none}.notification-header>div{display:grid;gap:3px}.notification-header strong{font-size:19px}.notification-header small,.notification-meta{color:var(--muted,#596661);font-size:12px}
     #notificationClose{font-size:25px}.notification-header button{width:44px;min-width:44px;font-size:25px;padding:0}.notification-filters{display:flex;gap:8px;padding:0 16px 12px;border-bottom:1px solid var(--line,#d7e2dd);flex:none}.notification-filters button{flex:1}.notification-filters button[aria-pressed=true]{background:var(--brand-deep,#14523c);color:#fff;border-color:var(--brand-deep,#14523c)}
+    .notification-reminder-entry{padding:8px 16px;border-bottom:1px solid var(--line,#d7e2dd);flex:none}.notification-reminder-entry button{width:100%;text-align:start}
+    .notification-unread-badge.notification-reminder-badge{left:auto;right:-5px;top:16px;background:#935814}
     .notification-list{overflow-y:auto;overscroll-behavior:contain;min-height:0}.notification-list>p{padding:16px}.notification-list>[data-notification-more]{margin:12px 16px}.notification-card{padding:16px;gap:9px}.notification-card h3{margin:0;font-size:15px}.notification-card p{margin:0;line-height:1.45}.notification-meta{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}.notification-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:3px}
 
     #dialogConsultationMenu button,#dialogConsultationReplies button,#dialogConsultationReplies a.outline{min-height:44px;line-height:1.25;white-space:normal}.notification-card button{padding:10px 12px}.dialog-consultation-card a.outline{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}.notification-original{font-size:12px;color:var(--muted,#596661)}.notification-original summary{cursor:pointer;padding:4px 0}.notification-original p{white-space:pre-wrap;overflow-wrap:anywhere}.notification-error{margin:0;padding:12px 16px;background:var(--paper,#f4f7f5);color:var(--danger,#a32020);border-bottom:1px solid var(--line,#d7e2dd)}
@@ -325,6 +337,7 @@
   document.addEventListener('tenant-chat-attachments-ready',()=>{mount();render();void load();});
   document.addEventListener('tenant-view',event=>{viewRevision++;if(event.detail?.view!=='dialogs'&&focused)leaveReplyView();});
   document.addEventListener('tenant-consultation-changed',()=>void load());
+  document.addEventListener('tenant-shared-reminders-changed',render);
   document.addEventListener('tenant-risk-alert-read',()=>void loadNotifications());
   document.addEventListener('tenant-language',()=>{render();if($('dialogDeveloperAsk'))$('dialogDeveloperAsk').textContent=t('consult');if($('dialogConsultationStart'))$('dialogConsultationStart').textContent=t('consult');if($('dialogHelperTypeLabel'))$('dialogHelperTypeLabel').textContent=t('helperType');const type=$('dialogHelperType');if(type){type.setAttribute('aria-label',t('helperType'));for(const option of type.options)option.textContent=t(option.value==='Helper'?'helper':'developer');}const marker=$('dialogDeveloperMarker');if(marker)marker.textContent=t(marker.dataset.enabled==='true'?'unmark':'mark');if($('dialogDeveloperBadge'))$('dialogDeveloperBadge').textContent=t('badge');document.querySelectorAll('[data-developer-empty]').forEach(node=>node.textContent=t('noTargets'));});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void load();});
