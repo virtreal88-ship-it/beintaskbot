@@ -70,6 +70,18 @@ def prepare_database() -> None:
         from tenant_dialog_consultations import require_schema
         require_schema(conn)
         conn.commit()
+        # Separate status-only opt-in, before the unrelated template hook.
+        # Reuses the dedicated startup lock and 2 s / 5 s transaction limits.
+        from tenant_dialog_presence import STATUS_PROVISION_ENV
+        presence_workspace = os.environ.get(STATUS_PROVISION_ENV, '').strip()
+        if presence_workspace:
+            from tenant_dialog_presence import provision_status_pilot
+            with conn.cursor() as cur:
+                presence_created = provision_status_pilot(cur, presence_workspace)
+            conn.commit()
+            if presence_created:
+                import logging
+                logging.getLogger(__name__).info('Provisioned status-only presence schema; routing unchanged.')
         # Opt-in only, on the dedicated startup connection. This fresh
         # transaction inherits the existing startup lock and timeout budget.
         # Closing the connection rolls back any partial template DDL.

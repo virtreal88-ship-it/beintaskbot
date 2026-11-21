@@ -4,9 +4,10 @@ import os
 import uuid
 
 from tenant_linear_policy import TenantLinearError
-from tenant_beinsystems_operator_access import is_operator_workspace
+from tenant_beinsystems_operator_access import configured_workspace_id, is_operator_workspace
 
 ROUTING_ENV = "TENANT_DIALOG_PRESENCE_ROUTING_ENABLED"
+STATUS_PROVISION_ENV = "DIALOG_PRESENCE_STATUS_PROVISION_WORKSPACE_ID"
 STATUSES = frozenset({"online", "lunch", "away"})
 
 
@@ -58,6 +59,85 @@ def migrate(cur):
     )""")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_dialog_presence_status_idx
       ON saas_dialog_employee_presence(tenant_id,status,employee_id)""")
+
+
+def provision_status_pilot(cur, requested_workspace):
+    """Install only the empty presence table, under the bounded startup lock."""
+    try:
+        tenant = str(uuid.UUID(requested_workspace))
+    except (TypeError, ValueError, AttributeError):
+        raise RuntimeError("Presence provisioning requires an exact BeinSystems workspace UUID.") from None
+    if tenant != requested_workspace or tenant != configured_workspace_id():
+        raise RuntimeError("Presence provisioning requires an exact BeinSystems workspace UUID.")
+    if _routing_requested(tenant):
+        raise RuntimeError("Status-only presence provisioning requires dialogue presence routing to be disabled.")
+    cur.execute("""SELECT 1 FROM saas_tenants
+      WHERE id=%s::uuid AND status='active' FOR SHARE""", (tenant,))
+    if not cur.fetchone():
+        raise RuntimeError("Presence provisioning requires the configured BeinSystems workspace to be active.")
+    from tenant_schema_preflight import ready
+    if not ready(cur, {"saas_dialog_rollout": (
+        "tenant_id", "mode", "activated_at", "admission_enabled", "generation",
+    )}, ()):
+        raise RuntimeError("Dialogue authorization schema must already exist before presence provisioning.")
+    created = not _available(cur)
+    if created:
+        migrate(cur)
+    if not ready(cur, {"saas_dialog_employee_presence": (
+        "tenant_id", "employee_id", "status", "updated_at", "updated_by",
+    )}, ("saas_dialog_presence_status_idx",)):
+        raise RuntimeError("Unexpected presence schema; status provisioning rolled back.")
+    cur.execute("""SELECT c.oid FROM pg_catalog.pg_class c
+      JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.oid=to_regclass('saas_dialog_employee_presence')
+        AND n.nspname=current_schema() AND c.relkind='r' AND c.relpersistence='p'
+        AND NOT c.relispartition AND NOT c.relrowsecurity AND NOT c.relforcerowsecurity
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid=c.oid AND NOT t.tgisinternal)
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i WHERE c.oid IN (i.inhrelid,i.inhparent))
+        AND EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k
+          WHERE k.conrelid=c.oid AND k.contype='p'
+            AND pg_get_constraintdef(k.oid)='PRIMARY KEY (tenant_id, employee_id)')""")
+    relation = cur.fetchone()
+    if not relation:
+        raise RuntimeError("Unexpected presence schema; status provisioning rolled back.")
+    cur.execute("""SELECT a.attname, format_type(a.atttypid,a.atttypmod) AS type,
+      a.attnotnull, a.attidentity, a.attgenerated, pg_get_expr(d.adbin,d.adrelid) AS default_expr
+      FROM pg_catalog.pg_attribute a
+      LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+      WHERE a.attrelid=%s::oid AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum""",
+      (relation["oid"],))
+    columns = cur.fetchall()
+    expected_columns = (
+        ("tenant_id", "uuid", None), ("employee_id", "bigint", None),
+        ("status", "text", None), ("updated_at", "timestamp with time zone", "clock_timestamp()"),
+        ("updated_by", "bigint", None),
+    )
+    if (tuple((row["attname"],row["type"],row["default_expr"]) for row in columns) != expected_columns
+            or any(not row["attnotnull"] or row["attidentity"] or row["attgenerated"] for row in columns)):
+        raise RuntimeError("Unexpected presence columns; status provisioning rolled back.")
+    cur.execute("""SELECT pg_get_constraintdef(oid) AS definition, convalidated
+      FROM pg_catalog.pg_constraint WHERE conrelid=%s::oid AND contype IN ('c','f','p','u','x')""",
+      (relation["oid"],))
+    constraints = cur.fetchall()
+    expected_constraints = {
+        "PRIMARY KEY (tenant_id, employee_id)",
+        "FOREIGN KEY (tenant_id, employee_id) REFERENCES saas_tenant_members(tenant_id, telegram_id)",
+        "FOREIGN KEY (tenant_id, updated_by) REFERENCES saas_tenant_members(tenant_id, telegram_id)",
+        "CHECK ((status = ANY (ARRAY['online'::text, 'lunch'::text, 'away'::text])))",
+    }
+    if (len(constraints) != len(expected_constraints)
+            or {row["definition"] for row in constraints} != expected_constraints
+            or not all(row["convalidated"] for row in constraints)):
+        raise RuntimeError("Unexpected presence constraints; status provisioning rolled back.")
+    cur.execute("""SELECT 1 FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class t ON t.oid=i.indrelid
+      JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace
+      WHERE i.indexrelid=to_regclass('saas_dialog_presence_status_idx') AND i.indrelid=%s::oid
+        AND i.indisvalid AND i.indisready AND i.indislive AND pg_get_indexdef(i.indexrelid)=format(
+          'CREATE INDEX saas_dialog_presence_status_idx ON %%I.saas_dialog_employee_presence USING btree (tenant_id, status, employee_id)',
+          n.nspname)""", (relation["oid"],))
+    if not cur.fetchone():
+        raise RuntimeError("Unexpected presence index; status provisioning rolled back.")
+    return created
 
 
 def is_online(cur, tenant, employee, *, lock=False, _routing=None):
