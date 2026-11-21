@@ -102,6 +102,7 @@ func (s *Session) wireCall(cm *call.CallManager, callID string, caller *callerId
 		rec := CallRecord{
 			SessionID: s.id, CallID: c.CallID, Direction: dir, Peer: c.PeerJid,
 			StartedAt: time.Now().UnixMilli(), Status: mapStatus(c.StateData.State),
+			RemoteAnswered: dir == "outbound" && c.StateData.AcceptedAt != nil,
 		}
 		if existing != nil {
 			rec.Recording = existing.Recording

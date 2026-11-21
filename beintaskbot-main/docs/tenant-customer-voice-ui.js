@@ -73,6 +73,9 @@
     session.status.textContent=session.message || (session.saving?text('saving'):snap.state==='requesting'?text('requesting'):
       snap.state==='recording'?text('recording'):entry?.state==='draft'?text('draft'):receipt?.manualConfirmation?.outcome?text('manualValue_'+receipt.manualConfirmation.outcome):receipt?.state==='unknown'?text('unknown'):
       receipt?.state==='accepted'?text(receipt.deliveryState==='read'?'read':receipt.deliveryState==='delivered'?'delivered':'accepted'):'');
+    session.status.hidden=!session.status.textContent;
+    session.voiceActions.hidden=[...session.voiceActions.children].every(node=>node.hidden||node===session.duration&&!node.textContent);
+    session.host.hidden=session.audio.hidden&&session.voiceActions.hidden&&session.status.hidden;
   }
   async function saveStopped(session){
     const blob=session.recorder.recording();if(!blob || session.saving)return;
@@ -108,7 +111,7 @@
   function node(tag,label,handler){const n=document.createElement(tag);if(label)n.textContent=text(label);if(tag==='button'){n.type='button';n.className='outline';n.onclick=handler;}return n;}
   function create(scopeValue,maySend){
     const session={scope:scopeValue,maySend,entry:null,receipt:null,busy:false,saving:false,message:'',release:null,host:node('section'),url:'',renderedId:''};
-    session.host.className='operator-customer-voice';session.host.setAttribute('aria-label',text('mic'));session.host.style.cssText='display:grid;gap:8px;min-width:0;margin-top:8px';
+    session.host.className='operator-customer-voice';session.host.setAttribute('aria-label',text('mic'));
     session.mic=node('button','mic',()=>void start(session));session.mic.classList.add('operator-voice-mic');session.mic.textContent='🎙';session.mic.title=text('mic');session.mic.setAttribute('aria-label',text('mic'));session.mic.style.cssText='min-width:44px;min-height:44px';
     session.stop=node('button','stop',()=>session.recorder.stop());session.cancel=node('button','cancel',()=>{session.message='';session.recorder.cancel();draw(session);});
     session.discard=node('button','discard',()=>void discard(session));session.retrySave=node('button','retrySave',()=>void saveStopped(session));
@@ -119,7 +122,7 @@
     });
     session.audio=node('audio');session.audio.controls=true;session.audio.preload='metadata';session.audio.style.cssText='width:100%;max-width:100%';
     session.duration=node('span');session.status=node('p');session.status.setAttribute('role','status');session.status.setAttribute('aria-live','polite');
-    const actions=node('div');actions.style.cssText='display:flex;flex-wrap:wrap;align-items:center;gap:8px';
+    const actions=node('div');actions.className='operator-customer-voice-actions';session.voiceActions=actions;
     actions.append(session.stop,session.cancel,session.discard,session.retrySave,session.discardUnstored,session.send,session.check,...session.manualButtons.map(([button])=>button),session.duration);
     session.host.append(session.audio,actions,session.status);
     session.recorder=window.createTenantVoiceRecorder({onChange:snapshot=>recorderChanged(session,snapshot)});
@@ -290,5 +293,13 @@
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')stopCurrent();});
   document.addEventListener('visibilitychange',()=>{if(document.hidden&&current?.recorder.snapshot().state==='recording')current.recorder.stop();else if(!document.hidden&&current)void refreshCapability(current);});
   window.addEventListener('pagehide',()=>{if(current?.recorder.snapshot().state==='recording')current.recorder.stop();});
+  const style=document.createElement('style');
+  style.textContent=`
+    .operator-customer-voice { display:grid; gap:6px; min-width:0 }
+    .operator-customer-voice-actions { display:flex; flex-wrap:wrap; align-items:center; gap:8px }
+    .operator-customer-voice [role=status] { margin:0 }
+    .operator-customer-voice[hidden],.operator-customer-voice [hidden] { display:none!important }
+  `;
+  document.head.append(style);
   void attach();
 })();

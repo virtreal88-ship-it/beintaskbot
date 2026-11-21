@@ -53,6 +53,7 @@ async function main(){
   });
   try{
     const page=await context.newPage();await page.setViewportSize({width:390,height:844});await page.goto(origin);await page.locator('.operator-voice-mic').waitFor({state:'visible'});
+    await page.locator('.operator-customer-voice').waitFor({state:'hidden'});
     await page.waitForFunction(()=>window.deliveryUpdate?.state==='read');
     await page.locator('.operator-voice-mic').click();await page.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
     const other=await context.newPage();await other.goto(origin+'/?lead=8');await other.locator('.operator-voice-mic').click();
