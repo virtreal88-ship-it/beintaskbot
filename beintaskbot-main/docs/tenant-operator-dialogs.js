@@ -1342,7 +1342,7 @@
       opener=button;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
       void renderGroupParticipants(route,card,current);void showClientTransfer(route,card,current);
-      if(!snapshot){(input||$('operatorCancelConversationName')).focus({preventScroll:true});input?.select();}
+      if(!snapshot)$('operatorCancelConversationName').focus({preventScroll:true});
     };
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
