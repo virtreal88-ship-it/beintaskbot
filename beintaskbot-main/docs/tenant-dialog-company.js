@@ -98,14 +98,24 @@
     input.focus({preventScroll:true});
   }
   function mount({host,route,member,isCurrent,onChanged}){
+    if(!host?.isConnected||!route?.provider||!route?.lead_id
+        ||typeof route.conversation_id!=='string'||typeof route.channel_id!=='string'
+        ||(route.provider==='connect'&&(!route.channel_id||!route.conversation_id))
+        ||!member?.tenant_id||member?.telegram_id==null||!isCurrent()){clear();return;}
+    const exact={provider:String(route.provider),lead_id:String(route.lead_id),
+      channel_id:route.channel_id,conversation_id:route.conversation_id};
+    const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),exact]);
+    // A poll may rebuild the entire header for a changed conversation state.
+    // Keep the current search and selection only for the same authorized key.
+    if(state?.key===key&&state.panel?.isConnected){
+      state.isCurrent=isCurrent;state.onChanged=onChanged;state.member=member;
+      host.append(state.section);return;
+    }
     clear();
-    if(!host?.isConnected||!route?.provider||!route?.lead_id||!route?.conversation_id
-        ||!member?.tenant_id||member?.telegram_id==null||!isCurrent())return;
     const section=node('div'),label=node('span',t('label')+':'),value=node('span',t('loading'));
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
-    const s={section,value,member,isCurrent,onChanged,route:{provider:String(route.provider),lead_id:String(route.lead_id),
-      channel_id:String(route.channel_id||''),conversation_id:String(route.conversation_id)},read:new AbortController()};
+    const s={section,value,member,isCurrent,onChanged,route:exact,key,read:new AbortController()};
     s.edit=button(t('edit'),()=>open(s));s.edit.hidden=true;s.edit.className='outline';
     section.append(label,value,s.edit);host.append(section);state=s;
     void request(endpoint,member,s.route,false,s.read.signal).then(payload=>paint(s,payload.binding),()=>paint(s,null));
