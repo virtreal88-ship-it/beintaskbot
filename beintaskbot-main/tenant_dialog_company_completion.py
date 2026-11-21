@@ -92,8 +92,9 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
         return None
     if skip and (supplied or payload['company_choice'] != 'none'):
         raise TenantLinearError('Выберите компанию или «Без компании».',422)
-    opaque = not enabled(tenant) and not can_preview(policy)
-    if not enabled(tenant) and (not (supplied or skip) or (opaque and skip)):
+    required = enabled(tenant)
+    opaque = not required and not can_preview(policy)
+    if not required and (not (supplied or skip) or (opaque and skip)):
         # Same behavior as ordinary optional close, without probing whether
         # a company exists or is outside this actor's scope.
         return None
@@ -134,7 +135,8 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
             if supplied:
                 raise TenantLinearError('У диалога уже есть компания. Обновите диалог.',422)
             return None
-    if skip and not bound:
+    if skip and (not bound or not required):
+        # Optional close makes no changes to an existing archived association.
         return None
     if not supplied:
         message = ('Компания диалога архивирована. Выберите действующую CRM-компанию.' if bound

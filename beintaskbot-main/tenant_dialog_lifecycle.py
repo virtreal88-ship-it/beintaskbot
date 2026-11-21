@@ -304,13 +304,14 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
                 dialog['lifecycle']['company_completion']={
                     'status':readiness,'required':required,
                     'can_choose':readiness in {'missing','archived'} and _can_update and completion.can_choose(_policy),
-                    'can_skip':readiness=='missing' and _can_update is True,
+                    'can_skip':_can_update is True and (readiness=='missing' or (not required and readiness=='archived')),
                 }
-            elif completion.available(tenant) and _can_update is True and completion.can_choose(_policy):
+            elif completion.available(tenant) and _can_update is True:
                 # Deliberately emit the same menu whether a hidden company is
                 # present or absent; a later choice must not overwrite one.
                 dialog['lifecycle']['company_completion']={
-                    'status':'choice_available','required':False,'can_choose':True,'can_skip':True,
+                    'status':'choice_available','required':False,
+                    'can_choose':completion.can_choose(_policy),'can_skip':True,
                 }
         cur.execute("""SELECT id::text AS id,accepted_at,closed_at,case_id::text AS case_id
           FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid

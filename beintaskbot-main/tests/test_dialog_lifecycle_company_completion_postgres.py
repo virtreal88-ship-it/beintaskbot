@@ -52,8 +52,9 @@ def test_explicit_no_company_is_scoped_fingerprinted_and_needs_no_crm_access(com
     db.commit()
     assert preview['lifecycle']['can_close'] is True
     assert preview['lifecycle'].get('company_completion') == ({
-        'status':'missing', 'required':True, 'can_choose':False, 'can_skip':True,
-    } if required else None)
+        'status':'missing' if required else 'choice_available',
+        'required':required,'can_choose':False,'can_skip':True,
+    })
 
     bad_payloads = (
         {'company_choice':None}, {'company_choice':'None'},
@@ -114,7 +115,8 @@ def test_optional_close_preserves_concurrently_added_company_without_disclosure(
     db.commit()
 
 
-def test_explicit_none_rejects_archived_or_unrelated_tenant_without_writes(companies, monkeypatch):
+@pytest.mark.parametrize('required',[False,True])
+def test_explicit_none_scoping_and_archived_preservation(companies,monkeypatch,required):
     from test_tenant_support_inbox import A, B, CA
     import tenant_dialog_company_completion as completion
     import tenant_dialog_lifecycle as lifecycle
@@ -122,7 +124,7 @@ def test_explicit_none_rejects_archived_or_unrelated_tenant_without_writes(compa
     from tenant_linear_policy import TenantLinearError
 
     db, company, *_ = companies
-    monkeypatch.delenv(completion.ENV)
+    monkeypatch.setenv(completion.ENV,str(required).lower())
     grant(db, monkeypatch)
     command(actor=33)
     request = payload('close', 1, company_choice='none')
@@ -138,12 +140,22 @@ def test_explicit_none_rejects_archived_or_unrelated_tenant_without_writes(compa
        (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
        VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,company))
     db.commit()
-    with pytest.raises(TenantLinearError) as archived:
-        lifecycle.mutate(STAFF, request)
-    assert archived.value.status == 422
-    assert state(db)['state'] == 'accepted'
-    assert bindings(db)[0]['company_id'] == company
-    assert db.execute("SELECT id FROM saas_tenant_audit_events WHERE action='dialog_close'") == []
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    with db.cursor() as cur:
+        policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+        route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+        decorated=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+    db.commit()
+    assert decorated['lifecycle']['company_completion']['can_skip'] is (not required)
+    if required:
+        with pytest.raises(TenantLinearError) as archived:
+            lifecycle.mutate(STAFF,request)
+        assert archived.value.status==422
+        assert state(db)['state']=='accepted'
+    else:
+        assert lifecycle.mutate(STAFF,request)['lifecycle']['state']=='closed'
+    assert bindings(db)[0]['company_id']==company
     db.commit()
 
 
