@@ -2,7 +2,7 @@
 import uuid
 
 from tenant_beinsystems_operator import OperatorError
-from tenant_beinsystems_operator_access import is_operator_workspace
+from tenant_beinsystems_operator_access import dialogue_chooser_enabled, is_operator_workspace
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect
 from tenant_policy import TenantPolicy
@@ -229,6 +229,8 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                           company_id=EXCLUDED.company_id,updated_by=EXCLUDED.updated_by,updated_at=now()""",
                           (*keys,company_id,actor,actor))
                 result = _read(cur,tenant,actor,route,allow_manage)
+                if allow_manage and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
+                    result['can_search_operator']=True
             conn.commit()
             return result
     except TenantLinearError as error:

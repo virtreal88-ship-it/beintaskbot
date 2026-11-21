@@ -66,6 +66,17 @@ def test_connect_media_filename_exposes_only_safe_basename():
     assert dialogs._media_filename({'filename':'unsafe\nname.pdf'})==''
 
 
+def test_document_projection_recognizes_nameless_pdf_without_exposing_raw_mime():
+    document = {'channel': 'connect:'+CA, 'direction': 'incoming', 'message_type': 'document',
+                'body': 'Check the totals'}
+    pdf = dialogs._message({**document, 'raw': {'mimeType': 'Application/PDF; synthetic=private'}})
+    assert pdf['media_mime_type'] == 'application/pdf'
+    assert pdf['body'] == 'Check the totals'
+    assert 'media_filename' not in pdf and 'raw' not in pdf
+    other = dialogs._message({**document, 'raw': {'mimeType': 'application/octet-stream'}})
+    assert 'media_mime_type' not in other
+
+
 def test_connect_media_size_exposes_only_positive_bounded_provider_metadata():
     assert dialogs._media_size({'fileLength':'16777217'})==16777217
     assert dialogs._media_size({'file_size':1048576})==1048576

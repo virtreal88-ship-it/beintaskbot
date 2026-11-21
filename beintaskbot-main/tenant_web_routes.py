@@ -172,6 +172,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/presence', operator_handler(member, origin, logger, 'presence'), ('GET','POST')),
         ('dialogs/sources', operator_handler(member, origin, logger, 'sources'), ('GET','POST')),
         ('dialogs/group-participants', operator_handler(member, origin, logger, 'group_participants'), ('GET',)),
+        ('dialogs/transfer-details', operator_handler(member, origin, logger, 'transfer_details'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),

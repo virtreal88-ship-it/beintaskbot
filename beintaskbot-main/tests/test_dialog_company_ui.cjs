@@ -1,5 +1,6 @@
 const fs=require('node:fs'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
 const tick=()=>new Promise(r=>setTimeout(r,10));
+const debounce=()=>new Promise(r=>setTimeout(r,450));
 const read=p=>fs.readFileSync(p,'utf8');
 (async()=>{
   const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'});
@@ -11,9 +12,11 @@ const read=p=>fs.readFileSync(p,'utf8');
   const a=group(41,'a'),b=group(42,'b');
   const kommo={...a,provider:'kommo',lead_id:43,channel_id:'k',conversation_id:'provider-peer',customer_kind:'contact'};
   const kommoWithoutJob={...kommo,lead_id:44,channel_id:'',conversation_id:''};
+  const operatorCandidate={...kommoWithoutJob,lead_id:45};
+  const all=[a,b,kommo,kommoWithoutJob,operatorCandidate];
   const named=(name,manage=false)=>({company_id:name,company_name:name,can_manage:manage});
-  const bindings=new Map([[41,named('Company A',true)],[42,named('Company B')],[43,named('Company K',true)],[44,named('Company without job',true)]]);
-  const calls=[];let delayRead=false,delaySearch=false,releaseRead,releaseSearch;
+  const bindings=new Map([[41,named('Company A',true)],[42,named('Company B')],[43,named('Company K',true)],[44,named('Company without job',true)],[45,{company_id:null,can_manage:true}]]);
+  const calls=[];let delayRead=false,delaySearch=false,releaseRead,releaseSearch,holdOperator=false,releaseOperator;
   w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};w.confirm=()=>true;
   w.fetch=async(url,opt={})=>{
     const u=new URL(String(url),w.location.origin),body=opt.body?JSON.parse(opt.body):null;
@@ -21,10 +24,19 @@ const read=p=>fs.readFileSync(p,'utf8');
     calls.push({path:u.pathname,query:u.searchParams,body});let result;
     if(u.pathname==='/api/platform/me')return{ok:true,json:async()=>profile};
     if(u.pathname==='/api/platform/operator/dialog-company'){
-      const q=body||Object.fromEntries(u.searchParams),route=[a,b,kommo,kommoWithoutJob].find(r=>String(r.lead_id)===q.lead_id);
+      const q=body||Object.fromEntries(u.searchParams),route=all.find(r=>String(r.lead_id)===q.lead_id);
       assert.deepEqual([q.provider,q.channel_id,q.conversation_id],[route.provider,route.channel_id,route.conversation_id]);
       assert.deepEqual([q.expected_tenant_id,q.expected_user_id],['tenant','33']);
-      if(body){bindings.set(route.lead_id,q.company_id?named('<b>New company</b>',true):{company_id:null,can_manage:true});}
+      if(body&&'operator_search' in q){
+        assert.equal('operator_account' in q,false);
+        assert.equal('company_id' in q,false);
+        if(holdOperator)await new Promise(resolve=>{releaseOperator=resolve;});
+        return{ok:true,json:async()=>({success:true,accounts:[{account:'acct_001',name:'Not contracted',phone:'Not contracted phone'},{account:'@acct_002'}]})};
+      }
+      if(body&&'operator_account' in q){
+        assert.equal('operator_search' in q,false);assert.equal('company_id' in q,false);
+        assert.equal(q.operator_account,'acct_001');bindings.set(route.lead_id,named('Bound Operator company',true));
+      }else if(body){bindings.set(route.lead_id,q.company_id?named('<b>New company</b>',true):{company_id:null,can_manage:true});}
       if(delayRead&&route===a)await new Promise(resolve=>{releaseRead=resolve;});
       return{ok:true,json:async()=>({success:true,binding:bindings.get(route.lead_id)})};
     }
@@ -36,9 +48,9 @@ const read=p=>fs.readFileSync(p,'utf8');
       ]})};
     }
     if(u.pathname.endsWith('/dialogs/history')){
-      const route=[a,b,kommo,kommoWithoutJob].find(r=>String(r.lead_id)===u.searchParams.get('lead_id'));
+      const route=all.find(r=>String(r.lead_id)===u.searchParams.get('lead_id'));
       result={dialog:route,messages:[],next_before:null};
-    }else if(u.pathname.endsWith('/dialogs'))result={dialogs:[{...a,group_sources:[a,b]},kommo,kommoWithoutJob],channels:[],agents:[],next_offset:null};
+    }else if(u.pathname.endsWith('/dialogs'))result={dialogs:[{...a,group_sources:[a,b]},kommo,kommoWithoutJob,operatorCandidate],channels:[],agents:[],next_offset:null};
     else if(u.pathname.endsWith('/dialogs/preferences'))result={};
     else if(u.pathname.endsWith('/dialogs/read'))result={updated:true};
     else throw Error('Unexpected request '+u.pathname);
@@ -56,9 +68,10 @@ const read=p=>fs.readFileSync(p,'utf8');
   await w.tenantOperator.openDialog(kommo);await tick();
   assert.equal(value(),'Company K',JSON.stringify({current:w.tenantOperator.currentDialog,
     visible:$('#view-dialogs')?.className,viewCalls:calls.map(c=>c.path).slice(-12)}));
-  assert.equal($('#operatorClientCard'),null,'Kommo company access never creates a display-name form');
+  assert.equal($('#operatorConversationName'),null,'Kommo company access never creates a display-name form');
+  $('#operatorClientCardOpen').click();
   section().querySelector('button').click();
-  let panel=$('#operatorDialogueCompanyPicker');assert(panel.open);
+  let panel=$('#operatorDialogueCompanyPicker');assert.equal(panel.closest('dialog').id,'operatorClientCard');
   const submit=()=>panel.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
   submit();await tick();
   assert.deepEqual([...panel.querySelector('select').options].map(o=>o.value),['','writeable']);
@@ -89,11 +102,52 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(value(),'Company B','late source A binding never bleeds into source B');
   bindings.set(41,{company_id:null,company_name:'Forbidden company name',can_manage:false});
   delayRead=false;await source(0);
-  assert.equal(value(),'Not specified or unavailable');
+  assert.equal(value(),'No company selected');
   assert(!section().outerHTML.includes('Forbidden company name'),'masked company name is absent from text, title and data attributes');
   assert(section().querySelector('button').hidden);
   assert.equal(calls.filter(c=>c.body&&c.path.endsWith('/dialog-company')).length,1);
+  await w.tenantOperator.openDialog(operatorCandidate);await tick();
+  const searchCalls=()=>calls.filter(c=>c.body?.operator_search);
+  const writes=()=>calls.filter(c=>c.body?.operator_account);
+  section().querySelector('button').click();
+  const pop=()=>$('#operatorDialogueAccountPicker');
+  assert(!pop()&&$('#operatorDialogueCompanyPicker'),'default-off owner gets only local CRM picker');
+  assert.equal(searchCalls().length,0);
+  await w.tenantOperator.openDialog(b);await tick();
+  bindings.set(45,{company_id:null,can_manage:true,can_search_operator:true});
+  await w.tenantOperator.openDialog(operatorCandidate);await tick();
+  section().querySelector('button').click();
+  assert(pop()&&d.activeElement===pop().querySelector('input'));
+  assert.equal(searchCalls().length,0);
+  bindings.set(45,{company_id:null,can_manage:true});
+  d.dispatchEvent(new w.Event('tenant-dialog-reauthorized'));await tick();
+  assert(!pop(),'reauthorization closes a picker whose explicit server capability disappeared');
+  bindings.set(45,{company_id:null,can_manage:true,can_search_operator:true});
+  d.dispatchEvent(new w.Event('tenant-dialog-reauthorized'));await tick();
+  section().querySelector('button').click();
+  pop().querySelector('[data-local-company-picker]').click();
+  assert(!pop()&&$('#operatorDialogueCompanyPicker'),'existing CRM fallback is one click');
+  $('#operatorDialogueCompanyPicker').querySelector('[type=button].primary').nextElementSibling.nextElementSibling.click();
+  section().querySelector('button').click();
+  const type=value=>{const input=pop().querySelector('input');input.value=value;input.dispatchEvent(new w.Event('input'));};
+  type('abc');await debounce();assert.equal(searchCalls().length,0);
+  type('acct');type(' acct_ ');await debounce();
+  assert.equal(searchCalls().length,1);assert.equal(searchCalls()[0].body.operator_search,'acct_');
+  assert.equal(searchCalls()[0].body.conversation_id,'');assert.equal(searchCalls()[0].body.channel_id,'');
+  assert.deepEqual([...pop().querySelectorAll('[data-operator-account-results] strong')].map(n=>n.textContent),['@acct_001','@acct_002']);
+  assert(!pop().textContent.includes('Not contracted'));
+  pop().querySelector('input').dispatchEvent(new w.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  assert.equal(writes().length,0,'typing, incoming results and Enter without a choice never bind');
+  holdOperator=true;type('stale');await debounce();assert(releaseOperator);
+  await w.tenantOperator.openDialog(b);await tick();assert(!pop());
+  releaseOperator();holdOperator=false;await tick();assert(!pop(),'late search cannot repaint a superseded route');
+  await w.tenantOperator.openDialog(operatorCandidate);await tick();
+  section().querySelector('button').click();type('acct');await debounce();
+  const pick=pop().querySelector('[data-operator-account-results] button');pick.click();pick.click();
+  await tick();await tick();
+  assert.equal(writes().length,1);assert.equal(writes()[0].body.lead_id,'45');
+  assert.equal(value(),'Bound Operator company');assert(!pop());
   assert(!calls.some(c=>c.path.includes('/send')));
   d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));assert(!section(),'auth transition immediately clears company');
-  w.close();console.log('PASS: Company field without Operator, exact Kommo and group source routes, safe write, stale guards');
+  w.close();console.log('PASS: Company field and Operator chooser, exact Kommo/group routes, debounce, explicit bind, fallback, stale guards');
 })().catch(err=>{console.error(err);process.exitCode=1;});

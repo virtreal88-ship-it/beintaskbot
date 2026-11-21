@@ -139,6 +139,28 @@ def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     assert state(episodes)['state']=='accepted'
 
 
+def test_transfer_details_show_only_the_current_visible_episode(episodes):
+    route = payload()
+    command(actor=33)
+    assert lifecycle.transfer_details({'tenant_id': A, 'telegram_id': 33}, route) == {'transfer': None}
+    command('transfer', 1, actor=33, target_employee_id=11)
+
+    transfer = lifecycle.transfer_details(PROFILE, route)['transfer']
+    assert transfer['from_name'] == 'Employee'
+    assert transfer['to_name']
+    assert transfer['at']
+    with pytest.raises(TenantLinearError) as denied:
+        lifecycle.transfer_details({'tenant_id': A, 'telegram_id': 33}, route)
+    assert denied.value.status == 404
+    with pytest.raises(TenantLinearError):
+        lifecycle.transfer_details(PROFILE, {**route, 'channel_id': CB})
+
+    command('close', 2)
+    assert lifecycle.transfer_details(PROFILE, route)['transfer'] == transfer
+    command('start', 3)
+    assert lifecycle.transfer_details(PROFILE, route) == {'transfer': None}
+
+
 
 def test_employee_presence_is_self_scoped_and_tenant_isolated(episodes):
     import tenant_dialog_presence as presence

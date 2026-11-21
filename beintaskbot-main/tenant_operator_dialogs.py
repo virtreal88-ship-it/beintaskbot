@@ -405,6 +405,11 @@ def _message(item, *, group=False, participant_names=None, employee_participants
             value['media_version']=media_version(raw)
             filename=_media_filename(raw)
             if filename:value['media_filename']=filename
+            if value['message_type']=='document' and isinstance(raw,dict):
+                # Publish only the recognized presentation type, not raw metadata.
+                mime=raw.get('mimeType') or raw.get('mimetype') or raw.get('mime_type')
+                if isinstance(mime,str) and mime.split(';',1)[0].strip().lower()=='application/pdf':
+                    value['media_mime_type']='application/pdf'
             size=_media_size(raw)
             if size is not None:value['media_size_bytes']=size
             if value.get('message_type') == 'image':

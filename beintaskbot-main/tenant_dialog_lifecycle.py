@@ -259,6 +259,42 @@ def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True):
 _UNSET_WORKFLOW=object()
 
 
+def transfer_details(profile, params):
+    """Return the recorded transfer of the current, visible source episode."""
+    from tenant_operator_access import access, assert_route
+    from tenant_platform import _connect
+
+    if params.get('provider') != 'connect':
+        return {'transfer': None}
+    with _connect() as conn, conn.cursor() as cur:
+        tenant, _, policy = access(cur, profile, 'dialogs')
+        selected = assert_route(cur, tenant, policy, 'connect', params.get('conversation_id'),
+                                str(params.get('channel_id') or ''), int(params['lead_id']), allow_merged=True)
+        if not enabled(cur, tenant):
+            return {'transfer': None}
+        channel = str(selected['connect_channel_id'])
+        conversation = selected['conversation_id']
+        row = _row(cur, tenant, channel, conversation)
+        if not row or row['revision'] < 2:
+            return {'transfer': None}
+        cur.execute("""SELECT sender.display_name AS from_name, recipient.display_name AS to_name, event.created_at
+          FROM saas_tenant_audit_events event
+          LEFT JOIN saas_tenant_members sender ON sender.tenant_id=event.tenant_id
+            AND sender.telegram_id=event.actor_telegram_id
+          LEFT JOIN saas_tenant_members recipient ON recipient.tenant_id=event.tenant_id
+            AND recipient.telegram_id::text=event.payload->>'operator_id'
+          WHERE event.tenant_id=%s::uuid AND event.action='dialog_transfer'
+            AND event.entity_type='dialog_episode' AND event.entity_id=%s
+            AND event.payload->>'channel_id'=%s AND event.payload->>'conversation_id'=%s
+          ORDER BY event.created_at DESC, event.id DESC LIMIT 1""",
+          (tenant, str(row['id']), channel, conversation))
+        event = cur.fetchone()
+        if not event:
+            return {'transfer': None}
+        return {'transfer': {'from_name': event['from_name'], 'to_name': event['to_name'],
+                             'at': event['created_at'].isoformat() if event['created_at'] else None}}
+
+
 def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
