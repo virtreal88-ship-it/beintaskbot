@@ -5,6 +5,8 @@ import pytest
 
 import tenant_dialog_company_binding as store
 import tenant_operator_dialogs as dialogs
+import tenant_crm_native_companies as native
+from tenant_crm_native_access import CRMAccessError
 from tenant_beinsystems_operator import OperatorError
 from test_connect_channel_multiprocess import database
 from test_dialog_lifecycle_company_completion import STAFF, bindings, companies
@@ -65,6 +67,35 @@ def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypa
         store.binding(STAFF,**route,company_id=None)
     assert denied.value.status in {403,404}
     assert len(bindings(database))==1
+
+
+def test_company_delete_blocks_dialogues_cases_and_deals(local, monkeypatch):
+    database, company, *_ = local
+    monkeypatch.setattr(native, '_connect', lambda: database)
+    monkeypatch.setattr(native, '_ensure_schema', lambda conn: None)
+    command()
+    store.binding(PROFILE, **_route('connect',41,CA,'client'), company_id=company)
+    with pytest.raises(CRMAccessError, match='company_has_linked_dialogues'):
+        native.archive_company(A, company, actor_id=11)
+    database.execute("""INSERT INTO saas_support_tickets(tenant_id,id,channel_id,conversation_id,source)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,'client','manual')""", (A,str(uuid.uuid4()),CA))
+    database.commit()
+    with pytest.raises(CRMAccessError, match='company_has_linked_cases'):
+        native.archive_company(A, company, actor_id=11)
+    assert native.get_company(A, company, actor_id=11)
+    deal_company = str(native.create_company(A, 'Linked deal company')['id'])
+    database.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name) VALUES(%s::uuid,'delete-test','Test')", (A,))
+    database.execute("""INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name)
+        VALUES(%s::uuid,'delete-test','new','New')""", (A,))
+    database.execute("""INSERT INTO saas_crm_native_deals(id,tenant_id,title,pipeline_id,stage_id,company_id)
+        VALUES(%s::uuid,%s::uuid,'Test deal','delete-test','new',%s::uuid)""", (str(uuid.uuid4()),A,deal_company))
+    database.commit()
+    with pytest.raises(CRMAccessError, match='company_has_linked_deals'):
+        native.archive_company(A, deal_company, actor_id=11)
+    unlinked = native.create_company(A,'Delete only this company')['id']
+    assert native.archive_company(A, unlinked, actor_id=11)
+    assert native.get_company(A, unlinked, actor_id=11) is None
+    assert not native.list_companies(A,'Delete only this company',actor_id=11)
 
 
 def test_group_binding_targets_only_the_selected_source(local):

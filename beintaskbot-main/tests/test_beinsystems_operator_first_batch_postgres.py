@@ -89,12 +89,13 @@ def state(monkeypatch):
                 c.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
                   VALUES(%s,%s,%s,%s,NULL)""", (tenant, actor, received_at, envelope))
 
-            def run(accounts, receipt=None, *, source_only=False):
+            def run(accounts, receipt=None, *, source_only=False, catalogue=False):
                 rows = [{"account": name} for name in accounts]
                 if source_only:
                     return batch._preview_operator_accounts_only(profile, tenant, actor, rows, credentials)
                 return batch._apply_company_import(profile, tenant, actor, rows, credentials,
-                    first_batch=True, preview_receipt=receipt, preview_scope="scope")
+                    first_batch=True, preview_receipt=receipt, preview_scope="scope",
+                    catalogue_source="accounts_only" if catalogue else None)
 
             yield connect, run, tenant
         finally:
@@ -124,6 +125,30 @@ def test_concurrent_confirmation_replay_and_archived_collision(state):
             {"name": "unique", "phone": "", "email": "", "description": "", "responsible_id": None}]
         assert c.execute("""SELECT count(*) AS n FROM saas_tenant_audit_events
           WHERE action='operator_first_company_batch'""").fetchone()["n"] == 1
+
+
+def test_catalogue_can_resume_after_a_full_batch_and_preserves_local_changes(state):
+    connect, run, tenant = state
+    names = [f"acct-{i:03}" for i in range(104)]
+    initial = run(names, catalogue=True)
+    assert initial["received"] == 104
+    assert initial["already"] == 0
+    assert len(initial["rows"]) == 100
+    first = run(names, initial["receipt"], catalogue=True)
+    assert first["created"] == 100 and first["remaining"] == 4
+    with connect() as c:
+        c.execute("UPDATE saas_crm_native_companies SET archived_at=now() WHERE tenant_id=%s AND name='acct-000'", (tenant,))
+        c.execute("UPDATE saas_crm_native_companies SET name='Edited locally' WHERE tenant_id=%s AND name='acct-001'", (tenant,))
+    resumed = run(names, catalogue=True)
+    assert resumed["already"] == 99
+    assert resumed["conflicts"] == [{"account": "acct-000", "reason": "archived_company"}]
+    assert len(resumed["rows"]) == 4
+    assert run(names, resumed["receipt"], catalogue=True)["created"] == 4
+    done = run(names, catalogue=True)
+    assert done["already"] == 103 and done["remaining"] == 0 and "receipt" not in done
+    with connect() as c:
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE tenant_id=%s AND name='Edited locally'", (tenant,)).fetchone()["n"] == 1
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE tenant_id=%s AND archived_at IS NOT NULL", (tenant,)).fetchone()["n"] == 1
 
 
 def test_mapping_rollback_clears_nonce_and_rotation_rejects_old_receipt(state, monkeypatch):

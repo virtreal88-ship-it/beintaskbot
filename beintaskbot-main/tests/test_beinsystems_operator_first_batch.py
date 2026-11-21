@@ -131,8 +131,11 @@ class FirstBatchTests(unittest.TestCase):
             self.assertEqual(transport.call_args.args[1], {"search": "", "limit": 100})
             batch.operator._request_operator("accounts", {"search": "", "limit": 1}, token="mock")
             self.assertEqual(transport.call_args.args[1], {"limit": 1})
+            batch.operator._request_operator("accounts", {"search": "", "limit": 1000},
+                token="mock", first_batch_accounts=True)
+            self.assertEqual(transport.call_args.args[1], {"search": "", "limit": 1000})
             calls_before = transport.call_count
-            for unsupported in (5, 101, 1000):
+            for unsupported in (5, 101, 1001):
                 with self.assertRaises(batch.operator.OperatorError):
                     batch.operator._request_operator("accounts", {"search": "", "limit": unsupported},
                         token="mock", first_batch_accounts=True)

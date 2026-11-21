@@ -14,7 +14,7 @@
   const view=document.getElementById('view-profile'), title=document.getElementById('profileWorkStatusTitle'),
     picker=document.getElementById('profileWorkStatusSelect'), button=document.getElementById('profileWorkStatusSave'),
     feedback=document.getElementById('profileWorkStatusFeedback');
-  const url='/api/platform/profile/availability';
+  const url='/api/platform/ai/profile/availability';
   const scope=member=>{
     if(!member||member.active!==true||!member.tenant_id||!member.telegram_id)return null;
     return {expected_tenant_id:String(member.tenant_id),expected_user_id:Number(member.telegram_id)};

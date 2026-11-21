@@ -8,7 +8,7 @@ from tenant_operator_api import handler as operator
 import tenant_dialog_presence as presence
 from test_company_employees_navigation_postgres import staff, database, db, A, B, LOGGER, ORIGIN, _apis, _get
 
-PROFILE = "/api/platform/profile/availability"
+PROFILE = "/api/platform/ai/profile/availability"
 DIALOGS = "/api/platform/dialogs/presence"
 MEMBERS = "/api/platform/members"
 
