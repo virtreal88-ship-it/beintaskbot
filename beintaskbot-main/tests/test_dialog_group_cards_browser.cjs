@@ -64,9 +64,15 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
     const c=row.querySelector('.operator-row-company');
     const fullHeight=row.offsetHeight,literal=c.textContent.includes('<b>stored</b>')&&!c.querySelector('b');
     const truncated=c.scrollWidth>c.clientWidth&&getComputedStyle(c).textOverflow==='ellipsis';
-    c.textContent='Short company';return {literal,truncated,noGrowth:fullHeight===row.offsetHeight};
+    const sample=document.createElement('span');
+    sample.className='operator-state operator-row-status';sample.dataset.state='manual';sample.hidden=true;
+    row.append(sample);
+    const former=getComputedStyle(sample),badge=getComputedStyle(c);
+    const sameBadge=['backgroundColor','color','borderRadius','fontSize','fontWeight'].every(key=>former[key]===badge[key]);
+    sample.remove();
+    c.textContent='Short company';return {literal,truncated,sameBadge,noGrowth:fullHeight===row.offsetHeight};
   });
-  assert.deepEqual(companyLine,{literal:true,truncated:true,noGrowth:true});
+  assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,noGrowth:true});
   assert.equal(await page.locator('#operatorRows .operator-row-status').count(),0);
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
@@ -82,8 +88,15 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await page.locator('#operatorConversationHeader [data-company-value]').count(),0);
   assert.equal(await card.locator('.operator-client-panel-block').first().locator('#operatorClientCompanyHost').count(),1,'company comes first in the side panel');
   assert.equal(await card.locator('.operator-client-panel-block').first().locator('.operator-client-panel-row').first().getAttribute('id'),'operatorConversationName','display name comes before the company search');
-  const agent=card.locator('.operator-client-panel-block').last().locator('[data-panel-agent-status]');
-  assert(await agent.isVisible(),'agent mode moves to the last panel block');
+  const dialogueBlock=card.locator('.operator-client-panel-block').filter({has:page.locator('[data-panel-agent-status]')});
+  assert(await dialogueBlock.locator('[data-panel-agent-status]').isVisible(),'agent mode stays in the dialogue block');
+  assert.equal(await card.locator('.operator-client-panel-block').last().locator('[data-group-participants]').count(),1,'the roster is the last block in groups');
+  assert.equal(await card.locator('.operator-client-panel-block').last().getAttribute('open'),null,'group members are collapsed by default');
+  const sourceRow=dialogueBlock.locator('.operator-client-panel-row').first();
+  assert.deepEqual(await sourceRow.evaluate(row=>{
+    const style=getComputedStyle(row);
+    return [style.paddingBlockStart,style.paddingBlockEnd,style.rowGap];
+  }),['6px','6px','3px'],'read-only source label and value use compact spacing');
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');

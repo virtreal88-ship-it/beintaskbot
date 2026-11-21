@@ -17,7 +17,12 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
   });
   await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,'ru');await page.locator('.operator-row').first().click();
   const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard');
-  await avatar.click();await card.getByText('+994500000001',{exact:true}).waitFor();assert.match(await card.innerText(),/Участников без доступного номера: 1/);
+  const roster=card.locator('.operator-client-panel-block').filter({has:page.locator('[data-group-participants]')});
+  const expandRoster=()=>roster.locator(':scope > summary').click();
+  await avatar.click();
+  assert.equal(await roster.getAttribute('open'),null);
+  assert.equal(calls.filter(c=>c.name.endsWith('/dialogs/group-participants')).length,0,'a collapsed group does not fetch its roster');
+  await expandRoster();await card.getByText('+994500000001',{exact:true}).waitFor();assert.match(await card.innerText(),/Участников без доступного номера: 1/);
   assert.equal(await card.locator('.operator-roster-row').count(),2);
   assert.equal(await card.locator('.operator-roster-avatar svg').count(),2);
   assert.match(await card.locator('.operator-roster-count').innerText(),/3/);
@@ -28,11 +33,17 @@ const group={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'1
   await search.fill('99999');await card.getByText('Участники не найдены',{exact:true}).waitFor();
   await card.getByRole('button',{name:'Поиск участников'}).click();assert.equal(await card.locator('.operator-roster-row:visible').count(),2);
   assert.equal(await card.locator('.operator-roster-list').evaluate(e=>e.scrollWidth<=e.clientWidth),true);
+  assert.deepEqual(await card.locator('.operator-roster-list').evaluate(list=>{
+    const style=getComputedStyle(list);
+    const panel=getComputedStyle(list.closest('.operator-client-panel-content'));
+    return [style.overflowY,style.maxHeight,panel.overflowY];
+  }),['visible','none','auto'],'the right panel is the only vertical scroller');
+  assert((await card.locator('.operator-roster-row').first().boundingBox()).height<=36,'roster rows are compact');
   assert.equal(calls.filter(c=>c.name.endsWith('/dialogs/group-participants')).length,1);
   const box=await card.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width);assert.equal(calls.some(c=>c.name.endsWith('/dialogs/display-name')),false);
-  await page.keyboard.press('Escape');mode='unavailable';await avatar.click();await card.getByText('Коннектор пока не передал состав группы.').waitFor();assert.equal(await card.getByText('+994500000001',{exact:true}).count(),0);
-  await page.keyboard.press('Escape');mode='available';gate=new Promise(r=>release=r);await avatar.click();await card.getByText('Загрузка…',{exact:true}).waitFor();await page.keyboard.press('Escape');release();gate=null;await page.waitForTimeout(50);assert.equal(await card.isVisible(),false);
-  await avatar.click();await card.getByText('+994500000001',{exact:true}).waitFor();await page.close();
+  await page.keyboard.press('Escape');mode='unavailable';await avatar.click();assert.equal(await roster.getAttribute('open'),null);await expandRoster();await card.getByText('Коннектор пока не передал состав группы.').waitFor();assert.equal(await card.getByText('+994500000001',{exact:true}).count(),0);
+  await page.keyboard.press('Escape');mode='available';gate=new Promise(r=>release=r);await avatar.click();await expandRoster();await card.getByText('Загрузка…',{exact:true}).waitFor();await page.keyboard.press('Escape');release();gate=null;await page.waitForTimeout(50);assert.equal(await card.isVisible(),false);
+  await avatar.click();await expandRoster();await card.getByText('+994500000001',{exact:true}).waitFor();await page.close();
  }
  console.log('group participants card passed');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1)});
