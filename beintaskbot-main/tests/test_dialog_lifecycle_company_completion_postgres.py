@@ -158,7 +158,45 @@ def test_optional_readiness_is_neutral_for_row_scoped_viewer(companies,monkeypat
         preview=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
     db.commit()
     assert preview['lifecycle']['can_close'] is True
-    assert 'company_completion' not in preview['lifecycle']
+    assert preview['lifecycle']['company_completion']=={
+        'status':'choice_available','required':False,'can_choose':True,'can_skip':True,
+    }
+    assert company not in str(preview)
     assert lifecycle.mutate(STAFF,payload('close',1,company_choice='none'))['lifecycle']['state']=='closed'
     assert len(bindings(db))==bound
+    db.commit()
+
+
+@pytest.mark.parametrize('bound',[False,True])
+def test_scoped_operator_may_choose_only_accessible_company_and_never_overwrite(companies,monkeypatch,bound):
+    from test_tenant_support_inbox import A, CA
+    from tenant_linear_policy import TenantLinearError
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+
+    db,own,_,foreign,hidden=companies
+    monkeypatch.delenv(completion.ENV)
+    grant(db,monkeypatch,view='self',update='self')
+    command(actor=33)
+    if bound:
+        db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+          (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+          VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""",(A,CA,hidden))
+        db.commit()
+    for denied in (foreign,hidden):
+        with pytest.raises(TenantLinearError) as unavailable:
+            lifecycle.mutate(STAFF,payload('close',1,company_id=denied))
+        assert unavailable.value.status==422
+        assert 'недоступна по вашим правам' in str(unavailable.value)
+        assert denied not in str(unavailable.value)
+    if bound:
+        with pytest.raises(TenantLinearError) as unsupported:
+            lifecycle.mutate(STAFF,payload('close',1,company_id=own))
+        assert unsupported.value.status==422
+        assert hidden not in str(unsupported.value)
+        assert bindings(db)[0]['company_id']==hidden
+        assert state(db)['state']=='accepted'
+    else:
+        assert lifecycle.mutate(STAFF,payload('close',1,company_id=own))['lifecycle']['state']=='closed'
+        assert bindings(db)[0]['company_id']==own
     db.commit()

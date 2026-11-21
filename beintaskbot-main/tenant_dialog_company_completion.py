@@ -92,15 +92,13 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
         return None
     if skip and (supplied or payload['company_choice'] != 'none'):
         raise TenantLinearError('Выберите компанию или «Без компании».',422)
-    if not enabled(tenant):
-        if not (supplied or skip):
-            return None
-        if not can_preview(policy):
-            if skip:
-                # Same behavior as ordinary optional close, without probing
-                # whether a company exists or is outside this actor's scope.
-                return None
-            raise TenantLinearError('Выбор компании при завершении недоступен.',422)
+    opaque = not enabled(tenant) and not can_preview(policy)
+    if not enabled(tenant) and (not (supplied or skip) or (opaque and skip)):
+        # Same behavior as ordinary optional close, without probing whether
+        # a company exists or is outside this actor's scope.
+        return None
+    if opaque and not can_choose(policy):
+        raise TenantLinearError('Выбор компании при завершении недоступен.',422)
     choice = None
     if supplied:
         raw = payload['company_id']
@@ -112,6 +110,8 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
                 raise ValueError
         except ValueError:
             raise TenantLinearError('Выберите CRM-компанию из списка.',422) from None
+    if opaque and supplied:
+        _require_company(cur,tenant,actor,choice)
     # 422 is recoverable in the existing UI; 403/404/409 remove the open route.
     if not _ready(cur):
         raise TenantLinearError('Проверка компании временно недоступна. Диалог не завершён.',422)
@@ -120,6 +120,10 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
         raise TenantLinearError('Сначала нужно проверить адрес диалога WhatsApp.',422)
     bound = _binding(cur,tenant,channel,conversation,lock=True)
     if bound:
+        if opaque:
+            # The actor cannot rely on knowing the current relationship. Do
+            # not overwrite it, classify it, or return any of its metadata.
+            raise TenantLinearError('Не удалось применить выбор компании. Завершите диалог без изменения привязки.',422)
         previous_status = _company_status(cur,tenant,bound,lock=True)
         if previous_status == 'invalid':
             raise TenantLinearError('Не удалось подтвердить текущую компанию диалога.',422)
@@ -136,15 +140,8 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
         message = ('Компания диалога архивирована. Выберите действующую CRM-компанию.' if bound
                    else 'Перед завершением выберите CRM-компанию.')
         raise TenantLinearError(message,422)
-    from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
-    try:
-        view=current_access(cur,tenant,actor,'companies','view')
-        update=current_access(cur,tenant,actor,'companies','update')
-        if not (locked_resource(cur,view,'companies','view',_COMPANIES,tenant,choice)
-                and locked_resource(cur,update,'companies','update',_COMPANIES,tenant,choice)):
-            raise CRMAccessError()
-    except CRMAccessError:
-        raise TenantLinearError('Компания недоступна для привязки по вашим правам.',422) from None
+    if not opaque:
+        _require_company(cur,tenant,actor,choice)
     if bound:
         cur.execute(f'''UPDATE {_BINDINGS} SET company_id=%s::uuid,updated_by=%s,updated_at=now()
           WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
@@ -159,3 +156,15 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
     if not cur.fetchone():
         raise TenantLinearError('Компания диалога изменилась. Обновите диалог.',422)
     return {'previous_company_id':bound,'company_id':choice}
+
+
+def _require_company(cur, tenant, actor, choice):
+    from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
+    try:
+        view=current_access(cur,tenant,actor,'companies','view')
+        update=current_access(cur,tenant,actor,'companies','update')
+        if not (locked_resource(cur,view,'companies','view',_COMPANIES,tenant,choice)
+                and locked_resource(cur,update,'companies','update',_COMPANIES,tenant,choice)):
+            raise CRMAccessError()
+    except CRMAccessError:
+        raise TenantLinearError('Компания недоступна для привязки по вашим правам.',422) from None
