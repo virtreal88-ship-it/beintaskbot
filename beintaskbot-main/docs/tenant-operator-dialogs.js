@@ -1238,7 +1238,7 @@
       #operatorConversationHeader .operator-dialog-head-main{flex:1;min-width:0}
       #operatorConversationHeader .operator-dialog-head-secondary{position:static;flex:none;gap:3px}
     }
-    #operatorClientCard [data-group-participants]{border-top:1px solid var(--line);padding-top:14px;min-width:0}#operatorClientCard .operator-roster-heading{display:flex;align-items:center;gap:8px;justify-content:space-between}#operatorClientCard .operator-roster-heading h3{margin:0;font-size:15px;font-weight:600;line-height:1.4}#operatorClientCard .operator-roster-search-button{display:grid;place-items:center;width:44px;height:44px;padding:0;flex:none;border:0;background:transparent;color:var(--muted)}#operatorClientCard .operator-roster-search-button svg{width:21px;height:21px}#operatorClientCard .operator-roster-count{margin:4px 0 8px;font-size:13px;color:var(--muted)}#operatorClientCard .operator-roster-list{list-style:none;margin:0;padding:0;max-height:280px;overflow:auto;overscroll-behavior:contain}#operatorClientCard .operator-roster-row{display:flex;align-items:center;gap:12px;min-height:64px;padding:8px 0;box-sizing:border-box}#operatorClientCard .operator-roster-avatar{display:grid;place-items:center;width:42px;height:42px;flex:none;border-radius:50%;background:var(--paper);color:var(--muted)}#operatorClientCard .operator-roster-avatar svg{width:24px;height:24px}#operatorClientCard .operator-roster-phone{font-size:16px;line-height:1.4;overflow-wrap:anywhere;min-width:0}#operatorClientCard .operator-roster-meta{margin-top:10px;font-size:12px;line-height:1.5;color:var(--muted)}#operatorClientCard .operator-roster-meta summary{cursor:pointer;min-height:36px;display:flex;align-items:center}#operatorClientCard .operator-roster-meta p{margin:4px 0}#operatorClientCard .operator-roster-unknown{margin:8px 0;font-size:12px;color:var(--muted)}#operatorClientCard .operator-roster-search{margin:0 0 8px}#operatorClientCard .operator-roster-search[hidden],#operatorClientCard .operator-roster-row[hidden]{display:none!important}
+    #operatorClientCard .operator-roster-heading{display:flex;align-items:center;gap:8px;justify-content:space-between}#operatorClientCard .operator-roster-heading h3{margin:0;font-size:14px;font-weight:600;line-height:1.35}#operatorClientCard .operator-roster-search-button{display:grid;place-items:center;width:32px;height:32px;min-height:32px;padding:0;flex:none;border:0;background:transparent;color:var(--muted)}#operatorClientCard .operator-roster-search-button svg{width:18px;height:18px}#operatorClientCard .operator-roster-count{margin:1px 0 3px;font-size:12px;color:var(--muted)}#operatorClientCard .operator-roster-list{list-style:none;margin:0;padding:0}#operatorClientCard .operator-roster-row{display:flex;align-items:center;gap:8px;min-height:34px;padding:3px 0;box-sizing:border-box}#operatorClientCard .operator-roster-avatar{display:grid;place-items:center;width:28px;height:28px;flex:none;border-radius:50%;background:var(--paper);color:var(--muted)}#operatorClientCard .operator-roster-avatar svg{width:17px;height:17px}#operatorClientCard .operator-roster-phone{font-size:13px;line-height:1.35;overflow-wrap:anywhere;min-width:0}#operatorClientCard .operator-roster-meta{margin-top:4px;font-size:12px;line-height:1.35;color:var(--muted)}#operatorClientCard .operator-roster-meta summary{cursor:pointer;min-height:28px;display:flex;align-items:center}#operatorClientCard .operator-roster-meta p{margin:4px 0}#operatorClientCard .operator-roster-unknown{margin:3px 0;font-size:12px;color:var(--muted)}#operatorClientCard .operator-roster-search{margin:0 0 3px}#operatorClientCard .operator-roster-search[hidden],#operatorClientCard .operator-roster-row[hidden]{display:none!important}
   `;document.head.append(clientCardStyle);
   function groupParticipantsText(key){return ({ru:{title:'Участники группы',count:'Участников',search:'Поиск участников',noMatch:'Участники не найдены',loading:'Загрузка…',unavailable:'Коннектор пока не передал состав группы.',snapshot:'Снимок состава',note:'Состав мог измениться. Показаны только номера, переданные WhatsApp.',unknown:'Участников без доступного номера',empty:'В снимке нет доступных номеров.'},az:{title:'Qrup iştirakçıları',count:'İştirakçılar',search:'İştirakçı axtarışı',noMatch:'İştirakçı tapılmadı',loading:'Yüklənir…',unavailable:'Konnektor qrupun tərkibini hələ ötürməyib.',snapshot:'Tərkibin qeydə alındığı vaxt',note:'Tərkib dəyişmiş ola bilər. Yalnız WhatsApp tərəfindən verilən nömrələr göstərilir.',unknown:'Nömrəsi əlçatan olmayan iştirakçılar',empty:'Qeyddə əlçatan nömrə yoxdur.'},en:{title:'Group participants',count:'Participants',search:'Search participants',noMatch:'No participants found',loading:'Loading…',unavailable:'The connector has not provided the group roster yet.',snapshot:'Roster snapshot',note:'Membership may have changed. Only numbers provided by WhatsApp are shown.',unknown:'Participants without an available number',empty:'No available numbers in this snapshot.'}})[i18n.language]?.[key]||key;}
   async function renderGroupParticipants(route,card,current){
@@ -1315,8 +1315,8 @@
     hydrateAvatars();
     const card=document.createElement('dialog');
     card.id='operatorClientCard';card.dataset.scope=scope;card.setAttribute('aria-labelledby','operatorClientCardTitle');
-    const block=(label,content)=>`<details open class="operator-client-panel-block"><summary>${esc(label)}</summary>${content}</details>`;
-    const roster=group?block(clientCardText('group'),'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>'):'';
+    const block=(label,content,expanded=true)=>`<details${expanded?' open':''} class="operator-client-panel-block"><summary>${esc(label)}</summary>${content}</details>`;
+    const roster=group?block(clientCardText('group'),'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>',false):'';
     const nameForm=editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<span class="operator-display-name-field"><input id="operatorConversationNameInput" maxlength="180" autocomplete="off"><span data-client-name-saved role="status" aria-label="${esc(clientCardText('saved'))}" title="${esc(clientCardText('saved'))}" hidden>✓</span></span></label><p data-client-card-error role="alert"></p></form>`:'';
     const handoff=route.handoff_active?[route.handoff_source==='ai_handoff'?'AI':'',route.handoff_assignee_name||''].filter(Boolean).join(' → '):'';
     const conversation=block(clientCardText('dialog'),`<div class="operator-client-panel-row"${channel?'':' hidden'}><small>${esc(clientCardText('source'))}</small><span data-user-content>${esc(channel)}</span></div>
@@ -1324,7 +1324,7 @@
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>${capabilities.dialog_company_binding===true?`<span class="operator-state operator-dialog-agent-status" data-panel-agent-status data-state="${esc(route.agent_status||route.display_state)}">${esc(agentModeLabel(route))}</span>`:''}<div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`);
     const companyBinding=capabilities.dialog_company_binding===true?'<div class="operator-client-panel-row" id="operatorClientCompanyHost"></div>':'';
     const company=nameForm||companyBinding?block(clientCardText('company'),nameForm+companyBinding):'';
-    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${roster}${conversation}</div>`;
+    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}</div>`;
     layout.append(card);
     hydrateContactPhone(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
@@ -1338,8 +1338,11 @@
       saved.hidden=!snapshot?.saved;
       if(snapshot?.error)error.textContent=snapshot.error;
     }
+    const groupBlock=card.querySelector('[data-group-participants]')?.closest('details');
     let authorized=true,opener=trigger;
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
+    const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
+    groupBlock?.addEventListener('toggle',loadRoster);
     const syncChatInteraction=()=>{
       $('operatorConversationContent').inert=card.open&&window.matchMedia?.('(max-width: 900px)').matches===true;
     };
@@ -1347,7 +1350,7 @@
       if(restore&&document.activeElement===input)void persistName();
       card.removeAttribute('open');for(const button of [trigger,title])button.setAttribute('aria-expanded','false');
       syncChatInteraction();
-      if(restore){window.tenantDialogueCompany?.closePicker?.();if(opener.isConnected)opener.focus({preventScroll:true});}
+      if(restore){if(groupBlock)groupBlock.open=false;window.tenantDialogueCompany?.closePicker?.();if(opener.isConnected)opener.focus({preventScroll:true});}
     };
     const resizePanel=()=>{
       if(!card.open)return;
@@ -1360,7 +1363,7 @@
       if(!current()||card.open)return;
       opener=button;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
-      void renderGroupParticipants(route,card,current);void showClientTransfer(route,card,current);
+      loadRoster();void showClientTransfer(route,card,current);
       if(!snapshot)$('operatorCancelConversationName').focus({preventScroll:true});
     };
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
@@ -1413,7 +1416,7 @@
       input.oninput=()=>{saved.hidden=true;error.textContent='';};
     }
     if(snapshot){
-      [...card.querySelectorAll('.operator-client-panel-block')].forEach((block,index)=>{block.open=snapshot.blocks[index]!==false;});
+      [...card.querySelectorAll('.operator-client-panel-block')].forEach((block,index)=>{if(index<snapshot.blocks.length)block.open=snapshot.blocks[index];});
       open();if(snapshot.focus&&card.contains($(snapshot.focus)))$(snapshot.focus).focus({preventScroll:true});
       if(input&&snapshot.start!==undefined)try{input.setSelectionRange(snapshot.start,snapshot.end);}catch{}
       card.querySelector('.operator-client-panel-content').scrollTop=snapshot.scroll||0;

@@ -88,9 +88,11 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await page.locator('#operatorConversationHeader [data-company-value]').count(),0);
   assert.equal(await card.locator('.operator-client-panel-block').first().locator('#operatorClientCompanyHost').count(),1,'company comes first in the side panel');
   assert.equal(await card.locator('.operator-client-panel-block').first().locator('.operator-client-panel-row').first().getAttribute('id'),'operatorConversationName','display name comes before the company search');
-  const agent=card.locator('.operator-client-panel-block').last().locator('[data-panel-agent-status]');
-  assert(await agent.isVisible(),'agent mode moves to the last panel block');
-  const sourceRow=card.locator('.operator-client-panel-block').last().locator('.operator-client-panel-row').first();
+  const dialogueBlock=card.locator('.operator-client-panel-block').filter({has:page.locator('[data-panel-agent-status]')});
+  assert(await dialogueBlock.locator('[data-panel-agent-status]').isVisible(),'agent mode stays in the dialogue block');
+  assert.equal(await card.locator('.operator-client-panel-block').last().locator('[data-group-participants]').count(),1,'the roster is the last block in groups');
+  assert.equal(await card.locator('.operator-client-panel-block').last().getAttribute('open'),null,'group members are collapsed by default');
+  const sourceRow=dialogueBlock.locator('.operator-client-panel-row').first();
   assert.deepEqual(await sourceRow.evaluate(row=>{
     const style=getComputedStyle(row);
     return [style.paddingBlockStart,style.paddingBlockEnd,style.rowGap];
