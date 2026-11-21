@@ -7,16 +7,16 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
 (async()=>{
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
  const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
- let status=null,routingEnforced=false,getCalls=0,postBody=null;
+ let status=null,routingEnforced=false,canOffline=false,getCalls=0,postBody=null;
  w.tenantProfileSnapshot=profile;
  w.fetch=async(url,options={})=>{
   const value=String(url);
   if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   if(value.includes('/dialogs/presence')){
-   if(options.method==='POST'){postBody=JSON.parse(options.body);status=postBody.status;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:true,routing_enforced:routingEnforced}})};}
+   if(options.method==='POST'){postBody=JSON.parse(options.body);status=postBody.status;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:true,routing_enforced:routingEnforced,can_set_offline:canOffline}})};}
    const query=new URL(value,w.location.origin).searchParams;
    assert.equal(query.get('expected_tenant_id'),tenant);assert.equal(query.get('expected_user_id'),'33');
-   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status,configured:status!==null,can_update:true,routing_enforced:routingEnforced}})};
+   getCalls++;return{ok:true,json:async()=>({success:true,result:{available:true,status:status??'online',configured:status!==null,can_update:true,routing_enforced:routingEnforced,can_set_offline:canOffline}})};
   }
   if(value.includes('/dialogs?'))return{ok:true,json:async()=>({success:true,result:{dialogs:[row],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],attention_count:0,unread_count:0,total_count:1,next_offset:null}})};
   throw Error('Unexpected request '+value);
@@ -44,21 +44,35 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  assert.equal(menu.open,true,'clicking the tools summary opens its menu');
  assert.ok(button&&!button.hidden,'current employee status is available in the tools menu');
  assert.equal(getCalls,1,'the menu loads one tenant-scoped status snapshot');
- assert.match(button.textContent,/Not set|Не выбран|Seçilməyib/);
+ assert.match(button.textContent,/Online|В сети|Onlayn/);
+ assert.equal(postBody,null,'displaying default Online does not save it');
  button.click();await tick();
  assert.ok(w.document.getElementById('operatorPresenceModal'),'status control opens an accessible dialog');
  assert.match(w.document.getElementById('operatorPresenceModal').textContent,/does not affect|не влияет|təsir etmir/);
- const select=w.document.getElementById('operatorPresenceSelect');assert.equal(select.value,'');select.value='online';
+ const select=w.document.getElementById('operatorPresenceSelect');assert.equal(select.value,'online');
+ assert.equal(select.querySelector('option[value=offline]'),null,'legacy three-state responses hide Offline');
+ assert.equal(postBody,null,'opening the picker does not save default status');select.value='lunch';
  w.document.getElementById('operatorPresenceModal').querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();
- assert.equal(postBody.status,'online');
+ assert.equal(postBody.status,'lunch');
  assert.equal(postBody.expected_tenant_id,tenant);assert.equal(postBody.expected_user_id,33);
  assert.equal(Object.keys(postBody).sort().join(','),'expected_tenant_id,expected_user_id,status','only the selected local status and identity scope are sent');
- assert.match(button.textContent,/Online|Онлайн|Onlayn/);
+ assert.match(button.textContent,/Lunch|Обед|Nahar/);
  assert.equal(w.document.getElementById('operatorPresenceModal'),null,'successful update closes the dialog');
  assert.ok(getCalls>=1,'status is read from the tenant-scoped server endpoint');
  routingEnforced=true;await openTools();
+ assert.match(button.textContent,/Lunch|Обед|Nahar/,'reopening tools shows stored manual choice');
  button.click();await tick();
  assert.match(w.document.getElementById('operatorPresenceModal').textContent,/Only employees|Только сотрудники|Yalnız/);
+ w.document.getElementById('operatorPresenceModal').querySelector('button[type=button]').click();
+ status=null;await openTools();button.click();await tick();
+ assert.match(w.document.getElementById('operatorPresenceModal').textContent,/before receiving new dialogues|текущем режиме|Cari rejimdə/);
+ w.document.getElementById('operatorPresenceModal').querySelector('button[type=button]').click();
+ canOffline=true;status='offline';routingEnforced=false;await openTools();
+ assert.match(button.textContent,/Offline|Не в сети|Oflayn/);
+ button.click();await tick();
+ const expanded=w.document.getElementById('operatorPresenceSelect');
+ assert.equal(expanded.value,'offline');assert.ok(expanded.querySelector('option[value=offline]'));
+
  const denied=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only'}),dw=denied.window;
  dw.tenantProfileSnapshot={member:{tenant_id:tenant,telegram_id:55,role:'worker',permissions:[],active:true},capabilities:{modules:{dialogs:false}}};
  dw.fetch=async()=>({ok:true,json:async()=>dw.tenantProfileSnapshot});

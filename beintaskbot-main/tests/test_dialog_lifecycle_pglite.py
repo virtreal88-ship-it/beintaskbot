@@ -511,7 +511,7 @@ def test_beinsystems_employee_without_presence_can_set_online_then_accept(episod
     episodes.commit()
     initial = presence.get_status(employee)
     assert initial['available'] is True
-    assert initial['status'] is None
+    assert initial['status'] == 'online'
     assert initial['routing_enforced'] is True
     assert initial['configured'] is False
     with pytest.raises(TenantLinearError) as offline:
@@ -572,7 +572,7 @@ def test_enrollment_is_ready_while_routing_off(episodes, monkeypatch):
         lifecycle.migrate(cur)
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_employee_presence')[0]['n']==0
     episodes.commit()
-    assert presence.get_status(employee)=={'available':True,'status':None,'configured':False,
+    assert presence.get_status(employee)=={'available':True,'status':'online','configured':False,
         'can_update':True,'routing_enforced':False}
     assert not presence.set_status(employee, {'status':'lunch'})['routing_enforced']
     assert presence.get_status(employee)['status']=='lunch'

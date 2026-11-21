@@ -311,7 +311,7 @@ def _member_payload(row: dict) -> dict:
     return result
 
 
-def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
+def list_members(*, tenant_id: str, owner_id: int, include_work_status: bool = False) -> list[dict]:
     """Return only cards in the current actor's independent read scope."""
     with _connect() as conn:
         _require_member_schema(conn)
@@ -348,6 +348,9 @@ def list_members(*, tenant_id: str, owner_id: int) -> list[dict]:
                 ORDER BY CASE WHEN m.role = 'owner' THEN 0 ELSE 1 END, m.display_name, m.telegram_id
             """, [int(owner_id), tenant_id, *scope_params])
             rows = cur.fetchall()
+            if include_work_status:
+                from tenant_dialog_presence import for_owner_roster
+                for_owner_roster(cur, tenant=tenant_id, owner_id=int(owner_id), current=current, rows=rows)
             ids=[int(row['telegram_id']) for row in rows]
             numbers={member_id:[] for member_id in ids}
             if ids:
