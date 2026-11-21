@@ -18,10 +18,16 @@ const beta='@verified_account';
    window.tenantProfileSnapshot=profile;
    const group=(channel_id,lead_id)=>({provider:'connect',channel_id,lead_id,channel_name:'Source '+channel_id,
     conversation_id:'same-synthetic@g.us',customer_name:'Customer Alpha',customer_kind:'group',can_send:false});
-   const sources=[group('a',41),group('b',42)];
+   const sources=[
+    {...group('a',41),assignee_name:'Chat-only person',
+     handoff_active:true,handoff_assignee_name:'Transfer history person'},
+    {...group('b',42),assignee_name:'Other chat-only person'},
+   ];
    const fixtures={a:{company_id:'alpha',company_name:alpha,can_manage:true},
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
+   window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
+   window.caseGets=[];window.caseWaiters=[];
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
@@ -39,7 +45,19 @@ const beta='@verified_account';
      const binding=mode==='masked'?{company_id:null,company_name:null,can_manage:false}:fixtures[channel];
      return {ok:true,json:async()=>({success:true,binding})};
     }
-    if(api.endsWith('/dialogs/history'))return ok({dialog:sources.find(r=>r.channel_id===q.get('channel_id')),messages:[],next_before:null});
+    if(api.endsWith('/dialogs/history')){
+     const channel=q.get('channel_id'),source=sources.find(r=>r.channel_id===channel);
+     if(q.get('support_case_only')==='1'){
+      const {provider,lead_id,channel_id,conversation_id}=source;
+      if(q.get('provider')!==provider||q.get('lead_id')!==String(lead_id)||q.get('conversation_id')!==conversation_id||
+         q.has('anchor')||q.has('before'))throw Error('Inexact compact case request');
+      window.caseGets.push(channel);
+      const support_case=window.cases[channel]; // Capture before any simulated revocation.
+      if(window.holdCaseRead)await new Promise(release=>window.caseWaiters.push(release));
+      return ok({dialog:{provider,lead_id,channel_id,conversation_id,support_case}});
+     }
+     return ok({dialog:source,messages:[],next_before:null});
+    }
     if(api.endsWith('/dialogs'))return ok({dialogs:[{...sources[0],group_sources:sources}],channels:[],agents:[],next_offset:null});
     if(api.endsWith('/dialogs/group-participants'))return ok({status:'available',phones:[],total:0});
     return ok({});
@@ -47,7 +65,7 @@ const beta='@verified_account';
   },{alpha,beta});
   for(const file of ['tenant-operator-i18n.js','tenant-dialog-company.js','tenant-operator-dialogs.js'])
     await page.addScriptTag({path:path.join(docs,file)});
-  await page.evaluate(()=>window.tenantOperator.refresh());
+  await page.evaluate(()=>{window.tenantI18n.setLanguage('en');return window.tenantOperator.refresh();});
   await page.locator('.operator-row').first().click();
   const name=page.locator('#operatorDialogCompanyName'),head=page.locator('#operatorConversationHeader');
   await page.waitForFunction(()=>Boolean(window.releases.a));
@@ -64,11 +82,41 @@ const beta='@verified_account';
   assert.equal(await name.evaluate(n=>n.previousElementSibling.id),'operatorDialogTitleText');
   assert(await name.evaluate(n=>n.scrollWidth>n.clientWidth&&getComputedStyle(n).textOverflow==='ellipsis'));
   assert.equal(await head.locator('.operator-channel-label').count(),0);
+  assert.deepEqual(await page.evaluate(()=>window.caseGets),[],'no case query while Information is closed');
   assert.deepEqual(await page.evaluate(()=>window.bindingGets),['a'],'header and side panel reuse one exact GET');
   assert.equal(await page.locator('#operatorClientCompanyHost [data-company-value]').textContent(),alpha);
   assert.equal(await page.locator('#operatorClientCard').isVisible(),false,'header cannot open the side editor');
   await page.locator('#operatorClientCardOpen').click();
-  assert(await page.locator('#operatorClientCard').isVisible());
+  const card=page.locator('#operatorClientCard');
+  assert(await card.isVisible());
+  const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
+  await caseField('status').waitFor();
+  assert.equal(await caseField('status').count(),1);
+  assert.equal(await caseField('status').locator('span').textContent(),'Resolved');
+  assert.equal(await caseField('responsible').locator('span').textContent(),'Actual & <em>case</em> worker');
+  assert.equal(await caseField('responsible').locator('em').count(),0);
+  assert.equal(await caseField('status').evaluate(n=>n.closest('details').querySelector('summary').textContent),'Support case');
+  assert.equal(await card.locator('[data-client-transfer-value]').textContent(),'Transfer history person');
+  assert(!((await head.textContent())+(await card.textContent())).includes('Chat-only person'));
+  await page.evaluate(()=>{
+   window.caseTestExistingEditor=document.querySelector('#operatorConversationNameInput');
+   window.caseTestExistingEditor.value='Unsaved synthetic edit';
+   window.holdCaseRead=true;
+   document.dispatchEvent(new Event('tenant-dialog-reauthorized'));
+  });
+  await page.waitForFunction(()=>window.caseWaiters.length===1);
+  assert(await card.isVisible(),'same exact Information panel remains open');
+  assert.equal(await card.locator('[data-client-case-field]').count(),0,'case is hidden during held reauthorization');
+  await page.evaluate(()=>{
+   window.cases.a=null;window.holdCaseRead=false;
+   document.dispatchEvent(new Event('tenant-dialog-reauthorized'));
+  });
+  await page.waitForFunction(()=>window.caseGets.length===3);
+  await page.evaluate(()=>window.caseWaiters.shift()());
+  assert.equal(await card.locator('[data-client-case-field]').count(),0,'the old allowed request cannot repaint after a fresh deny');
+  assert(await page.evaluate(()=>window.caseTestExistingEditor===document.querySelector('#operatorConversationNameInput')));
+  assert.equal(await page.locator('#operatorConversationNameInput').inputValue(),'Unsaved synthetic edit');
+  assert.equal(await card.locator('[data-client-transfer-value]').textContent(),'Transfer history person');
   await page.locator('#operatorCancelConversationName').click();
 
   const reauthorize=async(mode,channel='a')=>page.evaluate(({mode,channel})=>{
@@ -90,6 +138,8 @@ const beta='@verified_account';
   await page.waitForFunction(()=>window.bindingGets.at(-1)==='b');
   await page.evaluate(()=>window.releases.a());
   assert(!await name.isVisible()&&await name.textContent()==='','masked source and delayed previous source cannot populate the header');
+  assert.equal(await card.locator('[data-client-case-field]').count(),0,'old case does not cross source');
+  assert(!((await head.textContent())+(await card.textContent())).includes('Other chat-only person'));
   await reauthorize('visible','b');
   await name.waitFor();
   assert.equal(await name.textContent(),beta,'visible company does not require edit permission');
@@ -100,10 +150,17 @@ const beta='@verified_account';
   assert(!await name.isVisible());
   await reauthorize('visible','b');
   await name.waitFor();
+  await picker.selectOption('0');
+  await page.evaluate(()=>{window.holdCaseRead=true;});
+  await page.locator('#operatorClientCardOpen').click();
+  await page.waitForFunction(()=>window.caseWaiters.length===1);
+  assert.equal(await card.locator('[data-client-case-field]').count(),0,'opening an earlier chat starts a fresh case check, not a cached display');
+  await page.evaluate(()=>{window.holdCaseRead=false;window.caseWaiters.shift()();});
+  assert.equal(await card.locator('[data-client-case-field]').count(),0,'fresh null case remains absent');
   await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-pending')));
   assert(!await name.isVisible()&&!(await name.textContent()),'identity transition clears company name');
   await page.close();
  }
- console.log('PASS Chromium company header authorization, no extra GETs, compact geometry, 360/1440px');
+ console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/1440px');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

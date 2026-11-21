@@ -1146,7 +1146,34 @@ def mark_all_read(profile, payload=None):
             'unread_before':int(snapshot.get('unread_count') or 0)}
 
 
-def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None):
+def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
+    """Minimal support projection for an already-authorized exact dialogue."""
+    from tenant_support_access import predicate
+    scope, params = predicate(policy)
+    if scope == 'FALSE' or not conversation_ids:
+        return None
+    # The support inbox predicate authorizes both active and resolved cases.
+    # Never match a chat assignee, another source, or an unverified identity.
+    cur.execute("""SELECT t.status, m.display_name AS responsible_name
+      FROM saas_support_tickets t
+      LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.assigned_to
+      WHERE t.tenant_id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=ANY(%s::text[])
+        AND t.completion_outcome<>'test_stopped' AND """+scope+"""
+      ORDER BY (t.status<>'resolved') DESC,
+        CASE WHEN t.status='resolved' THEN COALESCE(t.resolved_at,t.updated_at,t.created_at)
+             ELSE t.created_at END DESC,t.id DESC LIMIT 1""",
+      (tenant,channel,list(conversation_ids),*params))
+    row=cur.fetchone()
+    return dict(row) if row else None
+
+
+def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,*,support_case_only=False):
+    if support_case_only and provider=='connect':
+        # Unlike ordinary history shortcuts, case display always names the
+        # selected source explicitly, including when a group spans numbers.
+        if (str(channel)!=identifier(channel) or not isinstance(conversation,str)
+                or not conversation or len(conversation)>160 or conversation.strip()!=conversation):
+            raise TenantLinearError('Диалог не найден.',404)
     lead_id=int(lead_id)
     requested_route={'provider':provider,'lead_id':lead_id,'channel_id':str(channel),'conversation_id':str(conversation)}
     with _connect() as conn:
@@ -1157,7 +1184,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             tenant,_,policy=access(cur,profile,'dialogs')
             transfer_targets=[]
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets
-            if provider=='connect' and lifecycle_enabled(cur,tenant):
+            if not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant):
                 from tenant_operator_access import _resolve_connect_route
                 candidate=_resolve_connect_route(cur,tenant,conversation,str(channel),lead_id,allow_merged=True)
                 transfer_targets=_targets(cur,tenant,policy,str(candidate['connect_channel_id']),int(profile['telegram_id']))
@@ -1170,10 +1197,14 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 history_members=members(cur,tenant,channel,conversation)
             history_leads=list(history_members.values())
             sql,scopes=projection(cur, policy)
-            cur.execute(sql+'SELECT * FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
+            columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
+            cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
             row=cur.fetchone()
             if not row:raise TenantLinearError('Диалог не найден.',404)
+            if support_case_only:
+                support=_linked_support_case(cur,tenant,policy,channel,history_members) if provider=='connect' else None
+                return {'dialog':{**public(row),'support_case':support}}
             dialog=decorate(row)
             restricted_ai = _scoped_ai_documents(policy)
             # This server-produced binding is emitted only after the requested

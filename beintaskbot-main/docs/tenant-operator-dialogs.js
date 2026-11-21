@@ -163,7 +163,7 @@
   const dialogKey=row=>[row?.provider||'connect',row?.channel_id||'',row?.conversation_id||'',row?.lead_id||''].join(':');
   const sameDialog=(a,b)=>!!a&&!!b&&dialogKey(a)===dialogKey(b);
   function stopAutoRefresh(){clearTimeout(autoRefreshTimer);autoRefreshTimer=null;}
-  function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();const backgroundNoticePolling=document.hidden&&window.Notification?.permission==='granted'&&!pushDeviceConnected;if((document.hidden&&!backgroundNoticePolling)||!hasRight('dialogs'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
+  function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();const backgroundNoticePolling=document.hidden&&window.Notification?.permission==='granted'&&!pushDeviceConnected;if((document.hidden&&!backgroundNoticePolling)||!hasRight('dialogs'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;void refreshClientSupportCase();try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
   const helperDrafts=new Map();let helperHistoryClosing=false;
   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
@@ -1182,7 +1182,7 @@
     az:{company:'Şirkət',title:'Müştəri məlumatları',group:'Qrup',dialog:'Dialoq',source:'Mənbə',transfer:'Ötürülmə',delegated:'Əməkdaşa ötürülüb',staff:'Əməkdaş',saved:'Ad yadda saxlanıldı',close:'Bağla'},
     en:{company:'Company',title:'Customer details',group:'Group',dialog:'Conversation',source:'Source',transfer:'Transfer',delegated:'Handed off to staff',staff:'Employee',saved:'Name saved',close:'Close'}
   }[i18n.language]||{})[key]||'';
-  let clientCardDispose=()=>{};
+  let clientCardDispose=()=>{},refreshClientSupportCase=()=>{};
   const pendingClientNames=new Set();
   const clientCardStyle=document.createElement('style');clientCardStyle.textContent=`
     #operatorConversationLayout{position:relative;display:flex;flex:1;min-width:0;min-height:0;overflow:hidden}
@@ -1276,6 +1276,19 @@
       mountDialogCompany(currentDialog);
     }
   }
+  function supportCaseBlock(route,block){
+    const item=route.support_case;
+    const labels={
+      ru:{title:'Обращение',status:'Статус',responsible:'Ответственный',new:'Новое',waiting:'Ожидает',in_progress:'В работе',resolved:'Решено'},
+      az:{title:'Müraciət',status:'Status',responsible:'Məsul şəxs',new:'Yeni',waiting:'Gözləyir',in_progress:'İcradadır',resolved:'Həll edilib'},
+      en:{title:'Support case',status:'Status',responsible:'Responsible',new:'New',waiting:'Waiting',in_progress:'In progress',resolved:'Resolved'},
+    };
+    if(route.provider!=='connect'||!item||!['new','waiting','in_progress','resolved'].includes(item.status))return '';
+    const copy=labels[i18n.language]||labels.en;
+    const row=(label,value,field)=>`<div class="operator-client-panel-row" data-client-case-field="${field}"><small>${esc(label)}</small><span data-user-content>${esc(value)}</span></div>`;
+    const name=typeof item.responsible_name==='string'&&item.responsible_name.trim()?item.responsible_name:'';
+    return block(copy.title,row(copy.status,copy[item.status],'status')+(name?row(copy.responsible,name,'responsible'):''));
+  }
   async function showClientTransfer(route,card,current){
     const host=card.querySelector('[data-client-transfer]');
     if(host.dataset.requested||!route.lifecycle?.id||Number(route.lifecycle.revision)<2)return;
@@ -1300,7 +1313,7 @@
     const developerNodes=sameCard?[...($('operatorClientDeveloperHost')?.childNodes||[])]:[],developerStatus=sameCard?[...($('operatorClientDeveloperStatus')?.childNodes||[])]:[];
     clientCardDispose();
     oldCard?.remove();
-    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span>${route.assignee_name?`<span class="operator-assignee-label" data-user-content>${esc(route.assignee_name)}</span>`:''}<span id="operatorBrowserCallHost"></span><details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
+    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span><details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
     head.parentElement.querySelector('[data-identity-warning]')?.remove();if(route.identity_conflict){const warning=document.createElement('p');warning.dataset.identityWarning='true';warning.className='operator-ai-context';warning.setAttribute('role','status');warning.textContent=({ru:'История WhatsApp разделена между JID/LID. AI остановлен до проверки связи диалогов.',az:'WhatsApp tarixçəsi JID/LID arasında bölünüb. Əlaqə yoxlanana qədər AI dayandırılıb.',en:'WhatsApp history is split between JID/LID. AI is blocked pending identity review.'})[i18n.language];head.after(warning);}
     const trigger=$('operatorClientCardOpen'),title=$('operatorDialogTitleText');
     const avatar=document.createElement('span');
@@ -1324,7 +1337,7 @@
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>${capabilities.dialog_company_binding===true?`<span class="operator-state operator-dialog-agent-status" data-panel-agent-status data-state="${esc(route.agent_status||route.display_state)}">${esc(agentModeLabel(route))}</span>`:''}<div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`);
     const companyBinding=capabilities.dialog_company_binding===true?'<div class="operator-client-panel-row" id="operatorClientCompanyHost"></div>':'';
     const company=nameForm||companyBinding?block(clientCardText('company'),nameForm+companyBinding):'';
-    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}</div>`;
+    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}<div data-client-support-case hidden></div></div>`;
     layout.append(card);
     hydrateContactPhone(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
@@ -1343,11 +1356,36 @@
     const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
     const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
     groupBlock?.addEventListener('toggle',loadRoster);
+    const caseSlot=card.querySelector('[data-client-support-case]');
+    let caseRead=0,caseInFlight=false,caseExpanded=true;
+    const clearSupportCase=()=>{
+      const details=caseSlot.querySelector('details');
+      if(details)caseExpanded=details.open;
+      caseRead++;caseInFlight=false;caseSlot.hidden=true;caseSlot.replaceChildren();
+    };
+    const refreshCase=async(restart=false)=>{
+      if(!current()||!card.open||route.provider!=='connect'){clearSupportCase();return;}
+      if(caseInFlight&&!restart)return;
+      // No previous case name or status may remain visible during revalidation.
+      clearSupportCase();caseInFlight=true;
+      const check=caseRead,params=historyQuery(route);
+      params.delete('anchor');params.set('support_case_only','1');
+      try{
+        const {dialog}=await api('dialogs/history?'+params);
+        if(check!==caseRead||!current()||!card.open||!sameDialog(dialog,route))return;
+        const markup=supportCaseBlock(dialog,block);
+        if(!markup)return;
+        caseSlot.innerHTML=markup;caseSlot.querySelector('details').open=caseExpanded;caseSlot.hidden=false;
+      }catch{/* Optional case info remains absent if authorization or transport is unavailable. */}
+      finally{if(check===caseRead)caseInFlight=false;}
+    };
+    refreshClientSupportCase=refreshCase;
     const syncChatInteraction=()=>{
       $('operatorConversationContent').inert=card.open&&window.matchMedia?.('(max-width: 900px)').matches===true;
     };
     const close=(restore=true)=>{
       if(restore&&document.activeElement===input)void persistName();
+      clearSupportCase();
       card.removeAttribute('open');for(const button of [trigger,title])button.setAttribute('aria-expanded','false');
       syncChatInteraction();
       if(restore){if(groupBlock)groupBlock.open=false;window.tenantDialogueCompany?.closePicker?.();if(opener.isConnected)opener.focus({preventScroll:true});}
@@ -1363,6 +1401,7 @@
       if(!current()||card.open)return;
       opener=button;card.setAttribute('open','');for(const control of [trigger,title])control.setAttribute('aria-expanded','true');
       resizePanel();
+      void refreshCase(true);
       loadRoster();void showClientTransfer(route,card,current);
       if(!snapshot)$('operatorCancelConversationName').focus({preventScroll:true});
     };
@@ -1382,8 +1421,9 @@
     listen('tenant-auth-invalid',destroy);
     listen('tenant-auth-pending',()=>{authorized=false;close(false);});
     listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')close(false);});
-    listen('tenant-profile',()=>{authorized=owner===identity(member)&&hasRight('dialogs');if(!current())close(false);});
-    clientCardDispose=()=>{listeners.forEach(remove=>remove());close(false);};
+    listen('tenant-profile',()=>{authorized=owner===identity(member)&&hasRight('dialogs');if(!current())close(false);else if(card.open)void refreshCase(true);});
+    listen('tenant-dialog-reauthorized',()=>{if(card.open)void refreshCase(true);});
+    clientCardDispose=()=>{if(refreshClientSupportCase===refreshCase)refreshClientSupportCase=()=>{};listeners.forEach(remove=>remove());close(false);};
     const activeCard=()=>{
       const active=$('operatorClientCard');
       return active?.dataset.scope===scope&&owner===identity(member)?active:null;
