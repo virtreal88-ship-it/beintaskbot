@@ -56,6 +56,23 @@ def test_phone_peer_cannot_claim_another_phone():
     assert identity.valid(LID,CALLER)
 
 
+def test_identity_after_end_updates_labels_without_reclosing_or_duplicate_event(managed):
+    db,key,cfg=managed
+    calls.sync(cfg,snapshot(2,active=[incoming()]))
+    ended={**incoming(),'state':'ended'}
+    calls.sync(cfg,snapshot(3,ended=[ended]))
+    before=db.execute("SELECT * FROM saas_browser_calls WHERE provider_id='identity-call'")[0];db.commit()
+    calls.sync(cfg,snapshot(4,ended=[{**ended,'caller':CALLER}]))
+    calls.sync(cfg,snapshot(5,ended=[{**ended,'caller':CALLER}]))
+    assert db.execute("SELECT * FROM saas_browser_calls WHERE provider_id='identity-call'")[0]==before
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE message_type='call_missed'")[0]['n']==1
+    row=db.execute('SELECT phone,display_name FROM saas_connect_conversations WHERE tenant_id=%s AND conversation_id=%s',(A,LID))[0]
+    assert row=={'phone':PN.split('@')[0],'display_name':'Synthetic Caller'}
+    public=calls.status(PROFILE)['calls'][0]
+    assert public['phone']==PN.split('@')[0] and public['display_name']=='Synthetic Caller'
+    db.commit()
+
+
 def test_addressed_repair_requires_exact_private_scope_and_preserves_call(managed,monkeypatch):
     from unittest.mock import Mock
     import tenant_call_sources as sources

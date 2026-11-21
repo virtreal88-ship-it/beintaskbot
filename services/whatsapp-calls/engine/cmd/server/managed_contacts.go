@@ -19,6 +19,33 @@ type callerIdentity struct {
 	Name  string `json:"display_name"`
 }
 
+// A direct offer carries a protocol-confirmed PN alongside its LID, before
+// contact sync necessarily populates the local mapping. Never infer it from
+// a name, group participant, or a mismatching creator; retain it per call only.
+func resolveOfferCaller(ctx context.Context, meta types.BasicCallMeta, lids store.LIDStore, contacts store.ContactStore) *callerIdentity {
+	peer, creator, alternate := meta.From.ToNonAD(), meta.CallCreator.ToNonAD(), meta.CallCreatorAlt.ToNonAD()
+	if !meta.GroupJID.IsEmpty() || peer != creator || !directPeer(peer.String()) {
+		return nil
+	}
+	if peer.Server == types.DefaultUserServer {
+		return resolveCaller(ctx, peer, lids, contacts)
+	}
+	if alternate.Server != types.DefaultUserServer || !directPeer(alternate.String()) {
+		return nil
+	}
+	if lids != nil {
+		pn, err := lids.GetPNForLID(ctx, peer)
+		if err != nil || !pn.IsEmpty() && pn.ToNonAD() != alternate {
+			return nil
+		}
+		lid, err := lids.GetLIDForPN(ctx, alternate)
+		if err != nil || !lid.IsEmpty() && lid.ToNonAD() != peer {
+			return nil
+		}
+	}
+	return callerWithPhone(ctx, alternate, peer, contacts)
+}
+
 // Only the paired device's protocol mapping proves LID -> PN. Contact labels
 // never establish identity. Both lookups use local stores, not provider I/O.
 func resolveCaller(ctx context.Context, peer types.JID, lids store.LIDStore, contacts store.ContactStore) *callerIdentity {
@@ -43,6 +70,10 @@ func resolveCaller(ctx context.Context, peer types.JID, lids store.LIDStore, con
 	if phone.Server != types.DefaultUserServer {
 		return nil
 	}
+	return callerWithPhone(ctx, phone, peer, contacts)
+}
+
+func callerWithPhone(ctx context.Context, phone, peer types.JID, contacts store.ContactStore) *callerIdentity {
 	result := &callerIdentity{Phone: phone.String()}
 	if contacts != nil {
 		for _, jid := range []types.JID{phone, peer} {
