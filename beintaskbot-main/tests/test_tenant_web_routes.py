@@ -53,6 +53,7 @@ EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operato
 EXPECTED_ASSETS += ['/assets/tenant-copilot-voice-audio.js','/assets/tenant-copilot-voice-controller.js','/assets/tenant-copilot-voice-channel.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
 EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js','/assets/tenant-dialog-composer.js','/assets/tenant-dialog-reply-templates.js','/assets/tenant-customer-media-ui.js']
+EXPECTED_ASSETS += ['/assets/tenant-personal-dialog-reminders.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialog-consultations/developer-marker', ('POST',)),
@@ -76,6 +77,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/audio-transcription', ('GET', 'POST')),
     ('dialogs/read', ('POST',)),
     ('dialogs/reply-templates', ('GET','POST')),
+    ('dialogs/personal-reminders', ('GET','POST')),
     ('dialogs/read-all', ('POST',)),
     ('testing/sessions', ('GET','POST')),
     ('testing/historical-replay', ('GET','POST')),
@@ -161,6 +163,7 @@ FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_hand
     'chat_history_handler', 'chat_attachment_handler', 'chat_review_handler', 'historical_replay_handler',
     'diagnostics_handler', 'deal_completion_handler', 'ai_agents_handler', 'administrator_handler', 'support_handler', 'knowledge_candidates_handler', 'operator_handler', 'reply_templates_handler', 'operator_voice_handler', 'dialog_consultations_handler', 'owner_asr_comparison_handler', 'dialog_audio_transcription_handler', 'business_analytics_handler', 'agent_reports_handler', 'night_report_handler', 'testing_handler', 'simulation_handler', 'ai_state_handler', 'ai_instructor_handler')
 FACTORIES += ('business_analyst_handler','business_analyst_preferences_handler','business_analytics_voice_handler')
+FACTORIES += ('reminders_handler',)
 FACTORIES += ('call_recordings_handler','browser_calls_handler','call_sources_handler')
 FACTORIES += ('whatsapp_integration_handler',)
 EXPECTED_API += (('GET','/api/platform/integrations/whatsapp'),('POST','/api/platform/integrations/whatsapp'))

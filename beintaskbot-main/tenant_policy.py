@@ -359,6 +359,9 @@ class TenantPolicy:
         document_access = ai_document_capabilities(self)
         if document_access is not None:
             capabilities['ai_documents'] = document_access
+        from tenant_personal_dialog_reminders import capability as reminder_capability
+        if reminder_capability(self):
+            capabilities['personal_dialog_reminders'] = True
         return capabilities
 
     def deal_board(self) -> list[dict]:
