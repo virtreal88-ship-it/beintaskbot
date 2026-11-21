@@ -2,18 +2,18 @@
 (()=>{
   const endpoint='/api/platform/ai/dialogs/shared-reminders';
   const copy={
-    ru:{list:'Общие напоминания',schedule:'Общее напоминание',note:'Общая заметка',date:'Дата и время',
+    ru:{list:'Общие напоминания',schedule:'Создать напоминание',note:'Общая заметка',date:'Дата и время',
       save:'Запланировать',close:'Закрыть',open:'Открыть напоминание',chat:'Открыть диалог',
       due:'Общее напоминание',empty:'Нет общих напоминаний',loading:'Загрузка…',saved:'Напоминание запланировано',
-      opened:'Метка снята у всех',error:'Не удалось выполнить действие',more:'Показаны первые 100 напоминаний'},
-    az:{list:'Ortaq xatırlatmalar',schedule:'Ortaq xatırlatma',note:'Ortaq qeyd',date:'Tarix və vaxt',
+      opened:'Метка снята у всех',error:'Не удалось выполнить действие',loadError:'Не удалось загрузить напоминания',retry:'Повторить',more:'Показаны первые 100 напоминаний'},
+    az:{list:'Ortaq xatırlatmalar',schedule:'Xatırlatma yarat',note:'Ortaq qeyd',date:'Tarix və vaxt',
       save:'Planlaşdır',close:'Bağla',open:'Xatırlatmanı aç',chat:'Dialoqu aç',due:'Ortaq xatırlatma',
       empty:'Ortaq xatırlatma yoxdur',loading:'Yüklənir…',saved:'Xatırlatma planlaşdırıldı',
-      opened:'Nişan hamı üçün silindi',error:'Əməliyyat alınmadı',more:'İlk 100 xatırlatma göstərilir'},
-    en:{list:'Shared reminders',schedule:'Shared reminder',note:'Shared note',date:'Date and time',
+      opened:'Nişan hamı üçün silindi',error:'Əməliyyat alınmadı',loadError:'Xatırlatmaları yükləmək mümkün olmadı',retry:'Yenidən yoxla',more:'İlk 100 xatırlatma göstərilir'},
+    en:{list:'Shared reminders',schedule:'Create reminder',note:'Shared note',date:'Date and time',
       save:'Schedule',close:'Close',open:'Open reminder',chat:'Open dialogue',due:'Shared reminder',
       empty:'No shared reminders',loading:'Loading…',saved:'Reminder scheduled',
-      opened:'Marker cleared for everyone',error:'Could not complete the action',more:'Showing the first 100 reminders'}
+      opened:'Marker cleared for everyone',error:'Could not complete the action',loadError:'Could not load reminders',retry:'Retry',more:'Showing the first 100 reminders'}
   };
   const language=()=>window.tenantI18n?.language||'az';
   const t=key=>(copy[language()]||copy.az)[key];
@@ -22,7 +22,7 @@
   const button=(label,action)=>{const el=node('button',label);el.type='button';el.className='outline';el.onclick=action;return el;};
   const current=()=>window.tenantOperator?.currentDialog;
   const routeKey=r=>JSON.stringify([r?.provider,String(r?.channel_id),r?.conversation_id,Number(r?.lead_id)]);
-  let toolbar,createControl,modal,feed=null,request=null,epoch=0,rows=[],paused=false;
+  let createControl,modal,feed=null,request=null,epoch=0,rows=[],paused=false,lastBellState='',feedStatus='loading';
   const scope=()=>{
     const p=window.tenantProfileSnapshot;
     const m=window.tenantOperator?.member;
@@ -30,7 +30,21 @@
     if(String(m.tenant_id)!==String(p.member?.tenant_id)||String(m.telegram_id)!==String(p.member?.telegram_id))return null;
     return {expected_tenant_id:String(m.tenant_id),expected_user_id:String(m.telegram_id)};
   };
-  const active=()=>!paused&&!document.hidden&&!!$('view-dialogs')?.classList.contains('active');
+  const active=()=>!paused&&!document.hidden;
+  const dialogueActive=()=>active()&&!!$('view-dialogs')?.classList.contains('active');
+  const canOpenList=()=>!paused&&!!scope()&&feedStatus!=='denied';
+  const notificationCount=()=>canOpenList()&&feed?(feed.reminders||[]).filter(row=>row.due).length:null;
+  const notificationLabel=count=>t('list')+(count?' ('+count+')':'');
+  function notificationEntry(bell,beforeOpen){
+    if(!canOpenList())return null;
+    const count=notificationCount();
+    const control=button(notificationLabel(count),()=>{
+      if(!canOpenList()||!active())return;
+      beforeOpen?.();renderList(box(bell,'list',t('list')));void refresh();
+    });
+    control.dataset.notificationFocus='shared-reminders';control.setAttribute('aria-haspopup','dialog');
+    return control;
+  }
   const valid=(stamp,expected)=>active()&&stamp===epoch&&JSON.stringify(scope())===JSON.stringify(expected);
   async function api(expected,data){
     const response=await fetch(endpoint+(data?'':'?'+new URLSearchParams(expected)),{
@@ -73,26 +87,30 @@
     }
   }
   function paint(){
-    const count=(feed?.reminders||[]).filter(r=>r.due).length;
-    if(toolbar?.isConnected){toolbar.hidden=!feed;toolbar.textContent=t('list')+(count?' ('+count+')':'');}
+    const count=notificationCount(),next=JSON.stringify([canOpenList(),count,language()]);
+    if(next!==lastBellState){
+      lastBellState=next;document.dispatchEvent(new CustomEvent('tenant-shared-reminders-changed'));
+    }
     if(createControl?.isConnected){
-      createControl.hidden=!feed||current()?.shared_reminder?.can_schedule!==true;
+      createControl.hidden=!dialogueActive()||!canOpenList()||current()?.shared_reminder?.can_schedule!==true;
       createControl.textContent=t('schedule');
+      const host=createControl.closest('#operatorClientSharedReminderHost');if(host)host.hidden=createControl.hidden;
     }
     markRows(rows);
     if(modal?.type==='list'&&!modal.busy)renderList(modal);
   }
   function refresh(){
     const expected=scope(),stamp=epoch;
-    if(!expected||!active()||request)return;
+    if(!expected||!active()||request||feedStatus==='denied')return;
     const token={};request=token;
+    if(!feed&&feedStatus!=='loading'){feedStatus='loading';paint();}
     return api(expected).then(result=>{
-      if(valid(stamp,expected)&&request===token)feed=result;
+      if(valid(stamp,expected)&&request===token){feed=result;feedStatus='ready';}
     },error=>{
       if(valid(stamp,expected)&&request===token){
         feed=null;
-        if([401,403,404].includes(error.status))close();
-        else if(modal?.type==='list')modal.status.textContent=error.message;
+        if([401,403,404].includes(error.status)){feedStatus='denied';close();}
+        else feedStatus='error';
       }
     }).finally(()=>{
       if(request===token){request=null;paint();}
@@ -109,7 +127,13 @@
   }
   function renderList(view){
     view.body.replaceChildren();
-    if(!feed?.reminders.length){view.body.append(node('p',feed?t('empty'):t('loading')));return;}
+    if(!feed?.reminders.length){
+      if(feedStatus==='error'){
+        const error=node('p',t('loadError'));error.setAttribute('role','alert');
+        view.body.append(error,button(t('retry'),()=>void refresh()));
+      }else view.body.append(node('p',feed?t('empty'):t('loading')));
+      return;
+    }
     for(const row of feed.reminders){
       const card=node('article'),title=node('strong',row.title||t('due')),time=node('time');
       sayTime(time,row.due_at);card.append(title,time);
@@ -124,6 +148,8 @@
     view.busy=true;view.status.textContent=t('loading');
     try{
       if(row.dialog){
+        if(!dialogueActive())window.tenantAppNavigate?.('dialogs',false);
+        if(!dialogueActive()||!valid(stamp,expected))throw Error(t('error'));
         const visible=await window.tenantOperator.openDialog(row.dialog);
         if(!visible||routeKey(current())!==routeKey(row.dialog))throw Error(t('error'));
       }
@@ -141,7 +167,7 @@
   }
   async function dialogOpened(route){
     const expected=scope(),stamp=epoch,id=route?.shared_reminder?.id;
-    if(!expected||!active()||!id)return;
+    if(!expected||!dialogueActive()||!canOpenList()||!id)return;
     try{
       await api(expected,{action:'open',id});
       if(valid(stamp,expected))removeMarker(id);
@@ -149,7 +175,7 @@
   }
   function schedule(source){
     const expected=scope(),stamp=epoch,route=current();
-    if(!expected||!active()||route?.shared_reminder?.can_schedule!==true)return;
+    if(!expected||!dialogueActive()||!canOpenList()||route?.shared_reminder?.can_schedule!==true)return;
     const view=box(source,'schedule',t('schedule')),form=node('form'),date=node('input'),note=node('textarea');
     view.route=routeKey(route);
     date.type='datetime-local';date.required=true;note.maxLength=280;note.rows=2;
@@ -159,7 +185,7 @@
     let id,signature;
     form.onsubmit=async event=>{
       event.preventDefault();
-      if(view!==modal||!valid(stamp,expected)||routeKey(current())!==view.route||submit.disabled)return;
+      if(view!==modal||!valid(stamp,expected)||!dialogueActive()||!canOpenList()||routeKey(current())!==view.route||submit.disabled)return;
       const due=new Date(date.value);
       if(!Number.isFinite(+due)||+due<=Date.now()){view.status.textContent=t('error');return;}
       const due_at=due.toISOString(),text=note.value.trim(),next=JSON.stringify([due_at,text]);
@@ -176,28 +202,26 @@
     };
   }
   function attach(){
-    const allowed=active()&&scope();
-    const list=$('operatorWorkspace')?.querySelector('.operator-list-pane .operator-filters');
-    if(allowed&&list&&!toolbar?.isConnected){
-      toolbar=button(t('list'),()=>{renderList(box(toolbar,'list',t('list')));void refresh();});
-      toolbar.id='operatorSharedRemindersOpen';toolbar.hidden=true;list.after(toolbar);
+    const host=$('operatorClientSharedReminderHost'),route=current();
+    if(dialogueActive()&&canOpenList()&&host&&route?.shared_reminder?.can_schedule===true&&
+        (!createControl?.isConnected||!host.contains(createControl))){
+      createControl=button(t('schedule'),()=>schedule(createControl));
+      createControl.id='operatorSharedReminderCreate';createControl.setAttribute('aria-haspopup','dialog');
+      host.replaceChildren(createControl);host.hidden=false;
     }
-    const menu=$('operatorMoreActions')?.querySelector('.operator-action-menu');
-    if(allowed&&menu&&(!createControl?.isConnected||!menu.contains(createControl))){
-      createControl=button(t('schedule'),()=>{$('operatorMoreActions').open=false;schedule(createControl);});
-      createControl.id='operatorSharedReminderCreate';createControl.setAttribute('role','menuitem');menu.append(createControl);
-    }
+    if(host&&!(createControl?.isConnected&&host.contains(createControl)))host.hidden=true;
     if(modal?.route&&modal.route!==routeKey(current()))close();
     paint();
   }
   function reset(block=false){
-    epoch++;paused=block;feed=null;request=null;close();paint();
+    epoch++;paused=block;feed=null;request=null;feedStatus='loading';close();paint();
   }
   function wake(){attach();void refresh();}
   const style=node('style');
   style.textContent=`
-    #operatorSharedRemindersOpen{align-self:flex-start;margin:0 0 6px;min-height:36px}
-    #operatorSharedRemindersOpen[hidden],#operatorSharedReminderCreate[hidden]{display:none!important}
+    #operatorClientSharedReminderHost[hidden],#operatorSharedReminderCreate[hidden]{display:none!important}
+    #operatorClientSharedReminderHost{margin-top:4px}
+    #operatorClientCard #operatorSharedReminderCreate{width:100%;min-height:36px;text-align:start}
     .operator-shared-reminder-badge{border-radius:9px;padding-inline:5px;background:var(--paper);color:var(--app-warning-ink,#9b5f08);font-weight:700}
     #sharedDialogReminderModal{box-sizing:border-box;width:min(440px,calc(100% - 24px));max-height:calc(100dvh - 24px);padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);overflow:auto}
     #sharedDialogReminderModal::backdrop{background:#071d1688}
@@ -209,10 +233,10 @@
     #sharedDialogReminderModal article{padding:9px 0;border-bottom:1px solid var(--line)}
     #sharedDialogReminderModal section p{white-space:pre-wrap;overflow-wrap:anywhere}
   `;document.head.append(style);
-  window.tenantSharedReminders={dialogOpened,markRows};
+  window.tenantSharedReminders={dialogOpened,markRows,notificationCount,notificationLabel,notificationEntry};
   document.addEventListener('tenant-profile',()=>{reset();queueMicrotask(wake);});
   for(const evt of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(evt,()=>reset(true));
-  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')reset(paused);else queueMicrotask(wake);});
+  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs'&&modal?.type==='schedule')close();queueMicrotask(wake);});
   document.addEventListener('tenant-chat-attachments-ready',attach);
   document.addEventListener('tenant-employee-status-changed',()=>{reset(paused);wake();});
   document.addEventListener('tenant-language',()=>{close();attach();});

@@ -1,5 +1,6 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const read=f=>fs.readFileSync(path.join(__dirname,'..','docs',f),'utf8');
+const fakeMenu='<button class="app-avatar-button" type="button" aria-controls="appUserMenu">SE</button><div id="appUserMenu"><div><span id="appUserName">Synthetic Employee</span></div><button data-app-open="profile">Profile</button><button data-app-logout>Logout</button></div>';
 const page=read('tenant-app.html'),statusAsset=read('tenant-profile-work-status.js'),rosterAsset=read('tenant-members-ui.js');
 const A='00000000-0000-0000-0000-000000009201',B='00000000-0000-0000-0000-000000009202';
 const fixture={worker:{member:{tenant_id:A,telegram_id:41,active:true,role:'worker',permissions:['tasks']},capabilities:{pages:{profile:true,dialogs:false}}},
@@ -13,10 +14,10 @@ const memberRows=[
 const tick=async()=>{for(let i=0;i<12;i++)await new Promise(resolve=>setImmediate(resolve));};
 const response=value=>({ok:true,json:async()=>value});
 async function domTest(){
- const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
- const init=(profile,view)=>{const w=new JSDOM(page,{url:'https://profile.test/app?view='+view,runScripts:'outside-only'}).window;
+ const {JSDOM,VirtualConsole}=require(process.env.JSDOM_PATH||'../.support-test-deps/node_modules/jsdom');
+ const init=(profile,view)=>{const w=new JSDOM(page.replace('</body>',fakeMenu+'</body>'),{url:'https://profile.test/app?view='+view,runScripts:'outside-only'}).window;
    w.tenantProfileSnapshot=profile;w.tenantI18n={language:'az'};w.document.querySelector('#view-'+view).classList.add('active');return w;};
- const w=init(fixture.worker,'profile'),results=[];let stored=null,release;
+ const w=init(fixture.worker,'tasks'),results=[];let stored=null,release;
  w.fetch=async(url,options={})=>{
    const u=new URL(url,w.location.origin);assert.equal(u.pathname,'/api/platform/ai/profile/availability');
    if(options.method==='POST'){
@@ -29,21 +30,27 @@ async function domTest(){
  };
  w.eval(statusAsset);await tick();
  const el=id=>w.document.getElementById(id);
- assert.equal(el('profileWorkStatusForm').hidden,false,'worker without Dialogs sees the control');
- assert.equal(el('profileWorkStatusTitle').textContent,'İş statusu');
- const select=el('profileWorkStatusSelect'),form=el('profileWorkStatusForm');
- assert.equal(select.value,'online');assert.deepEqual([...select.options].map(o=>o.text),['Onlayn','Kənarda','Nahar','Oflayn']);
- assert.equal(el('profileWorkStatusSave').disabled,true);
- form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();assert.equal(results.length,0);
- select.value='offline';select.dispatchEvent(new w.Event('change'));assert.equal(el('profileWorkStatusSave').disabled,false);
- form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();
+ const control=el('appWorkStatus'),trigger=el('appWorkStatusTrigger'),options=el('appWorkStatusOptions');
+ const avatar=w.document.querySelector('.app-avatar-button');
+ assert.equal(control.hidden,false,'worker without Dialogs can use the global account menu');
+ assert.equal(avatar.dataset.workStatus,'online');
+ assert.match(trigger.textContent,/İş statusuOnlayn/);
+ assert.equal(options.hidden,true,'options do not clutter the closed menu');
+ trigger.click();
+ assert.equal(trigger.getAttribute('aria-expanded'),'true');
+ assert.deepEqual([...options.querySelectorAll('button')].map(o=>o.textContent),['Onlayn','Kənarda','Nahar','Oflayn']);
+ options.querySelector('[data-status=online]').click();await tick();assert.equal(results.length,0);
+ trigger.click();options.querySelector('[data-status=offline]').click();await tick();
  assert.deepEqual(results,[{expected_tenant_id:A,expected_user_id:41,status:'offline'}]);
- assert.equal(el('profileWorkStatusFeedback').textContent,'Status saxlanıldı.');
- w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'tasks'}}));assert.equal(form.hidden,true);
- w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'profile'}}));await tick();assert.equal(select.value,'offline');
- select.value='away';select.dispatchEvent(new w.Event('change'));form.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();
+ assert.equal(avatar.dataset.workStatus,'offline');
+ assert.equal(el('appWorkStatusFeedback').textContent,'Status saxlanıldı.');
+ assert.equal(options.hidden,true);
+ w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'profile'}}));
+ assert.equal(avatar.dataset.workStatus,'offline','status is global, not view-specific');
+ trigger.click();options.querySelector('[data-status=away]').click();await tick();
  w.document.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));release();await tick();
- assert.equal(form.hidden,true);assert.equal(el('profileWorkStatusFeedback').textContent,'','stale write cannot surface a success in a new session');
+ assert.equal(control.hidden,true);assert.equal(avatar.dataset.workStatus,undefined);
+ assert.equal(el('appWorkStatusFeedback').textContent,'','stale write cannot surface a success in a new session');
  assert.equal(results.length,2);w.close();
 
  for(const [kind,profile] of Object.entries({owner:fixture.owner,manager:fixture.manager})){
@@ -58,7 +65,27 @@ async function domTest(){
    else assert.equal(request.searchParams.has('include'),false);
    m.close();
  }
- console.log('PASS: shared self profile, AZ labels, stale-session hide, and owner-only roster.');
+ const virtualConsole=new VirtualConsole(),shellErrors=[];virtualConsole.on('jsdomError',error=>shellErrors.push(error.message));
+ const actual=new JSDOM(page,{url:'https://profile.test/app?view=tasks',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole}).window;
+ actual.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});
+ actual.tenantViewDemand={watch(){}};
+ actual.tenantProfileSnapshot=fixture.worker;
+ actual.fetch=async()=>response(snapshot('online'));
+ actual.eval(statusAsset);
+ actual.eval(read('tenant-chakra-ui.js'));
+ await tick();
+ const accountMenu=actual.document.querySelector('#appUserMenu'),accountAvatar=actual.document.querySelector('.app-avatar-button');
+ assert.equal(accountAvatar.dataset.workStatus,'online','status mounted after the real shell generated the avatar');
+ accountAvatar.click();
+ assert.equal(accountMenu.hidden,false);
+ const accountStatus=accountMenu.querySelector('#appWorkStatusTrigger'),accountOptions=accountMenu.querySelector('#appWorkStatusOptions');
+ accountStatus.click();assert.equal(accountOptions.hidden,false);
+ accountOptions.dispatchEvent(new actual.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+ assert.equal(accountOptions.hidden,true);assert.equal(accountMenu.hidden,false,'Escape closes only the status choices');
+ assert.equal(accountMenu.querySelectorAll('[data-app-logout]').length,1);
+ assert.deepEqual(shellErrors,[]);
+ actual.close();
+ console.log('PASS: shared avatar placement, AZ labels, stale-session hide, and owner-only roster.');
 }
 async function browserTest(){
  const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
@@ -81,15 +108,29 @@ async function browserTest(){
    await tab.route('**/*',async route=>{if(new URL(route.request().url()).hostname!=='profile.test')return route.abort();return route.fallback();});
    await tab.goto('https://profile.test/app?view='+view);
    await tab.evaluate(({profile,view})=>{window.tenantProfileSnapshot=profile;window.tenantI18n={language:'az'};document.querySelector('#view-'+view).classList.add('active');},{profile:view==='profile'?fixture.worker:fixture.owner,view});
+   await tab.evaluate(()=>{window.tenantViewDemand={watch(){}};});
+   await tab.addScriptTag({content:read('tenant-chakra-ui.js')});
    await tab.addScriptTag({content:statusAsset});
    if(view==='profile'){
-    const picker=tab.locator('#profileWorkStatusSelect');
-    await picker.waitFor({state:'visible'});
-    const box=await picker.boundingBox();assert.ok(box&&box.x>=0&&box.x+box.width<=width+1);
-    assert.equal(await picker.inputValue(),'online');assert.equal(posted,0);
-    await picker.selectOption('offline');await tab.locator('#profileWorkStatusSave').click();
+    const avatar=tab.locator('.app-avatar-button');
+    await avatar.waitFor({state:'visible'});
+    await tab.waitForFunction(()=>document.querySelector('.app-avatar-button').dataset.workStatus==='online');
+    assert.ok(await avatar.evaluate(node=>getComputedStyle(node).borderRadius==='50%'&&getComputedStyle(node,'::after').content!=='none'),'round avatar shows current status');
+    await avatar.click();
+    const trigger=tab.locator('#appWorkStatusTrigger'),options=tab.locator('#appWorkStatusOptions');
+    assert.equal(await options.isVisible(),false);
+    const box=await trigger.boundingBox();assert.ok(box&&box.x>=0&&box.x+box.width<=width+1);
+    assert.equal(posted,0);await trigger.click();
+    assert.equal(await options.isVisible(),true);
+    await tab.keyboard.press('Escape');assert.equal(await options.isVisible(),false);
+    assert.equal(await trigger.isVisible(),true,'Escape closes only the nested picker');
+    await trigger.click();
+    await options.locator('[data-status=offline]').last().click();
     await tab.getByText('Status saxlanıldı.',{exact:true}).waitFor();
     assert.equal(stored,'offline');assert.equal(posted,1);
+    assert.equal(await avatar.getAttribute('data-work-status'),'offline');
+    assert.equal(await tab.locator('#appUserMenu [data-app-open=profile]').isVisible(),true);
+    assert.equal(await tab.locator('#appUserMenu [data-app-logout]').count(),1);
    }else{
     await tab.addScriptTag({content:rosterAsset});
     const badge=tab.locator('#staffContent [data-work-status=offline]');
