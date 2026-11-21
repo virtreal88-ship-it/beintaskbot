@@ -1181,7 +1181,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
         from tenant_connect_transport import _schema as ensure_connect_schema
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
-            tenant,_,policy=access(cur,profile,'dialogs')
+            tenant,actor,policy=access(cur,profile,'dialogs')
             transfer_targets=[]
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets
             if not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant):
@@ -1348,6 +1348,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 _can_update=action_capabilities.get('update',False),_policy=policy)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
+            if before is None:
+                from tenant_dialog_company_binding import read_dialogue_binding
+                dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)
