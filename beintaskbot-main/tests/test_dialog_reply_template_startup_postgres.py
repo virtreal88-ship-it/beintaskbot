@@ -11,6 +11,7 @@ from test_startup_transaction_budget_postgres import database, install_bootstrap
 
 PROVISION = "DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP"
 ENABLE = "DIALOG_REPLY_TEMPLATES_ENABLED"
+OBSERVE = "DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP"
 PILOT = "BEINSYSTEMS_OPERATOR_TENANT_ID"
 
 
@@ -20,6 +21,7 @@ def boot(database, monkeypatch):
     monkeypatch.setenv(PILOT, tenant)
     monkeypatch.delenv(PROVISION, raising=False)
     monkeypatch.delenv(ENABLE, raising=False)
+    monkeypatch.delenv(OBSERVE, raising=False)
 
     # Model existing base migrations, using the real startup transaction and
     # advisory lock. The optional hook must see these committed tables/rows.
@@ -163,4 +165,48 @@ def test_error_after_ddl_rolls_back_both_new_objects_not_base_commit(boot, monke
     with psycopg.connect(dsn) as conn:
         assert objects(conn) == (False, False)
         assert conn.execute('SELECT * FROM budget_webhook').fetchall() == [(41,)]
+    assert_session_released(dsn)
+
+
+def test_read_only_observation_reports_absent_then_existing_exact_shape(boot, monkeypatch, caplog):
+    dsn,_=boot
+    def forbidden(*_args):
+        pytest.fail('schema observation must not invoke any provisioning')
+    migrate=templates.migrate
+    monkeypatch.setattr(templates, 'migrate', forbidden)
+    monkeypatch.setenv(OBSERVE, 'true')
+    with caplog.at_level('INFO',logger=startup.__name__):
+        startup.prepare_database()
+    assert 'Reply template schema observation: absent' in caplog.text
+    with psycopg.connect(dsn) as conn:
+        assert objects(conn)==(False,False)
+    # Create a synthetic schema through its approved fixture path, not through
+    # observation. No real content, messages, or customer data is touched.
+    with psycopg.connect(dsn) as conn:
+        migrate(conn)
+    verify=templates.verify_provisioned_schema
+    def check(cur):
+        cur.execute("SELECT current_setting('transaction_read_only') AS readonly,current_setting('transaction_timeout') AS budget")
+        assert cur.fetchone()=={'readonly':'on','budget':'5s'}
+        verify(cur)
+    monkeypatch.setattr(templates,'verify_provisioned_schema',check)
+    with caplog.at_level('INFO',logger=startup.__name__):
+        startup.prepare_database()
+    assert 'Reply template schema observation: matching' in caplog.text
+    assert_session_released(dsn)
+
+
+def test_observation_of_unexpected_existing_schema_never_repairs(boot,monkeypatch,caplog):
+    dsn,_=boot
+    with psycopg.connect(dsn) as conn:
+        conn.execute('CREATE TABLE saas_dialog_reply_templates(marker text)')
+        conn.execute("INSERT INTO saas_dialog_reply_templates VALUES ('no customer data')")
+    monkeypatch.setenv(OBSERVE,'true')
+    with caplog.at_level('INFO',logger=startup.__name__):
+        startup.prepare_database()
+    assert 'Reply template schema observation: unverified' in caplog.text
+    assert 'no customer data' not in caplog.text
+    with psycopg.connect(dsn) as conn:
+        assert objects(conn)==(True,False)
+        assert conn.execute('SELECT marker FROM saas_dialog_reply_templates').fetchall()==[('no customer data',)]
     assert_session_released(dsn)

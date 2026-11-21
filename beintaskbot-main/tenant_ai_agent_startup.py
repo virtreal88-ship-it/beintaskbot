@@ -83,6 +83,8 @@ def prepare_database() -> None:
                 migrate(cur)
                 verify_provisioned_schema(cur)
             conn.commit()
+        elif os.environ.get('DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP', '').lower() == 'true':
+            _observe_reply_template_schema(conn)
         if os.environ.get('TENANT_PERSONAL_DIALOG_REMINDERS_PROVISION_ON_STARTUP') == '1':
             _provision_personal_reminders(conn)
 
@@ -103,6 +105,29 @@ def _provision_personal_reminders(conn):
         logger.warning('Personal reminders schema preflight: unverified')
     else:
         logger.info('Personal reminders schema preflight: ready')
+
+
+def _observe_reply_template_schema(conn):
+    """One-time, read-only catalog observation; never fetch template content."""
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_dialog_reply_templates import _schema_ready, verify_provisioned_schema
+    outcome = 'workspace_not_configured'
+    if configured_workspace_id():
+        try:
+            # A fresh bounded transaction under the existing startup lock.
+            # Never allow verification to write, and roll back before continuing.
+            with conn.transaction(), conn.cursor() as cur:
+                cur.execute('SET TRANSACTION READ ONLY')
+                if not _schema_ready(cur):
+                    outcome = 'absent'
+                else:
+                    verify_provisioned_schema(cur)
+                    outcome = 'matching'
+        except Exception:
+            # A failed observation is not evidence of an absent or safe schema.
+            # Do not emit detailed exceptions, SQL data, or identifiers.
+            outcome = 'unverified'
+    logging.getLogger(__name__).info('Reply template schema observation: %s', outcome)
 
 
 def ensure_pilot_case_schema(conn) -> None:

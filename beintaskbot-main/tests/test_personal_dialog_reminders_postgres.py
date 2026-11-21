@@ -230,3 +230,17 @@ def test_provision_requires_valid_workspace_before_reminder_ddl(reminder_boot,mo
     with psycopg.connect(dsn) as conn:
         assert _objects(conn)==(False,False)
     assert_session_released(dsn)
+
+
+def test_reminder_provision_and_template_observation_are_independent(reminder_boot,monkeypatch,caplog):
+    dsn,_=reminder_boot
+    monkeypatch.setenv('DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP','true')
+    monkeypatch.setenv(store.PROVISION_ON_STARTUP,'1')
+    with caplog.at_level('INFO',logger=startup.__name__):
+        startup.prepare_database()
+    assert 'Reply template schema observation: absent' in caplog.text
+    assert 'Personal reminders schema preflight: ready' in caplog.text
+    with psycopg.connect(dsn) as conn:
+        assert _objects(conn)==(True,True)
+        assert conn.execute("SELECT to_regclass('saas_dialog_reply_templates') IS NULL").fetchone()==(True,)
+    assert_session_released(dsn)
