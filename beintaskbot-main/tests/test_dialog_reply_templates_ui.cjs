@@ -28,6 +28,10 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.equal(w.eval("'QIŞ'.toLocaleLowerCase()"),'qiş','the browser defaults to en-US casing');
  const initial=[
    {id:'t1',name:'Welcome',body:'Welcome back. How can I help?',visibility:'team',version:1,can_edit:true},
+   {id:'salam',name:'Salam',body:'Salam! Necə kömək edim?',visibility:'personal',version:1,can_edit:false},
+   {id:'dav',name:'Давайте',body:'Давайте уточним.',visibility:'personal',version:1,can_edit:false},
+   {id:'note',name:'Note',body:'Note this later.',visibility:'personal',version:1,can_edit:false},
+   {id:'cancel',name:'Cancel',body:'Cancel this later.',visibility:'personal',version:1,can_edit:false},
    {id:'az1',name:'QİYMƏT',body:'Məlumat.',visibility:'personal',version:1,can_edit:false},
    {id:'az2',name:'Çatdırılma',body:'QIŞ üçün çatdırılma.',visibility:'personal',version:1,can_edit:false},
    {id:'ru1',name:'ДОСТАВКА',body:'Условия отправки.',visibility:'personal',version:1,can_edit:false},
@@ -115,6 +119,45 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.equal(w.document.activeElement,input,'focus returns to the editable draft after insertion');
  assert.equal(w.document.getElementById('operatorReplyTemplateModal'),null);
  assert.equal(calls.length,1,'inserting via the card sends no request');
+ const chooseTemplate=async (source,name)=>{
+   if(source==='card'){button.click();await tick();}
+   const parent=w.document.querySelector(source==='card'?'#operatorReplyTemplateModal':'.operator-reply-template-suggestions');
+   const item=parent.querySelector(`[aria-label="Insert into draft: ${name}"]`);
+   assert.ok(item,`${name} is available via ${source}`);item.click();await tick();
+ };
+ const completion=()=>w.document.querySelector('.operator-reply-template-suggestions [data-reply-template-replace]');
+ const greeting=initial.find(item=>item.id==='salam').body;
+ for(const source of ['suggestion','card']){
+   type('Sa');await chooseTemplate(source,'Salam');
+   assert.equal(input.value,'Sa\n'+greeting,`${source} preserves typed text unless replacement is explicitly selected`);
+   const multiline='Salam əvvəlki cavab.\nİkinci sətir.';
+   type(multiline);assert.equal(completion(),null,'multiline drafts never offer replacement');await chooseTemplate(source,'Salam');
+   assert.equal(input.value,multiline+'\n'+greeting,`${source} retains the full multiline draft even when it begins with the same greeting`);
+   type('Salam');assert.equal(completion(),null,'an exact first word never offers completion');await chooseTemplate(source,'Salam');
+   assert.equal(input.value,'Salam\n'+greeting,`${source} preserves an already complete word`);
+   for(const [draft,name] of [['Да','Давайте'],['No','Note'],['Can','Cancel']]){
+     type(draft);await chooseTemplate(source,name);
+     assert.equal(input.value,draft+'\n'+initial.find(item=>item.name===name).body,`${source} preserves the meaningful short word ${draft}`);
+   }
+ }
+ type('Sa');
+ assert.equal(completion()?.textContent,'Replace «Sa»','replacement shows the exact text being replaced');
+ assert.equal(completion()?.getAttribute('aria-label'),'Replace «Sa»: Salam','accessible label identifies target template');
+ completion().click();await tick();assert.equal(input.value,greeting,'one explicit click completes Sa without a duplicate prefix');
+ type('Sa');const stale=completion();type('Sal');stale.click();await tick();
+ assert.equal(input.value,'Sal','a stale replacement control cannot replace a later draft, even if it still matches');
+ type('Sa');const selected=completion();input.setSelectionRange(0,1);selected.click();await tick();
+ assert.equal(input.value,'Sa','replacement is revalidated against current caret and selection');
+ for(const [language,label] of [['ru','Заменить «Sa»'],['az','Əvəz et «Sa»'],['en','Replace «Sa»']]){
+   w.tenantI18n.language=language;type('');type('Sa');assert.equal(completion()?.textContent,label,`explicit replacement is labeled in ${language}`);
+ }
+ type('');await chooseTemplate('card','Salam');assert.equal(input.value,greeting,'empty draft receives the selected template');
+ type('  \n');await chooseTemplate('card','Salam');assert.equal(input.value,'  \n'+greeting,'default insertion does not strip existing whitespace');
+ type('Öz');assert.equal(completion(),null,'nonmatching drafts do not offer replacement');await chooseTemplate('card','Salam');assert.equal(input.value,'Öz\n'+greeting,'nonmatching short draft is preserved');
+ type('Sa!');assert.equal(completion(),null,'punctuation blocks replacement');await chooseTemplate('card','Salam');assert.equal(input.value,'Sa!\n'+greeting,'punctuated draft is preserved');
+ type('Salam\n');await chooseTemplate('card','Salam');assert.equal(input.value,'Salam\n'+greeting,'does not insert a duplicate newline');
+ assert.equal(calls.length,1,'both choices complete locally without transmitting the draft');
+ assert.equal(sent,0,'neither choice automatically sends');
  button.click();await tick();
  const edit=w.document.querySelector('#operatorReplyTemplateModal [aria-label="Edit: Welcome"]');
  assert.ok(edit);edit.click();
