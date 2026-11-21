@@ -1167,7 +1167,8 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
     return dict(row) if row else None
 
 
-def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,*,support_case_only=False):
+def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
+            *,support_case_only=False,include_operator_events=False,operator_events_revision=None):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
         # selected source explicitly, including when a group spans numbers.
@@ -1176,6 +1177,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             raise TenantLinearError('Диалог не найден.',404)
     lead_id=int(lead_id)
     requested_route={'provider':provider,'lead_id':lead_id,'channel_id':str(channel),'conversation_id':str(conversation)}
+    operator_timeline={}
     with _connect() as conn:
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
@@ -1271,11 +1273,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
                 from tenant_dialog_access import require_lead
                 require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
+            group_channels=None
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 from tenant_dialog_access import allowed_channels
+                group_channels=allowed_channels(cur,tenant,policy,conversation=conversation)
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at,
-                  channel_ids=allowed_channels(cur,tenant,policy,conversation=conversation))
+                  channel_ids=group_channels)
                 for message in messages:
                     message['source_conversation_id']=conversation
             else:
@@ -1354,6 +1358,16 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)
+            lifecycle=dialog.get('lifecycle')
+            if (include_operator_events and provider=='connect' and lifecycle and not anchor
+                    and requested_route==history_scope['canonical_route']
+                    and (before or str(lifecycle['revision'])!=str(operator_events_revision))):
+                from tenant_dialog_operator_timeline import page as operator_event_page
+                operator_timeline=operator_event_page(conn,cur,tenant,channel,conversation,messages=messages,
+                    before=identifier(before) if before else None,history_leads=history_leads,
+                    history_channel=row['history_channel'],group_channels=group_channels)
+                if 'operator_events' in operator_timeline:
+                    operator_timeline['operator_events_revision']=lifecycle['revision']
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.
@@ -1368,7 +1382,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     dialog['test_recording_import_allowed']=offer_import({**profile,'role':policy.profile.get('role')},dialog)
     from tenant_browser_calls import offer as offer_browser_call
     dialog['browser_call_available']=offer_browser_call(profile,dialog)
-    return {'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {**operator_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}

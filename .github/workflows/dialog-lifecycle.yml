@@ -14,6 +14,8 @@ on:
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_tenant_operator_presence_ui.cjs'
       - 'beintaskbot-main/tests/test_employee_work_status_ui.cjs'
+      - 'beintaskbot-main/tests/test_dialog_operator_timeline_ui.cjs'
+      - 'beintaskbot-main/tenant_dialog_operator_timeline.py'
       - 'beintaskbot-main/docs/tenant-profile-work-status.js'
       - 'beintaskbot-main/tenant_employee_work_status_api.py'
       - 'beintaskbot-main/tenant_operator_api.py'
@@ -76,3 +78,4 @@ jobs:
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_group_cards_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_tenant_operator_presence_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_employee_work_status_ui.cjs
+          NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_operator_timeline_ui.cjs
