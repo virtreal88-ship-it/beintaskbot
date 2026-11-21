@@ -1120,10 +1120,14 @@
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
     if(typeof route.compose_draft==='string'&&route.compose_draft.trim()){try{sessionStorage.setItem(contextKey('incoming-case-draft',route),route.compose_draft);}catch{notice(manualCaseCopy('storage'));return false;}}
     route={...route};delete route.compose_draft;
-    cancelCaseLink();
-    closeDialogDiagnostics(false);
     if(currentDialog&&!sameDialog(currentDialog,route))closeDialog(false);
-    const retained=!!displayedPage&&sameDialog(currentDialog,route)&&!!$('chatRows'),revision=retained?openRevision:++openRevision,readSerial=++dialogReadSerial,version=epoch;pendingDialogRoute=route;
+    const retained=!!displayedPage&&sameDialog(currentDialog,route)&&!!$('chatRows'),revision=retained?openRevision:++openRevision,readSerial=++dialogReadSerial,version=epoch;
+    const verifyingDisplayed=options.revalidateAccess&&retained&&!pendingDialogRoute;
+    if(!verifyingDisplayed){
+      cancelCaseLink();
+      closeDialogDiagnostics(false);
+      pendingDialogRoute=route;
+    }
     const workspace=$('operatorWorkspace'),operatorHost=$('operatorDialogs'),content=$('operatorConversationContent');
     currentDialog={...route};selectedDialog=currentDialog;selectedDialogOwner=identity(member);
     if(!fromHistory)rememberDialogHistory(route);

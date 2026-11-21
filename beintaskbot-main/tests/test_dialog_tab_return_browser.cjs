@@ -19,7 +19,7 @@ function gate(){
   const browser=await chromium.launch({args:['--no-sandbox']});
   try{
     const page=await browser.newPage({viewport:{width:1280,height:840}});
-    let meGate,companyGate,templatesGate,featuresDenied=false,dialogDenied=false,sessionDenied=false,profileReads=0;
+    let meGate,companyGate,templatesGate,historyGate,featuresDenied=false,dialogDenied=false,sessionDenied=false,profileReads=0;
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
       const name=new URL(route.request().url()).pathname;
@@ -42,7 +42,10 @@ function gate(){
         if(templatesGate)await templatesGate.hold();
         return featuresDenied?fulfill({success:false},403):fulfill({success:true,result:{available:true,templates:[template],allowed_visibility:['personal']}});
       }
-      if(name.endsWith('/dialogs/history'))return dialogDenied?fulfill({success:false},404):fulfill({success:true,result:{dialog,messages:[message],next_before:null}});
+      if(name.endsWith('/dialogs/history')){
+        if(historyGate)await historyGate.hold();
+        return dialogDenied?fulfill({success:false},404):fulfill({success:true,result:{dialog,messages:[message],next_before:null}});
+      }
       if(name.endsWith('/dialogs'))return fulfill({success:true,result:{dialogs:[dialog],channels:[],agents:[],next_offset:null}});
       return fulfill({success:true,result:{}});
     });
@@ -66,7 +69,7 @@ function gate(){
       getComputedStyle(document.querySelector('#operatorDialogs')).visibility==='visible'&&
       !document.querySelector('[data-operator-dialog-company]>button')?.hidden&&
       !document.querySelector('#operatorReplyTemplatesOpen')?.hidden);
-    meGate=gate();companyGate=gate();templatesGate=gate();
+    meGate=gate();companyGate=gate();templatesGate=gate();historyGate=gate();
     const previousProfileReads=profileReads;
     await tab(true);
     assert(await mounted(),'moving to another browser tab does not unmount or conceal the chat');
@@ -74,10 +77,9 @@ function gate(){
     assert(await mounted(),'the chat stays visible while /me is pending');
     assert.equal(profileReads,previousProfileReads+1,'visibility and focus share one fresh profile request');
     assert.equal(await page.evaluate(()=>window.authPauses),0);
-    meGate.release();await Promise.all([companyGate.waiting,templatesGate.waiting]);
+    meGate.release();await Promise.all([companyGate.waiting,templatesGate.waiting,historyGate.waiting]);
     assert(await mounted(),'the confirmed controls remain visible while their data is refreshed');
     companyGate.release();templatesGate.release();meGate=companyGate=templatesGate=null;
-    await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');
     assert(await mounted());assert.equal(await input.inputValue(),'Unsaved reply');
     assert.equal(await input.evaluate(el=>el===document.activeElement),true,'focus and draft stay in the original input');
     // App navigation retains the chat body but must restore controls removed by view exit.
@@ -85,6 +87,8 @@ function gate(){
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
     await company.waitFor();await templates.waitFor();
     assert.equal(await input.inputValue(),'Unsaved reply');
+    historyGate.release();historyGate=null;
+    await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');
     // API-level access can disappear while the profile capability still says yes.
     featuresDenied=true;
     await tab(true);await tab(false);
