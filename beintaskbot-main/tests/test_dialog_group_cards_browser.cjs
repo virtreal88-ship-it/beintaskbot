@@ -69,6 +69,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const openWidth=(await chat.boundingBox()).width;
   assert.equal(Math.abs(openWidth-closedWidth)<1,width<900,'mobile overlays the chat and desktop allocates a side column: '+JSON.stringify({width,openWidth,closedWidth,card:await card.boundingBox()}));
   assert.equal(await page.locator('#operatorConversationHeader [data-company-value]').count(),0);
+  assert.equal(await card.locator('.operator-client-panel-block').first().locator('#operatorClientCompanyHost').count(),1,'company comes first in the side panel');
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
