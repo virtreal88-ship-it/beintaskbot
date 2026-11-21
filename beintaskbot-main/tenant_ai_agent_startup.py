@@ -76,18 +76,29 @@ def prepare_database() -> None:
         # transaction inherits the existing startup lock and timeout budget.
         # Closing the connection rolls back any partial template DDL.
         if os.environ.get('DIALOG_REPLY_TEMPLATES_PROVISION_ON_STARTUP', '').lower() == 'true':
-            from tenant_beinsystems_operator_access import configured_workspace_id
-            from tenant_dialog_reply_templates import migrate, verify_provisioned_schema
-            if not configured_workspace_id():
-                raise RuntimeError('Reply-template provisioning requires a configured BeinSystems workspace UUID.')
-            with conn.cursor() as cur:
-                migrate(cur)
-                verify_provisioned_schema(cur)
-            conn.commit()
+            _provision_reply_template_schema(conn)
         elif os.environ.get('DIALOG_REPLY_TEMPLATES_OBSERVE_ON_STARTUP', '').lower() == 'true':
             _observe_reply_template_schema(conn)
         if os.environ.get(_KOMMO_BINDING_PROVISION_ENV, '').lower() == 'true':
             _prepare_optional_kommo_dialog_company(conn)
+
+
+def _provision_reply_template_schema(conn):
+    from tenant_beinsystems_operator_access import configured_workspace_id
+    from tenant_dialog_reply_templates import provision_schema
+    logger = logging.getLogger(__name__)
+    if not configured_workspace_id():
+        logger.warning('Reply template schema preflight: workspace_not_configured')
+        return
+    try:
+        # The optional transaction starts after every base commit, under the
+        # existing session lock and budget. Failure never cuts off normal boot.
+        with conn.transaction(), conn.cursor() as cur:
+            provision_schema(cur)
+    except Exception:
+        logger.warning('Reply template schema preflight: unverified')
+    else:
+        logger.info('Reply template schema preflight: ready')
 
 
 def _observe_reply_template_schema(conn):
