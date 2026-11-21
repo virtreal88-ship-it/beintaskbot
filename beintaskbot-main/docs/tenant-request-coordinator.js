@@ -2,10 +2,11 @@
 (()=>{
   const nativeFetch=window.fetch.bind(window),pending=new Map();
   let generation=0,scope='',profileResponse=null,profileUntil=0,profileKey='';
-  const fingerprint=data=>JSON.stringify([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.role,data?.member?.active,data?.member?.permissions,data?.capabilities,data?.role_permissions]);
+  const fingerprint=data=>JSON.stringify([data?.member?.tenant_id,data?.member?.telegram_id,data?.member?.role,data?.member?.active,data?.member?.department_id,data?.member?.permissions,data?.capabilities,data?.role_permissions]);
   function clearReads(){pending.clear();profileResponse=null;profileUntil=0;}
   function reset(){generation++;clearReads();}
-  document.addEventListener('tenant-profile',event=>{const next=fingerprint(event.detail);if(scope&&next!==scope)reset();scope=next;});
+  let authPending=false;
+  document.addEventListener('tenant-profile',event=>{const next=fingerprint(event.detail);if(scope&&next!==scope)reset();scope=next;authPending=false;});
   function invalidateAuth(){reset();scope='';window.tenantProfileSnapshot=null;document.dispatchEvent(new CustomEvent('tenant-auth-invalid'));}
   window.addEventListener('pagehide',invalidateAuth);
   window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
@@ -21,7 +22,7 @@
     return response;
   }
   let revalidation=null;
-  function pendingAuth(){document.dispatchEvent(new CustomEvent('tenant-auth-pending'));}
+  function pendingAuth(){authPending=true;document.dispatchEvent(new CustomEvent('tenant-auth-pending'));}
   function isTenantAuthFailure(response,url){
     return (response.status===401&&response.headers?.get('X-Tenant-Auth-Source')!=='operator')||
       (url.pathname==='/api/platform/me'&&response.status===403);
@@ -37,8 +38,46 @@
     }catch(error){invalidateAuth();throw error;}finally{revalidation=null;}})();
     return revalidation;
   }
-  document.addEventListener('visibilitychange',()=>{if(document.hidden)pendingAuth();else void revalidateProfile().catch(()=>{});});
-  window.addEventListener('focus',()=>{if(!document.hidden)void revalidateProfile().catch(()=>{});});
+  let dialogRevalidation=null,lastFocusCheck=null;
+  const visibleDialogs=()=>document.getElementById?.('view-dialogs')?.classList.contains('active');
+  const canKeepDialog=()=>!authPending&&visibleDialogs()&&!window.tenantOperator?.resolvingCaseLink&&window.tenantProfileSnapshot?.member?.active===true;
+  function verifyOnReturn(){
+    if(revalidation)return revalidation;
+    if(!canKeepDialog())return revalidateProfile();
+    if(dialogRevalidation)return dialogRevalidation;
+    if(lastFocusCheck?.generation===generation&&Date.now()-lastFocusCheck.at<500)return Promise.resolve();
+    let version=generation;
+    // This read must be fresh, independent of the startup profile cache, and
+    // must not publish if logout or a foreground reauthorization won the race.
+    dialogRevalidation=(async()=>{
+      try{
+        const response=await nativeFetch('/api/platform/me',{credentials:'same-origin',cache:'no-store',
+          signal:window.AbortSignal?.timeout?.(8000)});
+        const data=await response.json();
+        if(version!==generation)return;
+        if(!response.ok||data?.success!==true||data.member?.active!==true)throw new Error('Authentication required');
+        const previous=window.tenantProfileSnapshot;
+        if(fingerprint(previous)!==fingerprint(data)){pendingAuth();reset();version=generation;}
+        else clearReads();
+        if(JSON.stringify(previous)!==JSON.stringify(data)){
+          if(window.tenantApplyProfile)window.tenantApplyProfile(data);
+          else{
+            window.tenantProfileSnapshot=data;
+            document.dispatchEvent(new CustomEvent('tenant-profile',{detail:data}));
+          }
+        }
+        if(visibleDialogs()&&!document.hidden)document.dispatchEvent(new CustomEvent('tenant-dialog-reauthorized'));
+        lastFocusCheck={at:Date.now(),generation};
+      }catch(error){if(version===generation)invalidateAuth();throw error;}
+      finally{dialogRevalidation=null;}
+    })();
+    return dialogRevalidation;
+  }
+  document.addEventListener('visibilitychange',()=>{
+    if(document.hidden){lastFocusCheck=null;if(!canKeepDialog())pendingAuth();}
+    else void verifyOnReturn().catch(()=>{});
+  });
+  window.addEventListener('focus',()=>{if(!document.hidden)void verifyOnReturn().catch(()=>{});});
   window.tenantRequestCoordinator={reset,invalidateAuth,revalidateProfile};
   window.fetch=function(input,options={}){
     const url=new URL(typeof input==='string'?input:input?.url||String(input),location.href);
