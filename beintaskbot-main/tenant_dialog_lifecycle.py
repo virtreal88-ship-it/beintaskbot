@@ -297,11 +297,14 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     if details:
         if state=='accepted' and own:
             import tenant_dialog_company_completion as completion
-            if completion.enabled(tenant):
+            if completion.available(tenant):
                 readiness=completion.status(cur,tenant,dialog['channel_id'],dialog['conversation_id'],
                     identity_conflict=dialog.get('identity_conflict') is True)
-                dialog['lifecycle']['company_completion']={'status':readiness,
-                    'can_choose':readiness in {'missing','archived'} and _can_update and completion.can_choose(_policy)}
+                dialog['lifecycle']['company_completion']={
+                    'status':readiness,'required':completion.enabled(tenant),
+                    'can_choose':readiness in {'missing','archived'} and _can_update and completion.can_choose(_policy),
+                    'can_skip':readiness=='missing' and _can_update is True,
+                }
         cur.execute("""SELECT id::text AS id,accepted_at,closed_at,case_id::text AS case_id
           FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
             AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL
@@ -388,7 +391,7 @@ def _mutate_once(profile, payload):
                 message = ('Сотрудник сейчас не в статусе «Онлайн».' if action=='transfer' else
                            'Установите статус «Онлайн», чтобы принять диалог.')
                 raise TenantLinearError(message,403)
-            if 'company_id' in payload and action!='close':
+            if {'company_id','company_choice'} & payload.keys() and action!='close':
                 raise TenantLinearError('Выбор компании доступен только при завершении диалога.',422)
             bound_on_close=None
             row=_row(cur,tenant,channel,conversation)
@@ -454,7 +457,7 @@ def _mutate_once(profile, payload):
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {})})))
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
         conn.commit()
     return result
 

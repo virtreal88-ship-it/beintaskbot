@@ -109,7 +109,8 @@ def test_existing_binding_can_be_used_without_exposing_company_or_replacing_it(c
         assert mismatch.value.status==422
     with database.cursor() as cur:
         projection=lifecycle.decorate(cur,A,33,{'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True},_can_update=True)
-        assert projection['lifecycle']['company_completion']=={'status':'ready','can_choose':False}
+        assert projection['lifecycle']['company_completion']=={
+            'status':'ready','required':True,'can_choose':False,'can_skip':False}
         assert company not in str(projection)
         assert completion.bulk_prelinked_routes(cur,A,33)=={(CA,'client')}
         assert completion.bulk_prelinked_routes(cur,A,11)==set()

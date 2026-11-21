@@ -9,8 +9,14 @@ _BINDINGS = 'saas_beinsystems_operator_dialog_company_bindings'
 _COMPANIES = 'saas_crm_native_companies'
 
 
+def available(tenant):
+    # Optional choices are private to BeinSystems and independent of the
+    # historical rollout that requires selecting a company on legacy closes.
+    return is_operator_workspace(tenant)
+
+
 def enabled(tenant):
-    return os.environ.get(ENV, '').lower() == 'true' and is_operator_workspace(tenant)
+    return os.environ.get(ENV, '').lower() == 'true' and available(tenant)
 
 
 def _ready(cur):
@@ -71,9 +77,15 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload):
     A live or unknown binding cannot be replaced here.
     """
     supplied = 'company_id' in payload
-    if not enabled(tenant):
-        if supplied:
+    skip = 'company_choice' in payload
+    # Old clients and all other tenants keep their ordinary close behavior.
+    if not available(tenant):
+        if supplied or skip:
             raise TenantLinearError('Выбор компании при завершении недоступен.',422)
+        return None
+    if skip and (supplied or payload['company_choice'] != 'none'):
+        raise TenantLinearError('Выберите компанию или «Без компании».',422)
+    if not enabled(tenant) and not (supplied or skip):
         return None
     choice = None
     if supplied:
@@ -104,6 +116,8 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload):
             if supplied:
                 raise TenantLinearError('У диалога уже есть компания. Обновите диалог.',422)
             return None
+    if skip and not bound:
+        return None
     if not supplied:
         message = ('Компания диалога архивирована. Выберите действующую CRM-компанию.' if bound
                    else 'Перед завершением выберите CRM-компанию.')
