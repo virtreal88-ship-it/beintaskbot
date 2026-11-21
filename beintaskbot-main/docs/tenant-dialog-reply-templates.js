@@ -80,16 +80,27 @@
   }
   function renderSuggestions(state){
     if(state!==mounted||!state.input.isConnected)return;
-    const query=(state.input.value||'').trim().toLocaleLowerCase();
+    const language=window.tenantI18n?.language;
+    const locale=language==='en'||language==='ru'?language:'az';
+    const alternate=locale==='az'?'en':'az';
+    const query=(state.input.value||'').trim();
     state.suggestions.replaceChildren();
     if(query.length<2||!state.templates.length){state.suggestions.hidden=true;return;}
-    const terms=query.split(/\s+/).filter(Boolean).slice(-8);
+    const words=query.split(/\s+/).slice(-8);
+    const terms=words.map(word=>word.toLocaleLowerCase(locale));
+    const alternateTerms=words.map(word=>word.toLocaleLowerCase(alternate));
+    const score=(item,terms,language)=>{
+      const name=String(item.name||'').toLocaleLowerCase(language);
+      const body=String(item.body||'').toLocaleLowerCase(language);
+      return terms.reduce((total,term)=>total+(name.includes(term)?3:body.includes(term)?1:0),0);
+    };
     const matches=state.templates.map(item=>{
-      const name=String(item.name||'').toLocaleLowerCase(),body=String(item.body||'').toLocaleLowerCase();
-      const score=terms.reduce((total,term)=>total+(name.includes(term)?3:body.includes(term)?1:0),0);
-      return {item,score};
-    }).filter(entry=>entry.score>0)
-      .sort((a,b)=>b.score-a.score||String(a.item.name).localeCompare(String(b.item.name))).slice(0,5);
+      const primary=score(item,terms,locale);
+      // Uppercase I is ambiguous in a mixed catalogue. Try the other casing
+      // rules only for misses, without removing marks or mapping lowercase i/ı.
+      return {item,primary,fallback:primary?0:score(item,alternateTerms,alternate)};
+    }).filter(entry=>entry.primary||entry.fallback)
+      .sort((a,b)=>b.primary-a.primary||b.fallback-a.fallback||String(a.item.name).localeCompare(String(b.item.name))).slice(0,5);
     if(!matches.length){state.suggestions.hidden=true;return;}
     const title=document.createElement('strong');title.textContent=copy('suggestions');state.suggestions.append(title);
     for(const {item} of matches){

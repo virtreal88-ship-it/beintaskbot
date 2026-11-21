@@ -16,7 +16,23 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  const dealChat=w.document.createElement('textarea');dealChat.id='chatText';dealComposer.append(dealChat);
  const dealActions=w.document.createElement('div');dealActions.className='operator-composer-actions';dealComposer.append(dealActions);
  w.document.body.append(dealComposer);
- const initial=[{id:'t1',name:'Welcome',body:'Welcome back. How can I help?',visibility:'team',version:1,can_edit:true}];
+ // Make the host's fallback deterministic even if the CI machine uses another locale.
+ w.eval(`{
+   const lowercase=String.prototype.toLocaleLowerCase;
+   String.prototype.toLocaleLowerCase=function(locales='en-US'){return lowercase.call(this,locales);};
+ }`);
+ assert.equal(w.eval("'QIŞ'.toLocaleLowerCase()"),'qiş','the browser defaults to en-US casing');
+ const initial=[
+   {id:'t1',name:'Welcome',body:'Welcome back. How can I help?',visibility:'team',version:1,can_edit:true},
+   {id:'az1',name:'QİYMƏT',body:'Məlumat.',visibility:'personal',version:1,can_edit:false},
+   {id:'az2',name:'Çatdırılma',body:'QIŞ üçün çatdırılma.',visibility:'personal',version:1,can_edit:false},
+   {id:'ru1',name:'ДОСТАВКА',body:'Условия отправки.',visibility:'personal',version:1,can_edit:false},
+   {id:'en1',name:'INSTALL guide',body:'Setup steps.',visibility:'personal',version:1,can_edit:false},
+   {id:'en2',name:'Software setup',body:'How to install the application.',visibility:'personal',version:1,can_edit:false},
+   {id:'az3',name:'dilimiz',body:'Birinci nümunə.',visibility:'personal',version:1,can_edit:false},
+   {id:'az4',name:'dılımız',body:'İkinci nümunə.',visibility:'personal',version:1,can_edit:false},
+   {id:'marked',name:'SA\u0301LON',body:'Distinct spelling.',visibility:'personal',version:1,can_edit:false}
+ ];
  const calls=[];let sent=0,storageWrites=0;
  Object.defineProperty(w.localStorage,'setItem',{value:()=>{storageWrites++;}});
  w.document.getElementById('sendChat')?.addEventListener('click',()=>sent++);
@@ -47,6 +63,39 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.match(input.value,/Welcome back/,'selection inserts text into the editable composer');
  assert.equal(sent,0,'selection never sends a message');
  assert.equal(storageWrites,0,'templates and drafts are not stored in localStorage');
+ const type=query=>{input.value=query;input.dispatchEvent(new w.Event('input',{bubbles:true}));};
+ const matches=()=>[...w.document.querySelectorAll('.operator-reply-template-suggestions button span')].map(node=>node.textContent);
+ w.tenantI18n.language='az';
+ type('qiymət');
+ assert.deepEqual(matches(),['QİYMƏT'],'AZ dotted lowercase i matches AZ dotted uppercase İ under en-US');
+ type('qış');
+ assert.deepEqual(matches(),['Çatdırılma'],'AZ dotless lowercase ı matches uppercase I in template body under en-US');
+ w.document.querySelector('.operator-reply-template-suggestions button').click();
+ assert.equal(input.value,'qış\nQIŞ üçün çatdırılma.','AZ selection only appends original text to the editable draft');
+ type('qiş');
+ assert.deepEqual(matches(),['Çatdırılma'],'ambiguous uppercase I can match through alternate casing');
+ w.tenantI18n.language='ru';
+ type('доставка');
+ assert.deepEqual(matches(),['ДОСТАВКА'],'Russian remains case-insensitive');
+ type('qiymət');
+ assert.deepEqual(matches(),['QİYMƏT'],'AZ dotted name works with Russian menus');
+ type('qış');
+ assert.deepEqual(matches(),['Çatdırılma'],'AZ dotless body works with Russian menus');
+ type('dilimiz');
+ assert.deepEqual(matches(),['dilimiz'],'fallback does not turn lower-case dotless ı into dotted i');
+ type('dılımız');
+ assert.deepEqual(matches(),['dılımız'],'fallback does not turn lower-case dotted i into dotless ı');
+ type('salon');
+ assert.deepEqual(matches(),[],'fallback does not strip combining marks');
+ w.tenantI18n.language='az';
+ type('install');
+ assert.deepEqual(matches(),['Software setup','INSTALL guide'],
+   'selected-locale body matches rank ahead of fallback title matches');
+ w.tenantI18n.language='en';
+ type('welcome');
+ assert.deepEqual(matches(),['Welcome'],'English remains case-insensitive after a language change');
+ assert.equal(calls.length,1,'localized filtering and insertion never call the server');
+ assert.equal(sent,0,'localized insertion never sends a message');
  button.click();await tick();
  assert.ok(w.document.getElementById('operatorReplyTemplateModal'),'management is available in the modal');
  const edit=[...w.document.querySelectorAll('#operatorReplyTemplateModal button')].find(node=>node.textContent==='Edit');
