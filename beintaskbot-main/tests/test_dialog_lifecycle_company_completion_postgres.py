@@ -50,9 +50,10 @@ def test_explicit_no_company_is_scoped_fingerprinted_and_needs_no_crm_access(com
     with db.cursor() as cur:
         preview = lifecycle.decorate(cur, A, 33, route, _can_update=True)
     db.commit()
-    assert preview['lifecycle']['company_completion'] == {
-        'status':'missing', 'required':required, 'can_choose':False, 'can_skip':True,
-    }
+    assert preview['lifecycle']['can_close'] is True
+    assert preview['lifecycle'].get('company_completion') == ({
+        'status':'missing', 'required':True, 'can_choose':False, 'can_skip':True,
+    } if required else None)
 
     bad_payloads = (
         {'company_choice':None}, {'company_choice':'None'},
@@ -110,6 +111,7 @@ def test_explicit_none_rejects_archived_or_unrelated_tenant_without_writes(compa
 
     db, company, *_ = companies
     monkeypatch.delenv(completion.ENV)
+    grant(db, monkeypatch)
     command(actor=33)
     request = payload('close', 1, company_choice='none')
     monkeypatch.setenv(WORKSPACE_ENV, B)
@@ -130,4 +132,33 @@ def test_explicit_none_rejects_archived_or_unrelated_tenant_without_writes(compa
     assert state(db)['state'] == 'accepted'
     assert bindings(db)[0]['company_id'] == company
     assert db.execute("SELECT id FROM saas_tenant_audit_events WHERE action='dialog_close'") == []
+    db.commit()
+
+
+@pytest.mark.parametrize('bound',[False,True])
+def test_optional_readiness_is_neutral_for_row_scoped_viewer(companies,monkeypatch,bound):
+    from test_tenant_support_inbox import A, CA
+    from tenant_scoped_access_store import read_access_profile
+    from tenant_policy import TenantPolicy
+    import tenant_dialog_company_completion as completion
+    import tenant_dialog_lifecycle as lifecycle
+
+    db,company,*_ = companies
+    monkeypatch.delenv(completion.ENV)
+    grant(db,monkeypatch,view='self',update='self')
+    command(actor=33)
+    if bound:
+        db.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+          (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+          VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""",(A,CA,company))
+        db.commit()
+    route={'provider':'connect','channel_id':CA,'conversation_id':'client','lead_id':41,'can_send':True}
+    with db.cursor() as cur:
+        policy=TenantPolicy(read_access_profile(cur,A,33,lock=True))
+        preview=lifecycle.decorate(cur,A,33,route,_can_update=True,_policy=policy)
+    db.commit()
+    assert preview['lifecycle']['can_close'] is True
+    assert 'company_completion' not in preview['lifecycle']
+    assert lifecycle.mutate(STAFF,payload('close',1,company_choice='none'))['lifecycle']['state']=='closed'
+    assert len(bindings(db))==bound
     db.commit()

@@ -64,12 +64,19 @@ def bulk_prelinked_routes(cur, tenant, actor):
     return {(row['channel_id'],row['conversation_id']) for row in cur.fetchall()}
 
 
+def can_preview(policy):
+    # Restricted row scopes must not be able to infer a hidden company from
+    # the difference between 'missing' and any other readiness.
+    return bool(policy and policy.action_scope('companies','view') in {None,'all'}
+                and policy.allows_action('companies','view'))
+
+
 def can_choose(policy):
     return bool(policy and policy.allows_action('companies','view')
                 and policy.allows_action('companies','update'))
 
 
-def require_on_close(cur, tenant, actor, channel, conversation, payload):
+def require_on_close(cur, tenant, actor, channel, conversation, payload, *, policy=None):
     """Under the authorized canonical lock; initialize or repair archived only.
 
     Existing valid bindings need no CRM access to close and reveal no company
@@ -85,8 +92,15 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload):
         return None
     if skip and (supplied or payload['company_choice'] != 'none'):
         raise TenantLinearError('Выберите компанию или «Без компании».',422)
-    if not enabled(tenant) and not (supplied or skip):
-        return None
+    if not enabled(tenant):
+        if not (supplied or skip):
+            return None
+        if not can_preview(policy):
+            if skip:
+                # Same behavior as ordinary optional close, without probing
+                # whether a company exists or is outside this actor's scope.
+                return None
+            raise TenantLinearError('Выбор компании при завершении недоступен.',422)
     choice = None
     if supplied:
         raw = payload['company_id']

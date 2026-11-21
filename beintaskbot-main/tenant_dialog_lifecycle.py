@@ -297,11 +297,12 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     if details:
         if state=='accepted' and own:
             import tenant_dialog_company_completion as completion
-            if completion.available(tenant):
+            required=completion.enabled(tenant)
+            if completion.available(tenant) and (required or completion.can_preview(_policy)):
                 readiness=completion.status(cur,tenant,dialog['channel_id'],dialog['conversation_id'],
                     identity_conflict=dialog.get('identity_conflict') is True)
                 dialog['lifecycle']['company_completion']={
-                    'status':readiness,'required':completion.enabled(tenant),
+                    'status':readiness,'required':required,
                     'can_choose':readiness in {'missing','archived'} and _can_update and completion.can_choose(_policy),
                     'can_skip':readiness=='missing' and _can_update is True,
                 }
@@ -448,7 +449,7 @@ def _mutate_once(profile, payload):
                     cur.execute('UPDATE saas_dialog_episodes SET operator_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(target,tenant,row['id']))
                 else:
                     from tenant_dialog_company_completion import require_on_close
-                    bound_on_close=require_on_close(cur,tenant,actor,channel,conversation,payload)
+                    bound_on_close=require_on_close(cur,tenant,actor,channel,conversation,payload,policy=policy)
                     cur.execute("UPDATE saas_dialog_workflows SET state='closed',revision=revision+1,closed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s RETURNING closed_at",(tenant,channel,conversation))
                     closed_at=cur.fetchone()['closed_at']
                     cur.execute('UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(closed_at,tenant,row['id']))
