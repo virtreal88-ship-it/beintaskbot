@@ -1233,7 +1233,8 @@ def import_accounts(profile):
         raise OperatorError("Сначала получите JWT из карточки интеграции.")
     _record_operator_read(profile, "me", {})
     identity = operator_me_payload(_request_operator(
-        "me", {}, token=credentials["token"], base_url=credentials["base_url"]))
+        "me", {}, token=credentials["token"], base_url=credentials["base_url"],
+        requests_me=True))
     _record_operator_read(profile, "accounts", {})
     response = _request_operator(
         "accounts", {}, token=credentials["token"], base_url=credentials["base_url"])
