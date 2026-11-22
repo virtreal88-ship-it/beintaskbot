@@ -103,7 +103,10 @@ def test_dialogue_staff_can_search_and_choose_only_existing_local_companies(loca
     with pytest.raises(OperatorError) as unlink:
         store.binding(STAFF,**route,company_id=None,expected_company_id=company)
     assert unlink.value.status == 403
+    assert next(row for row in dialogs.listing(STAFF,lifecycle='all')['dialogs']
+                if row['lead_id']==41)['dialog_company_name']=='Demo % Search'
     command()  # Another employee accepts the route.
+    assert all(row['lead_id']!=41 for row in dialogs.listing(STAFF,lifecycle='all')['dialogs'])
     for operation in ({'company_search':'Demo'},{'company_id':company,'expected_company_id':company}):
         with pytest.raises(OperatorError) as no_longer_visible:
             store.binding(STAFF,**route,**operation)
@@ -206,7 +209,7 @@ def test_kommo_picker_allows_visible_dialog_without_granting_company_directory(l
     assert store.binding(STAFF,**route)=={'company_id':hidden,'company_name':'Synthetic company',
                                          'can_manage':True,'can_unlink':False}
     listed = lambda: next(row for row in dialogs.listing(STAFF, lifecycle='all')['dialogs'] if row['lead_id'] == route['lead_id'])
-    assert 'dialog_company_name' not in listed()
+    assert listed()['dialog_company_name']=='Synthetic company'
     with pytest.raises(OperatorError) as denied:
         store.binding(STAFF,**route,company_id=company)
     assert denied.value.status==409

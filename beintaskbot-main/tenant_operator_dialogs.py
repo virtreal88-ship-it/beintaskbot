@@ -1126,7 +1126,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             if not all_rows:rows=rows[offset:offset+51]
             if not all_rows and not completion_preview:
                 from tenant_dialog_company_binding import attach_list_company_names
-                attach_list_company_names(cur,tenant,actor,rows[:50])
+                attach_list_company_names(cur,tenant,rows[:50])
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
