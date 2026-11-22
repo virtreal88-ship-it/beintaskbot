@@ -2,6 +2,7 @@
 (() => {
   const $ = (root, selector) => root.querySelector(selector);
   const hostId = 'operatorIntegrationSettings';
+  const statusHostId = 'operatorConnectionStatusHost';
   const endpoint = '/api/platform/integrations/beinsystems-operator';
   const waiting = 'Проверка…';
   let revision = 0, profile = null;
@@ -32,6 +33,12 @@
     host.append(panel);
     const valid = () => current === revision && panel.isConnected;
     const status = $(panel, '[data-status]');
+    const statusHost=document.getElementById(statusHostId);
+    if(statusHost){
+      $(panel,'h2').remove();
+      status.className='operator-connection-badge';
+      statusHost.replaceChildren(status);
+    }
     status.textContent=waiting;
     let state;
     const owner=data.member.role==='owner';
@@ -46,17 +53,23 @@
     const isConfigured=()=>state?.configured===true||state?.status==='configured';
     let verifiedLogin=owner&&isConnected()&&typeof state.connected_login==='string'?state.connected_login.trim():'';
     const renderStatus=()=>{
-      status.textContent=isConnected()?('Подключено'+(verifiedLogin?' · '+verifiedLogin:'')):
-        state?.accounts_only_ready===true?'Доступ только к аккаунтам':
-        isConfigured()?'Подключение настроено, доступ не подтверждён':
-        state?.pending_auth_received===true?'Доступ не подтверждён':'Не подключено';
+      const accountsReady=state?.accounts_only_ready===true;
+      status.dataset.connected=String(isConnected()||accountsReady);
+      status.textContent=isConnected()||accountsReady?'Подключено':'Не подключено';
+      const loginDisplay=$(panel,'[data-connected-login]');
+      if(loginDisplay){
+        const login=isConnected()?verifiedLogin:'';
+        loginDisplay.textContent=login;
+        loginDisplay.hidden=!login;
+      }
     };
     renderStatus();
     if(!owner)return;
     const connection=document.createElement('section');
     connection.dataset.connection='';
-    connection.innerHTML='<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login placeholder="user@account" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><button type="button" data-show-password aria-label="Показать пароль" aria-pressed="false" style="display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path data-eye-slash d="M3 3l18 18" opacity="0"/></svg></button><button type="submit" data-save>Подключить</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-connection-next hidden><button type="button" data-finish-connection>Завершить подключение</button><button type="button" data-accounts-only>Подключить только аккаунты</button><div data-identity-confirmation></div></div>';
+    connection.innerHTML='<p class="sub" data-connected-login hidden></p><form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login placeholder="user@account" autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><button type="button" data-show-password aria-label="Показать пароль" aria-pressed="false" style="display:inline-flex;align-items:center;justify-content:center;min-width:36px;min-height:36px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path data-eye-slash d="M3 3l18 18" opacity="0"/></svg></button><button type="submit" data-save>Подключить</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-connection-next hidden><button type="button" data-finish-connection>Завершить подключение</button><button type="button" data-accounts-only>Подключить только аккаунты</button><div data-identity-confirmation></div></div>';
     panel.append(connection);
+    renderStatus();
     const authForm=$(connection,'[data-operator-auth-form]');
     const authMessage=$(connection,'[data-auth-message]');
     const passwordInput=$(authForm,'[data-operator-password]'), showPassword=$(authForm,'[data-show-password]');
@@ -167,7 +180,7 @@
     const user=$(form,'[data-employee-user]'), confirm=$(form,'[data-confirm-employee]');
     const message=$(form,'[data-employee-message]'), linksHost=$(employees,'[data-employee-links]');
     let members=[], selectionRevision='', lookupBusy=false, mappingBusy=false;
-    confirm.disabled=user.disabled=member.disabled=!isConnected();
+    confirm.disabled=true;
     const showEmployee=(value,focus=false)=>{
       if(!valid())return;
       message.textContent=value;
@@ -184,14 +197,25 @@
         linksHost.append(item);
       }
     }
-    Promise.all([request('/api/platform/members'),request('/api/platform/operator/employee-links')]).then(([m,l])=>{
+    let links=[];
+    const renderBind=()=>{
+      confirm.disabled=mappingBusy||!selectionRevision||!user.value||user.selectedOptions[0]?.disabled||
+        !members.some(row=>Number(row.telegram_id)===Number(member.value));
+    };
+    request('/api/platform/members').then(result=>{
       if(!valid())return;
-      members=(m.members||[]).filter(row=>row.active!==false);
+      members=(result.members||[]).filter(row=>row.active!==false);
       for(const row of members)member.append(new Option(staffName(row)||String(row.telegram_id),String(row.telegram_id)));
-      renderEmployeeLinks(l.links);
+      renderEmployeeLinks(links);
+      renderBind();
     }).catch(error=>showEmployee(error.message));
+    request('/api/platform/operator/employee-links').then(result=>{
+      if(valid()){links=result.links||[];renderEmployeeLinks(links);}
+    }).catch(error=>{if(!message.textContent)showEmployee(error.message);});
+    member.addEventListener('change',renderBind);
+    user.addEventListener('change',renderBind);
     async function loadUsers(interactive=false,keepError=false){
-      if(!valid()||!isConnected()||selectionRevision||lookupBusy||mappingBusy)return;
+      if(!valid()||selectionRevision||lookupBusy||mappingBusy)return;
       user.disabled=member.disabled=false;
       lookupBusy=true;
       user.setAttribute('aria-busy','true');
@@ -208,7 +232,7 @@
           user.append(option);
         }
         selectionRevision=result.selection_revision;
-        confirm.disabled=false;
+        renderBind();
       }catch(error){showEmployee(error.message,interactive);}
       finally{
         lookupBusy=false;
@@ -217,10 +241,10 @@
     }
     user.addEventListener('focus',()=>{void loadUsers(true);});
     user.addEventListener('pointerdown',()=>{void loadUsers(true);});
-    void loadUsers();
+    if(isConnected())void loadUsers();
     form.addEventListener('submit',async event=>{
       event.preventDefault();
-      if(!valid()||mappingBusy||!isConnected())return;
+      if(!valid()||mappingBusy)return;
       const selected=Number(member.value), login=user.value;
       if(!members.some(row=>Number(row.telegram_id)===selected)||!selectionRevision||!login||user.selectedOptions[0]?.disabled)return;
       mappingBusy=true;confirm.disabled=user.disabled=member.disabled=true;showEmployee('');
@@ -228,7 +252,7 @@
         await request('/api/platform/operator/employee-links',{member_telegram_id:selected,login,selection_revision:selectionRevision});
         if(!valid())return;
         const result=await request('/api/platform/operator/employee-links');
-        if(valid()){renderEmployeeLinks(result.links);user.value=member.value='';}
+        if(valid()){links=result.links||[];renderEmployeeLinks(links);user.value=member.value='';}
       }catch(error){
         showEmployee(error.message,true);
         if(error.status===409&&valid()){
@@ -239,13 +263,13 @@
         mappingBusy=false;
         if(!valid())return;
         user.disabled=member.disabled=false;
-        confirm.disabled=!selectionRevision;
+        renderBind();
         if(!selectionRevision)void loadUsers(false,true);
       }
     });
   }
   window.tenantViewDemand.watch({
     provider:'beinsystems_operator',editable:'#'+hostId,resetOnHide:true,activate:install,
-    reset:()=>{revision++;profile=null;document.getElementById(hostId)?.remove();},
+    reset:()=>{revision++;profile=null;document.getElementById(hostId)?.remove();document.getElementById(statusHostId)?.replaceChildren();},
   });
 })();

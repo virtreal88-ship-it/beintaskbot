@@ -368,3 +368,12 @@ body[data-app-ui=kwid] button.connect-number-add,.connect-number-add{background:
 .connect-call-status[data-state=online]{color:#10966e}.connect-call-status[data-state=online]:after{content:'✓'}
 .connect-call-status[data-state=offline]:after,.connect-call-status[data-state=unavailable]:after{content:'×'}
 .connect-call-status[data-state=pilot_online],.connect-call-status[data-state=pilot_offline],.connect-call-status[data-state=mismatch]{color:#b37b13}.connect-call-status[data-state=pilot_online]:after{content:'T'}.connect-call-status[data-state=pilot_offline]:after{content:'×'}.connect-call-status[data-state=mismatch]:after{content:'!'}
+
+/* Operator has its own server-backed status; constrain it to the modal header on mobile. */
+#operatorConnectionStatusHost .operator-connection-badge {
+  display:inline-block; max-width:100%; margin:0; padding:3px 8px; border-radius:999px;
+  background:var(--app-raised); color:var(--app-ink); font-size:.8rem; overflow-wrap:anywhere;
+}
+#operatorConnectionStatusHost .operator-connection-badge[data-connected="true"] { color:var(--app-success, #168247); }
+#operatorIntegrationSettings :is(input, select) { max-width:100%; min-width:0; }
+#operatorIntegrationSettings [data-connected-login] { overflow-wrap:anywhere; }

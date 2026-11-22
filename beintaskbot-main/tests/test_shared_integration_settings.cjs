@@ -36,7 +36,13 @@ function harness(provider, actions, role='worker', linearSettings={}){
  const link=harness('connect',{view:true,create:false,update:true,delete:false});
  assert.equal(link.w.document.body.textContent.includes('Şirkətin ortaq bağlantısı'),false,'Connect panel has no duplicate connection subtitle');
  const marketplace=fs.readFileSync(path.join(__dirname,'../ui/src/main.jsx'),'utf8');
- assert.ok(marketplace.includes('selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı'),'marketplace also hides Connect duplicate subtitle');
+ const sharedSubtitle=marketplace.match(/!\[(.*?)\]\.includes\(selected\.id\) && <Text>Şirkətin ortaq bağlantısı/);
+ assert.ok(sharedSubtitle,'marketplace gates the shared connection subtitle by provider');
+ const hiddenSubtitleProviders=JSON.parse('['+sharedSubtitle[1]+']');
+ for(const provider of ['connect','beinsystems_operator'])
+  assert.ok(hiddenSubtitleProviders.includes(provider),provider+' marketplace hides the duplicate subtitle');
+ assert.ok(marketplace.includes('selected.id === "beinsystems_operator" ? <Box id="operatorConnectionStatusHost"'),
+  'Operator retains its own server-backed status in the marketplace header');
  assert.ok(marketplace.includes('<StatusBadge tone={state.connected ? "green" : "orange"}>'),'top connection status retained');
  await tick();assert.equal(JSON.parse(link.calls[0].body).action,'channels');link.calls.length=0;
  let opened;link.w.tenantConnectPairing={open:(member,options)=>{opened={member,options};}};

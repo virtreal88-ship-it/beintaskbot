@@ -1715,7 +1715,9 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             result=operator.import_accounts(profile)
         self.assertEqual(result["imported"],1)
         self.assertFalse(result["activated"])
-        self.assertEqual([call.args[0] for call in request.call_args_list],["me","accounts"])
+        self.assertEqual([call.args for call in request.call_args_list], [("me", {}), ("accounts", {})])
+        self.assertIs(request.call_args_list[0].kwargs["requests_me"], True)
+        self.assertNotIn("requests_me", request.call_args_list[1].kwargs)
         self.assertTrue(all(call.kwargs["token"]=="synthetic-candidate-token"
                             for call in request.call_args_list))
         self.assertEqual(audit.call_count,2)
@@ -1723,6 +1725,46 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         activate.assert_called_once_with(cursor,TENANT,7,"synthetic-candidate-token",
                                          verified_identifier="synthetic.operator")
         save.assert_not_called()
+
+    def test_full_import_never_writes_if_canonical_identity_or_accounts_proof_fails(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        candidate = {"token": "synthetic-token", "received_at": "2026-11-19T00:00:00Z",
+                     "base_url": "https://operator-api.beinsystems.az/v1"}
+        identity = {"status": "success", "data": {"identifier": "synthetic.operator", "role": "operator"}}
+        accounts = {"status": "success", "data": [{"account": "synthetic-account"}]}
+        denied = operator.OperatorError("synthetic denied", 502, upstream_http_status=403)
+        for responses, current, calls in (
+                ([denied], True, ["me"]),
+                ([{"status": "failure"}], True, ["me"]),
+                ([identity, denied], True, ["me", "accounts"]),
+                ([identity, {"status": "success", "data": [{"not_account": "synthetic"}]}],
+                 True, ["me", "accounts"]),
+                ([identity, accounts], False, ["me", "accounts"])):
+            with self.subTest(responses=responses, current=current):
+                connection = MagicMock()
+                with (
+                    patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}),
+                    patch.object(operator, "_connect", return_value=connection),
+                    patch.object(operator, "_ensure_schema"),
+                    patch.object(operator, "_current_profile", return_value=profile),
+                    patch.object(operator, "_operator_row", return_value=None),
+                    patch.object(operator, "_pending_auth_candidate", return_value=candidate),
+                    patch.object(operator, "_record_operator_read"),
+                    patch.object(operator, "_request_operator", side_effect=responses) as request,
+                    patch.object(operator, "_pending_timestamp_is_current", return_value=current),
+                    patch.object(operator, "_lock_accounts_capability_scope"),
+                    patch.object(operator, "_upsert_imported_accounts") as upsert,
+                    patch.object(operator, "_revoke_accounts_capability") as revoke,
+                    patch.object(operator, "_activate_candidate_if_unconfigured") as activate,
+                ):
+                    with self.assertRaises(operator.OperatorError):
+                        operator.import_accounts(profile)
+                self.assertEqual([call.args[0] for call in request.call_args_list], calls)
+                self.assertIs(request.call_args_list[0].kwargs["requests_me"], True)
+                upsert.assert_not_called()
+                revoke.assert_not_called()
+                activate.assert_not_called()
+                connection.__enter__.return_value.commit.assert_not_called()
 
     def test_activation_guard_leaves_an_existing_connected_token_untouched(self):
         cursor=MagicMock()

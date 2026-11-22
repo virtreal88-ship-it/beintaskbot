@@ -6,7 +6,7 @@ const owner={member:{tenant_id:'tenant',telegram_id:33,role:'owner'},integration
 const empty={status:'not_connected',connected:false,configured:false};
 const connected={status:'connected',connected:true,configured:true};
 (async()=>{
- const dom=new JSDOM('<div id="integrationSettingsHost"></div>',{
+ const dom=new JSDOM('<div id="operatorConnectionStatusHost"></div><div id="integrationSettingsHost"></div>',{
   url:'https://crm.test/app?view=integrations',runScripts:'outside-only'
  });
  const w=dom.window,d=w.document,calls=[];
@@ -14,7 +14,7 @@ const connected={status:'connected',connected:true,configured:true};
  const post=(path,action)=>calls.filter(row=>row.path===path&&row.body&&(!action||row.body.action===action));
  const response=(value,status=200)=>({ok:status===200,status,json:async()=>value});
  let watch,state={...empty},confirmAnswer=false,loginPending=false,loadFailure=true,saveFailure=false;
- let listRevision=0;
+ let listRevision=0, linksFailure=false;
  let memberLinks=[{id:'existing-1',member_telegram_id:42,account:'existing-account',login:'existing-user',status:'confirmed'}];
  w.tenantViewDemand={watch(value){watch=value;}};
  w.confirm=()=>confirmAnswer;
@@ -44,7 +44,10 @@ const connected={status:'connected',connected:true,configured:true};
    if(loadFailure)return response({success:false,error:'Operator: загрузка не удалась'},403);
    return response({success:true,selection_revision:'opaque-'+(++listRevision),users:[{login:'from-operator',bindable:true},{login:'unavailable',bindable:false}]});
   }
-  if(path==='/api/platform/operator/employee-links'&&!body)return response({success:true,links:memberLinks});
+  if(path==='/api/platform/operator/employee-links'&&!body){
+   if(linksFailure)return response({success:false,error:'Operator: связи не загружены'},403);
+   return response({success:true,links:memberLinks});
+  }
   if(path==='/api/platform/operator/employee-links'&&body){
    if(saveFailure)return response({success:false,error:'Operator: связь не сохранена'},409);
    memberLinks=[...memberLinks,{id:'map-2',member_telegram_id:42,account:'server-selected',login:body.login,status:'confirmed'}];
@@ -61,6 +64,9 @@ const connected={status:'connected',connected:true,configured:true};
  assert.equal(post(integration).length,0,'opening the card must not initiate connection actions');
  assert.equal(calls[0].path,integration+'?include_connected_login=1&expected_tenant_id=tenant&expected_user_id=33');
  assert.equal(text('[data-status]'),'Не подключено');
+ assert.equal(at('#operatorIntegrationSettings [data-status]'),null);
+ assert.equal(at('#operatorIntegrationSettings h2'),null);
+ assert(at('#operatorConnectionStatusHost [data-status]'));
  assert(at('[data-connection-next]').hidden);
  const login=at('[data-operator-login]'),password=at('[data-operator-password]');
  assert.equal(login.autocomplete,'off');assert.equal(password.autocomplete,'new-password');
@@ -85,7 +91,7 @@ const connected={status:'connected',connected:true,configured:true};
   action:'login',login:'entered@example.test',password:'synthetic-password',expected_tenant_id:'tenant',expected_user_id:33
  }]);
  assert(!at('#operatorIntegrationSettings').textContent.includes('synthetic-password'));
- assert.equal(text('[data-status]'),'Доступ не подтверждён');
+ assert.equal(text('[data-status]'),'Не подключено');
  assert.equal(text('[data-auth-message]'),'');
  assert(!at('[data-connection-next]').hidden);
  assert.equal(post('/api/platform/operator/accounts').length,0,'login never automatically imports or activates');
@@ -96,10 +102,20 @@ const connected={status:'connected',connected:true,configured:true};
  assert.equal(post(integration,'confirm_accounts_capability').length,0);
  at('[data-accounts-only]').click();await tick();
  at('[data-identity-confirmation] button').click();await tick();
- assert.equal(text('[data-status]'),'Доступ только к аккаунтам');
+ assert.equal(text('[data-status]'),'Подключено');
+ assert.equal(at('[data-status]').dataset.connected,'true');
+ assert(!at('[data-employee-user]').disabled);
+ assert(!at('[data-employee-member]').disabled);
+ assert(at('[data-confirm-employee]').disabled);
+ assert.equal(post('/api/platform/operator/employee-users').length,0,'no staff prefetch for accounts-only access');
+ at('[data-employee-user]').dispatchEvent(new w.Event('pointerdown'));await tick();
+ assert.equal(text('[data-employee-message]'),'Operator: загрузка не удалась');
+ assert.equal(post('/api/platform/operator/employee-users').length,1);
+ assert(at('[data-confirm-employee]').disabled);
  assert.equal(post(integration,'confirm_accounts_capability').length,1);
  confirmAnswer=true;at('[data-finish-connection]').click();await tick();
- assert.equal(text('[data-status]'),'Подключено · verified@example.test');
+ assert.equal(text('[data-status]'),'Подключено');
+ assert.equal(text('[data-connected-login]'),'verified@example.test');
  assert.equal(text('[data-auth-message]'),'');
  assert(at('[data-connection-next]').hidden);
 
@@ -111,7 +127,7 @@ const connected={status:'connected',connected:true,configured:true};
  assert.deepEqual([...at('[data-employee-controls]').querySelectorAll('button')],[bind]);
  for(const selector of ['[data-employee-account]','[data-load-employee-users]','[data-employee-evidence]'])assert.equal(at(selector),null);
  assert.equal(bind.textContent,'Привязать');
- assert.equal(post('/api/platform/operator/employee-users').length,1);
+ assert.equal(post('/api/platform/operator/employee-users').length,2);
  assert.equal(message.textContent,'Operator: загрузка не удалась');
  operator.dispatchEvent(new w.Event('pointerdown'));await tick();
  assert.equal(d.activeElement,message);
@@ -121,16 +137,16 @@ const connected={status:'connected',connected:true,configured:true};
   {expected_tenant_id:'tenant',expected_user_id:33});
  assert.equal(operator.options.length,3);
  operator.dispatchEvent(new w.Event('pointerdown'));await tick();
- assert.equal(post('/api/platform/operator/employee-users').length,3,'reuse a loaded list');
- operator.value='unavailable';staff.value='42';bind.click();await tick();
+ assert.equal(post('/api/platform/operator/employee-users').length,4,'reuse a loaded list');
+ operator.value='unavailable';staff.value='42';staff.dispatchEvent(new w.Event('change'));bind.click();await tick();
  assert.equal(post('/api/platform/operator/employee-links').length,0);
- operator.value='from-operator';
+ operator.value='from-operator';operator.dispatchEvent(new w.Event('change'));
  saveFailure=true;bind.click();await tick();
  assert.equal(message.textContent,'Operator: связь не сохранена');assert.equal(d.activeElement,message);
  assert.equal(operator.value,'','a 409 clears a stale selection');
  assert.equal(listRevision,2,'refreshes the dropdown without retrying the write');
  assert.equal(post('/api/platform/operator/employee-links').length,1);
- saveFailure=false;operator.value='from-operator';bind.click();await tick();
+ saveFailure=false;operator.value='from-operator';operator.dispatchEvent(new w.Event('change'));bind.click();await tick();
  assert.deepEqual(post('/api/platform/operator/employee-links').at(-1).body,
   {member_telegram_id:42,login:'from-operator',selection_revision:'opaque-2',expected_tenant_id:'tenant',expected_user_id:33});
  assert.equal(message.textContent,'');
@@ -138,7 +154,7 @@ const connected={status:'connected',connected:true,configured:true};
  assert(!text('[data-employee-links]').includes('server-selected'));
 
  loginPending=true;login.value='replacement@example.test';password.value='replacement';
- at('[data-save]').click();assert.equal(text('[data-status]'),'Подключено · verified@example.test','a pending replacement preserves the current connection');
+ at('[data-save]').click();assert.equal(text('[data-status]'),'Подключено','a pending replacement preserves the current connection');
  const settleLogin=loginPending;watch.reset();await watch.activate({...owner,member:{...owner.member,role:'operator'}});await tick();
  settleLogin(response({success:true,integration:{...empty,pending_auth_received:true}}));await tick();
  assert.equal(text('[data-status]'),'Подключено','a stale owner response cannot replace the new card');
@@ -147,8 +163,12 @@ const connected={status:'connected',connected:true,configured:true};
  assert.equal(calls.at(-1).path,integration,'non-owner does not request active login identity');
  state={...connected,connected_login:'confirmed-after-reload@example.test'};
  await watch.activate(owner);await tick();
- assert.match(text('[data-status]'),/confirmed-after-reload@example\.test/);
+ assert.match(text('[data-connected-login]'),/confirmed-after-reload@example\.test/);
  assert.equal(at('[data-operator-login]').value,'','never prefill or overwrite entered credentials');
+ linksFailure=true;state={...empty,accounts_only_ready:true};
+ await watch.activate(owner);await tick();
+ assert.equal(at('[data-employee-member]').options.length,2,'CRM picker loads even if link history fails');
+ assert.equal(at('[data-confirm-employee]').disabled,true,'no Bind without a verified pair');
  assert(!calls.some(row=>/^https?:/.test(row.path)));
  dom.window.close();console.log('PASS: Operator connection, employee mapping and minimal card');
 })().catch(error=>{console.error(error);process.exitCode=1;});
