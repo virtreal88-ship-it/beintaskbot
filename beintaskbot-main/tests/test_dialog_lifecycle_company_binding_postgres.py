@@ -71,7 +71,8 @@ def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypa
 
 def test_dialogue_staff_can_search_and_choose_only_existing_local_companies(local):
     database, company, archived, foreign, _ = local
-    database.execute("UPDATE saas_crm_native_companies SET name=%s WHERE id=%s::uuid", ('Demo % Search',company))
+    database.execute("UPDATE saas_crm_native_companies SET name=%s,phone=%s WHERE id=%s::uuid",
+                     ('Demo % Search','5550102',company))
     database.execute("UPDATE saas_crm_native_companies SET name=%s WHERE id=%s::uuid", ('Demo % Foreign',foreign))
     database.execute("UPDATE saas_crm_native_companies SET name=%s,archived_at=now() WHERE id=%s::uuid", ('Demo % Archived',archived))
     database.commit()
@@ -79,6 +80,8 @@ def test_dialogue_staff_can_search_and_choose_only_existing_local_companies(loca
     assert store.binding(STAFF,**route)['can_manage'] is True  # before acceptance
     assert store.binding(STAFF,**route,company_search='Demo %') == [{'id':company,'name':'Demo % Search'}]
     assert store.binding(STAFF,**route,company_search='_') == []
+    assert store.binding(STAFF,**route,company_search='5550102') == []
+    assert store.binding(PROFILE,**route,company_search='5550102') == [{'id':company,'name':'Demo % Search'}]
     with pytest.raises(OperatorError):
         store.binding(STAFF,**route,company_search='')
     with pytest.raises(OperatorError) as wrong_route:

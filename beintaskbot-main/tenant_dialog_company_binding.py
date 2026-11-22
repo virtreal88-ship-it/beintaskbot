@@ -298,13 +298,16 @@ def _binding_snapshot(cur, tenant, policy, route, can_unlink):
     return result
 
 
-def _company_choices(cur, tenant, term):
+def _company_choices(cur, tenant, term, *, match_contact=False):
     if (not isinstance(term,str) or not 0<len(term.strip())<=120
             or any(ord(char)<32 or ord(char)==127 for char in term)):
         raise OperatorError('Некорректный поиск компании.')
+    search = term.strip()
+    columns = ("name","phone","email") if match_contact else ("name",)
+    matching = " OR ".join(f"strpos(lower({column}),lower(%s))>0" for column in columns)
     cur.execute(f"""SELECT id::text AS id,name FROM {COMPANIES}
-      WHERE tenant_id=%s::uuid AND archived_at IS NULL AND strpos(lower(name),lower(%s))>0
-      ORDER BY lower(name),id LIMIT 5""", (tenant,term.strip()))
+      WHERE tenant_id=%s::uuid AND archived_at IS NULL AND ({matching})
+      ORDER BY lower(name),id LIMIT 5""", (tenant,*([search]*len(columns))))
     return cur.fetchall()
 
 
@@ -337,7 +340,11 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                 if not _ready(cur,table):
                     raise OperatorError('Привязка компании для этого источника недоступна.',503)
                 if company_search is not None:
-                    return _company_choices(cur,tenant,company_search)
+                    # Preserve the owner's previous lookup by phone/email.
+                    # Dialogue access alone only permits matching by name.
+                    match_contact = (policy.profile.get('role')=='owner'
+                                     and policy.allows_action('companies','view'))
+                    return _company_choices(cur,tenant,company_search,match_contact=match_contact)
                 if write and company_id is not None:
                     if expected_company_id is _UNCHECKED and policy.profile.get('role') != 'owner':
                         raise OperatorError('Обновите диалог перед выбором компании.',409)
