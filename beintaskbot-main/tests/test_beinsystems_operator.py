@@ -393,6 +393,36 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             conversation_id=query["conversation_id"])
         provider.assert_not_called()
 
+    def test_company_search_posts_exact_route_and_returns_local_choices(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "operator", "active": True}
+        origin = "https://crm.example"
+        handler = operator_api.dialog_company_handler(lambda _request: profile, origin, MagicMock())
+        fields = {"provider": "connect", "lead_id": "41", "conversation_id": "test-dialog",
+                  "channel_id": "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", "company_search": "Demo"}
+        body = dict(fields, expected_tenant_id=TENANT, expected_user_id="7")
+
+        def post(payload, source=origin):
+            data = json.dumps(payload).encode()
+            request = MagicMock(method="POST", headers={"Origin": source}, content_type="application/json",
+                                content_length=len(data), read=AsyncMock(return_value=data))
+            return asyncio.run(handler(request))
+
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch("tenant_dialog_company_binding.binding",
+                   return_value=[{"id": "company", "name": "Demo"}]) as lookup, \
+             patch.object(operator, "_request_operator") as upstream:
+            self.assertEqual(post(body, "https://outside.example").status, 403)
+            self.assertEqual(post(dict(body, expected_user_id="8")).status, 409)
+            self.assertEqual(post(dict(body, company_id="ignored")).status, 400)
+            self.assertEqual(post(dict(body, company_search=None)).status, 400)
+            lookup.assert_not_called()
+            response = post(body)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(json.loads(response.text)["companies"], [{"id": "company", "name": "Demo"}])
+            lookup.assert_called_once_with(profile, **fields)
+            upstream.assert_not_called()
+
     def test_unverified_manual_token_action_is_rejected(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         request = MagicMock(method="POST")

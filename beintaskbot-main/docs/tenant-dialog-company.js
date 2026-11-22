@@ -202,7 +202,7 @@
     suggestions.id='operatorDialogueCompanySuggestions';suggestions.append(results);panel.append(suggestions);
     panel.addEventListener('focusout',event=>{
       if(panel.contains(event.relatedTarget)||!active()||s.writing||!s.editing)return;
-      if(!input.value.trim()&&s.binding?.company_id&&window.confirm(t('confirm'))){
+      if(!input.value.trim()&&s.binding?.company_id&&s.binding.can_unlink!==false&&window.confirm(t('confirm'))){
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
     });
@@ -224,7 +224,7 @@
       const hint=allowed?'search':s.binding===undefined?'loading':s.binding?'restricted':'unavailable';
       input.placeholder=t(hint);
       input.title=allowed?'':input.placeholder;
-      unlink.hidden=!allowed||!s.binding.company_id||!input.value;
+      unlink.hidden=!allowed||s.binding.can_unlink===false||!s.binding.company_id||!input.value;
       unlink.disabled=s.writing;
       for(const result of results.querySelectorAll('button'))result.disabled=s.writing;
     };
@@ -242,12 +242,12 @@
       search=new AbortController();const {signal}=search;
       const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=4;
       localStatus.textContent=t('loading');operatorStatus.textContent=operatorSearch?t('loading'):'';
-      void request('/api/platform/crm/native/companies',s.member,{search:query},false,signal)
+      void request(endpoint,s.member,{...s.route,company_search:query},true,signal)
         .then(payload=>{
           if(!active()||seq!==serial)return;
           const choices=new Map();
           for(const row of payload.companies||[]){
-            if(row.actions?.update===true&&row.id&&row.name)choices.set(String(row.id),String(row.name));
+            if(row.id&&row.name)choices.set(String(row.id),String(row.name));
           }
           const items=[...choices].slice(0,5).map(([id,name])=>[name,{company_id:id}]);
           render(localRows,items);localStatus.textContent=items.length?'':t('empty');

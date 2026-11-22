@@ -33,7 +33,12 @@ const beta='@verified_account';
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
     if(api==='/api/platform/me')return {ok:true,json:async()=>profile};
     if(api==='/api/platform/operator/dialog-company'){
-     if(opt.method!=='GET')throw Error('The header must never mutate');
+     if(opt.method==='POST'){
+      const data=JSON.parse(opt.body);
+      if(data.company_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
+      return {ok:true,json:async()=>({success:true,companies:[{id:'existing',name:'Test company'}]})};
+     }
+     if(opt.method!=='GET')throw Error('Unexpected method');
      const channel=q.get('channel_id'),route=sources.find(r=>r.channel_id===channel);
      if(!route||q.get('provider')!==route.provider||q.get('lead_id')!==String(route.lead_id)||
        q.get('conversation_id')!==route.conversation_id||q.get('expected_tenant_id')!==member.tenant_id||
@@ -95,6 +100,7 @@ const beta='@verified_account';
   await search.press('ControlOrMeta+a');
   await search.pressSequentially('Test company');
   assert.equal(await search.inputValue(),'Test company');
+  await card.getByRole('button',{name:'Test company',exact:true}).waitFor();
   await card.locator('#operatorConversationNameInput').click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
