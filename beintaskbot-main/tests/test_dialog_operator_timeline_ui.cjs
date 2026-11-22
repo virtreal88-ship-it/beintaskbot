@@ -12,13 +12,16 @@ const m4=msg('m4','2030-01-01T14:00:00Z');
 const accept={id:'accepted-a',kind:'accept',at:'2030-01-01T08:45:00Z',employee_name:'Owner'};
 const handoff={id:'transferred-a',kind:'transfer',at:'2030-01-01T11:00:00Z',employee_name:'<a>Employee</a>'};
 const anonymous={id:'transferred-b',kind:'transfer',at:'2030-01-01T13:00:00Z',employee_name:''};
+const reminder=(id,at,note)=>({id,at,note});
+const olderReminder=reminder('older','2030-01-01T09:30:00Z','Older follow-up');
+const dueReminder=reminder('due','2030-01-01T12:30:00Z','<img src=x> call back');
 const started={id:'started-c',kind:'start',at:'2030-01-01T13:15:00Z',employee_name:'Employee'};
 const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{
  const w=new JSDOM(read('tenant-app.html'),{url:'https://timeline.test/app?view=dialogs',runScripts:'outside-only'}).window;
  w.document.querySelector('#view-dialogs').classList.add('active');
  w.tenantProfileSnapshot={success:true,member:{tenant_id:tenant,telegram_id:33,role:'owner',active:true,permissions:['dialogs']},capabilities:{modules:{dialogs:true}}};
- const queries=[];let release,holdOlder=false,exact=first,cooldown=false,dense=false,serverDefersOlder=false;
+ const queries=[];let release,holdOlder=false,exact=first,cooldown=false,dense=false,serverDefersOlder=false,reminderTest=false,reminderDue=false;
  const clock=w.Date.now();let now=clock;w.Date.now=()=>now;
  const denseNotes=Array.from({length:220},(_,i)=>({id:'dense-'+String(i).padStart(3,'0'),kind:'transfer',at:'2030-01-01T09:20:00Z',employee_name:'Synthetic employee'}));
  const res=result=>({ok:true,json:async()=>({success:true,result})});
@@ -33,6 +36,14 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
    if(q.get('operator_events')==='1'){
     assert.equal(q.get('expected_tenant_id'),tenant);assert.equal(q.get('expected_user_id'),'33');
    }else assert.equal(cooldown,true,'operator event opt-in may only be omitted during backoff');
+   if(reminderTest&&q.get('lead_id')==='41'){
+    assert.equal(q.get('shared_reminder_events'),'1');
+    assert.equal(q.get('expected_tenant_id'),tenant);
+    assert.equal(q.get('expected_user_id'),'33');
+    if(q.has('before'))return res({dialog:exact,messages:[m1],next_before:null,shared_reminder_events:[olderReminder]});
+    return res({dialog:exact,messages:[m2,m3],next_before:'m2',
+      shared_reminder_events:reminderDue?[dueReminder,reminder('broken','bad date','must not render')]:[]});
+   }
    if(q.get('lead_id')==='42')return res({dialog:other,messages:[m4],next_before:null,operator_events:[],operator_events_revision:8});
    if(q.has('before')){
     assert.equal(q.get('before'),'m2');assert.equal(q.has('operator_events_revision'),false);
@@ -115,6 +126,26 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  const omissions=w.document.querySelectorAll('#chatRows [data-operator-timeline-omissions]');
  assert.equal(omissions.length,1);
  assert.match(omissions[0].textContent,/Some system events are not shown|Часть системных событий не показана|Sistem hadisələrinin bir hissəsi göstərilmir/);
+ reminderTest=true;
+ exact={...first,lifecycle:{...first.lifecycle,state:'closed',revision:20}};
+ await w.tenantOperator.openDialog(other,false,'',{suppressRead:true});await tick();
+ await w.tenantOperator.openDialog(exact,false,'',{suppressRead:true});await tick();
+ assert.deepEqual(view(),['m2','m3'],'future reminder is absent in a closed dialogue');
+ reminderDue=true;
+ await w.tenantOperator.openDialog(exact,true,'',{suppressRead:true});await tick();
+ assert.equal(queries.at(-1).operator_events_revision,undefined);
+ assert.deepEqual(view(),['m2','m3','shared-reminder:due'],'same lifecycle revision and no messages still display the due reminder');
+ const due=find('shared-reminder:due');
+ assert.ok(due.textContent.includes(dueReminder.note));
+ assert.equal(due.querySelector('img,[data-message-id]'),null,'internal note is rendered as literal text and not a customer message');
+ assert.equal(due.querySelector('time').getAttribute('datetime'),dueReminder.at);
+ assert.equal(w.document.getElementById('operatorNewMessages').hidden,true);
+ w.document.getElementById('operatorEarlier').click();await tick();
+ assert.deepEqual(view(),['m1','shared-reminder:older','m2','m3','shared-reminder:due']);
+ await w.tenantOperator.openDialog(other,false,'',{suppressRead:true});await tick();
+ assert.deepEqual(view(),['m4'],'another dialogue never shows another note');
+ await w.tenantOperator.openDialog(exact,false,'',{suppressRead:true});await tick();
+ assert.deepEqual(view(),['m2','m3','shared-reminder:due'],'reopening does not consume the note or duplicate it');
  w.document.dispatchEvent(new w.CustomEvent('tenant-auth-invalid'));assert.deepEqual(view(),[]);
  w.close();
  console.log('PASS: durable employee notes, order/paging/dedup, literal names and stale route/session fencing.');

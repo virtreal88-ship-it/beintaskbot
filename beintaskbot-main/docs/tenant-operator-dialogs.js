@@ -850,7 +850,12 @@
       if(namesOnly){
         const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
         patchDirectDialogNames(latest,page,chat);
-        setTimelineScroll(chat,follow?top:timelineScrollTop(top,anchor),true);
+        let placed=false;
+        if(Array.isArray(latest.shared_reminder_events)){
+          retainSharedReminderEvents(page,latest);
+          placed=placeOperatorEvents(chat,page);
+        }
+        setTimelineScroll(chat,follow?(placed?chat.scrollHeight:top):timelineScrollTop(top,anchor),true);
         rememberDialogPage(route,page);
         return;
       }
@@ -861,7 +866,7 @@
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
       retainOperatorEvents(currentPage,latest);
-      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',messageMarkup(added,route));
@@ -947,9 +952,15 @@
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...(route.source_message_id?{anchor:route.source_message_id}:{})});
   function timelineHistoryQuery(route,knownPage=null){
     const query=historyQuery(route);
-    if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id&&!(knownPage?.operatorEventsRetryAt>Date.now())){
-      query.set('operator_events','1');query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
-      if(Number.isSafeInteger(knownPage?.operator_events_revision))query.set('operator_events_revision',knownPage.operator_events_revision);
+    if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
+      if(!route.case_attachment)query.set('shared_reminder_events','1');
+      if(!(knownPage?.operatorEventsRetryAt>Date.now())){
+        query.set('operator_events','1');
+        if(Number.isSafeInteger(knownPage?.operator_events_revision))query.set('operator_events_revision',knownPage.operator_events_revision);
+      }
+      if(query.has('operator_events')||query.has('shared_reminder_events')){
+        query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
+      }
     }
     return query;
   }
@@ -966,12 +977,25 @@
     if(ordered.length>OPERATOR_TIMELINE_LIMIT)noteOperatorEventOmission(page,ordered[ordered.length-OPERATOR_TIMELINE_LIMIT].at);
     return ordered.slice(-OPERATOR_TIMELINE_LIMIT);
   }
+  const SHARED_REMINDER_TIMELINE_LIMIT=100;
+  function retainSharedReminderEvents(page,fresh){
+    if(!Array.isArray(fresh.shared_reminder_events))return;
+    const events=fresh.shared_reminder_events.filter(event=>typeof event?.id==='string'&&!!event.id&&
+      typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at))&&typeof event.note==='string'&&!!event.note.trim())
+      .map(({id,at,note})=>({id:'shared-reminder:'+id,at,note,kind:'shared_reminder'}));
+    const ordered=[...new Map([...(page.sharedReminderTimeline||[]),...events].map(event=>[event.id,event])).values()].sort(operatorEventOrder);
+    for(const at of [fresh.shared_reminder_events_omitted_at,ordered.length>SHARED_REMINDER_TIMELINE_LIMIT?ordered[ordered.length-SHARED_REMINDER_TIMELINE_LIMIT].at:null]){
+      if(Number.isFinite(timelineStamp(at))&&(!page.sharedReminderOmission||timelineStamp(at)>timelineStamp(page.sharedReminderOmission)))page.sharedReminderOmission=at;
+    }
+    page.sharedReminderTimeline=ordered.slice(-SHARED_REMINDER_TIMELINE_LIMIT);
+  }
   const operatorEventRetry=delay=>Number.isSafeInteger(delay)&&delay>=250&&delay<=30000;
   function retainOperatorEventRetry(page,fresh){
     const delay=fresh.operator_events_retry_after_ms;
     if(operatorEventRetry(delay))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,Date.now()+delay);
   }
   function retainOperatorEvents(page,fresh,{older=false}={}){
+    retainSharedReminderEvents(page,fresh);
     retainOperatorEventRetry(page,fresh);
     if(Number.isSafeInteger(fresh.operatorEventsRetryAt))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,fresh.operatorEventsRetryAt);
     if(!Array.isArray(fresh.operator_events))return;
@@ -1018,9 +1042,15 @@
   }
 
   function placeOperatorEvents(chat,page){
-    const events=boundedOperatorEvents(page,page.operator_events||[]);
-    page.operator_events=events;
-    const omission=timelineStamp(page.operator_events_omitted_at);
+    page.operator_events=boundedOperatorEvents(page,page.operator_events||[]);
+    if(Array.isArray(page.shared_reminder_events)){
+      retainSharedReminderEvents(page,page);
+      delete page.shared_reminder_events;
+      delete page.shared_reminder_events_omitted_at;
+    }
+    const events=[...page.operator_events,...(page.sharedReminderTimeline||[])].sort(operatorEventOrder);
+    const omissions=[page.operator_events_omitted_at,page.sharedReminderOmission].map(timelineStamp).filter(Number.isFinite);
+    const omission=omissions.length?Math.max(...omissions):NaN;
     if(!events.length&&!Number.isFinite(omission))return false;
     const messageTimes=new Map((page.messages||[]).map(m=>[String(m.id),timelineStamp(m.happened_at||m.created_at)]));
     const text={
@@ -1039,7 +1069,9 @@
       const node=existing.get(event.id)||document.createElement('div');
       if(!node.isConnected){node.className='operator-timeline-event';node.dataset.operatorTimelineEvent=event.id;node.setAttribute('role','note');node.append(document.createElement('span'),document.createElement('time'));}
       const name=typeof event.employee_name==='string'?event.employee_name.trim():'';
-      node.firstElementChild.textContent=name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
+      const reminderLabel=({ru:'Напоминание',az:'Xatırlatma',en:'Reminder'})[i18n.language]||'Reminder';
+      node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
+        name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
       if(next)next.before(node);else chat.append(node);
@@ -1056,7 +1088,7 @@
   }
 
   const pageCacheKey=route=>identity(member)+'|'+dialogKey(route);
-  function cloneDialogPage(page){try{const {operator_events,operator_events_revision,operator_events_omitted_at,operator_events_retry_after_ms,operatorEventsRetryAt,...cacheable}=page;return JSON.parse(JSON.stringify(cacheable));}catch{return null;}}
+  function cloneDialogPage(page){try{const {operator_events,operator_events_revision,operator_events_omitted_at,operator_events_retry_after_ms,operatorEventsRetryAt,shared_reminder_events,shared_reminder_events_omitted_at,sharedReminderTimeline,sharedReminderOmission,...cacheable}=page;return JSON.parse(JSON.stringify(cacheable));}catch{return null;}}
   function rememberDialogPage(route,page){const copy=cloneDialogPage(page);if(!copy)return;delete copy.scroll_to_latest;if(copy.dialog)delete copy.dialog.compose_draft;const key=pageCacheKey(route);dialogPageCache.delete(key);dialogPageCache.set(key,copy);while(dialogPageCache.size>DIALOG_PAGE_CACHE_LIMIT)dialogPageCache.delete(dialogPageCache.keys().next().value);}
   function cachedDialogPage(route){const key=pageCacheKey(route),page=dialogPageCache.get(key);if(!page||page.dialog?.lifecycle_enabled||!sameDialog(page.dialog,route)){dialogPageCache.delete(key);return null;}dialogPageCache.delete(key);dialogPageCache.set(key,page);return cloneDialogPage(page);}
   function renderComposerSourcePicker(){
@@ -1789,7 +1821,7 @@
       else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}Object.assign(prior,message);}
     }
     retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
-    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt'].includes(key))old[key]=value;
+    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission'].includes(key))old[key]=value;
     currentDialog=old.dialog;displayedPage=old;mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
     setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
@@ -2038,7 +2070,10 @@
       try{
         const query=timelineHistoryQuery(route),timelineRequested=query.get('operator_events')==='1'&&page.dialog?.lifecycle_enabled===true;
         const clientDeferred=timelineRequested&&page.operatorEventsRetryAt>Date.now();
-        if(clientDeferred)for(const key of ['operator_events','expected_tenant_id','expected_user_id'])query.delete(key);
+        if(clientDeferred){
+          query.delete('operator_events');
+          if(!query.has('shared_reminder_events'))for(const key of ['expected_tenant_id','expected_user_id'])query.delete(key);
+        }
         query.set('before',before);
         const earlier=await api('dialogs/history?'+query);
         if(!same()||currentPage!==page||!button.isConnected||!sameDialog(earlier.dialog,route))return;
