@@ -767,7 +767,7 @@
   function refresh(append=false,reuse=false,options={}){
     if(!hasRight('dialogs'))return Promise.resolve();install();
     if(!filterPreferencesLoaded){const version=epoch;return loadFilterPreferences().then(()=>{if(version===epoch&&hasRight('dialogs'))return refresh(append,reuse,options);});}
-    const key='dialogs?'+new URLSearchParams({search:$('operatorSearch').value,channel:$('operatorChannel').value,agent:$('operatorAgent').value,state:$('operatorState').value,lifecycle:queueMode(),offset:append?nextOffset||0:0});
+    const key='dialogs?'+new URLSearchParams({search:$('operatorSearch').value,channel:$('operatorChannel').value,agent:$('operatorAgent').value,state:$('operatorState').value,lifecycle:queueMode(),offset:append?nextOffset||0:0,paired_history:'1'});
     if(listFlight?.key===key)return listFlight.promise;
     if(reuse&&!append&&key===lastListKey&&Date.now()-lastListAt<5000){renderRows();return Promise.resolve();}
     const revision=++listRevision,version=epoch;
@@ -975,6 +975,7 @@
   function timelineHistoryQuery(route,knownPage=null){
     const query=historyQuery(route);
     if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
+      if(!route.case_attachment)query.set('paired_history','1');
       if(!route.case_attachment)query.set('shared_reminder_events','1');
       if(!(knownPage?.operatorEventsRetryAt>Date.now())){
         query.set('operator_events','1');

@@ -59,26 +59,25 @@ def handler(member_from_request,origin,logger,resource):
                         'Cache-Control':'private, max-age=3600',
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
                 elif resource=='dialogs':
-                    options={'combine_history':True}
+                    options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     if query.get('completion_preview')=='1': options['completion_preview']=True
                     if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
-                    read=partial(listing,**options)
+                    read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
                     case_only=query.get('support_case_only')=='1'
-                    read=partial(history,combine_history=True)
+                    options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     # The compact right-panel read never enriches messages or
                     # selects staff timeline metadata, even with both flags.
                     if case_only:
-                        read=partial(history,support_case_only=True)
+                        options={'support_case_only':True}
                     elif query.get('operator_events')=='1' or query.get('shared_reminder_events')=='1':
                         _expected(query,profile)
-                        options={'combine_history':True}
                         if query.get('operator_events')=='1':
                             options.update(include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
                         if query.get('shared_reminder_events')=='1':
                             options['include_shared_reminder_events']=True
-                        read=partial(history,**options)
+                    read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
                     if not case_only:
