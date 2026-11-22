@@ -20,7 +20,7 @@ LID='111111111111111@lid'
 PN='994100000002@s.whatsapp.net'
 
 
-@pytest.mark.parametrize('fault',['none','scope','peer','phone','oversize','html','missing'])
+@pytest.mark.parametrize('fault',['none','scope','peer','phone','oversize','html','missing','technical_name','generic_name'])
 def test_device_proof_is_exact_scoped_bounded_and_display_only(monkeypatch,fault):
     scope={'tenant':'t','source':'s','account':'994100000001@s.whatsapp.net','generation':'g'}
     route={'conversation_id':LID,'native':{'scope':scope,'gateway_id':'synthetic'}}
@@ -32,6 +32,8 @@ def test_device_proof_is_exact_scoped_bounded_and_display_only(monkeypatch,fault
             if fault=='scope':data['scope']['source']='other'
             if fault=='peer':data['peer_jid']='222222222222222@lid'
             if fault=='phone':data['caller']['phone_jid']=LID
+            if fault=='technical_name':data['caller']['display_name']=LID
+            if fault=='generic_name':data['caller']['display_name']='Контакт WhatsApp'
             body=json.dumps(data).encode()
             if fault=='oversize':body+=b' '*5000
             if fault=='html':body=b'<html>error</html>'
@@ -39,7 +41,12 @@ def test_device_proof_is_exact_scoped_bounded_and_display_only(monkeypatch,fault
         app=web.Application();app.router.add_post('/v1/sources/synthetic/messages/contact',serve)
         async with TestServer(app) as server:
             monkeypatch.setattr(sources,'service',lambda:(str(server.make_url('')).rstrip('/'),'synthetic'))
-            assert await phone.fetch_phone(route)==('+'+PN.split('@')[0] if fault=='none' else '')
+            details = await phone.fetch_contact(route)
+            if fault in ('none', 'technical_name', 'generic_name'):
+                assert details == {'phone': '+' + PN.split('@')[0],
+                                   'display_name': 'Synthetic' if fault == 'none' else ''}
+            else:
+                assert details == {}
     asyncio.run(run())
 
 
@@ -57,10 +64,10 @@ def test_two_histories_get_display_proof_without_writing_any_identity(active,mon
     tables=('saas_connect_conversations','saas_connect_direct_identities','saas_crm_messages','saas_dialog_source_members')
     before={t:db.execute('SELECT * FROM '+t) for t in tables};db.commit()
     seen=[]
-    async def fetch(route):seen.append(route);return '+'+PN.split('@')[0]
-    monkeypatch.setattr(phone,'fetch_phone',fetch)
+    async def fetch(route):seen.append(route);return {'phone':'+'+PN.split('@')[0],'display_name':'Verified name'}
+    monkeypatch.setattr(phone,'fetch_contact',fetch)
     result=asyncio.run(phone.get_phone(PROFILE,params))
-    assert result=={**params,'status':'available','display_only':True,'phone':'+994100000002'}
+    assert result=={**params,'status':'available','display_only':True,'phone':'+994100000002','display_name':'Verified name'}
     assert {t:db.execute('SELECT * FROM '+t) for t in tables}==before;db.commit()
     for wrong in ({**params,'channel_id':CB},{**params,'lead_id':98765},{**params,'conversation_id':'123456@g.us'}):
         with pytest.raises(TenantLinearError):asyncio.run(phone.get_phone(PROFILE,wrong))
@@ -75,8 +82,8 @@ def test_permissions_and_generation_rechecked_after_lookup(active,monkeypatch,ch
         if change=='member':db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s',(A,))
         elif change=='source':db.execute('UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s AND connect_channel_id=%s',(A,source))
         else:db.execute('UPDATE saas_browser_call_sources SET enabled=FALSE WHERE tenant_id=%s AND channel_id=%s',(A,source))
-        db.commit();return '+994100000002'
-    monkeypatch.setattr(phone,'fetch_phone',fetch)
+        db.commit();return {'phone':'+994100000002','display_name':'Verified name'}
+    monkeypatch.setattr(phone,'fetch_contact',fetch)
     with pytest.raises((TenantLinearError,TenantPlatformError)):asyncio.run(phone.get_phone(PROFILE,params))
 
 
@@ -89,7 +96,7 @@ def test_replaced_generation_does_not_return_old_proof(active,monkeypatch):
             current['native']['scope']['generation']='next-device-generation'
             return current
         monkeypatch.setattr(phone,'authorized_route',changed)
-        return '+994100000002'
-    monkeypatch.setattr(phone,'fetch_phone',fetch)
+        return {'phone':'+994100000002','display_name':'Verified name'}
+    monkeypatch.setattr(phone,'fetch_contact',fetch)
     with pytest.raises(TenantLinearError) as error:asyncio.run(phone.get_phone(PROFILE,params))
     assert error.value.status==409

@@ -159,10 +159,15 @@ def _retained_alias(db, identity, lead, age, names, *, active=True, kind='contac
 def _application_labels(list_dialog, open_dialog, message):
     source = (Path(__file__).resolve().parents[1] / 'docs/tenant-operator-dialogs.js').read_text()
     declarations = []
-    for signature in ('const safeName=', 'const dialogTitle=', 'function messageAuthor('):
+    for signature in ('const safeName=', 'function messageAuthor('):
         declarations.append(next(line.strip() for line in source.splitlines() if line.strip().startswith(signature)))
+    for signature in ('  const hasContactName=', '  const dialogTitle='):
+        start = source.index(signature)
+        end = source.index('\n  };', start) + len('\n  };')
+        declarations.append(source[start:end])
     script = '\n'.join(declarations) + """
         const t=key=>({whatsappContact:'Unknown contact',customer:'Customer'})[key];
+        const contactDetails=()=>null;
         const [row,header,message]=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
         console.log(JSON.stringify([dialogTitle(row),dialogTitle(header),messageAuthor(message)]));
     """

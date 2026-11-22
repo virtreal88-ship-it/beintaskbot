@@ -890,31 +890,48 @@
   }
   const safeName=row=>{const value=String(row.customer_name||'').trim();return value&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(value)?value:'';};
   const verifiedDialogPhone=row=>{const phone=String(row?.phone||'').trim(),digits=phone.replace(/\D/g,'');return /^\+?[0-9 ()-]+$/.test(phone)&&digits.length>=7&&digits.length<=15?phone:'';};
-  // Presentation evidence is deliberately separate from row.phone: it must not
-  // become a routing alias, CRM link, employee identity or persisted draft.
+  // Device contact details are presentation only and never change the route.
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}`;
-  const displayDialogPhone=route=>{const cached=contactPhoneLookups.get(contactPhoneKey(route));return verifiedDialogPhone(route)||(cached&&Date.now()-cached.at<=30000?cached.phone:'');};
-  function hydrateContactPhone(route,head){
-    if(route.provider!=='connect'||verifiedDialogPhone(route)||route.customer_kind==='group'||route.conversation_kind==='group'||! /^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||''))return;
+  const contactDetails=route=>{const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&Date.now()-cached.at<=30000?cached:null;};
+  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
+  const hasContactName=route=>{
+    const name=safeName(route);
+    return Boolean(route.manual_display_name?.trim()||(name&&name!==t('whatsappContact')&&!/^[+0-9(). -]+$/.test(name)));
+  };
+  function hydrateContactDetails(route,head){
+    if(route.provider!=='connect'||(verifiedDialogPhone(route)&&hasContactName(route))||route.customer_kind==='group'||route.conversation_kind==='group'||! /^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||''))return;
     const key=contactPhoneKey(route),version=epoch,revision=openRevision,owner=identity(member);
     let entry=contactPhoneLookups.get(key);
     if(!entry||Date.now()-entry.at>30000){
-      entry={at:Date.now(),phone:''};
+      entry={at:Date.now(),phone:'',name:''};
       if(contactPhoneLookups.size>=64)contactPhoneLookups.delete(contactPhoneLookups.keys().next().value);
       contactPhoneLookups.set(key,entry);
       entry.flight=api('dialogs/contact-phone?'+historyQuery(route)).then(result=>{
-        if(version===epoch&&owner===identity(member)&&result?.display_only===true&&result.status==='available'&&sameDialog(result,route)&&/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
+        if(version!==epoch||owner!==identity(member)||result?.display_only!==true||result.status!=='available'||!sameDialog(result,route)||Number(result.lead_id)!==Number(route.lead_id))return;
+        if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
+        if(typeof result.display_name==='string'&&result.display_name.length<=256)entry.name=result.display_name;
       }).catch(()=>{}); // Optional metadata failure must not close the chat.
     }
     entry.flight.then(()=>{
       if(version!==epoch||revision!==openRevision||owner!==identity(member)||!hasRight('dialogs')||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
-      const number=entry.phone||verifiedDialogPhone(route);
-      const label=head.querySelector('[data-header-phone]');if(label)label.textContent=number||phoneUnavailable();
+      const label=head.querySelector('[data-header-phone]');if(label)label.textContent=displayDialogPhone(currentDialog)||phoneUnavailable();
+      const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
+      const index=rows.findIndex(row=>sameDialog(row,route)&&Number(row.lead_id)===Number(route.lead_id));
+      if(index>=0){
+        const card=$('operatorRows').querySelector(`[data-open-operator="${index}"]`);
+        const cardTitle=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
+        if(cardTitle)cardTitle.textContent=dialogTitle(rows[index]);
+        if(subtitle)subtitle.textContent=dialogIdentity(rows[index]);
+      }
     });
   }
   const phoneUnavailable=()=>({ru:'Номер не подтверждён',az:'Nömrə təsdiqlənməyib',en:'Phone not confirmed'}[i18n.language]||'Phone not confirmed');
-  const dialogTitle=row=>safeName(row)||(row.customer_kind==='group'?t('whatsappGroup'):row.phone||t('whatsappContact'));
+  const dialogTitle=row=>{
+    const known=safeName(row);
+    if(row.customer_kind==='group')return known||t('whatsappGroup');
+    return (hasContactName(row)?known:contactDetails(row)?.name||known)||row.phone||t('whatsappContact');
+  };
   const dialogIdentity=row=>row.customer_kind==='group'?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:row.channel_name||''):displayDialogPhone(row)||row.channel_name||'';
   const avatarUrl=row=>'/api/platform/ai/dialogs/avatar?'+new URLSearchParams({provider:row.provider||'connect',lead_id:String(row.lead_id||''),channel_id:String(row.channel_id||''),conversation_id:String(row.conversation_id||'')});
   const avatarAttempts=new Set(),avatarReady=new Set(),avatarQueue=[];let avatarActive=0,avatarObserver;
@@ -1470,7 +1487,7 @@
     const company=nameForm||companyBinding||reminder?block(clientCardText('company'),nameForm+companyBinding+reminder):'';
     card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}<div data-client-support-case hidden></div></div>`;
     layout.append(card);
-    hydrateContactPhone(route,head);
+    hydrateContactDetails(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
     mountDialogCompany(route);
     const form=$('operatorConversationName'),input=$('operatorConversationNameInput'),saved=card.querySelector('[data-client-name-saved]'),error=card.querySelector('[data-client-card-error]'),listeners=[];
