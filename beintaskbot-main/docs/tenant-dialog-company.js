@@ -4,9 +4,9 @@
   const endpoint='/api/platform/operator/dialog-company';
   const publicLinkEndpoint=endpoint+'/public-link';
   const labels={
-    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
-    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
-    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No matching CRM companies.',error:'Could not get or change the company.'}
+    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
+    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
+    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',restricted:'Company selection requires access',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No matching CRM companies.',error:'Could not get or change the company.'}
   };
   const operatorLabels={
     ru:{empty:'Аккаунты Operator не найдены.',error:'Не удалось найти аккаунты Operator.',bindError:'Не удалось привязать аккаунт Operator.',},
@@ -185,7 +185,7 @@
     panel.id='operatorDialogueCompanyPicker';
     label.htmlFor=input.id='operatorDialogueCompanySearch';field.className='operator-company-link-row';
     input.type='search';input.maxLength=180;input.autocomplete='off';
-    input.placeholder=t('search');input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
     const unlink=button('×',()=>{
       if(!active()||s.writing||s.binding?.can_manage!==true)return;
       input.value='';schedule();input.focus({preventScroll:true});
@@ -221,6 +221,9 @@
     s.sync=()=>{
       const allowed=s.binding?.can_manage===true;
       input.readOnly=!allowed||s.writing;
+      const hint=allowed?'search':s.binding===undefined?'loading':s.binding?'restricted':'unavailable';
+      input.placeholder=t(hint);
+      input.title=allowed?'':input.placeholder;
       unlink.hidden=!allowed||!s.binding.company_id||!input.value;
       unlink.disabled=s.writing;
       for(const result of results.querySelectorAll('button'))result.disabled=s.writing;
@@ -298,7 +301,7 @@
       labelPublicLink(s);
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
-      }else paintHeader(s);
+      }else{paintHeader(s);s.sync();}
       return;
     }
     clear();
