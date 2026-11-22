@@ -69,7 +69,7 @@
     const status = $(panel, '[data-status]'), message = $(panel, '[data-message]'), connection = $(panel, '[data-connection]');
     if (!operatorLinkAllowed()) $(panel, '[data-link-controls]').hidden = true;
     if (data.member.role !== 'owner') employeeControls.hidden = true;
-    let batchReadBusy=false;
+    let batchReadBusy=false, proofBusy=false, confirmedProofRevision=null, displayedProofRevision=null;
     const renderStatus = () => {
       const parts = ['Состояние подключения: '+state.status];
       if (!state.api_ready) parts.push('API host не задан в серверной конфигурации');
@@ -81,6 +81,18 @@
       status.textContent = parts.join(' · ');
       const testButton=connection.querySelector('[data-test]');
       if(testButton)testButton.disabled=!(state.pending_auth_received||state.connected||state.configured);
+      const linkProof=connection.querySelector('[data-public-link-proof]');
+      if(linkProof){
+        linkProof.hidden=state.connected===true||state.configured===true
+          ||state.pending_public_link_proof_available!==true||!state.pending_auth_received_at;
+        if(displayedProofRevision&&displayedProofRevision!==state.pending_auth_received_at){
+          linkProof.querySelector('[data-public-link-proof-result]').textContent='';
+          displayedProofRevision=null;
+        }
+        const proofButton=linkProof.querySelector('[data-verify-public-link]');
+        proofButton.disabled=linkProof.hidden||proofBusy
+          ||confirmedProofRevision===state.pending_auth_received_at;
+      }
       const createCompaniesButton=connection.querySelector('[data-create-companies]');
       if(createCompaniesButton){
         createCompaniesButton.hidden=state.first_company_batch_plan_enabled===true;
@@ -105,7 +117,7 @@
     };
     renderStatus();
     if (data.member.role === 'owner') {
-      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-accounts-capability aria-live="polite"></div><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт запрашивает список /user/accounts и сохраняет полученные account ID; полнота выдачи Operator не проверена. Пропавшие записи не удаляются, данные в Operator не отправляются.</p><p>Создание компаний — отдельное подтверждаемое действие по account ID, полученному из запроса /user/accounts текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
+      connection.innerHTML = '<form data-operator-auth-form autocomplete="off"><label>Логин оператора<input type="text" name="operator_login" data-operator-login autocomplete="off" autocapitalize="none" spellcheck="false" enterkeyhint="next" required maxlength="240"></label><label>Пароль оператора<input type="password" name="operator_password" data-operator-password autocomplete="new-password" autocapitalize="none" enterkeyhint="go" required maxlength="512"></label><p>'+text.authPending+'</p><button type="submit" data-save>'+text.save+'</button><p class="sub" data-auth-message role="status" aria-live="polite" aria-atomic="true" tabindex="-1"></p></form><div data-accounts-capability aria-live="polite"></div><section data-public-link-proof hidden><button type="button" data-verify-public-link>Проверить доступ к ссылке клиента</button><p class="sub" data-public-link-proof-result role="status" aria-live="polite"></p></section><button type="button" data-test>Проверить Operator</button><button type="button" data-import>Импортировать доступные accounts</button><button type="button" data-create-companies>Создать CRM-компании из accounts</button><button type="button" data-disconnect>'+text.disconnect+'</button><p>Проверка читает только /user/me. Импорт запрашивает список /user/accounts и сохраняет полученные account ID; полнота выдачи Operator не проверена. Пропавшие записи не удаляются, данные в Operator не отправляются.</p><p>Создание компаний — отдельное подтверждаемое действие по account ID, полученному из запроса /user/accounts текущего активного подключения. Название новой компании берётся из account; при совпадении названия автоматической привязки не будет — требуется ручная проверка. Телефон и email остаются пустыми. В Operator ничего не записывается.</p><div data-catalog aria-live="polite"></div>';
       const testControl = $(connection, '[data-test]');
       testControl.textContent = 'Проверить доступ к accounts';
       const testDescription = Array.from(connection.querySelectorAll('p'))
@@ -172,6 +184,33 @@
         };
       };
       renderAccountsCapability();
+      const proofSection=$(connection,'[data-public-link-proof]');
+      const proofButton=$(proofSection,'[data-verify-public-link]');
+      const proofResult=$(proofSection,'[data-public-link-proof-result]');
+      proofButton.onclick=async()=>{
+        const candidate=state.pending_auth_received_at;
+        if(current!==revision||proofSection.hidden||proofButton.disabled||!candidate||
+            !window.confirm('Проверить сохранённый JWT Operator на заранее настроенном тестовом аккаунте? Operator вернёт существующую ссылку или выдаст одну, если её нет. Доступы и подключение не изменятся.'))return;
+        proofBusy=true;displayedProofRevision=candidate;renderStatus();proofResult.textContent=text.waiting;
+        try{
+          const response=await request('/api/platform/integrations/beinsystems-operator',{
+            action:'verify_public_link_proof',candidate_received_at:candidate,
+          });
+          if(current!==revision||state.pending_auth_received_at!==candidate)return;
+          if(response.public_link_proof?.verified!==true||response.public_link_proof.candidate_received_at!==candidate)
+            throw Error('Operator не подтвердил проверку.');
+          confirmedProofRevision=candidate;
+          proofResult.textContent='Operator подтвердил доступ к ссылке на тестовом аккаунте. Интеграция не активирована.';
+        }catch(error){
+          if(current===revision&&state.pending_auth_received_at===candidate){
+            if(!error.status||error.status>=500)confirmedProofRevision=candidate; // No retry after an ambiguous result.
+            proofResult.textContent=error.message;
+          }
+        }finally{
+          if(current===revision){proofBusy=false;renderStatus();}
+        }
+      };
+      renderStatus();
       if (state.pending_auth_received) showAuthMessage(text.tokenPending);
       const run = async (button, fn) => {
         button.disabled = true; message.textContent = text.waiting;

@@ -250,7 +250,8 @@ def first_company_batch_plan_enabled(tenant):
 
 def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
             pending_auth_me_verified=False, pending_auth_accounts_access_verified=False,
-            legacy_pending_auth_received=False, accounts_only_ready=False, batch_plan_enabled=False):
+            legacy_pending_auth_received=False, accounts_only_ready=False, batch_plan_enabled=False,
+            public_link_proof_available=False):
     row = row or {}
     return {
         "provider": PROVIDER,
@@ -270,6 +271,7 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
         "pending_auth_accounts_access_verified": bool(pending_auth_accounts_access_verified),
         "legacy_pending_auth_received": bool(legacy_pending_auth_received),
         "accounts_only_ready": bool(accounts_only_ready),
+        "pending_public_link_proof_available": bool(public_link_proof_available),
         "first_company_batch_preview_enabled": first_company_batch_preview_enabled(),
         "first_company_batch_plan_enabled": batch_plan_enabled,
         "pending_auth_received_at": (
@@ -285,6 +287,8 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
 
 
 def status(profile):
+    from tenant_operator_public_link_proof import probe_configured
+
     tenant = _tenant(profile)
     try:
         actor = int(profile.get("telegram_id"))
@@ -313,6 +317,9 @@ def status(profile):
         pending_auth_accounts_access_verified=bool((pending or {}).get("accounts_access_verified_at")),
         legacy_pending_auth_received=bool(legacy_pending),
         accounts_only_ready=accounts_only_ready,
+        public_link_proof_available=bool(pending and current.get("role") == "owner"
+            and not ((row or {}).get("status") in {"configured", "connected"})
+            and probe_configured()),
         batch_plan_enabled=(current.get("role") == "owner" and first_company_batch_plan_enabled(tenant)),
     )
 
