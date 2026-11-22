@@ -14,9 +14,9 @@
     en:{empty:'No Operator accounts found.',error:'Could not find Operator accounts.',bindError:'Could not link the Operator account.',}
   };
   const linkLabels={
-    ru:{label:'Ссылка для клиента',copy:'Скопировать ссылку',copied:'Ссылка скопирована',unavailable:'Ссылка для этой компании недоступна.',error:'Operator не подтвердил выдачу ссылки.',copyError:'Ссылка получена. Нажмите ещё раз, чтобы скопировать.',unsupported:'Копирование недоступно в этом браузере.'},
-    az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',unavailable:'Bu şirkət üçün link əlçatan deyil.',error:'Operator linkin verilməsini təsdiqləmədi.',copyError:'Link alındı. Kopyalamaq üçün yenidən basın.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
-    en:{label:'Customer link',copy:'Copy link',copied:'Link copied',unavailable:'No link is available for this company.',error:'Operator did not confirm the link request.',copyError:'Link obtained. Click again to copy it.',unsupported:'Copying is unavailable in this browser.'}
+    ru:{label:'Ссылка для клиента',copy:'Скопировать ссылку',copied:'Ссылка скопирована',error:'Не удалось получить ссылку. Повторите попытку.',copyError:'Браузер не скопировал ссылку. Повторите попытку.',unsupported:'Копирование недоступно в этом браузере.'},
+    az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',error:'Linki almaq mümkün olmadı. Yenidən cəhd edin.',copyError:'Brauzer linki kopyalamadı. Yenidən cəhd edin.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
+    en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.'}
   };
   const linkProblems={
     ru:{not_found:'Operator не вернул существующую ссылку.',not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
@@ -60,7 +60,7 @@
   const linkCurrent=(s,company)=>current(s)&&s.section.closest('dialog')?.open===true&&
     !s.writing&&s.binding?.company_id===company;
   function clearPublicLink(s){
-    s.linkRequest?.abort();s.linkRequest=null;s.linkCompany=null;s.linkUrl=null;
+    s.linkRequest?.abort();s.linkRequest=null;s.linkCompany=null;
     s.linkBox.hidden=true;s.linkCopy.disabled=false;s.linkStatus.textContent='';
   }
   function syncPublicLink(s,force=false){
@@ -84,24 +84,21 @@
     }
     const read=new AbortController();s.linkRequest=read;s.linkCopy.disabled=true;s.linkStatus.textContent='';
     const active=()=>s.linkRequest===read&&linkCurrent(s,company);
-    let uncertain=false;
-    const pending=s.linkUrl?Promise.resolve(s.linkUrl):request(publicLinkEndpoint,s.member,
+    let received=false;
+    const pending=request(publicLinkEndpoint,s.member,
       {...s.route,expected_company_id:company},true,read.signal).then(({public_link:link})=>{
         if(!active())throw Error('stale');
-        if(['unavailable','not_found','not_connected','not_linked'].includes(link?.state))
+        if(['not_found','not_connected','not_linked'].includes(link?.state))
           throw Object.assign(Error('unavailable'),{status:404,linkState:link.state});
         if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
           throw Error('unconfirmed');
-        s.linkUrl=link.url;return link.url;
+        received=true;
+        return link.url;
       });
     // Call write in the original gesture. Safari requires this even when the
     // item data itself cannot exist until the verified Operator reply arrives.
     let gestureWrite=null;
-    try{
-      if(s.linkUrl&&typeof navigator.clipboard?.writeText==='function')
-        gestureWrite=Promise.resolve(navigator.clipboard.writeText(s.linkUrl));
-      else gestureWrite=writePendingClipboard(pending);
-    }catch{}
+    try{gestureWrite=writePendingClipboard(pending);}catch{}
     const wrote=gestureWrite?.then(()=>true,()=>false);
     try{
       const url=await pending;
@@ -112,11 +109,10 @@
       if(active())s.linkStatus.textContent=linkText('copied');
     }catch(error){
       if(!active())return;
-      uncertain=!s.linkUrl&&(!error.status||error.status>=500||error.status===409);
       const problem=error.linkState||(error.status===424?'rejected':error.status===403?'denied':null);
-      s.linkStatus.textContent=linkProblem(problem)||linkText(s.linkUrl?'copyError':uncertain?'error':'unavailable');
+      s.linkStatus.textContent=linkProblem(problem)||linkText(received?'copyError':'error');
     }finally{
-      if(s.linkRequest===read){s.linkRequest=null;if(linkCurrent(s,company))s.linkCopy.disabled=uncertain;}
+      if(s.linkRequest===read){s.linkRequest=null;if(linkCurrent(s,company))s.linkCopy.disabled=false;}
     }
   }
   function mountPublicLink(s){

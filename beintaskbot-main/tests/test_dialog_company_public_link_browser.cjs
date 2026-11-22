@@ -31,7 +31,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'../.support-test-deps/n
   });
   const row=page.locator('[data-company-public-link]'),icon=row.getByRole('button',{name:'Linki kopyala'});
   assert.equal(await row.locator('span').textContent(),'Müştəri linki');
-  assert.equal(calls.length,0,'opening never calls issuance');
+  assert.equal(calls.length,0,'opening does not look up the link');
   await icon.click();
   await row.getByText('Link kopyalandı',{exact:true}).waitFor();
   assert.deepEqual(calls,[{method:'POST',body:{provider:'connect',lead_id:'42',channel_id:'source',
@@ -40,7 +40,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'../.support-test-deps/n
   assert(!((await row.innerHTML()).includes(url)));
   await icon.click();await row.getByText('Link kopyalandı',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),url);
-  assert.equal(calls.length,1,'second click does not reissue');
-  console.log('PASS: Chromium 360px one-click clipboard and same-link reuse');
+  assert.equal(calls.length,2,'second click verifies the existing link again');
+  console.log('PASS: Chromium 360px one-click clipboard with revalidation');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
