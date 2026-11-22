@@ -2099,6 +2099,10 @@
         query.set('before',before);
         const earlier=await api('dialogs/history?'+query);
         if(!same()||currentPage!==page||!button.isConnected||!sameDialog(earlier.dialog,route))return;
+        if(earlier.dialog.history_pair_id!==page.dialog.history_pair_id){
+          await openDialog(route,true);
+          return;
+        }
         const height=chat.scrollHeight,top=chat.scrollTop,viewportTop=chat.getBoundingClientRect().top,
           anchor=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>viewportTop+1),
           anchorTop=anchor?.getBoundingClientRect().top;

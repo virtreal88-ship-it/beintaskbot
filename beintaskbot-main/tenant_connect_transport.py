@@ -354,6 +354,8 @@ def _schema(conn) -> None:
           PRIMARY KEY(tenant_id,connect_channel_id,conversation_id,event_id))''')
         from tenant_connect_dialog_equivalence import schema as equivalence_schema
         equivalence_schema(cur)
+        from tenant_whatsapp_history_pairs import migrate as migrate_history_pairs
+        migrate_history_pairs(cur)
         from tenant_connect_owner_identity import schema as owner_identity_schema
         owner_identity_schema(cur)
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_call_retractions (
