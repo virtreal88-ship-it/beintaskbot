@@ -18,6 +18,12 @@
     az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',unavailable:'Bu şirkət üçün link əlçatan deyil.',error:'Operator linkin verilməsini təsdiqləmədi.',copyError:'Link alındı. Kopyalamaq üçün yenidən basın.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',unavailable:'No link is available for this company.',error:'Operator did not confirm the link request.',copyError:'Link obtained. Click again to copy it.',unsupported:'Copying is unavailable in this browser.'}
   };
+  const linkProblems={
+    ru:{not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
+    az:{not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
+    en:{not_connected:'Operator is disconnected.',not_linked:'This company has no verified Operator account link.',rejected:'Operator rejected the link request.',denied:'You do not have access to this company’s link.'}
+  };
+  const linkProblem=key=>(linkProblems[window.tenantI18n?.language]||linkProblems.az)[key];
   const linkText=key=>(linkLabels[window.tenantI18n?.language]||linkLabels.az)[key];
   const t=key=>(labels[window.tenantI18n?.language]||labels.az)[key];
   const copy=key=>(operatorLabels[window.tenantI18n?.language]||operatorLabels.az)[key];
@@ -82,7 +88,8 @@
     const pending=s.linkUrl?Promise.resolve(s.linkUrl):request(publicLinkEndpoint,s.member,
       {...s.route,expected_company_id:company},true,read.signal).then(({public_link:link})=>{
         if(!active())throw Error('stale');
-        if(link?.state==='unavailable')throw Object.assign(Error('unavailable'),{status:404});
+        if(['unavailable','not_connected','not_linked'].includes(link?.state))
+          throw Object.assign(Error('unavailable'),{status:404,linkState:link.state});
         if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
           throw Error('unconfirmed');
         s.linkUrl=link.url;return link.url;
@@ -106,7 +113,8 @@
     }catch(error){
       if(!active())return;
       uncertain=!s.linkUrl&&(!error.status||error.status>=500||error.status===409);
-      s.linkStatus.textContent=linkText(s.linkUrl?'copyError':uncertain?'error':'unavailable');
+      const problem=error.linkState||(error.status===424?'rejected':error.status===403?'denied':null);
+      s.linkStatus.textContent=linkProblem(problem)||linkText(s.linkUrl?'copyError':uncertain?'error':'unavailable');
     }finally{
       if(s.linkRequest===read){s.linkRequest=null;if(linkCurrent(s,company))s.linkCopy.disabled=uncertain;}
     }

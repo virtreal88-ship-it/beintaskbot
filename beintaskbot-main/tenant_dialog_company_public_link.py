@@ -115,9 +115,9 @@ def _snapshot(profile, route, expected_company):
             integration = operator._operator_row(cur, tenant)
             generation, instance = operator._link_connection_scope(integration)
             if not generation or not instance or integration.get('status') != 'connected':
-                return None
+                return 'not_connected'
             account = _linked_account(cur, tenant, expected_company, generation, instance)
-            return (tenant, account, generation, instance) if account else None
+            return (tenant, account, generation, instance) if account else 'not_linked'
 
 
 def issue_link(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id):
@@ -128,8 +128,8 @@ def issue_link(profile, *, provider, lead_id, channel_id, conversation_id, expec
         raise operator.OperatorError('Компания диалога не указана.')
     try:
         before = _snapshot(profile, route, company)
-        if before is None:
-            return {'state': 'unavailable'}
+        if isinstance(before, str):
+            return {'state': before}
         tenant, account, generation, instance = before
         credentials = operator._credentials(tenant)
         if (credentials['generation'], credentials['connection_instance_id']) != (generation, instance):

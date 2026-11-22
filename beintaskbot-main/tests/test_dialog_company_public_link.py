@@ -76,7 +76,7 @@ def test_no_provider_call_without_proven_mapping_and_recheck_after(monkeypatch):
     monkeypatch.setattr(operator, '_tenant', lambda p: 'tenant')
     credentials = {'generation': 'g', 'connection_instance_id': 'i', 'token': 'synthetic',
                    'base_url': operator.OPERATOR_API_BASE_URL}
-    authorize = Mock(return_value=None)
+    authorize = Mock(return_value='not_connected')
     get_credentials = Mock(return_value=credentials)
     audit = Mock()
     upstream = Mock(return_value=URL)
@@ -84,7 +84,9 @@ def test_no_provider_call_without_proven_mapping_and_recheck_after(monkeypatch):
     monkeypatch.setattr(operator, '_credentials', get_credentials)
     monkeypatch.setattr(operator, '_record_operator_request', audit)
     monkeypatch.setattr(link, '_issue_public_link', upstream)
-    assert link.issue_link({}, **ROUTE) == {'state': 'unavailable'}
+    assert link.issue_link({}, **ROUTE) == {'state': 'not_connected'}
+    authorize.return_value = 'not_linked'
+    assert link.issue_link({}, **ROUTE) == {'state': 'not_linked'}
     for mock in (get_credentials, audit, upstream):
         mock.assert_not_called()
     before = ('tenant', ACCOUNT, 'g', 'i')

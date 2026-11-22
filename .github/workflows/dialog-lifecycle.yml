@@ -4,6 +4,8 @@ on:
     paths:
       - 'beintaskbot-main/tenant_dialog_lifecycle.py'
       - 'beintaskbot-main/tenant_dialog_company_binding.py'
+      - 'beintaskbot-main/tenant_dialog_company_public_link.py'
+      - 'beintaskbot-main/tests/test_dialog_company_public_link*'
       - 'beintaskbot-main/tenant_dialog_company_operator.py'
       - 'beintaskbot-main/tenant_operator_company_name_guard.py'
       - 'beintaskbot-main/tenant_crm_native_companies.py'
@@ -69,10 +71,13 @@ jobs:
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26
       - name: Lifecycle SQL, ownership, AI and native races
         run: python -m pytest -q --tb=short tests/test_dialog_lifecycle*.py tests/test_dialog_completion_preview.py tests/test_dialog_completion_retry.py tests/test_*rollout*.py tests/test_dialog_episode_cases.py tests/test_tenant_chat_api.py tests/test_tenant_notification_center.py tests/test_knowledge_candidates.py tests/test_tenant_web_routes.py
+      - name: Public-link authorization and status
+        run: python -m pytest -q --tb=short tests/test_dialog_company_public_link.py tests/test_dialog_company_public_link_pglite.py
       - name: UI lifecycle and repeated actions
         run: |
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_company_ui.cjs
+          NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_company_public_link_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_lifecycle_bulk_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_bulk_interrupted_ui.cjs
           NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_group_cards_ui.cjs
