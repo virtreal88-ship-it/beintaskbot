@@ -579,7 +579,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             active.return_value = row
             result = operator.staff_employee_users(profile)
             request.assert_called_once_with("profile_users", {"account": account}, token="synthetic-token",
-                                            base_url="https://operator-api.beinsystems.az/v1")
+                                            base_url="https://operator-api.beinsystems.az/v1",
+                                            requests_staff_directory=True)
             audit.assert_called_once_with(profile, "profile_users", {"account": account})
             self.assertEqual(set(result), {"users", "selection_revision"})
             self.assertEqual([x["login"] for x in result["users"]], ["operator_a", "operator_b"])
@@ -711,6 +712,103 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             self.assertIn(operator._STAFF_SELECTION_EVIDENCE, calls[insert].args[1])
             self.assertIn("operator_employee_link_confirmed", calls[-1].args[0])
             conn.commit.assert_called_once()
+
+    def test_staff_roster_and_bind_recheck_fail_closed_on_provider_denial(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        account = "synthetic-staff"
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        instance = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        metadata = {"generation": "gen1", "connection_instance_id": instance}
+        credentials = {**metadata, "token": "synthetic-jwt", "base_url": base}
+        row = {"status": "connected", "secrets": b"synthetic", "metadata": metadata}
+        scope = {"tenant": TENANT, "actor": 7, "account": account,
+                 "generation": metadata["generation"], "instance": instance}
+        logger = MagicMock()
+        cases = (
+            (401, 'invalid_token', {}, operator_api.employee_users_handler),
+            (403, 'insufficient_scope', {}, operator_api.employee_users_handler),
+            (401, 'invalid_token', {"member_telegram_id": 19, "login": "known",
+                                    "selection_revision": "opaque"}, operator_api.employee_links_handler),
+            (403, 'insufficient_scope', {"member_telegram_id": 19, "login": "known",
+                                         "selection_revision": "opaque"}, operator_api.employee_links_handler),
+        )
+        for status, challenge, payload, handler in cases:
+            response = FakeRequestsResponse(
+                {"detail": "private upstream detail synthetic-jwt"},
+                status_code=status, headers={"WWW-Authenticate": f'Bearer error="{challenge}"'})
+            transport = FakeRequestsSession(response)
+            conn, cursor = MagicMock(), MagicMock()
+            conn.__enter__.return_value = conn
+            conn.cursor.return_value.__enter__.return_value = cursor
+            with (
+                self.subTest(status=status, handler=handler.__name__),
+                patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT, operator._STAFF_ACCOUNT_ENV: account}),
+                patch.object(operator_api, "_body", new=AsyncMock(return_value=payload)),
+                patch.object(operator, "_connect", return_value=conn),
+                patch.object(operator, "_ensure_schema"),
+                patch.object(operator, "_current_profile", return_value=profile),
+                patch.object(operator, "_operator_row", return_value=row) as integration,
+                patch.object(operator, "_credentials", return_value=credentials),
+                patch.object(operator, "_record_operator_read") as audit,
+                patch.object(operator, "_staff_selection_decode", return_value={"scope": scope, "members": "digest"}),
+                patch.object(operator, "_NoRedirectRequestsSession", return_value=transport),
+                patch.object(operator, "build_opener") as urllib_opener,
+            ):
+                endpoint = handler(lambda _: profile, "https://crm.example", logger)
+                result = asyncio.run(endpoint(MagicMock(method="POST")))
+                self.assertEqual(result.status, 502)
+                self.assertEqual(result.headers["Cache-Control"], "no-store")
+                self.assertEqual(set(json.loads(result.text)), {"success", "error"})
+                self.assertIn(challenge, json.loads(result.text)["error"])
+                for secret in ("private upstream detail", "synthetic-jwt", account, "opaque"):
+                    self.assertNotIn(secret, result.text)
+                self.assertEqual(transport.url, base + "/user/profileUsers")
+                self.assertEqual(transport.post_calls, 1)
+                self.assertEqual(transport.get_calls, 0)
+                self.assertEqual(transport.kwargs["json"], {"account": account})
+                self.assertEqual(transport.kwargs["headers"], {
+                    "Authorization": "Bearer synthetic-jwt", "Accept": "application/json"})
+                self.assertFalse(transport.kwargs["allow_redirects"])
+                self.assertTrue(transport.kwargs["verify"])
+                self.assertTrue(transport.kwargs["stream"])
+                self.assertFalse(transport.trust_env)
+                self.assertFalse(response.iterated)
+                self.assertTrue(response.closed)
+                self.assertTrue(transport.closed)
+                urllib_opener.assert_not_called()
+                audit.assert_called_once_with(profile, "profile_users", {"account": account})
+                self.assertEqual(integration.call_count, 2)
+                cursor.execute.assert_not_called()
+                conn.commit.assert_not_called()
+
+    def test_requests_staff_option_is_exact_route_only_and_preserves_redirect_and_size_limits(self):
+        base = "https://operator-api.beinsystems.az/v1"
+        account = {"account": "synthetic-staff"}
+        for bad_endpoint, bad_payload, bad_base in (
+                ("me", account, base), ("accounts", account, base),
+                ("profile_users", {}, base), ("profile_users", {**account, "search": "foo"}, base),
+                ("profile_users", account, "https://example.invalid/v1")):
+            with self.subTest(endpoint=bad_endpoint, payload=bad_payload, base=bad_base), \
+                 patch.object(operator, "_NoRedirectRequestsSession") as transport:
+                with self.assertRaises(operator.OperatorError):
+                    operator._request_operator(bad_endpoint, bad_payload, token="synthetic",
+                                               base_url=bad_base, requests_staff_directory=True)
+                transport.assert_not_called()
+        for response in (
+                FakeRequestsResponse({"detail": "private redirect"}, status_code=307,
+                                     headers={"Location": "https://example.invalid"}),
+                FakeRequestsResponse(chunks=[b"x" * 5])):
+            fake = FakeRequestsSession(response)
+            with self.subTest(status=response.status_code), \
+                 patch.object(operator, "MAX_RESPONSE_BYTES", 4), \
+                 patch.object(operator, "_NoRedirectRequestsSession", return_value=fake):
+                with self.assertRaises(operator.OperatorError) as raised:
+                    operator._request_operator("profile_users", account, token="synthetic",
+                                               base_url=base, requests_staff_directory=True)
+                self.assertEqual(fake.post_calls, 1)
+                self.assertEqual(response.iterated, response.status_code == 200)
+                self.assertTrue(response.closed)
+                self.assertNotIn("private redirect", str(raised.exception))
 
     def test_staff_http_accepts_only_exact_new_selector_shape_or_legacy(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}

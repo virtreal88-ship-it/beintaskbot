@@ -683,6 +683,13 @@ class _NoRedirectRequestsSession(requests.Session):
 
 def _request_accounts_with_requests(url, payload, token):
     """Use the confirmed requests transport for the documented accounts read."""
+    return _post_read_with_requests(url, payload, token)
+
+
+def _post_read_with_requests(url, payload, token, *, accept_json=False):
+    headers = {"Authorization": "Bearer " + str(token)}
+    if accept_json:
+        headers["Accept"] = "application/json"
     try:
         with _NoRedirectRequestsSession() as session:
             # Keep the verified direct TLS path used by the successful control.
@@ -690,7 +697,7 @@ def _request_accounts_with_requests(url, payload, token):
             with session.post(
                 url,
                 json=payload,
-                headers={"Authorization": "Bearer " + str(token)},
+                headers=headers,
                 timeout=REQUEST_TIMEOUT_SECONDS,
                 allow_redirects=False,
                 stream=True,
@@ -745,12 +752,16 @@ def _request_me_with_requests(url, token):
 
 
 def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
-                      requests_me=False, first_batch_accounts=False):
+                      requests_me=False, first_batch_accounts=False, requests_staff_directory=False):
     """Call one allowlisted documented read method; never follows redirects."""
     if endpoint not in READ_ENDPOINTS:
         raise OperatorError("Операция Operator пока не поддерживается.")
     if requests_me and (endpoint != "me" or opener is not None):
         raise OperatorError("Операция Operator пока не поддерживается.")
+    if requests_staff_directory and (
+            endpoint != "profile_users" or opener is not None or not isinstance(payload, dict)
+            or set(payload) != {"account"} or not _login_identifier(payload["account"])):
+        raise OperatorError("Параметры запроса списка сотрудников Operator некорректны.")
     if first_batch_accounts and (endpoint != "accounts" or payload not in (
             {"search": "", "limit": 100}, {"search": "", "limit": ACCOUNTS_REQUEST_LIMIT})):
         raise OperatorError("Параметры запроса первой выборки Operator некорректны.")
@@ -785,6 +796,8 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         raw = _request_accounts_with_requests(base + path, payload, token)
     elif endpoint == "me" and requests_me:
         raw = _request_me_with_requests(base + path, token)
+    elif requests_staff_directory:
+        raw = _post_read_with_requests(base + path, payload, token, accept_json=True)
     else:
         method = "GET" if endpoint == "me" else "POST"
         body = None if method == "GET" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1634,7 +1647,8 @@ def _staff_directory(profile, account, *, expected_scope=None):
     if _staff_connection_scope(profile, account) != scope:
         raise error
     response = _request_operator("profile_users", {"account": account},
-                                 token=credentials["token"], base_url=credentials["base_url"])
+                                 token=credentials["token"], base_url=credentials["base_url"],
+                                 requests_staff_directory=True)
     if _staff_connection_scope(profile, account) != scope:
         raise error
     # Reject conflicting scope echoes if provided. The documented request is
