@@ -18,11 +18,12 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
-    if(url.includes('/api/platform/crm/native/companies'))return{ok:true,json:async()=>({success:true,companies:[]})};
     if(url.includes('/operator/dialog-company')){
      const q=new URL(url,'https://example.test').searchParams;
      if(opt.method==='POST'){
-      const cmd=JSON.parse(opt.body);window.accountCalls.push(cmd);
+      const cmd=JSON.parse(opt.body);
+      if(cmd.company_search)return{ok:true,json:async()=>({success:true,companies:[]})};
+      window.accountCalls.push(cmd);
       if(cmd.operator_search)return{ok:true,json:async()=>({success:true,accounts:[{account:'synthetic_a'},{account:'synthetic_b'}]})};
       if(cmd.operator_account){window.boundOperator=true;return{ok:true,json:async()=>({success:true,binding:{company_id:'new',company_name:'Selected Operator account',can_manage:true}})};}
       throw Error('Unexpected mutation');
