@@ -113,3 +113,15 @@ def test_proof_mismatch_or_different_source_cannot_register(split,monkeypatch):
     with pytest.raises(TenantLinearError):
         pairs.confirm(PROFILE,channel,41,42)
     assert database.execute('SELECT * FROM saas_whatsapp_history_pairs')==[]
+
+
+def test_connect_upgrade_installs_pair_table_in_an_existing_schema(split):
+    from tenant_connect_transport import _schema
+
+    database,channel=split
+    database.execute('DROP TABLE saas_whatsapp_history_pairs')
+    database.commit()
+    _schema(database)
+    database.commit()
+    pairs.confirm(PROFILE,channel,41,50)
+    assert len(database.execute('SELECT id FROM saas_whatsapp_history_pairs'))==1
