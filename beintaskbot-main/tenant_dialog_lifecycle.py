@@ -467,6 +467,7 @@ def _mutate_once(profile, payload):
             from tenant_dialog_presence import is_online, work_status_routing_requested
             target = None
             eligible = True
+            transfer_source_active = False
             if action == 'start' and _manual_start_exempt_from_operator_routing(tenant,channel,policy):
                 # Preserve the active exact-source requirement formerly implicit
                 # in is_online. Keep this shared lock through the transition.
@@ -484,6 +485,9 @@ def _mutate_once(profile, payload):
                 if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor,filter_presence=False)}:
                     raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
                 eligible = is_online(cur,tenant,target,lock=True,source_channel=channel)
+                cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
+                    AND connect_channel_id=%s::uuid AND active FOR SHARE''',(tenant,channel))
+                transfer_source_active = bool(cur.fetchone())
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)
@@ -557,11 +561,8 @@ def _mutate_once(profile, payload):
                 if action=='transfer':
                     if row['state'] not in {'accepted','closed','dismissed'}:
                         raise TenantLinearError('Диалог недоступен для передачи.',409)
-                    if row['state']!='accepted':
-                        cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
-                            AND connect_channel_id=%s::uuid AND active FOR SHARE''',(tenant,channel))
-                        if not cur.fetchone():
-                            raise TenantLinearError('Источник недоступен.',403)
+                    if row['state']!='accepted' and not transfer_source_active:
+                        raise TenantLinearError('Источник недоступен.',403)
                     cur.execute('UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(target,tenant,channel,conversation))
                     # A handed-off completed dialogue keeps its original episode
                     # and case attribution. Only current dialogue ownership moves.
