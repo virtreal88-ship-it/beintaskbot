@@ -1,7 +1,8 @@
-"""Explicitly obtain a public link for the current Operator company of an exact dialogue."""
+"""Read the existing Operator link for the current company of an exact dialogue."""
 import json
 import re
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, build_opener
 
 import tenant_beinsystems_operator as operator
@@ -12,8 +13,7 @@ from tenant_operator_access import access
 
 
 _ENDPOINT = 'dialog_company_public_link'
-_API_PATH = '/task/publicLink'
-_PUBLIC_BASE_URL = 'https://operator.beinsystems.az'
+_API_PATH = '/task/getPublicLink'
 _SHORT_URL = re.compile(r'https://1000\.az/[A-Za-z0-9_-]{6}', re.ASCII)
 _MAX_RESULT_BYTES = 16_384
 
@@ -23,6 +23,8 @@ def _public_link(response, account):
     if not isinstance(response, dict) or response.get('status') != 'success':
         raise operator.OperatorError('Operator не подтвердил публичную ссылку.', 502)
     data = response.get('data')
+    if 'data' in response and data is None:
+        return None
     if not isinstance(data, dict) or ('account' in data and data['account'] != account):
         raise operator.OperatorError('Operator не подтвердил публичную ссылку.', 502)
     url = data.get('short_url')
@@ -31,15 +33,14 @@ def _public_link(response, account):
     raise operator.OperatorError('Operator вернул некорректную публичную ссылку.', 502)
 
 
-def _issue_public_link(account, *, token, base_url, opener=None):
-    """Perform one explicit issuance. Never follow redirects or retry."""
+def _lookup_public_link(account, *, token, base_url, opener=None):
+    """Use only Operator's read endpoint, with no redirects or issuance fallback."""
     if base_url != operator.OPERATOR_API_BASE_URL or base_url != operator.api_base_url():
         raise operator.OperatorError('Адрес Operator API не настроен.', 503)
-    body = json.dumps({'account': account, 'public_base_url': _PUBLIC_BASE_URL},
-                      ensure_ascii=False).encode('utf-8')
-    request = Request(base_url + _API_PATH, method='POST', data=body, headers={
+    query = urlencode({'account': account})
+    request = Request(f'{base_url}{_API_PATH}?{query}', method='GET', headers={
         'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json', 'Accept': 'application/json',
+        'Accept': 'application/json',
     })
     try:
         with (opener or build_opener(operator._NoRedirect())).open(
@@ -49,12 +50,14 @@ def _issue_public_link(account, *, token, base_url, opener=None):
             return _public_link(json.loads(raw.decode('utf-8')), account)
     except HTTPError as error:
         if error.code in (401, 403):
-            raise operator.OperatorError('Operator не разрешил выдать ссылку.', 424) from None
+            raise operator.OperatorError('Operator не разрешил прочитать ссылку.', 424) from None
+        if error.code == 404:
+            return None
         if 400 <= error.code < 500:
             raise operator.OperatorError('Operator отклонил запрос ссылки.', 424) from None
     except (URLError, TimeoutError, OSError, ValueError):
         pass
-    raise operator.OperatorError('Действие Operator не подтверждено. Не повторяйте автоматически.', 502)
+    raise operator.OperatorError('Чтение ссылки Operator не подтверждено.', 502)
 
 
 def _linked_account(cur, tenant, company, generation, instance):
@@ -102,8 +105,8 @@ def _snapshot(profile, route, expected_company):
                     or not policy.allows_action('operator_data', 'view')):
                 raise operator.OperatorError('Публичная ссылка недоступна.', 403)
             access(cur, profile, 'dialogs', 'update')
-            # Issuing a company link is not writing to the conversation. A
-            # closed, owned dialogue remains eligible without starting it again.
+            # Retain the existing link-access policy. A closed, owned dialogue
+            # remains eligible without starting another conversation.
             require_source(cur, tenant, policy, route[0], route[2], 'update')
             dialogue._prove(cur, tenant, policy, route)
             table, _, _ = dialogue._pred(tenant, route)
@@ -120,7 +123,7 @@ def _snapshot(profile, route, expected_company):
             return (tenant, account, generation, instance) if account else 'not_linked'
 
 
-def issue_link(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id):
+def lookup_link(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id):
     operator._tenant(profile)
     route = dialogue._key(provider, lead_id, channel_id, conversation_id)
     company = dialogue.normalize_company_id(expected_company_id)
@@ -134,13 +137,13 @@ def issue_link(profile, *, provider, lead_id, channel_id, conversation_id, expec
         credentials = operator._credentials(tenant)
         if (credentials['generation'], credentials['connection_instance_id']) != (generation, instance):
             raise operator.OperatorError('Подключение Operator изменилось.', 409)
-        operator._record_operator_request(profile, _ENDPOINT, {'account': account}, issuance=True)
+        operator._record_operator_read(profile, _ENDPOINT, {'account': account})
         if _snapshot(profile, route, company) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         # The account never comes from the request or the company display name.
-        url = _issue_public_link(account, token=credentials['token'], base_url=credentials['base_url'])
+        url = _lookup_public_link(account, token=credentials['token'], base_url=credentials['base_url'])
         if _snapshot(profile, route, company) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
-        return {'state': 'available', 'url': url}
+        return {'state': 'available', 'url': url} if url else {'state': 'not_found'}
     except TenantLinearError as error:
         raise operator.OperatorError(str(error), error.status) from error

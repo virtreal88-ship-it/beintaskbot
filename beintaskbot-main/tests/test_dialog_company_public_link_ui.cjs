@@ -42,20 +42,25 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   calls[0].finish({state:'available',url:'https://1000.az/Wrong1'});await tick();
   assert.equal(copied.length,0,'late first-company receipt cannot enter clipboard');
   press();clipboardFails=true;calls[1].finish({state:'available',url:URL});await tick();await tick();
-  assert.match(box().textContent,/yenidən basın/);assert(!box().innerHTML.includes(URL));
-  clipboardFails=false;press();await tick();assert.deepEqual(copied,[URL]);assert.equal(calls.length,2,'clipboard retry does not reissue');
-  mount('second','b');press();assert.equal(calls[2].channel,'b');
-  api.hidePublicLink();card.open=false;calls[2].finish({state:'available',url:URL});await tick();
+  assert.match(box().textContent,/Brauzer linki kopyalamadı/);assert(!box().innerHTML.includes(URL));
+  clipboardFails=false;press();calls[2].finish(undefined,403);await tick();
+  assert.equal(copied.length,0,'retry uses current authorization');
+  press();calls[3].finish({state:'available',url:URL});await tick();await tick();
+  assert.deepEqual(copied,[URL]);
+  mount('second','b');press();assert.equal(calls[4].channel,'b');
+  api.hidePublicLink();card.open=false;calls[4].finish({state:'available',url:URL});await tick();
   assert(box().hidden,'late closed-panel result never copies');
   assert.deepEqual(copied,[URL]);
-  card.open=true;api.refreshPublicLink();press();calls[3].finish(undefined,502);await tick();
-  assert(icon().disabled);press();assert.equal(calls.length,4,'ambiguous response does not reissue');
-  api.hidePublicLink();api.refreshPublicLink();press();calls[4].finish({state:'available',url:URL});
+  card.open=true;api.refreshPublicLink();press();calls[5].finish(undefined,502);await tick();
+  assert(!icon().disabled,'a read can be retried after an ambiguous failure');
+  press();calls[6].finish({state:'available',url:URL});
   for(let i=0;i<6;i++)await tick();
   assert.deepEqual(copied,[URL,URL]);assert.match(box().textContent,/Link kopyalandı/);
-  press();await tick();assert.deepEqual(copied,[URL,URL,URL]);assert.equal(calls.length,5,'sequential clicks copy the same URL without further requests');
+  press();calls[7].finish({state:'available',url:URL});await tick();await tick();
+  assert.deepEqual(copied,[URL,URL,URL]);assert.equal(calls.length,8,'sequential clicks verify the existing URL');
   mount('third');
   for(const [reply,status,message] of [
+    [{state:'not_found'},200,/Operator mövcud linki qaytarmadı/],
     [{state:'not_connected'},200,/Operator qoşulmayıb/],
     [{state:'not_linked'},200,/təsdiqlənmiş Operator hesabı/],
     [undefined,424,/Operator link sorğusunu rədd etdi/],
@@ -66,7 +71,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(copied.length,3,'failure does not change the clipboard');
   }
   Object.defineProperty(w.navigator,'clipboard',{value:undefined});
-  press();await tick();assert.equal(calls.length,9,'unsupported clipboard does not issue');
+  press();await tick();assert.equal(calls.length,13,'unsupported clipboard does not make a request');
   assert.match(box().textContent,/kopyalama əlçatan deyil/);
   api.clear();assert.equal(box(),null);
   dom.window.close();

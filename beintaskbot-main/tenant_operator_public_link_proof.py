@@ -1,11 +1,11 @@
 """One operator-owner requested demo check. Never activate or widen a pending JWT."""
 import os
 
-from tenant_beinsystems_operator import OperatorError, _record_operator_request
+from tenant_beinsystems_operator import OperatorError, _record_operator_read
 from tenant_beinsystems_operator_company_import import (
     _pending_candidate_fence, _revision, _verified_pending_identity,
 )
-from tenant_dialog_company_public_link import _ENDPOINT, _issue_public_link
+from tenant_dialog_company_public_link import _ENDPOINT, _lookup_public_link
 
 
 IDENTITY_ENV = 'BEINSYSTEMS_OPERATOR_PUBLIC_LINK_PROBE_IDENTIFIER'
@@ -39,10 +39,12 @@ def verify_public_link_proof(profile, candidate_received_at):
     tenant, actor, candidate, identity = _verified_pending_identity(profile,candidate_received_at)
     if identity['identifier'].casefold() != expected_identity.casefold():
         raise OperatorError('Сохранённый JWT принадлежит не ожидаемой учётной записи Operator.',409)
-    _record_operator_request(profile, _ENDPOINT, {'account': demo_account}, issuance=True)
+    _record_operator_read(profile, _ENDPOINT, {'account': demo_account})
     _pending_candidate_fence(profile, tenant, actor, candidate)
     # Reuse the exact same fixed-host transport and receipt validation as the
     # active integration, but do not return the URL or persist any capability.
-    _issue_public_link(demo_account, token=candidate['token'], base_url=candidate['base_url'])
+    link = _lookup_public_link(demo_account, token=candidate['token'], base_url=candidate['base_url'])
     _pending_candidate_fence(profile, tenant, actor, candidate)
+    if link is None:
+        raise OperatorError('Operator не вернул существующую ссылку тестового аккаунта.',404)
     return {'verified': True, 'candidate_received_at': _revision(candidate['received_at'])}

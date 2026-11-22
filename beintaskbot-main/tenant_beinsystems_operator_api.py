@@ -276,12 +276,12 @@ def dialog_company_public_link_handler(member: Callable, origin: str, logger):
         if not profile:
             return web.json_response({"success": False}, status=404, headers=headers)
         try:
-            from tenant_dialog_company_public_link import issue_link
+            from tenant_dialog_company_public_link import lookup_link
             data = await _body(request, profile, origin)
             fields = {"provider", "lead_id", "channel_id", "conversation_id", "expected_company_id"}
             if set(data) != fields:
                 raise operator.OperatorError("Поля публичной ссылки некорректны.")
-            result = await asyncio.to_thread(issue_link, profile, **data)
+            result = await asyncio.to_thread(lookup_link, profile, **data)
             return _json_response({"public_link": result})
         except operator.OperatorError as error:
             return web.json_response({"success": False}, status=error.status, headers=headers)

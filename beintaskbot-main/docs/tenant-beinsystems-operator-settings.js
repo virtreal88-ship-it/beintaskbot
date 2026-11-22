@@ -190,7 +190,7 @@
       proofButton.onclick=async()=>{
         const candidate=state.pending_auth_received_at;
         if(current!==revision||proofSection.hidden||proofButton.disabled||!candidate||
-            !window.confirm('Проверить сохранённый JWT Operator на заранее настроенном тестовом аккаунте? Operator вернёт существующую ссылку или выдаст одну, если её нет. Доступы и подключение не изменятся.'))return;
+            !window.confirm('Проверить сохранённый JWT Operator на заранее настроенном тестовом аккаунте? Operator проверит, доступна ли сохранённая ссылка.'))return;
         proofBusy=true;displayedProofRevision=candidate;renderStatus();proofResult.textContent=text.waiting;
         try{
           const response=await request('/api/platform/integrations/beinsystems-operator',{

@@ -15,9 +15,10 @@ request is sent.
 
 Only a confirmed click on the owner settings card invokes the test. It checks
 the exact saved candidate revision and identity using the existing fenced
-`/user/me` path. It then sends one get-or-create request for the configured
-demo account via the existing fixed-host `/task/publicLink` implementation.
-There are no automatic retries. The public-link value and credential are never
+`/user/me` path. It then reads one existing link for the configured demo account with
+`GET /task/getPublicLink?account=...`. The provider only exposes links
+issued from version 1.0.88 onward through this method. A missing or older
+link does not trigger issuance. There are no automatic retries. The public-link value and credential are never
 returned or logged; status and candidate revision are the entire UI result.
 A changed candidate or active connection makes even a successful upstream
 result ineligible to display. Any previously configured read-only accounts
