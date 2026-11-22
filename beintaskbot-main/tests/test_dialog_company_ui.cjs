@@ -28,6 +28,12 @@ const read=p=>fs.readFileSync(p,'utf8');
       const q=body||Object.fromEntries(u.searchParams),route=all.find(r=>String(r.lead_id)===q.lead_id);
       assert.deepEqual([q.provider,q.channel_id,q.conversation_id],[route.provider,route.channel_id,route.conversation_id]);
       assert.deepEqual([q.expected_tenant_id,q.expected_user_id],['tenant','33']);
+      if(body&&'company_search' in q){
+        assert.equal('company_id' in q,false);
+        assert.equal('operator_account' in q,false);
+        if(delaySearch)await new Promise(resolve=>{releaseSearch=resolve;});
+        return{ok:true,json:async()=>({success:true,companies:[{id:'existing-company',name:'Can bind'}]})};
+      }
       if(body&&'operator_search' in q){
         assert.equal('operator_account' in q,false);
         assert.equal('company_id' in q,false);
@@ -42,13 +48,6 @@ const read=p=>fs.readFileSync(p,'utf8');
       }else if(body){bindings.set(route.lead_id,q.company_id?named('<b>New company</b>',true):{company_id:null,can_manage:true,can_search_operator:bindings.get(route.lead_id)?.can_search_operator});}
       if(delayRead&&route===a)await new Promise(resolve=>{releaseRead=resolve;});
       return{ok:true,json:async()=>({success:true,binding:bindings.get(route.lead_id)})};
-    }
-    if(u.pathname==='/api/platform/crm/native/companies'){
-      if(delaySearch)await new Promise(resolve=>{releaseSearch=resolve;});
-      return{ok:true,json:async()=>({success:true,companies:[
-        {id:'visible-only',name:'Read only',actions:{update:false}},
-        {id:'writeable',name:'Can bind',actions:{update:true}}
-      ]})};
     }
     if(u.pathname.endsWith('/dialogs/history')){
       const route=all.find(r=>String(r.lead_id)===u.searchParams.get('lead_id'));
@@ -68,7 +67,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   const openSearch=()=>{search().focus();search().click();};
   const type=value=>{const input=search();input.value=value;input.dispatchEvent(new w.Event('input'));};
   const unbind=async()=>{section().querySelector('.operator-company-unlink').click();search().blur();await tick();await tick();};
-  const localReads=()=>calls.filter(c=>c.path.endsWith('/native/companies'));
+  const localReads=()=>calls.filter(c=>c.body?.company_search);
   const localWrites=()=>calls.filter(c=>c.body?.company_id);
   const source=async ix=>{const picker=$('#operatorComposerSourceSelect');picker.value=String(ix);picker.dispatchEvent(new w.Event('change'));await tick();await tick();};
   announce();await w.tenantOperator.refresh();await w.tenantOperator.openDialog(kommo);await tick();
@@ -119,6 +118,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   await source(1);assert.equal(value(),'Company B');assert(search().readOnly);
   delaySearch=false;releaseSearch();await tick();assert(search().readOnly&&!$('#operatorDialogueCompanySuggestions:not([hidden])'),'late search cannot repaint another group source');
   assert(search().readOnly,'read-only member cannot edit the company');
+  assert.equal(search().placeholder,'Company selection requires access');
   delayRead=true;await source(0);assert(releaseRead);
   await source(1);assert.equal(value(),'Company B');releaseRead();await tick();
   assert.equal(value(),'Company B','late source A binding never bleeds into source B');
@@ -177,6 +177,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   const priorReads=calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length;
   await w.tenantOperator.openDialog(freshCandidate);await tick();
   assert(!search().readOnly,'authorized history makes inline editing available immediately');
+  assert.equal(search().placeholder,'Find a company');
   assert.equal(calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length,priorReads,'no follow-up company GET for an authorized snapshot');
   assert(!calls.some(c=>c.path.includes('/send')));
   d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));assert(!section(),'auth transition immediately clears company');

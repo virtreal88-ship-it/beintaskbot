@@ -4,9 +4,9 @@
   const endpoint='/api/platform/operator/dialog-company';
   const publicLinkEndpoint=endpoint+'/public-link';
   const labels={
-    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
-    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
-    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No matching CRM companies.',error:'Could not get or change the company.'}
+    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
+    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
+    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',restricted:'Company selection requires access',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No matching CRM companies.',error:'Could not get or change the company.'}
   };
   const operatorLabels={
     ru:{empty:'Аккаунты Operator не найдены.',error:'Не удалось найти аккаунты Operator.',bindError:'Не удалось привязать аккаунт Operator.',},
@@ -185,7 +185,7 @@
     panel.id='operatorDialogueCompanyPicker';
     label.htmlFor=input.id='operatorDialogueCompanySearch';field.className='operator-company-link-row';
     input.type='search';input.maxLength=180;input.autocomplete='off';
-    input.placeholder=t('search');input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
     const unlink=button('×',()=>{
       if(!active()||s.writing||s.binding?.can_manage!==true)return;
       input.value='';schedule();input.focus({preventScroll:true});
@@ -202,7 +202,7 @@
     suggestions.id='operatorDialogueCompanySuggestions';suggestions.append(results);panel.append(suggestions);
     panel.addEventListener('focusout',event=>{
       if(panel.contains(event.relatedTarget)||!active()||s.writing||!s.editing)return;
-      if(!input.value.trim()&&s.binding?.company_id&&window.confirm(t('confirm'))){
+      if(!input.value.trim()&&s.binding?.company_id&&s.binding.can_unlink!==false&&window.confirm(t('confirm'))){
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
     });
@@ -221,7 +221,10 @@
     s.sync=()=>{
       const allowed=s.binding?.can_manage===true;
       input.readOnly=!allowed||s.writing;
-      unlink.hidden=!allowed||!s.binding.company_id||!input.value;
+      const hint=allowed?'search':s.binding===undefined?'loading':s.binding?'restricted':'unavailable';
+      input.placeholder=t(hint);
+      input.title=allowed?'':input.placeholder;
+      unlink.hidden=!allowed||s.binding.can_unlink===false||!s.binding.company_id||!input.value;
       unlink.disabled=s.writing;
       for(const result of results.querySelectorAll('button'))result.disabled=s.writing;
     };
@@ -239,12 +242,12 @@
       search=new AbortController();const {signal}=search;
       const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=4;
       localStatus.textContent=t('loading');operatorStatus.textContent=operatorSearch?t('loading'):'';
-      void request('/api/platform/crm/native/companies',s.member,{search:query},false,signal)
+      void request(endpoint,s.member,{...s.route,company_search:query},true,signal)
         .then(payload=>{
           if(!active()||seq!==serial)return;
           const choices=new Map();
           for(const row of payload.companies||[]){
-            if(row.actions?.update===true&&row.id&&row.name)choices.set(String(row.id),String(row.name));
+            if(row.id&&row.name)choices.set(String(row.id),String(row.name));
           }
           const items=[...choices].slice(0,5).map(([id,name])=>[name,{company_id:id}]);
           render(localRows,items);localStatus.textContent=items.length?'':t('empty');
@@ -298,7 +301,7 @@
       labelPublicLink(s);
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
-      }else paintHeader(s);
+      }else{paintHeader(s);s.sync();}
       return;
     }
     clear();

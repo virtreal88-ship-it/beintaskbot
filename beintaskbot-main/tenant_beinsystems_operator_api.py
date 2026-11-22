@@ -239,6 +239,9 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                     raise operator.OperatorError("Поля привязки компании некорректны.")
                 return _json_response({"binding": found})
             data = await _body(request, profile, origin)
+            if set(data) == exact | {"company_search"} and isinstance(data["company_search"],str):
+                choices = await asyncio.to_thread(exact_binding, profile, **data)
+                return _json_response({"companies": choices})
             if set(data) in (exact | {"operator_search"}, exact | {"operator_account"},
                              exact | {"operator_account", "expected_company_id"}):
                 from tenant_dialog_company_operator import chooser

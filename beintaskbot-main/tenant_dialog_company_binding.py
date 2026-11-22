@@ -271,7 +271,7 @@ def write_binding(cur, route, table, pred, keys, company, actor, expected=_UNCHE
 
 def read_dialogue_binding(cur, tenant, actor, policy, route):
     """The history route was already verified. Reuse the company endpoint's grants."""
-    if not is_operator_workspace(tenant):
+    if not is_operator_workspace(tenant) or policy.profile.get('tenant_status')!='active':
         return None
     try:
         exact = _key(route['provider'],route['lead_id'],route['channel_id'],route['conversation_id'])
@@ -280,18 +280,39 @@ def read_dialogue_binding(cur, tenant, actor, policy, route):
     table,_,_ = _pred(tenant,exact)
     if not _ready(cur,table):
         return None
-    return _binding_snapshot(cur,tenant,actor,policy,exact,_manage(cur,tenant,actor,policy,exact,write=False))
+    return _binding_snapshot(cur,tenant,policy,exact,_manage(cur,tenant,actor,policy,exact,write=False))
 
 
-def _binding_snapshot(cur, tenant, actor, policy, route, can_manage):
-    result = _read(cur,tenant,actor,route,can_manage)
-    if can_manage and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
+def _binding_snapshot(cur, tenant, policy, route, can_unlink):
+    # Only for a verified visible route. Expose the linked company name and ID,
+    # independently of full CRM access, with no profile or contact fields.
+    table, pred, keys = _pred(tenant,route)
+    cur.execute(f"""SELECT c.id::text AS company_id,c.name AS company_name
+        FROM (SELECT company_id FROM {table} WHERE {pred}) b
+        JOIN {COMPANIES} c ON c.tenant_id=%s::uuid AND c.id=b.company_id
+        WHERE c.archived_at IS NULL""", (*keys,tenant))
+    found = cur.fetchone() or {'company_id':None,'company_name':None}
+    result = {**found,'can_manage':True,'can_unlink':can_unlink}
+    if can_unlink and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
         result['can_search_operator'] = True
     return result
 
 
+def _company_choices(cur, tenant, term, *, match_contact=False):
+    if (not isinstance(term,str) or not 0<len(term.strip())<=120
+            or any(ord(char)<32 or ord(char)==127 for char in term)):
+        raise OperatorError('Некорректный поиск компании.')
+    search = term.strip()
+    columns = ("name","phone","email") if match_contact else ("name",)
+    matching = " OR ".join(f"strpos(lower({column}),lower(%s))>0" for column in columns)
+    cur.execute(f"""SELECT id::text AS id,name FROM {COMPANIES}
+      WHERE tenant_id=%s::uuid AND archived_at IS NULL AND ({matching})
+      ORDER BY lower(name),id LIMIT 5""", (tenant,*([search]*len(columns))))
+    return cur.fetchall()
+
+
 def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_id=_NO_WRITE,
-            expected_company_id=_UNCHECKED):
+            expected_company_id=_UNCHECKED, company_search=None):
     if not is_operator_workspace(profile.get('tenant_id')):
         raise OperatorError('Диалоги этого рабочего пространства недоступны.',404)
     route = _key(provider,lead_id,channel_id,conversation_id)
@@ -300,7 +321,7 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
         normalize_company_id(company_id)
     if expected_company_id is not _UNCHECKED:
         normalize_company_id(expected_company_id)
-    from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
+    from tenant_crm_native_access import CRMAccessError
     from tenant_operator_access import access
     try:
         with _connect() as conn:
@@ -308,23 +329,33 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                 tenant, actor, policy = access(cur,profile,'dialogs','view')
                 if policy.profile.get('tenant_status') != 'active':
                     raise OperatorError('Нет доступа к активному рабочему пространству.',403)
-                if write:
+                unlink = write and company_id is None
+                if unlink:
                     access(cur,profile,'dialogs','update')
-                allow_manage = _manage(cur,tenant,actor,policy,route,write=write)
-                if write and not allow_manage:
-                    raise OperatorError('Менять компанию диалога может только владелец.',403)
+                can_unlink = company_search is None and _manage(cur,tenant,actor,policy,route,write=unlink)
+                if unlink and not can_unlink:
+                    raise OperatorError('Снимать привязку компании может только владелец.',403)
                 _prove(cur,tenant,policy,route)
                 table, pred, keys = _pred(tenant,route)
                 if not _ready(cur,table):
                     raise OperatorError('Привязка компании для этого источника недоступна.',503)
+                if company_search is not None:
+                    # Preserve the owner's previous lookup by phone/email.
+                    # Dialogue access alone only permits matching by name.
+                    match_contact = (policy.profile.get('role')=='owner'
+                                     and policy.allows_action('companies','view'))
+                    return _company_choices(cur,tenant,company_search,match_contact=match_contact)
                 if write and company_id is not None:
-                    for action in ('view','update'):
-                        rights = current_access(cur,tenant,actor,'companies',action)
-                        if not locked_resource(cur,rights,'companies',action,COMPANIES,tenant,company_id):
-                            raise CRMAccessError()
+                    if expected_company_id is _UNCHECKED and policy.profile.get('role') != 'owner':
+                        raise OperatorError('Обновите диалог перед выбором компании.',409)
+                    cur.execute(f"""SELECT 1 FROM {COMPANIES}
+                        WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR SHARE""",
+                        (tenant,company_id))
+                    if not cur.fetchone():
+                        raise OperatorError('Компания недоступна для привязки.',403)
                 if write:
                     write_binding(cur,route,table,pred,keys,company_id,actor,expected_company_id)
-                result = _binding_snapshot(cur,tenant,actor,policy,route,allow_manage)
+                result = _binding_snapshot(cur,tenant,policy,route,can_unlink)
             conn.commit()
             return result
     except TenantLinearError as error:

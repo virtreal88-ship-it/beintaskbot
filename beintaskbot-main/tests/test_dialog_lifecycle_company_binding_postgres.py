@@ -40,13 +40,13 @@ def _deal(database,lead=503):
 def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypatch):
     database, company, _, foreign, _ = local
     route = _route('connect',41,CA,'client')
-    assert store.binding(PROFILE,**route)['can_manage'] is False  # waiting
-    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding']['can_manage'] is False
+    assert store.binding(PROFILE,**route)['can_manage'] is True  # waiting
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding']['can_manage'] is True
     command()
     accepted = dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding']
     assert accepted['can_manage'] is True
     assert accepted['company_id'] is None
-    expected = {'company_id':company,'company_name':'Synthetic company','can_manage':True}
+    expected = {'company_id':company,'company_name':'Synthetic company','can_manage':True,'can_unlink':True}
     assert store.binding(PROFILE,**route,company_id=company) == expected
     assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['company_binding'] == expected
     assert [entry['company_id'] for entry in bindings(database)] == [company]
@@ -67,6 +67,47 @@ def test_native_direct_uses_existing_legacy_binding_and_owner_acl(local,monkeypa
         store.binding(STAFF,**route,company_id=None)
     assert denied.value.status in {403,404}
     assert len(bindings(database))==1
+
+
+def test_dialogue_staff_can_search_and_choose_only_existing_local_companies(local):
+    database, company, archived, foreign, _ = local
+    database.execute("UPDATE saas_crm_native_companies SET name=%s,phone=%s WHERE id=%s::uuid",
+                     ('Demo % Search','5550102',company))
+    database.execute("UPDATE saas_crm_native_companies SET name=%s WHERE id=%s::uuid", ('Demo % Foreign',foreign))
+    database.execute("UPDATE saas_crm_native_companies SET name=%s,archived_at=now() WHERE id=%s::uuid", ('Demo % Archived',archived))
+    database.commit()
+    route = _route('connect',41,CA,'client')
+    assert store.binding(STAFF,**route)['can_manage'] is True  # before acceptance
+    assert store.binding(STAFF,**route,company_search='Demo %') == [{'id':company,'name':'Demo % Search'}]
+    assert store.binding(STAFF,**route,company_search='_') == []
+    assert store.binding(STAFF,**route,company_search='5550102') == []
+    assert store.binding(PROFILE,**route,company_search='5550102') == [{'id':company,'name':'Demo % Search'}]
+    with pytest.raises(OperatorError):
+        store.binding(STAFF,**route,company_search='')
+    with pytest.raises(OperatorError) as wrong_route:
+        store.binding(STAFF,**{**route,'channel_id':CB},company_search='Demo')
+    assert wrong_route.value.status == 404
+    with pytest.raises(OperatorError) as other_tenant:
+        store.binding(OWNER_B,**route,company_search='Demo')
+    assert other_tenant.value.status == 404
+    for invalid in (archived, foreign):
+        with pytest.raises(OperatorError) as denied:
+            store.binding(STAFF,**route,company_id=invalid,expected_company_id=None)
+        assert denied.value.status == 403
+    linked = store.binding(STAFF,**route,company_id=company,expected_company_id=None)
+    assert linked == {'company_id':company,'company_name':'Demo % Search','can_manage':True,'can_unlink':False}
+    with pytest.raises(OperatorError) as stale:
+        store.binding(STAFF,**route,company_id=company,expected_company_id=None)
+    assert stale.value.status == 409
+    assert len(bindings(database)) == 1
+    with pytest.raises(OperatorError) as unlink:
+        store.binding(STAFF,**route,company_id=None,expected_company_id=company)
+    assert unlink.value.status == 403
+    command()  # Another employee accepts the route.
+    for operation in ({'company_search':'Demo'},{'company_id':company,'expected_company_id':company}):
+        with pytest.raises(OperatorError) as no_longer_visible:
+            store.binding(STAFF,**route,**operation)
+        assert no_longer_visible.value.status == 404
 
 
 def test_company_delete_blocks_dialogues_cases_and_deals(local, monkeypatch):
@@ -146,7 +187,7 @@ def test_kommo_requires_visible_exact_source_and_explicit_schema(local):
     assert store.binding(PROFILE,**route,company_id=None)['company_id'] is None
 
 
-def test_kommo_binding_reads_mask_out_of_scope_company_and_denied_source(local,monkeypatch):
+def test_kommo_picker_allows_visible_dialog_without_granting_company_directory(local,monkeypatch):
     database, company, _, _, hidden=local
     route=_deal(database)
     with database.cursor() as cur:
@@ -156,19 +197,20 @@ def test_kommo_binding_reads_mask_out_of_scope_company_and_denied_source(local,m
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     import json
     def rights(dialogs):
-        row={'33':{'access_scopes':{'dialogs':{'view':dialogs,'update':dialogs},'companies':{'view':'self','update':'self'}}}}
+        row={'33':{'access_scopes':{'dialogs':{'view':dialogs,'update':'none'},'companies':{'view':'self','update':'self'}}}}
         database.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
           VALUES(%s::uuid,'members',%s::jsonb) ON CONFLICT(tenant_id,policy_key)
           DO UPDATE SET value=EXCLUDED.value""",(A,json.dumps(row)))
         database.commit()
     rights('all')
-    assert store.binding(STAFF,**route)=={'company_id':None,'company_name':None,'can_manage':False}
+    assert store.binding(STAFF,**route)=={'company_id':hidden,'company_name':'Synthetic company',
+                                         'can_manage':True,'can_unlink':False}
     listed = lambda: next(row for row in dialogs.listing(STAFF, lifecycle='all')['dialogs'] if row['lead_id'] == route['lead_id'])
     assert 'dialog_company_name' not in listed()
     with pytest.raises(OperatorError) as denied:
         store.binding(STAFF,**route,company_id=company)
-    assert denied.value.status==403
-    store.binding(PROFILE,**route,company_id=company)
+    assert denied.value.status==409
+    assert store.binding(STAFF,**route,company_id=company,expected_company_id=hidden)['company_id']==company
     assert store.binding(STAFF,**route)['company_id']==company
     assert listed()['dialog_company_name']=='Synthetic company'
     rights('self')
