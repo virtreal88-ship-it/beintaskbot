@@ -1,8 +1,9 @@
 const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
 const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0));
-async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,oldServer=false,large=false,ineligible=false,onlyIneligible=false,unknownInbound=false}={}){
+async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,oldServer=false,large=false,ineligible=false,onlyIneligible=false,unknownInbound=false,selected=false,stale=false,leaveView=false}={}){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs&lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ if(selected)d.querySelector('#view-dialogs').classList.add('active');
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  const route=(id,state='waiting',owner=33)=>({provider:'connect',lead_id:id,channel_id:'channel-'+id,conversation_id:'client-'+id,state:'human',agent_name:'Agent',can_send:false,lifecycle_enabled:true,lifecycle:{id:'episode-'+id,state,operator_id:owner,revision:4,can_dismiss:state==='waiting',can_close:state==='accepted'&&owner===33,last_inbound_id:'inbound-'+id}});
  const a=route(1),b=route(2,'accepted'),other=route(3,'accepted',44),closed=route(4,'closed'),group={...a,group_sources:[a,b,other]};
@@ -11,15 +12,36 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
  const unavailable={...route(6),lifecycle:{...route(6).lifecycle,can_dismiss:false}};
  if(ineligible||onlyIneligible)group.group_sources=onlyIneligible?[other,noInbound,unavailable]:[a,b,other,noInbound,unavailable];
  const routes=new Map([a,b,other,closed].map(r=>[String(r.lead_id),r]));
- const calls=[],prompts=[];let bulk=false;
- w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};w.confirm=text=>{prompts.push(text);return confirm;};
+ const calls=[],prompts=[];let bulk=false,staleHistory,staleOpen,reminderOpens=0;
+ if(selected){
+  // Model browser-dispatched programmatic scroll, which JSDOM otherwise
+  // doesn't emit, and make the pending read cursor eligible only during bulk.
+  Object.defineProperty(d,'hidden',{get:()=>!bulk});
+  Object.defineProperty(w.HTMLElement.prototype,'scrollTop',{
+   get(){return this._top||0;},set(top){this._top=top;if(this.id==='chatRows')w.queueMicrotask(()=>this.dispatchEvent(new w.Event('scroll')));}
+  });
+  w.tenantSharedReminders={dialogOpened(){reminderOpens++;},markRows(){}};
+ }
+ const historyPage=dialog=>({dialog,messages:selected?[{id:'m1',body:'existing message',direction:'incoming'}]:[],next_before:null,...(selected?{read_through_message_id:'m1'}:{})});
+ w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:selected,addListener(){},removeListener(){}});w.alert=()=>{};w.confirm=text=>{prompts.push(text);return confirm;};
  w.fetch=async(url,options={})=>{
   url=String(url);const body=options.body?JSON.parse(options.body):null;calls.push({url,body});let result;
   if(url.endsWith('dialogs_lifecycle')){
    if(fail&&body.lead_id===1){if(fail==='network')throw Error('Network interrupted');return{ok:false,status:fail,json:async()=>({success:false,error:'Changed'})};}
    result={lifecycle:{state:body.action==='dismiss'?'dismissed':'closed',revision:5}};
+   // The bulk mutation receipt intentionally lacks action capabilities.
+   if(selected&&body.lead_id===2){
+    routes.set('2',{...b,lifecycle:{...b.lifecycle,...result.lifecycle,can_start:true,can_close:false}});
+    if(leaveView)d.querySelector('#view-dialogs').classList.remove('active');
+   }
   }else if(url.includes('/dialogs/history')){
-   const q=new URL(url,'https://example.test').searchParams;result={dialog:routes.get(q.get('lead_id')),messages:[],next_before:null};
+   const q=new URL(url,'https://example.test').searchParams;
+   if(bulk&&stale&&!staleHistory)return new Promise(resolve=>{
+    staleHistory=()=>resolve({ok:true,status:200,json:async()=>({success:true,result:historyPage(b)})});
+   });
+   result=historyPage(routes.get(q.get('lead_id')));
+  }else if(url.includes('/dialogs/read')){
+   result={updated:true};
   }else if(url.includes('/dialogs?')){
    const offset=new URL(url,'https://example.test').searchParams.get('offset');
    const preview=new URL(url,'https://example.test').searchParams.get('completion_preview')==='1';
@@ -29,14 +51,23 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
   return{ok:true,status:200,json:async()=>({success:true,result})};
  };
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await tick();await tick();
- await w.tenantOperator.refresh();bulk=true;calls.length=0;
+ await w.tenantOperator.refresh();if(selected){assert(await w.tenantOperator.openDialog(b));await tick();}bulk=true;calls.length=0;if(stale)staleOpen=w.tenantOperator.openDialog(b);
  d.querySelector('#operatorSearch').value='filter ignored';
  const button=d.querySelector('#operatorCompleteAll');assert(button);button.click();button.click();
  for(let i=0;i<30&&button.disabled;i++)await tick();
  const mutations=calls.filter(c=>c.body),notice=d.querySelector('#operatorBulkCompletionStatus').textContent;
  assert(!calls.some(c=>c.url.includes('/dialogs/read')),'bulk completion never marks read');
  assert(!calls.some(c=>/send|copilot|support-tickets/.test(c.url)),'bulk never sends messages or creates cases');
- assert(!calls.some(c=>c.url.includes('/dialogs/history')),'preparation must not make one history request per dialogue');
+ if(selected){
+  if(stale){assert.equal(typeof staleHistory,'function');staleHistory();assert.equal(await staleOpen,false,'stale same-route history may not downgrade a completed receipt');}
+  await tick();
+  const reads=calls.filter(c=>c.url.includes('/dialogs/history'));
+  assert.equal(reads.length,leaveView?0:stale?2:1,'only the still-open completed dialogue is refreshed');
+  assert(reads.every(read=>new URL(read.url,'https://example.test').searchParams.get('lead_id')==='2'));
+  assert.equal(!!d.querySelector('[data-operator-lifecycle="start"]'),!leaveView,'authoritative mobile history renders Start only in the active dialogue view');
+  assert(!calls.some(c=>c.url.includes('/dialogs/read')),'capability refresh is read-only');
+  assert.equal(reminderOpens,0,'bulk refresh never acknowledges reminders');
+ }else assert(!calls.some(c=>c.url.includes('/dialogs/history')),'preparation must not make one history request per dialogue');
  if(cycle||scopeChange||oldServer){assert.equal(mutations.length,0);assert.equal(prompts.length,0);}
  else if(onlyIneligible){
   assert.equal(mutations.length,0);assert.equal(prompts.length,0);
@@ -65,4 +96,4 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
  }
  assert(!button.disabled);dom.window.close();
 }
-(async()=>{for(const opts of [{},{ineligible:true},{ineligible:true,unknownInbound:true},{ineligible:true,fail:409},{ineligible:true,fail:'network'},{onlyIneligible:true},{confirm:false},{fail:409},{fail:403},{fail:'network'},{cycle:true},{scopeChange:true},{oldServer:true},{large:true,confirm:false}])await scenario(opts);console.log('bulk dialogue lifecycle UI: 14 scenarios passed');})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{for(const opts of [{},{selected:true},{selected:true,stale:true},{selected:true,leaveView:true},{ineligible:true},{ineligible:true,unknownInbound:true},{ineligible:true,fail:409},{ineligible:true,fail:'network'},{onlyIneligible:true},{confirm:false},{fail:409},{fail:403},{fail:'network'},{cycle:true},{scopeChange:true},{oldServer:true},{large:true,confirm:false}])await scenario(opts);console.log('bulk dialogue lifecycle UI: 17 scenarios passed');})().catch(e=>{console.error(e);process.exitCode=1;});

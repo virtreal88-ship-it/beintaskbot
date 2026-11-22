@@ -346,6 +346,7 @@
     completeAllBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;
     let done=0,skipped=0,unknown=0,remaining=0,applying=false,companyGate=false;
     const excluded={noInbound:0,otherOwner:0,unavailable:0,company:0,noReply:0};
+    let completedView=null;
     const exclusionSummary=()=>completeAllCopy('excluded').replace('{excluded}',String(Object.values(excluded).reduce((a,b)=>a+b,0))).replace('{noInbound}',String(excluded.noInbound)).replace('{otherOwner}',String(excluded.otherOwner)).replace('{unavailable}',String(excluded.unavailable));
     const withExclusions=text=>text+' '+exclusionSummary()+
       (excluded.company?' '+companyCloseText('bulkChoice').replace('{count}',String(excluded.company)):'')+
@@ -406,7 +407,8 @@
             if(result.lifecycle.state==='dismissed'&&queueMode()==='active')removeLifecycleDialog(route);
             else if(currentPage){
               currentDialog={...currentDialog,can_send:false,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_close:false,can_transfer:false}};
-              currentPage.dialog=currentDialog;renderDialog(currentPage);
+              currentPage.dialog=currentDialog;renderDialog(currentPage,{suppressRead:true});
+              completedView={route:currentDialog,revision:openRevision,serial:dialogReadSerial};
             }
           }
         }catch(error){
@@ -418,7 +420,30 @@
       }
       if(current())completeAllNotice(withExclusions(completeAllCopy(unknown?'interrupted':'done').replace('{done}',String(done)).replace('{skipped}',String(skipped)).replace('{unknown}',String(unknown)).replace('{remaining}',String(remaining))));
     }catch(error){if(current())completeAllNotice(applying?withExclusions(completeAllCopy('interrupted').replace('{done}',String(done)).replace('{skipped}',String(skipped)).replace('{unknown}',String(unknown+1)).replace('{remaining}',String(remaining))):error.message);}
-    finally{completeAllBusy=false;if(button.isConnected)button.disabled=false;}
+    finally{
+      completeAllBusy=false;if(button.isConnected)button.disabled=false;
+      if(completedView)void refreshCompletedViewStart(completedView,current);
+    }
+  }
+  async function refreshCompletedViewStart(view,current){
+    // The receipt proves the transition, not fresh permissions. Retrieve only
+    // the selected route's capability and leave history/scroll/reminders alone.
+    const revision=view.route.lifecycle.revision;
+    const same=()=>current()&&$('view-dialogs')?.classList.contains('active')&&
+      sameDialog(currentDialog,view.route)&&currentPage&&
+      view.revision===openRevision&&view.serial===dialogReadSerial&&
+      currentDialog.lifecycle?.revision===revision;
+    if(!same())return;
+    try{
+      const fresh=(await api('dialogs/history?'+historyQuery(view.route)))?.dialog;
+      if(!same()||!sameDialog(fresh,view.route)||fresh.lifecycle?.revision!==revision||
+        fresh.lifecycle?.state!==view.route.lifecycle.state||fresh.lifecycle.can_start!==true)return;
+      const host=$('operatorAcceptAction');
+      if(!host||host.querySelector('[data-operator-lifecycle="start"]'))return;
+      currentDialog.lifecycle.can_start=true;
+      currentPage.dialog=currentDialog;
+      renderLifecycleActions(currentDialog,host,true);
+    }catch{} // A failed capability read is not permission to show Start.
   }
   let closeLifecycleModal=()=>{};
   function removeLifecycleDialog(route){
@@ -565,15 +590,15 @@
     done.onclick=()=>void complete(false);skip.onclick=()=>void complete(true);
     document.body.append(modal);(canChoose?input:skip).focus();
   }
-  function renderLifecycleActions(route,host){
+  function renderLifecycleActions(route,host,onlyStart=false){
     const state=route.lifecycle||{},company=state.company_completion;
-    if(state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
+    if(!onlyStart&&state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
       const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
       reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
     for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
-      if(!allowed)continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
+      if(!allowed||(onlyStart&&action!=='start'))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
       button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
@@ -747,9 +772,13 @@
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
       $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
+      const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
+      const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
+        sameDialog(nameHint,currentPage.dialog)&&nameHint.customer_name!==currentPage.dialog.customer_name);
       if(currentDialog&&!pendingDialogRoute&&(currentDialog.lifecycle_enabled||options.revalidateSelected)){
-        await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true,revalidateAccess:options.revalidateSelected===true});
-      }else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);
+        await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true||nameOnly,revalidateAccess:options.revalidateSelected===true});
+      }else if(nameOnly&&!pendingDialogRoute)await appendNewMessages(currentDialog,true,true);
+      else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);
       else if(currentDialog&&!options.suppressRead)void markDialogReadIfVisible(currentPage);
       return result;
     }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
@@ -813,11 +842,19 @@
     try{const latest=await api('dialogs/history?'+historyQuery(route));if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog))return;updateDeliveryEvidence(latest,route);updateAudioEvidence(latest,route,sourceIds);updateVisualEvidence(latest,route,sourceIds);}
     catch(error){if(serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog)){const status=$('operatorChatError');if(status)status.textContent=error.message;}}
   }
-  async function appendNewMessages(route,suppressRead=false){
-    const chat=$('chatRows'),page=currentPage,version=epoch,serial=++historyUpdateSerial;if(!chat||!page||!sameDialog(route,currentDialog))return;
+  async function appendNewMessages(route,suppressRead=false,namesOnly=false){
+    const chat=$('chatRows'),page=currentPage,version=epoch,revision=openRevision,readSerial=dialogReadSerial,serial=++historyUpdateSerial;if(!chat||!page||!sameDialog(route,currentDialog))return;
     try{
       const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
-      if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
+      if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
+      if(namesOnly){
+        const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+        patchDirectDialogNames(latest,page,chat);
+        setTimelineScroll(chat,follow?top:timelineScrollTop(top,anchor),true);
+        rememberDialogPage(route,page);
+        return;
+      }
+      patchDirectDialogNames(latest,page,chat);
       updateDeliveryEvidence(latest,route);
       updateAudioEvidence(latest,route);
       updateVisualEvidence(latest,route);
@@ -835,7 +872,11 @@
       if(follow){setTimelineScroll(chat,chat.scrollHeight,timelinePlaced);if(!suppressRead)void markDialogReadIfVisible(currentPage);}
       else {setTimelineScroll(chat,timelineScrollTop(oldTop,anchor),timelinePlaced);const button=$('operatorNewMessages');if(button)button.hidden=false;}
       const error=$('operatorChatError');if(error)error.textContent='';
-    }catch(error){if(version===epoch&&sameDialog(route,currentDialog)&&lifecycleUnavailable(error,route))return;const status=$('operatorChatError');if(status&&serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog))status.textContent=error.message;}
+    }catch(error){
+      if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog))return;
+      if(lifecycleUnavailable(error,route))return;
+      const status=$('operatorChatError');if(status)status.textContent=error.message;
+    }
   }
   const safeName=row=>{const value=String(row.customer_name||'').trim();return value&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(value)?value:'';};
   const verifiedDialogPhone=row=>{const phone=String(row?.phone||'').trim(),digits=phone.replace(/\D/g,'');return /^\+?[0-9 ()-]+$/.test(phone)&&digits.length>=7&&digits.length<=15?phone:'';};
@@ -968,8 +1009,12 @@
   function timelineOnlyScroll(chat){
     const mark=timelineScrollMarks.get(chat);
     if(!mark)return false;
+    // A single DOM update can queue several scroll events at the same
+    // position. Keep suppressing them until layout advances, but allow a
+    // user move to another position to clear the guard immediately.
+    if(Math.abs(chat.scrollTop-mark.top)<1)return true;
     timelineScrollMarks.delete(chat);
-    return Math.abs(chat.scrollTop-mark.top)<1;
+    return false;
   }
 
   function placeOperatorEvents(chat,page){
@@ -1127,7 +1172,7 @@
     const media=m.source==='connect'&&!missed&&m.message_type!=='text'&&m.external_id;
     const transcript=m.has_transcription&&(m.audio_transcript||m.body)?`<details data-audio-transcript><summary>${t('showTranscript')}</summary><div data-user-content>${esc(m.audio_transcript||m.body)}</div></details>`:'';
     const participantMenu=!readOnly&&m.author_type==='participant'&&m.participant_jid;
-    const author=participantMenu?`<span class="operator-participant-name" data-participant-menu="${esc(m.id)}" data-participant-jid="${esc(m.participant_jid)}" role="button" tabindex="0" aria-label="${esc(t('editParticipantName'))}" data-user-content>${esc(messageAuthor(m))}</span>`:`<span data-user-content>${esc(messageAuthor(m))}</span>`;const reply=!missed&&!readOnly&&route?.provider==='connect'&&m.id&&['incoming','outgoing'].includes(m.direction)?`<button type="button" class="operator-reply-action" data-reply-message="${esc(m.id)}" aria-label="${esc(replyText('action'))}" title="${esc(m.provider_message_id?replyText('action'):replyText('unavailable'))}"><span aria-hidden="true">${m.direction==='outgoing'?'→':'←'}</span></button>`:'';
+    const author=participantMenu?`<span class="operator-participant-name" data-participant-menu="${esc(m.id)}" data-participant-jid="${esc(m.participant_jid)}" role="button" tabindex="0" aria-label="${esc(t('editParticipantName'))}" data-user-content>${esc(messageAuthor(m))}</span>`:`<span data-user-content${isDirectConnectDialog(route)&&m.source==='connect'&&m.direction==='incoming'&&m.author_type==='customer'?' data-direct-message-author':''}>${esc(messageAuthor(m))}</span>`;const reply=!missed&&!readOnly&&route?.provider==='connect'&&m.id&&['incoming','outgoing'].includes(m.direction)?`<button type="button" class="operator-reply-action" data-reply-message="${esc(m.id)}" aria-label="${esc(replyText('action'))}" title="${esc(m.provider_message_id?replyText('action'):replyText('unavailable'))}"><span aria-hidden="true">${m.direction==='outgoing'?'→':'←'}</span></button>`:'';
     const directAudio=media&&['audio','voice','voice_message','ptt'].includes(String(m.message_type||'').toLowerCase());
     const fileActuators=media?`${readOnly?'':`<button type="button" data-media-menu-load>${esc(t('loadAttachment'))}</button>`}<button type="button" data-media-download="${esc(attachmentUrl(m,route,true))}">${esc(t('downloadAttachment'))}</button>`:'';
     const audioActions=directAudio?`<div data-media-actions ${readOnly?'':'hidden'}>${fileActuators}${m.id?`<div data-audio-transcription-menu data-message-row-id="${esc(m.id)}" data-message-id="${esc(m.external_id)}" hidden><span data-audio-transcription-status role="status" aria-live="polite"></span><div data-audio-transcription-actions></div></div>`:''}</div>`:'';
@@ -1181,7 +1226,7 @@
     if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);restoreOperatorEventsWindow(page,knownTimeline);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page);notice('');if(options.userOpened)window.tenantSharedReminders?.dialogOpened(currentDialog);const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
+    try{const page=await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;const lifecycleFloor=lifecycleListStates.get(contextKey('lifecycle-list',route));if(lifecycleFloor&&page.dialog.lifecycle?.revision<lifecycleFloor.revision)return false;if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);restoreOperatorEventsWindow(page,knownTimeline);retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page,{suppressRead:options.suppressRead===true});notice('');if(options.userOpened)window.tenantSharedReminders?.dialogOpened(currentDialog);const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
     catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;
       if(options.revalidateAccess&&error.status===404){removeLifecycleDialog(route);notice(error.message);return false;}
       if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
@@ -1317,6 +1362,37 @@
       host.querySelector('[data-client-transfer-value]').replaceChildren(text);
       host.hidden=false;
     }catch{delete host.dataset.requested;}
+  }
+  const isDirectConnectDialog=route=>route?.provider==='connect'&&route.customer_kind==='contact'&&route.conversation_kind!=='group';
+  function patchDirectDialogNames(latest,page,chat){
+    const route=latest.dialog,previous=page.dialog;
+    if(page!==displayedPage||!chat.isConnected||pendingDialogRoute||
+       !$('view-dialogs')?.classList.contains('active')||!isDirectConnectDialog(route)||!isDirectConnectDialog(previous)||
+       !sameDialog(route,previous)||!sameDialog(route,currentDialog))return;
+    const name=dialogTitle(route);
+    const title=$('operatorDialogTitleText');
+    if(title&&title.textContent!==name){
+      title.textContent=name;
+      const initial=$('operatorClientCardOpen')?.querySelector('.operator-header-avatar')?.firstChild;
+      if(initial?.nodeType===Node.TEXT_NODE)initial.nodeValue=name.slice(0,1).toLocaleUpperCase();
+    }
+    // Only patch rendered direct incoming authors backed by this history page.
+    // Do not infer names for older messages outside it or reset their media.
+    const existing=new Map((page.messages||[]).map(message=>[String(message.id),message]));
+    const articles=new Map([...chat.querySelectorAll('article[data-message-id]')].map(node=>[node.dataset.messageId,node]));
+    const direct=message=>message?.source==='connect'&&message.author_type==='customer'&&message.direction==='incoming';
+    for(const fresh of latest.messages||[]){
+      const prior=existing.get(String(fresh.id));
+      if(!fresh.id||!fresh.external_id||!direct(prior)||!direct(fresh)||
+         prior.external_id!==fresh.external_id||
+         String(prior.source_channel_id||route.channel_id)!==String(fresh.source_channel_id||route.channel_id)||
+         String(prior.source_conversation_id||route.conversation_id)!==String(fresh.source_conversation_id||route.conversation_id))continue;
+      prior.author_name=fresh.author_name;
+      const label=articles.get(String(fresh.id))?.querySelector('[data-direct-message-author]');
+      if(label){const author=messageAuthor(prior);if(label.textContent!==author)label.textContent=author;}
+    }
+    previous.customer_name=route.customer_name;
+    currentDialog.customer_name=route.customer_name;
   }
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
@@ -1691,12 +1767,13 @@
   }
   // Keep the mounted editor/media subtree for a refreshed snapshot of the
   // same route and permissions. Mutate the page object captured by handlers.
-  const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).sort(([a],[b])=>a.localeCompare(b))]);
-  function patchDialogPage(latest){
+  const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!(key==='customer_name'&&isDirectConnectDialog(route))&&!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).sort(([a],[b])=>a.localeCompare(b))]);
+  function patchDialogPage(latest,{suppressRead=false}={}){
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
     currentPage=old;old.messages ||= [];
     const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+    patchDirectDialogNames(latest,old,chat);
     // Only a complete, unanchored history proves absence. A newest-page read
     // must not remove older messages explicitly loaded by the employee.
     if(latest.next_before===null&&!latest.anchor_message_id){
@@ -1714,14 +1791,14 @@
     retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt'].includes(key))old[key]=value;
     currentDialog=old.dialog;displayedPage=old;mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
-    setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced);
+    setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
   }
-  function renderDialog(page){
+  function renderDialog(page,{suppressRead=false}={}){
     const route=page.dialog,host=$('operatorConversationContent');if(!host)return;const existingShell=host.querySelector('[data-operator-dialog]');
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingShell.dataset.copilotBusy==='true'&&(!route.lifecycle_enabled||displayedRouteScope===dialogRenderScope(route))){copilotDeferredPage=page;return;}
-    if(existingShell?.dataset.dialogKey===dialogKey(route)&&patchDialogPage(page)){copilotDeferredPage=null;return;}
+    if(existingShell?.dataset.dialogKey===dialogKey(route)&&patchDialogPage(page,{suppressRead})){copilotDeferredPage=null;return;}
     const existingVoice=host.querySelector('[data-copilot-voice]');
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingVoice?.isVoiceActive?.()&&(!route.lifecycle_enabled||displayedRouteScope===dialogRenderScope(route))){copilotDeferredPage=page;return;}
     if(existingVoice?.disposeVoice)void existingVoice.disposeVoice().catch(()=>{});
@@ -1954,7 +2031,7 @@
     window.tenantChatSend?.clearDiagnostics?.();if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,getQuote:()=>replyTarget,onPending:restorePendingReply,onDiscard:clearReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:text=>{clearReply();if((sessionStorage.getItem(sendDraftKey)||'').trim()===text)sessionStorage.removeItem(sendDraftKey);},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     renderComposerSourcePicker();
     const chat=$('chatRows'),timelinePlaced=placeOperatorEvents(chat,page);
-    const draftKey=contextKey('draft',route),composer=$('chatText'),composerSurface=composer.closest('.operator-composer'),dialogBody=$('operatorDialogBody'),newMessages=$('operatorNewMessages');const scrollKey=contextKey('scroll',route),savedScroll=sessionStorage.getItem(scrollKey);setTimelineScroll(chat,savedScroll===null||page.scroll_to_latest?chat.scrollHeight:Number(savedScroll),timelinePlaced);chat.addEventListener('scroll',()=>{sessionStorage.setItem(scrollKey,String(chat.scrollTop));if(!timelineOnlyScroll(chat)&&atBottom(chat))void markDialogReadIfVisible(currentPage);});composer.value=interactionState?.draft??sessionStorage.getItem(draftKey)??'';const updateComposerHeight=()=>{const rect=composerSurface.getBoundingClientRect(),style=window.getComputedStyle(composerSurface),marginBottom=parseFloat(style.marginBottom)||0;dialogBody.style.setProperty('--operator-composer-height',`${Math.ceil(rect.height+marginBottom)}px`);};const autosize=()=>{composer.style.height='auto';const height=Math.max(40,Math.min(180,composer.scrollHeight||40));composer.style.height=height+'px';composer.style.overflowY=composer.scrollHeight>composer.clientHeight?'auto':'hidden';updateComposerHeight();};autosize();composer.addEventListener('input',()=>{sessionStorage.setItem(draftKey,composer.value);autosize();});newMessages.onclick=()=>{const behavior=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';if(typeof chat.scrollTo==='function')chat.scrollTo({top:chat.scrollHeight,behavior});else chat.scrollTop=chat.scrollHeight;newMessages.hidden=true;if(behavior==='auto')void markDialogReadIfVisible(currentPage);};
+    const draftKey=contextKey('draft',route),composer=$('chatText'),composerSurface=composer.closest('.operator-composer'),dialogBody=$('operatorDialogBody'),newMessages=$('operatorNewMessages');const scrollKey=contextKey('scroll',route),savedScroll=sessionStorage.getItem(scrollKey);setTimelineScroll(chat,savedScroll===null||page.scroll_to_latest?chat.scrollHeight:Number(savedScroll),timelinePlaced||suppressRead);chat.addEventListener('scroll',()=>{sessionStorage.setItem(scrollKey,String(chat.scrollTop));if(!timelineOnlyScroll(chat)&&atBottom(chat))void markDialogReadIfVisible(currentPage);});composer.value=interactionState?.draft??sessionStorage.getItem(draftKey)??'';const updateComposerHeight=()=>{const rect=composerSurface.getBoundingClientRect(),style=window.getComputedStyle(composerSurface),marginBottom=parseFloat(style.marginBottom)||0;dialogBody.style.setProperty('--operator-composer-height',`${Math.ceil(rect.height+marginBottom)}px`);};const autosize=()=>{composer.style.height='auto';const height=Math.max(40,Math.min(180,composer.scrollHeight||40));composer.style.height=height+'px';composer.style.overflowY=composer.scrollHeight>composer.clientHeight?'auto':'hidden';updateComposerHeight();};autosize();composer.addEventListener('input',()=>{sessionStorage.setItem(draftKey,composer.value);autosize();});newMessages.onclick=()=>{const behavior=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';if(typeof chat.scrollTo==='function')chat.scrollTo({top:chat.scrollHeight,behavior});else chat.scrollTop=chat.scrollHeight;newMessages.hidden=true;if(behavior==='auto')void markDialogReadIfVisible(currentPage);};
     $('operatorEarlier').onclick=async()=>{
       const button=$('operatorEarlier'),before=page.next_before;if(button.disabled||!before)return;
       button.disabled=true;
