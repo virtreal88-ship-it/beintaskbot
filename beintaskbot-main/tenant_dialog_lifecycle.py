@@ -383,7 +383,9 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
-        'can_close':state=='accepted' and own,'can_transfer':state=='accepted' and own,
+        'can_close':state=='accepted' and own,
+        'can_transfer':own and (state=='accepted' or (
+            state in {'closed','dismissed'} and _can_update is True and dialog.get('channel_active') is True)),
         'can_submit_case':state=='closed' and own}
     if details:
         if state=='accepted' and own:
@@ -408,8 +410,11 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
           FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
             AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL
           ORDER BY closed_at DESC LIMIT 20""",(tenant,dialog['channel_id'],dialog['conversation_id'],actor))
-        dialog['lifecycle']['completed_episodes']=[{key:(value.isoformat() if hasattr(value,'isoformat') else value)
+        completed=[{key:(value.isoformat() if hasattr(value,'isoformat') else value)
             for key,value in episode.items()} for episode in cur.fetchall()]
+        dialog['lifecycle']['completed_episodes']=completed
+        if dialog['lifecycle']['can_submit_case']:
+            dialog['lifecycle']['can_submit_case']=any(episode['id']==str(row['id']) for episode in completed)
     dialog['can_send']=bool(dialog.get('can_send') and own and state=='accepted')
     if not dialog['can_send']: dialog['send_block_reason']='dialog_accept_required'
     return dialog
@@ -462,6 +467,7 @@ def _mutate_once(profile, payload):
             from tenant_dialog_presence import is_online, work_status_routing_requested
             target = None
             eligible = True
+            transfer_source_active = False
             if action == 'start' and _manual_start_exempt_from_operator_routing(tenant,channel,policy):
                 # Preserve the active exact-source requirement formerly implicit
                 # in is_online. Keep this shared lock through the transition.
@@ -479,6 +485,9 @@ def _mutate_once(profile, payload):
                 if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor,filter_presence=False)}:
                     raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
                 eligible = is_online(cur,tenant,target,lock=True,source_channel=channel)
+                cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
+                    AND connect_channel_id=%s::uuid AND active FOR SHARE''',(tenant,channel))
+                transfer_source_active = bool(cur.fetchone())
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
             lock_dialog(cur,tenant,'connect',channel,conversation)
@@ -549,11 +558,18 @@ def _mutate_once(profile, payload):
                     AND conversation_id=%s AND state IN ('queued','processing')''',(tenant,channel,conversation))
             else:
                 if not row or row.get('operator_id')!=actor: raise TenantLinearError('Диалог недоступен.',404)
-                if row['state']!='accepted': raise TenantLinearError('Диалог уже завершён.',409)
                 if action=='transfer':
+                    if row['state'] not in {'accepted','closed','dismissed'}:
+                        raise TenantLinearError('Диалог недоступен для передачи.',409)
+                    if row['state']!='accepted' and not transfer_source_active:
+                        raise TenantLinearError('Источник недоступен.',403)
                     cur.execute('UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(target,tenant,channel,conversation))
-                    cur.execute('UPDATE saas_dialog_episodes SET operator_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(target,tenant,row['id']))
+                    # A handed-off completed dialogue keeps its original episode
+                    # and case attribution. Only current dialogue ownership moves.
+                    if row['state']=='accepted':
+                        cur.execute('UPDATE saas_dialog_episodes SET operator_id=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(target,tenant,row['id']))
                 else:
+                    if row['state']!='accepted': raise TenantLinearError('Диалог уже завершён.',409)
                     from tenant_dialog_company_completion import require_on_close
                     bound_on_close=require_on_close(cur,tenant,actor,channel,conversation,payload,policy=policy)
                     cur.execute("UPDATE saas_dialog_workflows SET state='closed',revision=revision+1,closed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s RETURNING closed_at",(tenant,channel,conversation))

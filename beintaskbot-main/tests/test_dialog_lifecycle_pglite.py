@@ -190,6 +190,52 @@ def test_owner_can_start_new_cycle_from_dismissed_dialog(episodes):
     episodes.commit()
 
 
+@pytest.mark.parametrize('state_before',('closed','dismissed'))
+def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monkeypatch,state_before):
+    from tenant_dialog_presence import set_status
+    import tenant_operator_dialogs
+    monkeypatch.setattr(tenant_operator_dialogs,'_connect',lambda:episodes)
+    recipient={'tenant_id':A,'telegram_id':33}
+    def read(profile):
+        return tenant_operator_dialogs.history(profile,'connect',41,CA,'client')
+    if state_before=='dismissed':
+        inbound=insert_message(episodes,'for-completed-transfer',created_at='2099-01-01T00:00:00Z')
+        command('dismiss',0,message_id=inbound)
+    else:
+        command()
+        command('close',1)
+    before=read(PROFILE)
+    workflow=state(episodes)
+    original_episodes=episodes.execute('SELECT * FROM saas_dialog_episodes ORDER BY id')
+    episodes.commit()
+    assert before['dialog']['lifecycle']['can_transfer'] is True
+    assert {'employee_id':33,'name':'Employee'} in before['dialog']['lifecycle']['transfer_targets']
+    with pytest.raises(TenantLinearError) as unassigned:
+        read(recipient)
+    assert unassigned.value.status==404
+    set_status(recipient,{'status':'away'})
+    with pytest.raises(TenantLinearError) as unavailable:
+        command('transfer',workflow['revision'],target_employee_id=33)
+    assert unavailable.value.status==403
+    assert state(episodes)['operator_id']==11
+    set_status(recipient,{'status':'online'})
+    result=command('transfer',workflow['revision'],target_employee_id=33)
+    assert result['lifecycle']['state']==state_before
+    assert result['lifecycle']['operator_id']==33
+    assert state(episodes)['closed_at']==workflow['closed_at']
+    assert episodes.execute('SELECT * FROM saas_dialog_episodes ORDER BY id')==original_episodes
+    episodes.commit()
+    after=read(recipient)
+    assert after['messages']==before['messages']
+    assert after['dialog']['lifecycle']['can_start'] is True
+    assert after['dialog']['lifecycle']['can_submit_case'] is False
+    assert after['dialog']['can_send'] is False
+    with pytest.raises(TenantLinearError) as former_owner:
+        read(PROFILE)
+    assert former_owner.value.status==404
+    assert lifecycle.transfer_details(recipient,payload())['transfer']['to_name']=='Employee'
+
+
 def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
     command(actor=33)
     with episodes.cursor() as cur:

@@ -31,7 +31,8 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
    result={lifecycle:{state:body.action==='dismiss'?'dismissed':'closed',revision:5}};
    // The bulk mutation receipt intentionally lacks action capabilities.
    if(selected&&body.lead_id===2){
-    routes.set('2',{...b,lifecycle:{...b.lifecycle,...result.lifecycle,can_start:true,can_close:false}});
+    routes.set('2',{...b,lifecycle:{...b.lifecycle,...result.lifecycle,can_start:true,can_close:false,can_transfer:true,
+      transfer_targets:[{employee_id:44,name:'Recipient'}]}});
     if(leaveView)d.querySelector('#view-dialogs').classList.remove('active');
    }
   }else if(url.includes('/dialogs/history')){
@@ -65,6 +66,7 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
   assert.equal(reads.length,leaveView?0:stale?2:1,'only the still-open completed dialogue is refreshed');
   assert(reads.every(read=>new URL(read.url,'https://example.test').searchParams.get('lead_id')==='2'));
   assert.equal(!!d.querySelector('[data-operator-lifecycle="start"]'),!leaveView,'authoritative mobile history renders Start only in the active dialogue view');
+  assert.equal(!!d.querySelector('[data-operator-lifecycle="transfer"]'),!leaveView,'the completed dialogue can be transferred without opening a new episode');
   assert(!calls.some(c=>c.url.includes('/dialogs/read')),'capability refresh is read-only');
   assert.equal(reminderOpens,0,'bulk refresh never acknowledges reminders');
  }else assert(!calls.some(c=>c.url.includes('/dialogs/history')),'preparation must not make one history request per dialogue');
