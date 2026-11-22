@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import pytest
@@ -113,3 +114,53 @@ def test_proof_mismatch_or_different_source_cannot_register(split,monkeypatch):
     with pytest.raises(TenantLinearError):
         pairs.confirm(PROFILE,channel,41,42)
     assert database.execute('SELECT * FROM saas_whatsapp_history_pairs')==[]
+
+
+def test_connect_upgrade_installs_pair_table_in_an_existing_schema(split):
+    from tenant_connect_transport import _schema
+
+    database,channel=split
+    database.execute('DROP TABLE saas_whatsapp_history_pairs')
+    database.commit()
+    _schema(database)
+    database.commit()
+    pairs.confirm(PROFILE,channel,41,50)
+    assert len(database.execute('SELECT id FROM saas_whatsapp_history_pairs'))==1
+
+
+@pytest.mark.parametrize('surrounding_proof', [True, False])
+def test_old_self_only_receipt_needs_matching_provider_history_and_live_device(split,surrounding_proof):
+    database,channel=split
+    confirmed={
+        'originalConversationId':PN, 'canonicalConversationId':PN,
+        'directIdentity':{'jid':PN,'lid':LID}, 'pair_matches_conversation':True,
+    }
+    incomplete={
+        'originalConversationId':LID, 'canonicalConversationId':LID,
+        'directIdentity':{'jid':'','lid':''}, 'pair_matches_conversation':False,
+    }
+
+    def evidence(event, data, age):
+        database.execute("""INSERT INTO saas_connect_identity_conflict_events
+          (tenant_id,connect_channel_id,conversation_id,event_id,evidence,created_at)
+          VALUES(%s,%s,%s,%s,%s::jsonb,now()-%s*interval '1 day')""",
+          (A,channel,LID,event,json.dumps(data),age))
+        database.commit()
+
+    evidence('before',confirmed,3)
+    evidence('incomplete',incomplete,2)
+    if not surrounding_proof:
+        with pytest.raises(TenantLinearError):
+            pairs.confirm(PROFILE,channel,41,50)
+        assert not database.execute('SELECT id FROM saas_whatsapp_history_pairs')
+        return
+    evidence('after',confirmed,1)
+    pairs.confirm(PROFILE,channel,41,50)
+    page=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
+    assert page['dialog']['history_pair_id']
+    assert {m['direction'] for m in page['messages']}=={'incoming','outgoing'}
+
+    evidence('contradiction',{**confirmed,'directIdentity':{'jid':'994100000103@s.whatsapp.net','lid':LID}},1)
+    page=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
+    assert 'history_pair_id' not in page['dialog']
+    assert {m['direction'] for m in page['messages']}=={'incoming'}
