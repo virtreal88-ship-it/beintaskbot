@@ -272,7 +272,7 @@ def test_compact_case_wins_over_timeline_flags_and_never_enriches(monkeypatch):
     def get(**fields):
         return asyncio.run(endpoint(SimpleNamespace(method='GET',query={**query,**fields},headers={})))
 
-    case=get(support_case_only="1",before="ignored",anchor="ignored")
+    case=get(support_case_only="1",shared_reminder_events="1",before="ignored",anchor="ignored")
     assert case.status==200 and json.loads(case.body)["result"]==compact
     read.assert_called_once_with(PROFILE,"connect","41",CA,"client",None,None,support_case_only=True)
     enrich.assert_not_called()
@@ -288,3 +288,15 @@ def test_compact_case_wins_over_timeline_flags_and_never_enriches(monkeypatch):
     denied=get(expected_user_id="33")
     assert denied.status==409
     read.assert_not_called()
+
+
+    # Due notes may refresh even when the lifecycle timeline is not requested.
+    query.pop("operator_events")
+    denied=get(shared_reminder_events="1",expected_user_id="33")
+    assert denied.status==409
+    read.assert_not_called()
+
+    page=get(shared_reminder_events="1")
+    assert page.status==200
+    read.assert_called_once_with(PROFILE,"connect","41",CA,"client",None,None,
+                                 include_shared_reminder_events=True)

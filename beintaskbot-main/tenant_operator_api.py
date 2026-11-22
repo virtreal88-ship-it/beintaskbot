@@ -71,9 +71,14 @@ def handler(member_from_request,origin,logger,resource):
                     # selects staff timeline metadata, even with both flags.
                     if case_only:
                         read=partial(history,support_case_only=True)
-                    elif query.get('operator_events')=='1':
+                    elif query.get('operator_events')=='1' or query.get('shared_reminder_events')=='1':
                         _expected(query,profile)
-                        read=partial(history,include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
+                        options={}
+                        if query.get('operator_events')=='1':
+                            options.update(include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
+                        if query.get('shared_reminder_events')=='1':
+                            options['include_shared_reminder_events']=True
+                        read=partial(history,**options)
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
                     if not case_only:

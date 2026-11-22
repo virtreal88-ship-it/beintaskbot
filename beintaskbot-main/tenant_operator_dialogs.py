@@ -1225,7 +1225,8 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
 
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
-            *,support_case_only=False,include_operator_events=False,operator_events_revision=None):
+            *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
+            include_shared_reminder_events=False):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
         # selected source explicitly, including when a group spans numbers.
@@ -1235,6 +1236,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     lead_id=int(lead_id)
     requested_route={'provider':provider,'lead_id':lead_id,'channel_id':str(channel),'conversation_id':str(conversation)}
     operator_timeline={}
+    shared_reminder_timeline={}
     with _connect() as conn:
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
@@ -1429,6 +1431,12 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     history_channel=row['history_channel'],group_channels=group_channels)
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
+            if (include_shared_reminder_events and provider=='connect' and not anchor
+                    and requested_route==history_scope['canonical_route']):
+                from tenant_shared_dialog_reminders import timeline_page
+                shared_reminder_timeline=timeline_page(conn,cur,tenant,channel,conversation,lead_id,
+                    messages=messages,before=identifier(before) if before else None,history_leads=history_leads,
+                    history_channel=row['history_channel'],group_channels=group_channels)
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.
@@ -1443,7 +1451,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     dialog['test_recording_import_allowed']=offer_import({**profile,'role':policy.profile.get('role')},dialog)
     from tenant_browser_calls import offer as offer_browser_call
     dialog['browser_call_available']=offer_browser_call(profile,dialog)
-    return {**operator_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {**operator_timeline,**shared_reminder_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '',
                                          contact_route=str(dialog.get('conversation_id') or ''))
                                         for r in reversed(messages[:50])],

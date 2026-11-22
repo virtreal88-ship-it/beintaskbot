@@ -2,6 +2,8 @@
 from datetime import datetime, timezone
 import os
 
+from psycopg.errors import LockNotAvailable, QueryCanceled
+
 from tenant_dialog_access import require_source, sql_filter
 from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _row
 from tenant_dialog_presence import is_effectively_online, work_status_routing_sources
@@ -122,6 +124,44 @@ def dialogue_marker(cur, tenant, actor, policy, route):
         (tenant,channel,conversation,lead))
     row=cur.fetchone()
     return {'can_schedule':can_create,**({'id':row['id']} if row else {})}
+
+
+def timeline_page(conn, cur, tenant, channel, conversation, lead, **message_window):
+    """Due notes in exact authorized chat history, independent of badge reads."""
+    if not configured() or str(channel) not in work_status_routing_sources(tenant):
+        return {}
+    from tenant_dialog_operator_timeline import history_window
+    try:
+        # Bounded optional read, separate from lifecycle audit backoff. A
+        # blocked reminder relation must not suppress the rest of the chat.
+        with conn.transaction():
+            cur.execute("""SELECT current_setting('statement_timeout') AS previous,setting::integer AS milliseconds
+                FROM pg_settings WHERE name='statement_timeout'""")
+            setting=cur.fetchone()
+            budget=min(setting['milliseconds'] or 200,200)
+            cur.execute("SELECT set_config('statement_timeout',%s,true)",(f"{budget}ms",))
+            rows=[]
+            if ready(cur,{TABLE:('tenant_id','id','channel_id','conversation_id','lead_id','note','due_at')},()):
+                window=history_window(cur,tenant,conversation,**message_window)
+                if window is not None:
+                    lower,upper=window
+                    cur.execute(f"""SELECT id::text,note,due_at FROM {TABLE}
+                        WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND lead_id=%s
+                          AND due_at<=CURRENT_TIMESTAMP AND note ~ '[^[:space:]]'
+                          AND (%s::timestamptz IS NULL OR due_at>=%s::timestamptz)
+                          AND (%s::timestamptz IS NULL OR due_at<%s::timestamptz)
+                        ORDER BY due_at DESC,id DESC LIMIT %s""",
+                        (tenant,channel,conversation,lead,lower,lower,upper,upper,MAX_VISIBLE+1))
+                    rows=cur.fetchall()
+            cur.execute("SELECT set_config('statement_timeout',%s,true)",(setting['previous'],))
+    except (LockNotAvailable, QueryCanceled):
+        return {}
+    shown=rows[:MAX_VISIBLE]
+    result={'shared_reminder_events':[
+        {'id':row['id'],'note':row['note'],'at':row['due_at'].isoformat()} for row in reversed(shown)]}
+    if len(rows)>MAX_VISIBLE:
+        result['shared_reminder_events_omitted_at']=shown[-1]['due_at'].isoformat()
+    return result
 
 
 def _missing():

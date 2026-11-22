@@ -56,6 +56,33 @@ def page(conn, cur, tenant, channel, conversation, **window):
             _active.discard(key)
 
 
+def history_window(cur, tenant, conversation, *, messages, before,
+                   history_leads, history_channel, group_channels=None):
+    """Fence metadata to the same authorized message page as the timeline."""
+    upper = None
+    if before:
+        if group_channels is not None:
+            cur.execute("""SELECT COALESCE(m.happened_at,m.created_at) AS stamp
+              FROM saas_crm_messages m JOIN saas_connect_conversations c
+                ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+                AND m.channel='connect:'||c.connect_channel_id::text
+              WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND c.conversation_id=%s
+                AND c.connect_channel_id=ANY(%s::uuid[])""",
+                (tenant,before,conversation,group_channels))
+        else:
+            cur.execute("""SELECT COALESCE(happened_at,created_at) AS stamp
+              FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
+                AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s""",
+                (tenant,before,history_leads,history_channel))
+        boundary = cur.fetchone()
+        if not boundary:
+            return None
+        upper = boundary["stamp"]
+    # Include earlier events on the oldest page, without changing the cursor.
+    lower = _stamp(messages[49]) if len(messages)>50 else None
+    return lower, upper
+
+
 def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
                  history_leads, history_channel, group_channels=None):
     # No new index/migration. Limit the optional JSON audit read's latency,
@@ -68,29 +95,12 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
         timeout = setting["previous"]
         budget = min(setting["milliseconds"] or 200, 200)
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (f"{budget}ms",))
-        upper = None
-        if before:
-            if group_channels is not None:
-                cur.execute("""SELECT COALESCE(m.happened_at,m.created_at) AS stamp
-                  FROM saas_crm_messages m JOIN saas_connect_conversations c
-                    ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
-                    AND m.channel='connect:'||c.connect_channel_id::text
-                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND c.conversation_id=%s
-                    AND c.connect_channel_id=ANY(%s::uuid[])""",
-                    (tenant,before,conversation,group_channels))
-            else:
-                cur.execute("""SELECT COALESCE(happened_at,created_at) AS stamp
-                  FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
-                    AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s""",
-                    (tenant,before,history_leads,history_channel))
-            boundary = cur.fetchone()
-            if not boundary:
-                cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
-                return {'operator_events': []}
-            upper = boundary["stamp"]
-        # The oldest loaded message fences current events. Once the oldest
-        # message page is loaded, its window can include pre-message events.
-        lower = _stamp(messages[49]) if len(messages)>50 else None
+        window = history_window(cur,tenant,conversation,messages=messages,before=before,
+            history_leads=history_leads,history_channel=history_channel,group_channels=group_channels)
+        if window is None:
+            cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
+            return {'operator_events': []}
+        lower,upper=window
         cur.execute("""SELECT a.id::text AS id,a.action,a.created_at,m.display_name
           FROM saas_tenant_audit_events a
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
