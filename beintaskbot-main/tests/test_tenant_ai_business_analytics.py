@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from types import SimpleNamespace
 import uuid
 
@@ -141,7 +142,15 @@ def test_company_risks_reuses_owner_reader_and_removes_identity_fields(monkeypat
     assert events[0]['payload'] == {'tool': 'get_company_risks', 'read_only': True}
 
 
+class _FixedSearchClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        fixed = cls(2026, 11, 15, tzinfo=timezone.utc)
+        return fixed.astimezone(tz) if tz is not None else fixed.replace(tzinfo=None)
+
+
 def test_search_conversations_uses_bounded_exact_dialog_sample_and_returns_source_refs(monkeypatch):
+    monkeypatch.setattr(analytics, "datetime", _FixedSearchClock)
     _owner_access(monkeypatch)
     monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
     monkeypatch.setattr('tenant_platform._ensure_schema', lambda conn: None)
@@ -223,6 +232,7 @@ def test_search_conversations_stops_at_twenty_exact_routes(monkeypatch):
 
 
 def test_search_coverage_counts_only_work_completed_before_limit_stop(monkeypatch):
+    monkeypatch.setattr(analytics, "datetime", _FixedSearchClock)
     _owner_access(monkeypatch)
     monkeypatch.setattr('tenant_platform._connect', lambda: _Connection(_Cursor()))
     routes = [{'provider': 'connect', 'channel_id': f'channel-{index}', 'lead_id': index + 1,
