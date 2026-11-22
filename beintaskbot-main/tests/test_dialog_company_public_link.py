@@ -37,6 +37,7 @@ def test_unsafe_url_is_never_projected(url):
 
 def test_shape_and_account_fail_closed():
     assert link._public_link(envelope(), ACCOUNT) == URL
+    assert link._public_link({'status':'success','data':None},ACCOUNT) is None
     assert link._public_link(envelope('https://1000.az/a-_12X'), ACCOUNT) == 'https://1000.az/a-_12X'
 
     for response in (envelope(URL, 'different'), {'status': 'success', 'data': {'link': URL}},
@@ -45,31 +46,34 @@ def test_shape_and_account_fail_closed():
             link._public_link(response, ACCOUNT)
 
 
-def test_one_transport_post_pinned_body_url_and_no_retry(monkeypatch):
+def test_only_get_encodes_account_and_never_retries(monkeypatch):
     monkeypatch.setattr(operator, 'api_base_url', lambda: operator.OPERATOR_API_BASE_URL)
     opener = Mock()
     def response(request, *, timeout):
-        assert request.full_url == 'https://operator-api.beinsystems.az/v1/task/publicLink'
-        assert request.get_method() == 'POST'
-        assert json.loads(request.data) == {'account': ACCOUNT, 'public_base_url': 'https://operator.beinsystems.az'}
+        assert request.full_url == 'https://operator-api.beinsystems.az/v1/task/getPublicLink?account=account%2Ba%26b'
+        assert request.get_method() == 'GET'
+        assert request.data is None
         assert request.get_header('Authorization') == 'Bearer synthetic'
         assert timeout == operator.REQUEST_TIMEOUT_SECONDS
         return BytesIO(json.dumps(envelope()).encode())
     base = operator.OPERATOR_API_BASE_URL
     opener.open.side_effect = response
-    assert link._issue_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener) == URL
+    assert link._lookup_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener) == URL
     for error, status in (
-            (TimeoutError('potentially issued'), 502),
-            (HTTPError(base, 404, 'missing endpoint', {}, None), 424),
+            (TimeoutError('unconfirmed'), 502),
+            (HTTPError(base, 403, 'forbidden', {}, None), 424),
             (HTTPError(base, 302, 'redirect', {}, None), 502)):
         prior = opener.open.call_count
         opener.open.side_effect = error
         with pytest.raises(operator.OperatorError) as denied:
-            link._issue_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener)
+            link._lookup_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener)
         assert denied.value.status == status and opener.open.call_count == prior + 1
+    opener.open.side_effect = HTTPError(base,404,'missing link',{},None)
+    assert link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base,opener=opener) is None
+    assert opener.open.call_count == 5
     with pytest.raises(operator.OperatorError):
-        link._issue_public_link(ACCOUNT, token='synthetic', base_url='https://unknown.test', opener=opener)
-    assert opener.open.call_count == 4
+        link._lookup_public_link(ACCOUNT, token='synthetic', base_url='https://unknown.test', opener=opener)
+    assert opener.open.call_count == 5
 
 
 def test_no_provider_call_without_proven_mapping_and_recheck_after(monkeypatch):
@@ -82,26 +86,26 @@ def test_no_provider_call_without_proven_mapping_and_recheck_after(monkeypatch):
     upstream = Mock(return_value=URL)
     monkeypatch.setattr(link, '_snapshot', authorize)
     monkeypatch.setattr(operator, '_credentials', get_credentials)
-    monkeypatch.setattr(operator, '_record_operator_request', audit)
-    monkeypatch.setattr(link, '_issue_public_link', upstream)
-    assert link.issue_link({}, **ROUTE) == {'state': 'not_connected'}
+    monkeypatch.setattr(operator, '_record_operator_read', audit)
+    monkeypatch.setattr(link, '_lookup_public_link', upstream)
+    assert link.lookup_link({}, **ROUTE) == {'state': 'not_connected'}
     authorize.return_value = 'not_linked'
-    assert link.issue_link({}, **ROUTE) == {'state': 'not_linked'}
+    assert link.lookup_link({}, **ROUTE) == {'state': 'not_linked'}
     for mock in (get_credentials, audit, upstream):
         mock.assert_not_called()
     before = ('tenant', ACCOUNT, 'g', 'i')
     authorize.side_effect = [before, before, before]
-    assert link.issue_link({}, **ROUTE) == {'state': 'available', 'url': URL}
+    assert link.lookup_link({}, **ROUTE) == {'state': 'available', 'url': URL}
     upstream.assert_called_once_with(ACCOUNT,
         token='synthetic', base_url=operator.OPERATOR_API_BASE_URL)
     authorize.side_effect = [before, before, ('tenant', 'different', 'g', 'i')]
     with pytest.raises(operator.OperatorError) as changed:
-        link.issue_link({}, **ROUTE)
+        link.lookup_link({}, **ROUTE)
     assert changed.value.status == 409
     upstream.reset_mock()
     authorize.side_effect = [before, ('tenant', 'different', 'g', 'i')]
     with pytest.raises(operator.OperatorError):
-        link.issue_link({}, **ROUTE)
+        link.lookup_link({}, **ROUTE)
     upstream.assert_not_called()
 
 
@@ -128,7 +132,7 @@ async def test_handler_rejects_get_cross_origin_forged_account_and_never_caches(
     profile = {'tenant_id': str(uuid.uuid4()), 'telegram_id': 17}
     monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', profile['tenant_id'])
     lookup = Mock(return_value={'state': 'available', 'url': URL})
-    monkeypatch.setattr(link, 'issue_link', lookup)
+    monkeypatch.setattr(link, 'lookup_link', lookup)
     origin = 'https://crm.test'
     handler = dialog_company_public_link_handler(lambda request: profile, origin, Mock())
     query = {**ROUTE, 'expected_tenant_id': profile['tenant_id'], 'expected_user_id': '17'}

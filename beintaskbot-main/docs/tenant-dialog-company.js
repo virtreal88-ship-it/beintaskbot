@@ -19,9 +19,9 @@
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',unavailable:'No link is available for this company.',error:'Operator did not confirm the link request.',copyError:'Link obtained. Click again to copy it.',unsupported:'Copying is unavailable in this browser.'}
   };
   const linkProblems={
-    ru:{not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
-    az:{not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
-    en:{not_connected:'Operator is disconnected.',not_linked:'This company has no verified Operator account link.',rejected:'Operator rejected the link request.',denied:'You do not have access to this company’s link.'}
+    ru:{not_found:'Operator не вернул существующую ссылку.',not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
+    az:{not_found:'Operator mövcud linki qaytarmadı.',not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
+    en:{not_found:'Operator did not return an existing link.',not_connected:'Operator is disconnected.',not_linked:'This company has no verified Operator account link.',rejected:'Operator rejected the link request.',denied:'You do not have access to this company’s link.'}
   };
   const linkProblem=key=>(linkProblems[window.tenantI18n?.language]||linkProblems.az)[key];
   const linkText=key=>(linkLabels[window.tenantI18n?.language]||linkLabels.az)[key];
@@ -88,7 +88,7 @@
     const pending=s.linkUrl?Promise.resolve(s.linkUrl):request(publicLinkEndpoint,s.member,
       {...s.route,expected_company_id:company},true,read.signal).then(({public_link:link})=>{
         if(!active())throw Error('stale');
-        if(['unavailable','not_connected','not_linked'].includes(link?.state))
+        if(['unavailable','not_found','not_connected','not_linked'].includes(link?.state))
           throw Object.assign(Error('unavailable'),{status:404,linkState:link.state});
         if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
           throw Error('unconfirmed');

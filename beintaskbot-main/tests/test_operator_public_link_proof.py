@@ -27,8 +27,8 @@ def hooks(monkeypatch):
     audit = Mock()
     fence = Mock()
     post = Mock(return_value='https://1000.az/abc123')
-    for name, call in [('_verified_pending_identity', verified),('_record_operator_request', audit),
-                       ('_pending_candidate_fence', fence),('_issue_public_link', post)]:
+    for name, call in [('_verified_pending_identity', verified),('_record_operator_read', audit),
+                       ('_pending_candidate_fence', fence),('_lookup_public_link', post)]:
         monkeypatch.setattr(proof, name, call)
     return verified, audit, fence, post, candidate
 
@@ -47,7 +47,7 @@ def test_unconfigured_or_unbound_revision_never_reads_saved_candidate(monkeypatc
         fn.assert_not_called()
 
 
-def test_wrong_identity_or_failed_owner_read_never_posts(hooks):
+def test_wrong_identity_or_failed_owner_read_never_fetches(hooks):
     verified, audit, fence, post, candidate = hooks
     verified.return_value = (OWNER['tenant_id'], OWNER['telegram_id'], candidate,
                              {'identifier':'different@synthetic'})
@@ -67,12 +67,12 @@ def test_success_pins_demo_and_reports_proof_only(hooks):
     result = proof.verify_public_link_proof(OWNER, REVISION.isoformat())
     assert result == {'verified': True,'candidate_received_at': REVISION.isoformat()}
     verified.assert_called_once_with(OWNER, REVISION.isoformat())
-    audit.assert_called_once_with(OWNER, proof._ENDPOINT, {'account':'synthetic-demo'}, issuance=True)
+    audit.assert_called_once_with(OWNER, proof._ENDPOINT, {'account':'synthetic-demo'})
     assert fence.call_count == 2
     post.assert_called_once_with('synthetic-demo',token=candidate['token'],base_url=candidate['base_url'])
 
 
-def test_rejects_replaced_candidate_before_post_and_after_receipt(hooks):
+def test_rejects_replaced_candidate_before_read_and_after_receipt(hooks):
     _, _, fence, post, _ = hooks
     fence.side_effect = OperatorError('replaced',409)
     with pytest.raises(OperatorError):
@@ -82,6 +82,16 @@ def test_rejects_replaced_candidate_before_post_and_after_receipt(hooks):
     with pytest.raises(OperatorError):
         proof.verify_public_link_proof(OWNER, REVISION.isoformat())
     post.assert_called_once()
+
+
+def test_demo_must_already_have_a_link(hooks):
+    _, _, fence, lookup, _ = hooks
+    lookup.return_value = None
+    with pytest.raises(OperatorError) as missing:
+        proof.verify_public_link_proof(OWNER, REVISION.isoformat())
+    assert missing.value.status == 404
+    lookup.assert_called_once()
+    assert fence.call_count == 2
 
 
 def test_ambiguous_upstream_failure_is_not_retried(hooks):

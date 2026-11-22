@@ -56,6 +56,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   press();await tick();assert.deepEqual(copied,[URL,URL,URL]);assert.equal(calls.length,5,'sequential clicks copy the same URL without further requests');
   mount('third');
   for(const [reply,status,message] of [
+    [{state:'not_found'},200,/Operator mövcud linki qaytarmadı/],
     [{state:'not_connected'},200,/Operator qoşulmayıb/],
     [{state:'not_linked'},200,/təsdiqlənmiş Operator hesabı/],
     [undefined,424,/Operator link sorğusunu rədd etdi/],
@@ -66,7 +67,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(copied.length,3,'failure does not change the clipboard');
   }
   Object.defineProperty(w.navigator,'clipboard',{value:undefined});
-  press();await tick();assert.equal(calls.length,9,'unsupported clipboard does not issue');
+  press();await tick();assert.equal(calls.length,10,'unsupported clipboard does not issue');
   assert.match(box().textContent,/kopyalama əlçatan deyil/);
   api.clear();assert.equal(box(),null);
   dom.window.close();
