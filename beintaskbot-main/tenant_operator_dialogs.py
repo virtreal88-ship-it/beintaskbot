@@ -493,6 +493,11 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
           c.conversation_id,split_part(c.conversation_id,'@',1){other_ids})
           AND clean.label !~* '@(s[.]whatsapp[.]net|g[.]us|lid)$'
           AND clean.label !~ '^[+0-9().[:space:]-]+$'"""
+    # Historical rows predate the kind column and keep its empty default.
+    # Such a row may contribute only on an exact direct route, never on a
+    # provider group address, and both ends of an alias must pass this check.
+    direct_route = "({route}.conversation_kind IN ('contact','') AND {route}.conversation_id !~* '@g[.]us$')"
+    canonical_direct = direct_route.format(route='c')
     contact_join,contact_name='', 'NULL::text'
     if include_contact_names and schema_ready(cur, {
         'saas_crm_native_contact_conversations': ('tenant_id','provider','channel_id','conversation_id','contact_id'),
@@ -502,7 +507,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         contact_join='''      LEFT JOIN LATERAL(SELECT contact.display_name AS dialog_name
         FROM saas_crm_native_contact_conversations link
         JOIN saas_crm_native_contacts contact ON contact.tenant_id=link.tenant_id AND contact.id=link.contact_id
-        WHERE c.conversation_kind='contact' AND link.tenant_id=c.tenant_id AND link.provider='connect'
+        WHERE '''+canonical_direct+''' AND link.tenant_id=c.tenant_id AND link.provider='connect'
           AND link.channel_id=c.connect_channel_id AND link.conversation_id=c.conversation_id
           AND contact.archived_at IS NULL AND position('@' in contact.display_name)=0
       ) linked_contact ON TRUE
@@ -562,14 +567,14 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
           WITH ORDINALITY AS candidate(label,priority)
         CROSS JOIN LATERAL(SELECT regexp_replace(candidate.label,'^[[:space:]]+|[[:space:]]+$','','g') AS label) clean
         WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id
-          AND dl.canonical_lead=c.lead_id AND dl.active AND sc.conversation_kind='contact'
+          AND dl.canonical_lead=c.lead_id AND dl.active AND '''+canonical_direct+''' AND '''+direct_route.format(route='sc')+'''
           AND '''+usable_label.format(other_ids=",sc.conversation_id,split_part(sc.conversation_id,'@',1)")+'''
         ORDER BY sc.created_at,sc.lead_id,candidate.priority LIMIT 1) names ON TRUE
 '''+contact_join+'''      LEFT JOIN LATERAL(SELECT clean.label AS dialog_name
         FROM unnest(ARRAY[c.manual_display_name,c.contact_name,c.display_name,'''+contact_name+''',names.customer_name])
           WITH ORDINALITY AS candidate(label,priority)
         CROSS JOIN LATERAL(SELECT regexp_replace(candidate.label,'^[[:space:]]+|[[:space:]]+$','','g') AS label) clean
-        WHERE c.conversation_kind='contact' AND '''+usable_label.format(other_ids='')+'''
+        WHERE '''+canonical_direct+''' AND '''+usable_label.format(other_ids='')+'''
         ORDER BY candidate.priority LIMIT 1
       ) meaningful_name ON TRUE
       WHERE c.tenant_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl

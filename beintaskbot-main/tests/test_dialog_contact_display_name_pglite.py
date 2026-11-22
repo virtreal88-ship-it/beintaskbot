@@ -146,11 +146,11 @@ def test_optional_crm_schema_absent_or_partial_does_not_break_dialogues(scoped, 
         scoped.commit()
 
 
-def _retained_alias(db, identity, lead, age, names, *, active=True):
+def _retained_alias(db, identity, lead, age, names, *, active=True, kind='contact'):
     db.execute("""INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,
       conversation_kind,manual_display_name,contact_name,display_name,created_at)
-      VALUES(%s::uuid,%s::uuid,%s,%s,'contact',%s,%s,%s,now()-(%s*interval '1 day'))""",
-      (A, CA, identity, lead, *names, age))
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,now()-(%s*interval '1 day'))""",
+      (A, CA, identity, lead, kind, *names, age))
     db.execute("""INSERT INTO saas_connect_dialog_links(tenant_id,channel_id,source_id,canonical_id,source_lead,
       canonical_lead,pair_id,active,snapshot) VALUES(%s::uuid,%s::uuid,%s,%s,%s,251,'synthetic',%s,'{}')""",
       (A, CA, identity, JID, lead, active))
@@ -199,3 +199,17 @@ def test_message_formatter_preserves_independently_named_authors():
     employee = {**direct, 'raw': {'verified_employee_id': 99}}
     assert dialogs._message(employee, contact_name='Unrelated')['author_name'] == direct['author_name']
     assert dialogs._message({**direct, 'channel': 'kommo'}, contact_name='Legacy route name')['author_name'] == 'Legacy route name'
+
+
+
+def test_legacy_direct_aliases_still_resolve_but_never_use_group_names(scoped):
+    # Existing direct rows may not have a populated conversation_kind.
+    # The route binds both source and canonical ids and lead numbers.
+    scoped.execute("""UPDATE saas_connect_conversations SET conversation_kind=''
+      WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s""", (A, CA, JID))
+    _retained_alias(scoped, '12345678901@g.us', 257, 40, ('Wrong legacy group', '', ''), kind='')
+    _retained_alias(scoped, 'synthetic-explicit-group', 258, 30, ('Wrong explicit group', '', ''), kind='group')
+    _retained_alias(scoped, 'synthetic-legacy-direct', 259, 20, ('', 'Legacy direct display', ''), kind='')
+    scoped.commit()
+    for profile in (PROFILE, EMPLOYEE):
+        assert _listed(profile)['customer_name'] == _open(profile)['customer_name'] == 'Legacy direct display'
