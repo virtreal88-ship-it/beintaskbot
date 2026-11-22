@@ -3,7 +3,7 @@
 import asyncio
 import uuid
 
-from tenant_connect_direct_identity import phone_jid
+from tenant_connect_direct_identity import direct_identity, phone_jid
 from tenant_linear_policy import TenantLinearError
 
 
@@ -20,9 +20,11 @@ def migrate(cur):
         REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE,
       FOREIGN KEY(tenant_id,channel_id,alternate_id)
         REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE)""")
+    cur.execute("""ALTER TABLE saas_whatsapp_history_pairs
+      ADD COLUMN IF NOT EXISTS lid_is_primary BOOLEAN NOT NULL DEFAULT FALSE""")
 
 
-def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
+def available_pairs(cur, tenant, channel=None, conversation=None, *, include_alternate=False, lock=False):
     """Check live source generation and retire overlays when a route diverges."""
     cur.execute("""SELECT to_regclass('saas_whatsapp_native_routes') IS NOT NULL
       AND to_regclass('saas_whatsapp_history_pairs') IS NOT NULL
@@ -33,9 +35,15 @@ def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
     # Older deliveries sometimes flagged a known route without including either
     # alternate ID. A self-only receipt is covered only when matching signed
     # receipts predate and follow it, and WeCall has since confirmed the pair.
-    cur.execute("""SELECT p.id::text,p.channel_id::text AS channel_id,p.primary_id,p.alternate_id,
+    # The stored pair is always PN then LID. The primary card follows the
+    # existing workflow and can belong to either of those routes.
+    cur.execute("""SELECT p.id::text,p.channel_id::text AS channel_id,view_route.primary_id,view_route.alternate_id,
              main.lead_id AS primary_lead,other.lead_id AS alternate_lead
       FROM saas_whatsapp_history_pairs p
+      CROSS JOIN LATERAL (
+        SELECT CASE WHEN p.lid_is_primary THEN p.alternate_id ELSE p.primary_id END AS primary_id,
+          CASE WHEN p.lid_is_primary THEN p.primary_id ELSE p.alternate_id END AS alternate_id
+      ) view_route
       JOIN saas_whatsapp_native_routes r
         ON r.tenant_id=p.tenant_id AND r.channel_id=p.channel_id AND r.generation=p.generation
         AND r.enabled AND NOT r.paused
@@ -45,16 +53,16 @@ def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid AND s.enabled
       JOIN saas_connect_channels c ON c.tenant_id=p.tenant_id AND c.connect_channel_id=p.channel_id AND c.active
       JOIN saas_connect_conversations main ON main.tenant_id=p.tenant_id AND main.connect_channel_id=p.channel_id
-        AND main.conversation_id=p.primary_id AND main.conversation_kind='contact'
+        AND main.conversation_id=view_route.primary_id AND main.conversation_kind='contact'
       JOIN saas_connect_conversations other ON other.tenant_id=p.tenant_id AND other.connect_channel_id=p.channel_id
-        AND other.conversation_id=p.alternate_id AND other.conversation_kind='contact'
+        AND other.conversation_id=view_route.alternate_id AND other.conversation_kind='contact'
       WHERE p.tenant_id=%s::uuid AND (%s::uuid IS NULL OR p.channel_id=%s::uuid)
-        AND (%s::text IS NULL OR p.primary_id=%s)
+        AND (%s::text IS NULL OR view_route.primary_id=%s OR (%s AND view_route.alternate_id=%s))
         AND NOT EXISTS (SELECT 1 FROM saas_connect_dialog_links l
           WHERE l.tenant_id=p.tenant_id AND l.channel_id=p.channel_id AND l.active
             AND (l.source_id IN (p.primary_id,p.alternate_id) OR l.canonical_id IN (p.primary_id,p.alternate_id)))
         AND NOT EXISTS (SELECT 1 FROM saas_dialog_workflows w
-          WHERE w.tenant_id=p.tenant_id AND w.channel_id=p.channel_id AND w.conversation_id=p.alternate_id)
+          WHERE w.tenant_id=p.tenant_id AND w.channel_id=p.channel_id AND w.conversation_id=view_route.alternate_id)
         AND NOT EXISTS (SELECT 1 FROM saas_crm_messages m
           WHERE m.tenant_id=p.tenant_id AND m.channel='connect:'||p.channel_id::text
             AND m.kommo_lead_id=other.lead_id AND m.direction<>'outgoing')
@@ -83,26 +91,29 @@ def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
                   AND proof.evidence->>'canonicalConversationId' IN (p.primary_id,p.alternate_id)
                   AND proof.created_at<p.verified_at
                 HAVING min(proof.created_at)<conflict.created_at AND max(proof.created_at)>conflict.created_at)))
-      """ + (' FOR SHARE OF p,r,g,s,c' if lock else ''), (tenant, channel, channel, primary, primary))
+      """ + (' FOR SHARE OF p,r,g,s,c' if lock else ''), (tenant, channel, channel, conversation, conversation, include_alternate, conversation))
     return cur.fetchall()
 
 
-def history_pair(cur, tenant, policy, channel, conversation, lead_id):
+def history_pair(cur, tenant, policy, channel, conversation, lead_id, *, include_alternate=False):
     from tenant_operator_access import assert_route
 
-    if not phone_jid(conversation):
+    if not direct_identity(conversation):
         return None
-    candidates = available_pairs(cur,tenant,channel,conversation)
-    if not candidates or candidates[0]['primary_lead'] != lead_id:
+    candidates = available_pairs(cur,tenant,channel,conversation,include_alternate=include_alternate)
+    if not candidates:
         return None
     pair = candidates[0]
+    requested, companion = ('primary','alternate') if pair['primary_id']==conversation else ('alternate','primary')
+    if pair[requested+'_lead'] != lead_id:
+        return None
     try:
-        assert_route(cur,tenant,policy,'connect',pair['alternate_id'],channel,pair['alternate_lead'])
+        assert_route(cur,tenant,policy,'connect',pair[companion+'_id'],channel,pair[companion+'_lead'])
     except TenantLinearError as exc:
         if exc.status in {403,404,409}:
             return None
         raise
-    return pair if available_pairs(cur,tenant,channel,conversation,lock=True)==candidates else None
+    return pair if available_pairs(cur,tenant,channel,conversation,include_alternate=include_alternate,lock=True)==candidates else None
 
 
 def fold_cards(rows, pairs):
@@ -143,26 +154,29 @@ def confirm(profile, channel, primary_lead, alternate_lead):
             AND conversation_kind='contact' FOR SHARE""",(tenant,channel,primary_lead,alternate_lead))
         routes = {row['lead_id']:row['conversation_id'] for row in cur.fetchall()}
         primary, alternate = routes.get(primary_lead,''), routes.get(alternate_lead,'')
-        if not binding or not phone_jid(primary) or not alternate.endswith('@lid'):
+        lid_is_primary = primary.endswith('@lid')
+        phone, lid = (alternate, primary) if lid_is_primary else (primary, alternate)
+        if not binding or not phone_jid(phone) or not (direct_identity(lid) and lid.endswith('@lid')):
             raise TenantLinearError('Эта пара диалогов недоступна.',409)
-        return tenant, binding, primary, alternate
+        return tenant, binding, phone, lid, lid_is_primary
 
     with _connect() as conn, conn.cursor() as cur:
         prepared = snapshot(cur)
-    tenant, binding, primary, alternate = prepared
-    fact = asyncio.run(fetch_contact({'conversation_id':alternate,'native':binding}))
-    if fact.get('phone') != '+' + phone_jid(primary).split('@')[0]:
+    tenant, binding, phone, lid, lid_is_primary = prepared
+    fact = asyncio.run(fetch_contact({'conversation_id':lid,'native':binding}))
+    if fact.get('phone') != '+' + phone_jid(phone).split('@')[0]:
         raise TenantLinearError('WeCall не подтвердил эту пару диалогов.',409)
     with _connect() as conn, conn.cursor() as cur:
         if snapshot(cur) != prepared:
             raise TenantLinearError('Источник изменился. Подтвердите пару заново.',409)
         cur.execute("""INSERT INTO saas_whatsapp_history_pairs AS existing
-          (id,tenant_id,channel_id,generation,primary_id,alternate_id)
-          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s)
+          (id,tenant_id,channel_id,generation,primary_id,alternate_id,lid_is_primary)
+          VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s)
           ON CONFLICT (tenant_id,channel_id,primary_id) DO UPDATE SET
-            id=CASE WHEN existing.generation=excluded.generation THEN existing.id ELSE excluded.id END,
-            generation=excluded.generation,verified_at=now()
+            id=CASE WHEN existing.generation=excluded.generation AND existing.lid_is_primary=excluded.lid_is_primary
+                 THEN existing.id ELSE excluded.id END,
+            generation=excluded.generation,lid_is_primary=excluded.lid_is_primary,verified_at=now()
           WHERE existing.alternate_id=excluded.alternate_id RETURNING id""",
-          (str(uuid.uuid4()),tenant,channel,binding['scope']['generation'],primary,alternate))
-        if not cur.fetchone() or not available_pairs(cur,tenant,channel,primary):
+          (str(uuid.uuid4()),tenant,channel,binding['scope']['generation'],phone,lid,lid_is_primary))
+        if not cur.fetchone() or not available_pairs(cur,tenant,channel,lid if lid_is_primary else phone):
             raise TenantLinearError('Обе части истории уже используются отдельно.',409)

@@ -5,6 +5,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const root=path.join(__dirname,'..');
 const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
 const dialog={provider:'connect',phone:'+994501234567',lead_id:41,channel_id:channel,conversation_id:'994501234567@s.whatsapp.net',customer_kind:'contact',customer_name:'Customer',channel_name:'WhatsApp',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:true,controls_allowed:true,agent_status:'manual',agent_mode:'manual',agent_id:'00000000-0000-0000-0000-000000000301',agent_name:'Assigned Helper'};
+const oldPhoneCard={provider:'connect',lead_id:77,channel_id:channel,conversation_id:'998818181818@s.whatsapp.net'};
 const technicalName='405e6e7d-3911-4ac6-b5a0-9bdad7ddcd50.pdf',realName='Inventory report.pdf';
 const pdfs=[
   {id:'original-pdf',external_id:'external-1',body:realName,media_filename:realName},
@@ -32,7 +33,8 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     if(name==='/api/platform/me')return route.fulfill({json:profile});
     let result={tickets:[],agents:[],members:[],channels:[],items:[]};
     if(name.endsWith('/dialogs/display-name')){if(nameGate)await nameGate;if(nameFailure)return route.fulfill({status:500,json:{error:'Synthetic name save failure'}});const body=JSON.parse(request.postData());savedNames.set(body.conversation_id,body.display_name);result={};}
-    else if(name.endsWith('/dialogs/history')){const conversation=url.searchParams.get('conversation_id')||dialog.conversation_id,original=conversation===dialog.conversation_id?'Very long customer name / Очень длинное имя клиента':'Other customer';result={dialog:{...dialog,lead_id:conversation===dialog.conversation_id?41:42,conversation_id:conversation,customer_name:savedNames.get(conversation)||original,manual_display_name:savedNames.get(conversation)||'',agent_name:'Assigned agent / Назначенный агент с очень длинным названием / Uzun agent adı'},messages:[{id:'text',external_id:'e1',direction:'incoming',message_type:'text',body:'Synthetic conversation',happened_at:'2026-10-21T10:00:00Z'},...pdfs],next_before:null};}
+    else if(name.endsWith('/dialogs/history')&&url.searchParams.get('conversation_id')===oldPhoneCard.conversation_id){assert.equal(url.searchParams.get('paired_history'),'1');result={combined_dialog:{provider:'connect',lead_id:41,channel_id:channel,conversation_id:dialog.conversation_id}};}
+    else if(name.endsWith('/dialogs/history')){const conversation=url.searchParams.get('conversation_id')||dialog.conversation_id,original=conversation===dialog.conversation_id?'Very long customer name / Очень длинное имя клиента':'Other customer';result={dialog:{...dialog,lead_id:conversation===dialog.conversation_id?41:42,conversation_id:conversation,...(conversation===dialog.conversation_id?{history_pair_id:'verified-pair'}:{}),customer_name:savedNames.get(conversation)||original,manual_display_name:savedNames.get(conversation)||'',agent_name:'Assigned agent / Назначенный агент с очень длинным названием / Uzun agent adı'},messages:[{id:'text',external_id:'e1',direction:'incoming',message_type:'text',body:'Synthetic conversation',happened_at:'2026-10-21T10:00:00Z'},...pdfs],next_before:null};}
     else if(name.endsWith('/dialogs'))result={dialogs:[{...dialog,last_message_id:'m1',last_message_direction:'incoming',last_message_text:'Customer question',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],next_offset:null};
     else if(name.endsWith('/developer-marker')){if(request.method()==='POST'&&typeof JSON.parse(request.postData()).enabled==='boolean')marker=JSON.parse(request.postData()).enabled;result={enabled:marker};}
     else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
@@ -59,6 +61,24 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     const pdfLabel={ru:'Документ PDF',az:'PDF sənədi',en:'PDF document'}[language];
     const cards=page.locator('#chatRows article').filter({has:page.locator('[data-media-title]')});
     assert.equal(await cards.count(),3);
+    const incoming=page.locator('#operatorLatestIncoming');await incoming.waitFor();
+    const incomingLabel={ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'}[language];
+    assert.equal(await incoming.innerText(),incomingLabel);
+    if(width===390||width===1280){
+      assert.equal(await page.evaluate(route=>window.tenantOperator.openDialog(route,true),oldPhoneCard),true);
+      assert.equal(await page.evaluate(()=>history.state.operatorDialog.lead_id),41,'the saved phone route reopens the authorized combined card');
+      const chat=page.locator('#chatRows');
+      await chat.evaluate(node=>{node.style.maxHeight='120px';node.scrollTop=node.scrollHeight;});
+      const beforeScroll=await chat.evaluate(node=>node.scrollTop);assert(beforeScroll>0);
+      const beforeJump=calls.filter(call=>call.path.endsWith('/dialogs/history')).length;
+      await incoming.click();
+      assert(await chat.evaluate((node,prior)=>{
+        const first=node.querySelector('[data-message-id="text"]').getBoundingClientRect(),viewport=node.getBoundingClientRect();
+        return node.scrollTop<prior&&first.bottom>viewport.top&&first.top<viewport.bottom;
+      },beforeScroll),'the last incoming message is visible after the jump');
+      assert.equal(calls.filter(call=>call.path.endsWith('/dialogs/history')).length,beforeJump,'navigating inside the loaded history needs no request');
+      await chat.evaluate(node=>node.style.removeProperty('max-height'));
+    }
     assert.equal((await cards.nth(0).innerText()).split(realName).length-1,1);
     assert.equal(await cards.nth(1).locator('[data-media-title]').innerText(),pdfLabel);
     assert(!((await cards.nth(1).innerText()).includes(technicalName)));
@@ -105,7 +125,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await revealAccountControl(page,'#dialogConsultationBell');const beforeBell=calls.filter(c=>c.method==='POST').length;await bell.click();await page.locator('#dialogConsultationMenu').waitFor();assert.equal(calls.filter(c=>c.method==='POST').length,beforeBell,'opening the retained global bell does not mark read automatically');await page.locator('#notificationClose').click();if(!await avatar.isVisible())await page.locator('.operator-row').first().click();
     await avatar.click();await field.fill('Pending name stays with its source');nameGate=new Promise(resolve=>{releaseName=resolve;});const beforePending=calls.filter(c=>c.path.endsWith('/dialogs/display-name')).length;await blurName();await page.waitForFunction(()=>document.querySelector('#operatorConversationNameInput')?.readOnly);await page.locator('#operatorConversationName').evaluate(n=>n.requestSubmit());assert.equal(calls.filter(c=>c.path.endsWith('/dialogs/display-name')).length,beforePending+1,'pending guard rejects double submission');
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));assert.equal(await card.isVisible(),true);assert.equal(await field.inputValue(),'Pending name stays with its source');assert.equal(await field.evaluate(n=>n.readOnly),true,'background rendering retains pending save');
-    await page.evaluate(()=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,lead_id:42,conversation_id:'other-customer'},true));assert.equal(await card.isVisible(),false);await avatar.click();assert.equal(await field.inputValue(),'Other customer');const response=page.waitForResponse(r=>r.url().includes('/dialogs/display-name')&&r.request().method()==='POST');releaseName();await response;nameGate=null;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));assert.equal(await field.inputValue(),'Other customer','late name response never edits another customer');assert(!await saveMark.isVisible(),'a late save never marks another dialogue');assert.equal(await page.locator('#operatorDialogTitleText').innerText(),'Other customer');await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.querySelector('#operatorClientCard').contains(document.activeElement)),true);
+    await page.evaluate(()=>window.tenantOperator.openDialog({...window.tenantOperator.currentDialog,lead_id:42,conversation_id:'other-customer'},true));assert.equal(await card.isVisible(),false);await avatar.click();assert.equal(await field.inputValue(),'Other customer');assert.equal(await incoming.isVisible(),false);const response=page.waitForResponse(r=>r.url().includes('/dialogs/display-name')&&r.request().method()==='POST');releaseName();await response;nameGate=null;await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));assert.equal(await field.inputValue(),'Other customer','late name response never edits another customer');assert(!await saveMark.isVisible(),'a late save never marks another dialogue');assert.equal(await page.locator('#operatorDialogTitleText').innerText(),'Other customer');await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.querySelector('#operatorClientCard').contains(document.activeElement)),true);
     if(width===390){await page.setViewportSize({width,height:420});await page.waitForTimeout(50);const compact=await card.boundingBox();assert.ok(compact.y>=0&&compact.y+compact.height<=420,'card fits a keyboard-sized viewport');assert.equal(await field.inputValue(),'Other customer');await page.setViewportSize({width,height});}
     const box=await card.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=width+1&&box.y>=0&&box.y+box.height<=height+1);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:'/tmp/dialog-avatar-card-'+width+'-'+language+'.png'});
     await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-auth-invalid')));assert.equal(await page.locator('#operatorClientCard[open]').count(),0,'logout closes the card');

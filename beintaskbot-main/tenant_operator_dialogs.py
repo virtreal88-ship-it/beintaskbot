@@ -1268,7 +1268,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             paired_history=None
             if combine_history and not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant) and len(history_members)==1:
                 from tenant_whatsapp_history_pairs import history_pair
-                paired_history=history_pair(cur,tenant,policy,channel,conversation,lead_id)
+                paired_history=history_pair(cur,tenant,policy,channel,conversation,lead_id,
+                    include_alternate=not before and not anchor)
+                if paired_history and conversation==paired_history['alternate_id']:
+                    # An old card can lead to the combined history only after
+                    # both exact routes have independently passed view checks.
+                    return {'combined_dialog':{'provider':'connect','channel_id':channel,
+                        'conversation_id':paired_history['primary_id'],'lead_id':paired_history['primary_lead']}}
             message_leads=history_leads.copy()
             if paired_history:
                 message_leads.append(paired_history['alternate_lead'])
