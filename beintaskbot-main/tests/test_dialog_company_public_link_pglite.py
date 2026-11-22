@@ -35,7 +35,7 @@ def test_owned_closed_has_exact_access_but_other_operator_and_pending_do_not(com
     route = dict(provider='connect',lead_id=41,channel_id=CA,conversation_id='client',
                  expected_company_id=company)
     # Accounts-only access cannot authorize a task POST, even for the owner.
-    assert link.issue_link(PROFILE, **route) == {'state':'unavailable'}
+    assert link.issue_link(PROFILE, **route) == {'state':'not_connected'}
     instance=str(uuid.uuid4())
     generation='synthetic-generation'
     import json
@@ -44,6 +44,8 @@ def test_owned_closed_has_exact_access_but_other_operator_and_pending_do_not(com
         (tenant_id,provider,status,account_domain,metadata)
         VALUES(%s::uuid,%s,'connected',%s,%s::jsonb)""",
         (A,operator.PROVIDER,operator.OPERATOR_API_BASE_URL,metadata))
+    database.commit()
+    assert link.issue_link(PROFILE, **route) == {'state':'not_linked'}
     database.execute("""INSERT INTO saas_beinsystems_operator_company_imports
         (tenant_id,external_account,company_id,created_by,updated_by,
           last_seen_connection_instance_id,last_seen_generation)
