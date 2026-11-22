@@ -79,6 +79,7 @@ def integration_handler(member: Callable, origin: str, logger):
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
+        action = ""
         try:
             if request.method == "GET":
                 return _json_response({"integration": await asyncio.to_thread(operator.status, profile)})
@@ -108,6 +109,10 @@ def integration_handler(member: Callable, origin: str, logger):
                     candidate_received_at=data["candidate_received_at"])
                 value = await asyncio.to_thread(operator.status, profile)
                 return _json_response({"accounts_only": capability, "integration": value})
+            elif action == "verify_public_link_proof" and set(data) == {"action", "candidate_received_at"}:
+                from tenant_operator_public_link_proof import verify_public_link_proof
+                proof = await asyncio.to_thread(verify_public_link_proof, profile, data["candidate_received_at"])
+                return _json_response({"public_link_proof": proof})
             elif action == "test" and set(data) == {"action", "search"}:
                 verification = await asyncio.to_thread(
                     operator.verify_accounts_access, profile, data["search"])
@@ -131,7 +136,10 @@ def integration_handler(member: Callable, origin: str, logger):
                 body["upstream_error_code"] = error.upstream_error_code
             return web.json_response(body, status=error.status, headers=headers)
         except Exception:
-            logger.exception("Operator integration settings failed")
+            if action == "verify_public_link_proof":
+                logger.error("Operator public-link demo verification failed")
+            else:
+                logger.exception("Operator integration settings failed")
             return web.json_response({"success": False, "error": "Не удалось обновить подключение Operator."},
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint
