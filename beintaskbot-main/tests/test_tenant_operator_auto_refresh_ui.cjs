@@ -4,7 +4,7 @@ const root=path.join(__dirname,'..'),read=file=>fs.readFileSync(path.join(root,f
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(r=>setImmediate(r));};
 const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
 const route={provider:'connect',lead_id:41,channel_id:channel,conversation_id:'direct@s.whatsapp.net',customer_kind:'contact',customer_name:'Test customer',display_state:'human',state:'human',ai_availability:'stopped',available_actions:[],can_send:false};
-const messages=[1,2,3].map(n=>({id:`message-${n}`,external_id:`external-${n}`,direction:n===3?'incoming':'outgoing',message_type:'text',body:`Message ${n}`,author_type:n===3?'customer':'operator',author_name:n===3?'Customer':'Operator',happened_at:`2026-10-21T10:0${n}:00Z`}));
+const messages=[1,2,3].map(n=>({id:`message-${n}`,source:'connect',external_id:`external-${n}`,direction:n===3?'incoming':'outgoing',message_type:'text',body:`Message ${n}`,author_type:n===3?'customer':'operator',author_name:n===3?'Customer':'Operator',happened_at:`2026-10-21T10:0${n}:00Z`}));
 let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:true,result:{unread_count:readThrough.get(route.conversation_id)===messages.at(-1).id?0:unreadValue,dialogs:[{...route,unread_count:readThrough.get(route.conversation_id)===messages.at(-1).id?0:unreadValue,last_message_id:messages.at(-1).id,last_message_direction:messages.at(-1).direction,last_message_type:'text',last_message_text:messages.at(-1).body,last_message_at:messages.at(-1).happened_at}],channels:[],agents:[],attention_count:0,next_offset:null}});
 (async()=>{
  for(const config of [
@@ -20,7 +20,7 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
   w.tenantProfileSnapshot=profile;
   w.fetch=async(url,options={})=>{const value=String(url);calls.push({url:value,method:options.method||'GET'});let result;
    if(value.includes('/api/platform/me'))return {ok:true,json:async()=>profile};
-   if(value.includes('/dialogs/history'))result={dialog:{...route},messages:[...messages],next_before:null};
+   if(value.includes('/dialogs/history'))result={dialog:{...route},messages:messages.map(m=>({...m})),next_before:null};
    else if(value.includes('/dialogs/read'))result={updated:true};
    else if(value.includes('/dialogs?'))result=latest().result;
    else throw Error('Unexpected request '+value);
@@ -45,7 +45,8 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app/dialogs',runScripts:'outside-only'}),w=dom.window,calls=[],timers=new Map();let timerId=0;Object.defineProperty(w.document,'hidden',{configurable:true,value:false});
  w.setTimeout=(fn,delay=0)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};w.clearTimeout=id=>timers.delete(id);
  const member={tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},profile={member,capabilities:{modules:{dialogs:true}}};w.tenantProfileSnapshot=profile;w.AudioContext=class{constructor(){this.state='suspended';this.currentTime=1;soundCalls++;}resume(){this.state='running';return Promise.resolve();}createOscillator(){return{type:'',frequency:{value:0},connect(){},start(){soundCalls++;},stop(){}};}createGain(){return{gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}};}};
- w.fetch=async (url,options={})=>{const value=String(url);calls.push(value);if(value.includes('/dialogs/read')){const body=JSON.parse(options.body||'{}');readThrough.set(body.conversation_id,body.message_id);return{ok:true,json:async()=>({success:true,result:{updated:true}})}};if(value.includes('/dialogs/history'))return{ok:true,json:async()=>({success:true,result:{dialog:{...route,last_message_id:messages.at(-1).id},messages:[...messages],next_before:null}})};if(value.includes('/dialogs?'))return{ok:true,json:async()=>latest()};if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};throw Error('Unexpected request '+value);};
+ let historyName=route.customer_name,historyRouteOverride={},readCursorOverride;
+ w.fetch=async (url,options={})=>{const value=String(url);calls.push(value);if(value.includes('/dialogs/read')){const body=JSON.parse(options.body||'{}');readThrough.set(body.conversation_id,body.message_id);return{ok:true,json:async()=>({success:true,result:{updated:true}})}};if(value.includes('/dialogs/history'))return{ok:true,json:async()=>({success:true,result:{dialog:{...route,...historyRouteOverride,customer_name:historyName,last_message_id:messages.at(-1).id},messages:messages.map(m=>({...m})),next_before:null,...(readCursorOverride?{read_through_message_id:readCursorOverride}:{})}})};if(value.includes('/dialogs?'))return{ok:true,json:async()=>latest()};if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};throw Error('Unexpected request '+value);};
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js'])w.eval(read(file));
  await settle();await w.tenantOperator.refresh();await settle();
  const view=w.document.getElementById('view-dialogs');view.classList.add('active');w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'dialogs'}}));await settle();
@@ -55,11 +56,44 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  const chat=w.document.getElementById('chatRows'),composer=w.document.getElementById('chatText'),copilot=w.document.getElementById('operatorCopilot');
  Object.defineProperty(chat,'scrollHeight',{configurable:true,get:()=>chat.querySelectorAll('.operator-message').length*100});Object.defineProperty(chat,'clientHeight',{configurable:true,value:100});chat.scrollTop=45;
  composer.value='Draft stays';copilot.hidden=false;w.document.getElementById('operatorCopilotPrompt').value='Internal copilot prompt';
+ const d=w.document,title=d.getElementById('operatorDialogTitleText'),oldAuthor=chat.querySelector('[data-message-id="message-3"] [data-direct-message-author]');
+ assert.equal(oldAuthor.textContent,'Customer');const beforeNames=calls.length,article=oldAuthor.closest('article');
+ route.customer_name='List projection hint';historyName='New <verified> customer';messages[2].author_name=historyName;
+ await w.tenantOperator.refresh();await settle();
+ assert.equal(d.getElementById('operatorDialogTitleText'),title,'name-only refresh does not rebuild the header');
+ assert.equal(title.textContent,historyName,'history response is authoritative, not the hint');
+ assert.equal(title.querySelector('verified'),null,'author and header are inserted as plain text');
+ assert.equal(oldAuthor.textContent,historyName);assert.equal(oldAuthor.closest('article'),article);
+ assert.equal(chat.scrollTop,45);assert.equal(composer.value,'Draft stays');assert.equal(copilot.hidden,false);
+ assert.equal(w.document.getElementById('operatorCopilotPrompt').value,'Internal copilot prompt');
+ assert.equal(calls.slice(beforeNames).filter(url=>url.includes('/dialogs/history')).length,1);
+ assert.ok(calls.slice(beforeNames).every(url=>!url.includes('/dialogs/read')&&!url.includes('/reminders')));
+ route.customer_name='Mismatch triggers only a history read';historyRouteOverride={conversation_id:'different@lid'};
+ historyName='Different route name';messages[2].author_name='Unrelated author';
+ await w.tenantOperator.refresh();await settle();
+ assert.equal(title.textContent,'New <verified> customer');assert.equal(oldAuthor.textContent,'New <verified> customer');
+ historyRouteOverride={};route.customer_name=title.textContent;
+ messages[2].author_name='';historyName='12345678901@lid';
+ // Model a real browser scroll event queued by patchDialogPage's viewport
+ // restoration while a fresh history cursor is otherwise eligible at bottom.
+ const priorReadCalls=calls.filter(url=>url.includes('/dialogs/read')).length;
+ let simulatedTop=chat.scrollHeight;readCursorOverride='fresh-read-cursor';
+ Object.defineProperty(chat,'scrollTop',{configurable:true,get:()=>simulatedTop,set:top=>{simulatedTop=top;w.queueMicrotask(()=>chat.dispatchEvent(new w.Event('scroll')));}});
+ await w.tenantOperator.openDialog(route,true,'',{suppressRead:true});await settle();
+ assert.equal(calls.filter(url=>url.includes('/dialogs/read')).length,priorReadCalls,'suppressRead fences synthetic viewport scroll during history refresh');
+ delete chat.scrollTop;chat.scrollTop=45;readCursorOverride=undefined;
+ assert.equal(d.getElementById('operatorDialogTitleText'),title,'same-route refresh patches the header');
+ assert.equal(title.textContent,w.tenantI18n.t('whatsappContact'));
+ assert.equal(oldAuthor.textContent,w.tenantI18n.t('customer'));assert.equal(oldAuthor.closest('article'),article);
+ assert.equal(chat.scrollTop,45);assert.equal(composer.value,'Draft stays');
+ route.customer_name=historyName;
  messages.push({id:'duplicate-delivery',external_id:'external-3',direction:'incoming',message_type:'text',body:'Message 3 duplicate webhook',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:03:00Z'});
- messages.push({id:'message-4',external_id:'external-4',direction:'incoming',message_type:'text',body:'New customer question',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:04:00Z'});
+ messages.push({id:'message-4',source:'connect',external_id:'external-4',direction:'incoming',message_type:'text',body:'New customer question',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:04:00Z'});
+ historyName=route.customer_name='Current customer';messages[2].author_name=historyName;
  const beforeHistory=calls.filter(url=>url.includes('/dialogs/history')).length;
  await w.tenantOperator.refresh();await settle();
  assert.equal(calls.filter(url=>url.includes('/dialogs/history')).length,beforeHistory+1,'a changed latest message fetches the existing history API');
+ assert.equal(title.textContent,historyName);assert.equal(oldAuthor.textContent,historyName);
  assert.equal(chat.querySelectorAll('.operator-message').length,4,'new history is appended once and duplicate external deliveries are ignored');
  assert.equal(composer.value,'Draft stays');assert.equal(w.document.getElementById('operatorCopilot'),copilot);assert.equal(copilot.hidden,false);assert.equal(w.document.getElementById('operatorCopilotPrompt').value,'Internal copilot prompt');
  assert.equal(chat.scrollTop,45,'appending below the reader preserves the same viewport offset');assert.equal(w.document.getElementById('operatorNewMessages').hidden,false);

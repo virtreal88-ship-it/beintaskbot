@@ -104,6 +104,82 @@ def test_owner_can_start_new_cycle_from_closed_dialog_without_sending(episodes):
     assert history[1]['closed_at'] is None
 
 
+def test_manual_restart_remains_for_own_closed_history_after_operator_routing(episodes, monkeypatch):
+    from tenant_dialog_presence import (provision_status_schema, ROUTING_SOURCES_ENV,
+        STATUS_ENABLED_ENV, set_status)
+    from tenant_operator_access import access
+    import tenant_operator_dialogs
+    monkeypatch.setattr(tenant_operator_dialogs, '_connect', lambda: episodes)
+    from tenant_operator_dialogs import history, listing
+
+    command()
+    command('close', 1)
+    # The production provisioner safely composes the constraint identifier;
+    # PGlite's transport accepts only already-rendered SQL.
+    query=episodes.query
+    monkeypatch.setattr(episodes,'query',
+        lambda sql,params=():query(sql.as_string() if hasattr(sql,'as_string') else sql,params))
+    with episodes.cursor() as cur:
+        provision_status_schema(cur)
+    episodes.commit()
+    monkeypatch.setenv(STATUS_ENABLED_ENV, 'true')
+    monkeypatch.setenv(ROUTING_SOURCES_ENV, CA)
+    set_status(PROFILE, {'status': 'away'})
+
+    # Full ordinary history, using the same capability consumed by Android
+    # and desktop. The owner is not an eligible new queue operator.
+    page=history(PROFILE,'connect',41,CA,'client')
+    assert page['dialog']['lifecycle']['can_start']
+    rows=listing(PROFILE,lifecycle='completed')['dialogs']
+    assert [r['lifecycle']['can_start'] for r in rows if r['lead_id']==41]==[True]
+    with episodes.cursor() as cur:
+        from tenant_dialog_presence import is_online
+        assert not is_online(cur,A,11,source_channel=CA)
+        _,_,policy=access(cur,PROFILE)
+        row={'provider':'connect','lead_id':41,'conversation_id':'client','channel_id':CA}
+        lifecycle.decorate(cur,A,11,row,details=False,_policy=policy,_can_update=False)
+        assert not row['lifecycle']['can_start']
+    episodes.commit()
+    with pytest.raises(TenantLinearError) as other:
+        command('start',2,actor=33)
+    assert other.value.status==404
+
+    episodes.execute("UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,CA))
+    episodes.commit()
+    assert not history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']['can_start']
+    with pytest.raises(TenantLinearError) as inactive:
+        command('start',2)
+    assert inactive.value.status==403
+    episodes.execute("UPDATE saas_connect_channels SET active=TRUE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,CA))
+    episodes.commit()
+
+    from tenant_dialog_rollout import transition
+    with episodes.cursor() as cur:
+        transition(cur,A,mode='active',admission_enabled=False,expected_generation=1)
+    episodes.commit()
+    assert not history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']['can_start']
+    with pytest.raises(TenantLinearError) as paused:
+        command('start',2)
+    assert paused.value.status==409
+    with episodes.cursor() as cur:
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=2)
+    episodes.commit()
+
+    restarted=command('start',2)['lifecycle']
+    assert restarted['state']=='accepted' and restarted['operator_id']==11
+    command('transfer',restarted['revision'],target_employee_id=33)
+    command('close',4,actor=33)
+    operator={'tenant_id':A,'telegram_id':33}
+    set_status(operator, {'status': 'offline'})
+    assert not history(operator,'connect',41,CA,'client')['dialog']['lifecycle']['can_start']
+    with pytest.raises(TenantLinearError) as offline:
+        command('start',5,actor=33)
+    assert offline.value.status==403
+    set_status(operator, {'status': 'online'})
+    assert history(operator,'connect',41,CA,'client')['dialog']['lifecycle']['can_start']
+    assert command('start',5,actor=33)['lifecycle']['operator_id']==33
+
+
 def test_owner_can_start_new_cycle_from_dismissed_dialog(episodes):
     inbound=insert_message(episodes,'for-dismiss-start',created_at='2099-01-01T00:00:00Z')
     command('dismiss',0,message_id=inbound)

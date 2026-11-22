@@ -308,7 +308,7 @@ def _attach_call_recording_directions(cur, tenant, rows):
             row['_call_recording_direction']=binding['direction']
 
 
-def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name=''):
+def _message(item, *, group=False, participant_names=None, employee_participants=None, contact_name='', contact_route=''):
     value = dict(item)
     call_direction=value.pop('_call_recording_direction',None)
     media_evidence=value.pop('media_evidence',{}) or {}
@@ -347,14 +347,23 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         candidate = participant_jid.split('@', 1)[0]
         if candidate.isdecimal():
             author = candidate
-    # A direct conversation has one customer.  The route projection has
-    # already resolved its tenant/channel-local name in the safe order
-    # manual override -> saved provider name -> pushName -> phone.  Use that
-    # display fact for its incoming message footer rather than the persisted
-    # transport fallback (usually a phone/JID).  Group participants, AI and
-    # operator authors intentionally remain on their independent branches.
-    if not group and direction == 'incoming' and author_type == 'customer' and str(contact_name).strip():
-        author = str(contact_name).strip()
+    # Direct Connect chats can retain a technical route fallback in
+    # customer_name for routing/search, but that fallback is not an author.
+    # Preserve an independently named genuine author when no route name is
+    # available. Groups, employees, system and legacy messages are unchanged.
+    if not group and direction == 'incoming' and author_type == 'customer':
+        if contact_route and str(value.get('channel') or '').startswith('connect:'):
+            routes = (str(contact_route or ''), str(value.get('source_conversation_id') or ''))
+            identifiers = {part for route in routes for part in (route, route.split('@',1)[0])}
+            def meaningful_name(label):
+                label = str(label or '').strip()
+                if (label in identifiers or re.search(r'@(?:s\.whatsapp\.net|g\.us|lid)$',label,re.I)
+                        or re.fullmatch(r'[+0-9().\s-]+',label)):
+                    return ''
+                return label
+            author = meaningful_name(contact_name) or meaningful_name(author)
+        elif str(contact_name).strip():
+            author = str(contact_name).strip()
     value['direction'] = direction
     value['author_type'] = author_type
     value['author_name'] = author
@@ -454,7 +463,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -471,9 +480,41 @@ def projection(cur, policy, *, include_read_cursors=False):
     from tenant_support_access import sql_filter as support_filter
     ticket_filter=support_filter(policy,'st')
     handoff_filter=support_filter(policy,'ht')
+    # A visible conversation may use its explicitly linked contact's name
+    # without granting access to the CRM directory. Match the complete
+    # contact route; never infer a CRM identity from a phone or JID alone.
+    # Optional CRM may not be installed in an older deployment. Check once
+    # for this request and avoid referencing missing relations/columns at all.
+    # Do not run DDL or retain a positive result across requests/databases.
+    from tenant_schema_preflight import ready as schema_ready
+    # The same display-name filter applies before choosing either a route
+    # label or the first usable label across retained direct-route aliases.
+    usable_label = """clean.label<>'' AND clean.label NOT IN (
+          c.conversation_id,split_part(c.conversation_id,'@',1){other_ids})
+          AND clean.label !~* '@(s[.]whatsapp[.]net|g[.]us|lid)$'
+          AND clean.label !~ '^[+0-9().[:space:]-]+$'"""
+    # Historical rows predate the kind column and keep its empty default.
+    # Such a row may contribute only on an exact direct route, never on a
+    # provider group address, and both ends of an alias must pass this check.
+    direct_route = "({route}.conversation_kind IN ('contact','') AND {route}.conversation_id !~* '@g[.]us$')"
+    canonical_direct = direct_route.format(route='c')
+    contact_join,contact_name='', 'NULL::text'
+    if include_contact_names and schema_ready(cur, {
+        'saas_crm_native_contact_conversations': ('tenant_id','provider','channel_id','conversation_id','contact_id'),
+        'saas_crm_native_contacts': ('tenant_id','id','display_name','archived_at'),
+    }, []):
+        contact_name='linked_contact.dialog_name'
+        contact_join='''      LEFT JOIN LATERAL(SELECT contact.display_name AS dialog_name
+        FROM saas_crm_native_contact_conversations link
+        JOIN saas_crm_native_contacts contact ON contact.tenant_id=link.tenant_id AND contact.id=link.contact_id
+        WHERE '''+canonical_direct+''' AND link.tenant_id=c.tenant_id AND link.provider='connect'
+          AND link.channel_id=c.connect_channel_id AND link.conversation_id=c.conversation_id
+          AND contact.archived_at IS NULL AND position('@' in contact.display_name)=0
+      ) linked_contact ON TRUE
+'''
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-        COALESCE(NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
+        COALESCE(meaningful_name.dialog_name,NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
         CASE WHEN (c.avatar_checked_at IS NULL AND c.avatar_status IN ('unavailable','loading'))
           OR c.avatar_checked_at<now()-interval '7 days'
           OR (c.avatar_status='loading' AND c.avatar_checked_at<now()-interval '3 minutes') THEN '' ELSE c.avatar_status END AS avatar_status,
@@ -518,11 +559,24 @@ def projection(cur, policy, *, include_read_cursors=False):
         WHERE ('''+handoff_filter+''') AND ht.tenant_id=c.tenant_id AND ht.channel_id=c.connect_channel_id AND ht.conversation_id=c.conversation_id
           AND (he.event_key LIKE 'handoff:%%' OR he.event_key LIKE 'manual-handoff:%%' OR he.event_key LIKE 'group-handoff:%%')
         ORDER BY ht.created_at DESC,he.event_key DESC LIMIT 1) h ON TRUE
-      LEFT JOIN LATERAL(SELECT COALESCE(NULLIF(sc.manual_display_name,''),NULLIF(sc.contact_name,''),NULLIF(sc.display_name,'')) AS customer_name
+      LEFT JOIN LATERAL(SELECT clean.label AS customer_name
         FROM saas_connect_dialog_links dl JOIN saas_connect_conversations sc
           ON sc.tenant_id=dl.tenant_id AND sc.connect_channel_id=dl.channel_id AND sc.conversation_id=dl.source_id
-        WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active
-        ORDER BY sc.created_at,sc.lead_id LIMIT 1) names ON TRUE
+          AND sc.lead_id=dl.source_lead
+        CROSS JOIN LATERAL unnest(ARRAY[sc.manual_display_name,sc.contact_name,sc.display_name])
+          WITH ORDINALITY AS candidate(label,priority)
+        CROSS JOIN LATERAL(SELECT regexp_replace(candidate.label,'^[[:space:]]+|[[:space:]]+$','','g') AS label) clean
+        WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id
+          AND dl.canonical_lead=c.lead_id AND dl.active AND '''+canonical_direct+''' AND '''+direct_route.format(route='sc')+'''
+          AND '''+usable_label.format(other_ids=",sc.conversation_id,split_part(sc.conversation_id,'@',1)")+'''
+        ORDER BY sc.created_at,sc.lead_id,candidate.priority LIMIT 1) names ON TRUE
+'''+contact_join+'''      LEFT JOIN LATERAL(SELECT clean.label AS dialog_name
+        FROM unnest(ARRAY[c.manual_display_name,c.contact_name,c.display_name,'''+contact_name+''',names.customer_name])
+          WITH ORDINALITY AS candidate(label,priority)
+        CROSS JOIN LATERAL(SELECT regexp_replace(candidate.label,'^[[:space:]]+|[[:space:]]+$','','g') AS label) clean
+        WHERE '''+canonical_direct+''' AND '''+usable_label.format(other_ids='')+'''
+        ORDER BY candidate.priority LIMIT 1
+      ) meaningful_name ON TRUE
       WHERE c.tenant_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
         WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.source_id=c.conversation_id AND dl.active)
       UNION ALL
@@ -1021,7 +1075,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
                     lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
-                        _rollout=rollout,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
+                        _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
                         _online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources),
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
@@ -1201,7 +1255,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_connect_dialog_equivalence import members
                 history_members=members(cur,tenant,channel,conversation)
             history_leads=list(history_members.values())
-            sql,scopes=projection(cur, policy)
+            sql,scopes=projection(cur, policy,include_contact_names=not support_case_only)
             columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
             cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
@@ -1390,7 +1444,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     from tenant_browser_calls import offer as offer_browser_call
     dialog['browser_call_available']=offer_browser_call(profile,dialog)
     return {**operator_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
-                                         contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '')
+                                         contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '',
+                                         contact_route=str(dialog.get('conversation_id') or ''))
                                         for r in reversed(messages[:50])],
             'next_before':str(messages[49]['id']) if len(messages)>50 else None}
 

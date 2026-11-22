@@ -339,6 +339,15 @@ def transfer_details(profile, params):
                              'at': event['created_at'].isoformat() if event['created_at'] else None}}
 
 
+def _manual_start_exempt_from_operator_routing(tenant, channel, policy):
+    # Closed history is already restricted to its current owner. An explicit
+    # restart by that employee is not a claim from the shared waiting queue.
+    # Keep existing legacy admission and operator availability unchanged.
+    from tenant_dialog_presence import work_status_routing_requested
+    role = policy.profile.get('role') if policy else None
+    return bool(role and role != 'operator' and work_status_routing_requested(tenant, channel))
+
+
 def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
@@ -368,7 +377,9 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
         'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
-        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and online and own and _can_update is True,
+        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and own and _can_update is True
+            and (online or (dialog.get('channel_active') is True
+                and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
@@ -451,7 +462,15 @@ def _mutate_once(profile, payload):
             from tenant_dialog_presence import is_online, work_status_routing_requested
             target = None
             eligible = True
-            if action in {'accept','start'} or (action == 'dismiss' and work_status_routing_requested(tenant,channel)):
+            if action == 'start' and _manual_start_exempt_from_operator_routing(tenant,channel,policy):
+                # Preserve the active exact-source requirement formerly implicit
+                # in is_online. Keep this shared lock through the transition.
+                cur.execute('''SELECT 1 FROM saas_connect_channels
+                    WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
+                    AND active FOR SHARE''',(tenant,channel))
+                if not cur.fetchone():
+                    raise TenantLinearError('Источник недоступен.',403)
+            elif action in {'accept','start'} or (action == 'dismiss' and work_status_routing_requested(tenant,channel)):
                 eligible = is_online(cur,tenant,actor,lock=True,source_channel=channel)
             if action == 'transfer':
                 target=payload.get('target_employee_id')
