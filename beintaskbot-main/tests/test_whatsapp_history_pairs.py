@@ -151,11 +151,13 @@ def test_lid_can_preserve_the_workflow_and_include_outgoing_phone_history(split)
     assert page['dialog']['can_send'] is False
     assert {(m['direction'],m['source_lead_id'],m['source_conversation_id']) for m in page['messages']}=={
         ('incoming',50,LID),('outgoing',41,PN)}
-    combined=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
+    legacy=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
+    assert 'combined_dialog' not in legacy and {m['direction'] for m in legacy['messages']}=={'outgoing'}
+    combined=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True,redirect_paired_history=True)
     assert combined == {'combined_dialog':{'provider':'connect','channel_id':channel,
         'conversation_id':LID,'lead_id':50}}
-    assert 'combined_dialog' not in dialogues.history(PROFILE,'connect',41,channel,PN,combine_history=True)
-    assert 'combined_dialog' not in dialogues.history(EMPLOYEE,'connect',41,channel,PN,support_case_only=True,combine_history=True)
+    assert 'combined_dialog' not in dialogues.history(PROFILE,'connect',41,channel,PN,combine_history=True,redirect_paired_history=True)
+    assert 'combined_dialog' not in dialogues.history(EMPLOYEE,'connect',41,channel,PN,support_case_only=True,combine_history=True,redirect_paired_history=True)
 
 
 @pytest.mark.parametrize('surrounding_proof', [True, False])

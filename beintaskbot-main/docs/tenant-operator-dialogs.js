@@ -975,7 +975,9 @@
   function timelineHistoryQuery(route,knownPage=null){
     const query=historyQuery(route);
     if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
-      if(!route.case_attachment)query.set('paired_history','1');
+      if(!route.case_attachment){
+        query.set('paired_history','1');query.set('paired_history_redirect','1');
+      }
       if(!route.case_attachment)query.set('shared_reminder_events','1');
       if(!(knownPage?.operatorEventsRetryAt>Date.now())){
         query.set('operator_events','1');
