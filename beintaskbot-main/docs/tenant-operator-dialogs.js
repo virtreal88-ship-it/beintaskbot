@@ -422,10 +422,10 @@
     }catch(error){if(current())completeAllNotice(applying?withExclusions(completeAllCopy('interrupted').replace('{done}',String(done)).replace('{skipped}',String(skipped)).replace('{unknown}',String(unknown+1)).replace('{remaining}',String(remaining))):error.message);}
     finally{
       completeAllBusy=false;if(button.isConnected)button.disabled=false;
-      if(completedView)void refreshCompletedViewStart(completedView,current);
+      if(completedView)void refreshCompletedViewActions(completedView,current);
     }
   }
-  async function refreshCompletedViewStart(view,current){
+  async function refreshCompletedViewActions(view,current){
     // The receipt proves the transition, not fresh permissions. Retrieve only
     // the selected route's capability and leave history/scroll/reminders alone.
     const revision=view.route.lifecycle.revision;
@@ -437,13 +437,18 @@
     try{
       const fresh=(await api('dialogs/history?'+historyQuery(view.route)))?.dialog;
       if(!same()||!sameDialog(fresh,view.route)||fresh.lifecycle?.revision!==revision||
-        fresh.lifecycle?.state!==view.route.lifecycle.state||fresh.lifecycle.can_start!==true)return;
-      const host=$('operatorAcceptAction');
-      if(!host||host.querySelector('[data-operator-lifecycle="start"]'))return;
-      currentDialog.lifecycle.can_start=true;
+        fresh.lifecycle?.state!==view.route.lifecycle.state)return;
+      const startHost=$('operatorAcceptAction'),primaryHost=$('operatorPrimaryAction');
+      if(!startHost||!primaryHost)return;
+      const missing=new Set();
+      if(fresh.lifecycle.can_start===true&&!startHost.querySelector('[data-operator-lifecycle="start"]'))missing.add('start');
+      if(fresh.lifecycle.can_transfer===true&&!primaryHost.querySelector('[data-operator-lifecycle="transfer"]'))missing.add('transfer');
+      if(!missing.size)return;
+      Object.assign(currentDialog.lifecycle,{can_start:fresh.lifecycle.can_start,can_transfer:fresh.lifecycle.can_transfer,
+        transfer_targets:fresh.lifecycle.transfer_targets});
       currentPage.dialog=currentDialog;
-      renderLifecycleActions(currentDialog,host,true);
-    }catch{} // A failed capability read is not permission to show Start.
+      renderLifecycleActions(currentDialog,primaryHost,missing);
+    }catch{} // Keep actions disabled until the server confirms them.
   }
   let closeLifecycleModal=()=>{};
   function removeLifecycleDialog(route){
@@ -590,15 +595,15 @@
     done.onclick=()=>void complete(false);skip.onclick=()=>void complete(true);
     document.body.append(modal);(canChoose?input:skip).focus();
   }
-  function renderLifecycleActions(route,host,onlyStart=false){
+  function renderLifecycleActions(route,host,only=null){
     const state=route.lifecycle||{},company=state.company_completion;
-    if(!onlyStart&&state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
+    if(!only&&state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
       const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
       reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
     for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
-      if(!allowed||(onlyStart&&action!=='start'))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
+      if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
       button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
