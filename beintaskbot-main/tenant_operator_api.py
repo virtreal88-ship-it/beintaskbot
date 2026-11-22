@@ -73,6 +73,8 @@ def handler(member_from_request,origin,logger,resource):
                         options={'support_case_only':True}
                     elif query.get('operator_events')=='1' or query.get('shared_reminder_events')=='1':
                         _expected(query,profile)
+                        if options.get('combine_history') and query.get('paired_history_redirect')=='1':
+                            options['redirect_paired_history']=True
                         if query.get('operator_events')=='1':
                             options.update(include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
                         if query.get('shared_reminder_events')=='1':

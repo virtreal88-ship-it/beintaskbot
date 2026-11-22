@@ -126,6 +126,38 @@ def test_connect_upgrade_installs_pair_table_in_an_existing_schema(split):
     database.commit()
     pairs.confirm(PROFILE,channel,41,50)
     assert len(database.execute('SELECT id FROM saas_whatsapp_history_pairs'))==1
+    database.execute('ALTER TABLE saas_whatsapp_history_pairs DROP COLUMN lid_is_primary')
+    database.commit()
+    _schema(database)
+    database.commit()
+    assert database.execute('SELECT lid_is_primary FROM saas_whatsapp_history_pairs')==[{'lid_is_primary':False}]
+
+
+def test_lid_can_preserve_the_workflow_and_include_outgoing_phone_history(split):
+    database,channel=split
+    database.execute("""UPDATE saas_crm_messages SET kommo_lead_id=CASE kommo_lead_id WHEN 41 THEN 50 ELSE 41 END
+        WHERE tenant_id=%s AND kommo_lead_id IN (41,50)""",(A,))
+    database.execute("""UPDATE saas_dialog_workflows SET conversation_id=%s
+        WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s""",(LID,A,channel,PN))
+    database.commit()
+    pairs.confirm(PROFILE,channel,50,41)
+    cards=dialogues.listing(EMPLOYEE,lifecycle='all',combine_history=True)['dialogs']
+    assert [(c['lead_id'],c['lifecycle']['state']) for c in cards]==[(50,'dismissed')]
+    with pytest.raises(TenantLinearError) as denied:
+        dialogues.history(PROFILE,'connect',50,channel,LID,combine_history=True)
+    assert denied.value.status==404
+    page=dialogues.history(EMPLOYEE,'connect',50,channel,LID,combine_history=True)
+    assert page['dialog']['history_pair_id']
+    assert page['dialog']['can_send'] is False
+    assert {(m['direction'],m['source_lead_id'],m['source_conversation_id']) for m in page['messages']}=={
+        ('incoming',50,LID),('outgoing',41,PN)}
+    legacy=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
+    assert 'combined_dialog' not in legacy and {m['direction'] for m in legacy['messages']}=={'outgoing'}
+    combined=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True,redirect_paired_history=True)
+    assert combined == {'combined_dialog':{'provider':'connect','channel_id':channel,
+        'conversation_id':LID,'lead_id':50}}
+    assert 'combined_dialog' not in dialogues.history(PROFILE,'connect',41,channel,PN,combine_history=True,redirect_paired_history=True)
+    assert 'combined_dialog' not in dialogues.history(EMPLOYEE,'connect',41,channel,PN,support_case_only=True,combine_history=True,redirect_paired_history=True)
 
 
 @pytest.mark.parametrize('surrounding_proof', [True, False])
