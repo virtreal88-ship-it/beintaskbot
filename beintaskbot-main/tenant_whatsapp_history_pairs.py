@@ -30,9 +30,6 @@ def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
       AND to_regclass('saas_dialog_workflows') IS NOT NULL AS ready""")
     if not cur.fetchone()['ready']:
         return []
-    # Older deliveries sometimes flagged a known route without including either
-    # alternate ID. A self-only receipt is covered only when matching signed
-    # receipts predate and follow it, and WeCall has since confirmed the pair.
     cur.execute("""SELECT p.id::text,p.channel_id::text AS channel_id,p.primary_id,p.alternate_id,
              main.lead_id AS primary_lead,other.lead_id AS alternate_lead
       FROM saas_whatsapp_history_pairs p
@@ -64,25 +61,7 @@ def available_pairs(cur, tenant, channel=None, primary=None, *, lock=False):
             AND (conflict.evidence->>'pair_matches_conversation' IS DISTINCT FROM 'true'
               OR conflict.evidence->'directIdentity'->>'lid' IS DISTINCT FROM p.alternate_id
               OR COALESCE(conflict.evidence->'directIdentity'->>'jid','') NOT IN (
-                split_part(p.primary_id,'@',1)||'@s.whatsapp.net',split_part(p.primary_id,'@',1)||'@c.us'))
-            AND NOT (
-              conflict.evidence->>'pair_matches_conversation' IS NOT DISTINCT FROM 'false'
-              AND conflict.evidence->'directIdentity'->>'jid' IS NOT DISTINCT FROM ''
-              AND conflict.evidence->'directIdentity'->>'lid' IS NOT DISTINCT FROM ''
-              AND conflict.evidence->>'originalConversationId' IS NOT DISTINCT FROM conflict.conversation_id
-              AND conflict.evidence->>'canonicalConversationId' IS NOT DISTINCT FROM conflict.conversation_id
-              AND conflict.created_at<p.verified_at
-              AND EXISTS (SELECT 1 FROM saas_connect_identity_conflict_events proof
-                WHERE proof.tenant_id=conflict.tenant_id AND proof.connect_channel_id=conflict.connect_channel_id
-                  AND proof.conversation_id=conflict.conversation_id
-                  AND proof.evidence->>'pair_matches_conversation'='true'
-                  AND proof.evidence->'directIdentity'->>'lid'=p.alternate_id
-                  AND proof.evidence->'directIdentity'->>'jid' IN (
-                    split_part(p.primary_id,'@',1)||'@s.whatsapp.net',split_part(p.primary_id,'@',1)||'@c.us')
-                  AND proof.evidence->>'originalConversationId' IN (p.primary_id,p.alternate_id)
-                  AND proof.evidence->>'canonicalConversationId' IN (p.primary_id,p.alternate_id)
-                  AND proof.created_at<p.verified_at
-                HAVING min(proof.created_at)<conflict.created_at AND max(proof.created_at)>conflict.created_at)))
+                split_part(p.primary_id,'@',1)||'@s.whatsapp.net',split_part(p.primary_id,'@',1)||'@c.us')))
       """ + (' FOR SHARE OF p,r,g,s,c' if lock else ''), (tenant, channel, channel, primary, primary))
     return cur.fetchall()
 

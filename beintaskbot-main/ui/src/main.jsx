@@ -1829,23 +1829,23 @@ function IntegrationMarketplace() {
                     bg="app.surface"
                     borderBottomWidth="1px"
                   >
-                    <Flex align="center" gap="4">
+                    <Flex align="center" gap={selected.id === "beinsystems_operator" ? "2" : "4"} minW="0" w="full" flexWrap={selected.id === "beinsystems_operator" ? "wrap" : undefined}>
                       <IntegrationLogo provider={selected.id} size="lg" />
                       <Box flex="1" minW="0">
                         <Dialog.Title color="app.ink">
                           {selected.name}
                         </Dialog.Title>
-                        <Dialog.Description color="app.muted">
+                        {selected.id !== "beinsystems_operator" && <Dialog.Description color="app.muted">
                           {selected.description}
-                        </Dialog.Description>
+                        </Dialog.Description>}
                       </Box>
-                      <StatusBadge tone={state.connected ? "green" : "orange"}>
+                      {selected.id === "beinsystems_operator" ? <Box id="operatorConnectionStatusHost" minW="0" maxW="full" /> : <StatusBadge tone={state.connected ? "green" : "orange"}>
                         {state.connected
                           ? tx("connected")
                           : selected.id === "connect" && !owner
                             ? tx("noData")
                             : tx("disconnected")}
-                      </StatusBadge>
+                      </StatusBadge>}
                     </Flex>
                   </Dialog.Header>
                   {!["connect","whatsapp"].includes(selected.id) && (
@@ -1878,7 +1878,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
-                    {selected.id === "whatsapp" ? <WhatsAppIntegration profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{selected.id !== "connect" && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{!Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                    {selected.id === "whatsapp" ? <WhatsAppIntegration profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{!["connect","beinsystems_operator"].includes(selected.id) && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{selected.id !== "beinsystems_operator" && !Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box

@@ -282,9 +282,6 @@ _SCHEMA_COLUMNS = {
     'saas_connect_webhook_events': (
         'event_id received_at tenant_id '
     ).split(),
-    'saas_whatsapp_history_pairs': (
-        'id tenant_id channel_id generation primary_id alternate_id verified_at '
-    ).split(),
 }
 _SCHEMA_INDEXES = ['saas_connect_dialog_links_canonical',
  'saas_connect_direct_canonical_idx',
