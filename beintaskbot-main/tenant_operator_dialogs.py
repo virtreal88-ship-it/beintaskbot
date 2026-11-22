@@ -987,7 +987,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1005,8 +1005,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
             rollout=rollout_guard(cur,tenant)
+            from tenant_whatsapp_history_pairs import available_pairs, fold_cards
+            history_pairs=available_pairs(cur,tenant) if combine_history and rollout.enforced and not (completion_preview or all_rows) else []
             group_fold= "provider='connect' AND conversation_id ~ '^[0-9]{5,22}(-[0-9]{5,22})?@g[.]us$'"
-            if lifecycle != 'all':
+            if lifecycle != 'all' and not history_pairs:
                 sql=sql.replace('visible AS MATERIALIZED (','eligible AS MATERIALIZED (')
                 completed="EXISTS(SELECT 1 FROM saas_dialog_workflows dw WHERE dw.tenant_id='"+str(uuid.UUID(str(tenant)))+"'::uuid AND dw.channel_id::text=eligible.channel_id AND dw.conversation_id=eligible.conversation_id AND dw.state IN ('closed','dismissed'))"
                 condition=("provider='connect' AND "+completed if lifecycle=='completed' else "provider<>'connect' OR NOT "+completed) if rollout.enforced else ('FALSE' if lifecycle=='completed' else 'TRUE')
@@ -1092,8 +1094,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Recheck lifecycle ownership from the later snapshot as well.
             rows=[r for r in rows if not (r.get('lifecycle') or {}).get('operator_id')
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
+            if history_pairs:
+                rows=fold_cards(rows,history_pairs)
             if lifecycle != 'all':
                 rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
+            if history_pairs:
+                count=len({('group',r['conversation_id']) if r['provider']=='connect' and group_jid(r['conversation_id'])
+                           else (r['provider'],r['channel_id'],r['lead_id']) for r in rows
+                           if r['display_state'] in {'human','paused','blocked','error'}})
             if lifecycle == 'active' and rollout.enforced and not completion_preview:
                 # A source with only outgoing history has no active request.
                 # Keep it in All and in completion previews (for skip auditing),
@@ -1226,7 +1234,7 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
             *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
-            include_shared_reminder_events=False):
+            include_shared_reminder_events=False,combine_history=False):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
         # selected source explicitly, including when a group spans numbers.
@@ -1257,6 +1265,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_connect_dialog_equivalence import members
                 history_members=members(cur,tenant,channel,conversation)
             history_leads=list(history_members.values())
+            paired_history=None
+            if combine_history and not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant) and len(history_members)==1:
+                from tenant_whatsapp_history_pairs import history_pair
+                paired_history=history_pair(cur,tenant,policy,channel,conversation,lead_id)
+            message_leads=history_leads.copy()
+            if paired_history:
+                message_leads.append(paired_history['alternate_lead'])
             sql,scopes=projection(cur, policy,include_contact_names=not support_case_only)
             columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
             cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
@@ -1267,6 +1282,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 support=_linked_support_case(cur,tenant,policy,channel,history_members) if provider=='connect' else None
                 return {'dialog':{**public(row),'support_case':support}}
             dialog=decorate(row)
+            if paired_history:
+                dialog['history_pair_id']=paired_history['id']
             restricted_ai = _scoped_ai_documents(policy)
             # This server-produced binding is emitted only after the requested
             # route passes assert_route and the canonical route is visible.
@@ -1326,7 +1343,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                   WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text))) AND '''+sql_filter(policy,"CASE WHEN m.channel LIKE 'connect:%%' THEN 'connect' ELSE 'kommo' END","substring(m.channel from 9)"),
-                  (tenant,identifier(anchor),history_leads,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
+                  (tenant,identifier(anchor),message_leads,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
                 if not anchor_row:
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
@@ -1342,14 +1359,17 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 for message in messages:
                     message['source_conversation_id']=conversation
             else:
-                args=[tenant,history_leads,row['history_channel']];clause=''
+                args=[tenant,message_leads,row['history_channel']];clause=''
                 if anchor_at:
                     clause=' AND (COALESCE(happened_at,created_at),id)<=(%s,%s::uuid)'
                     args.extend((anchor_at,str(anchor_row['id'])))
                 if before:
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid)'''
-                    args += [tenant,history_leads,row['history_channel'],identifier(before)]
+                    args += [tenant,message_leads,row['history_channel'],identifier(before)]
+                if paired_history:
+                    clause+=" AND (m.kommo_lead_id<>%s OR m.direction='outgoing')"
+                    args.append(paired_history['alternate_lead'])
                 call_filter=_RECORDED_CALL_OBSERVATION_FILTER if provider=='connect' else ''
                 cur.execute('''SELECT id,external_id,direction,channel,author_name,body,message_type,media_url,happened_at,created_at,raw,kommo_lead_id AS source_lead_id FROM saas_crm_messages m
                   WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s'''+clause+call_filter+'''
@@ -1357,6 +1377,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 messages=cur.fetchall()
                 if provider=='connect':
                     by_lead={v:k for k,v in history_members.items()}
+                    if paired_history:
+                        by_lead[paired_history['alternate_lead']]=paired_history['alternate_id']
                     for message in messages:
                         message['source_conversation_id']=by_lead[int(message['source_lead_id'])]
                         message['source_channel_id']=channel
