@@ -184,14 +184,9 @@ def _read(cur, tenant, actor, route, can_manage):
     return {**empty,'company_id':binding['company_id'],'company_name':visible['name']} if visible else empty
 
 
-def attach_list_company_names(cur, tenant, actor, cards):
-    """Enrich the visible page from exact dialogue routes and current CRM grants."""
+def attach_list_company_names(cur, tenant, cards):
+    """Read only linked company names for the already authorized dialogue page."""
     if not cards or not is_operator_workspace(tenant):
-        return
-    from tenant_crm_native_access import CRMAccessError, current_access, scoped_sql
-    try:
-        view = current_access(cur, tenant, actor, 'companies', 'view')
-    except CRMAccessError:
         return
 
     def route_key(row):
@@ -202,7 +197,6 @@ def attach_list_company_names(cur, tenant, actor, cards):
 
     keys_by_card = [[route_key(row) for row in card.get('group_sources', [card])] for card in cards]
     keys = {key for routes in keys_by_card for key in routes if key is not None}
-    where, scope = scoped_sql(view, 'companies', 'view', 'c')
     companies = {}
     for provider, table, match in (
         ('connect', CONNECT, 'b.channel_id=r.channel_id::uuid'),
@@ -218,8 +212,8 @@ def attach_list_company_names(cur, tenant, actor, cards):
             FROM routes r JOIN {table} b
               ON b.tenant_id=%s::uuid AND {match} AND b.conversation_id=r.conversation_id
             JOIN {COMPANIES} c ON c.tenant_id=b.tenant_id AND c.id=b.company_id
-            WHERE c.archived_at IS NULL AND ({where})""",
-            [list(lead_ids), list(channels), list(peers), tenant, *scope])
+            WHERE c.archived_at IS NULL""",
+            (list(lead_ids), list(channels), list(peers), tenant))
         for row in cur.fetchall():
             companies[(provider, row['lead_id'], row['channel_id'], row['conversation_id'])] = (row['company_id'], row['name'])
 
