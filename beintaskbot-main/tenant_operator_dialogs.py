@@ -1094,8 +1094,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Recheck lifecycle ownership from the later snapshot as well.
             rows=[r for r in rows if not (r.get('lifecycle') or {}).get('operator_id')
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
+            history_companions={}
             if history_pairs:
-                rows=fold_cards(rows,history_pairs)
+                rows,history_companions=fold_cards(rows,history_pairs)
             if lifecycle != 'all':
                 rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
             if history_pairs:
@@ -1117,8 +1118,16 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Preparation must not initialize read cursors or mark anything read.
             unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),rows)
             if search:
-                query_text='%'+str(search)[:200]+'%'
-                rows=[r for r in rows if any(query_text[1:-1].casefold() in str(r.get(key) or '').casefold() for key in ('customer_name','phone','conversation_id'))]
+                query_text=str(search)[:200].casefold()
+                def matches(row):
+                    return any(query_text in str(row.get(key) or '').casefold()
+                               for key in ('customer_name','phone','conversation_id'))
+
+                # A card may keep the workflow under a private WhatsApp ID.
+                # Search its phone route only if both routes passed visibility.
+                rows=[r for r in rows if matches(r) or (r['provider']=='connect'
+                    and (companion:=history_companions.get((r['channel_id'],r['conversation_id'],int(r['lead_id']))))
+                    and matches(companion))]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
             for r in rows:
                 if r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
