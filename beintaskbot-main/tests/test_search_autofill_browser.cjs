@@ -28,7 +28,7 @@ assert.doesNotMatch(operatorCard,/<input[^>]*\bdata-search(?:[\s=>])/, 'retired 
    await page.keyboard.press('ControlOrMeta+A');await page.keyboard.type('typed query');
    await page.locator('#after').click();assert.equal(await page.locator('#query').evaluate(n=>n.readOnly),true);
    assert.equal(await page.locator('#query').inputValue(),'typed query','blur never clears query');
-   await page.locator('label').click();await page.keyboard.type(' + label');assert.match(await page.locator('#query').inputValue(),/label/);
+   await page.locator('label[for="query"]').click();await page.keyboard.type(' + label');assert.match(await page.locator('#query').inputValue(),/label/);
    assert.equal(await page.locator('#query').getAttribute('name'),'original-query');
    assert.equal(await page.locator('#owned').evaluate(n=>n.form.id),'searchForm');
    await page.locator('#locked').focus();assert.equal(await page.locator('#locked').evaluate(n=>n.readOnly),true,'authored readonly stays readonly');
