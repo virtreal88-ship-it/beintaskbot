@@ -122,15 +122,18 @@ def fold_cards(rows, pairs):
     def key(row):
         return row['channel_id'], row['conversation_id'], int(row['lead_id'])
 
-    visible = {key(row) for row in rows if row['provider']=='connect'}
+    visible = {key(row):row for row in rows if row['provider']=='connect'}
     removed = set()
+    companions = {}
     for pair in pairs:
         channel = pair['channel_id']
         primary = channel, pair['primary_id'], pair['primary_lead']
         alternate = channel, pair['alternate_id'], pair['alternate_lead']
         if primary in visible and alternate in visible:
             removed.add(alternate)
-    return [row for row in rows if row['provider']!='connect' or key(row) not in removed]
+            companions[primary] = visible[alternate]
+    cards = [row for row in rows if row['provider']!='connect' or key(row) not in removed]
+    return cards, companions
 
 
 def confirm(profile, channel, primary_lead, alternate_lead):

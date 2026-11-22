@@ -143,6 +143,12 @@ def test_lid_can_preserve_the_workflow_and_include_outgoing_phone_history(split)
     pairs.confirm(PROFILE,channel,50,41)
     cards=dialogues.listing(EMPLOYEE,lifecycle='all',combine_history=True)['dialogs']
     assert [(c['lead_id'],c['lifecycle']['state']) for c in cards]==[(50,'dismissed')]
+    for needle in ('994100000102','0000102',LID):
+        found=dialogues.listing(EMPLOYEE,search=needle,lifecycle='completed',combine_history=True)
+        assert found['total_count']==1 and [c['lead_id'] for c in found['dialogs']]==[50]
+        assert not dialogues.listing(PROFILE,search=needle,lifecycle='completed',combine_history=True)['dialogs']
+    assert not dialogues.listing(EMPLOYEE,search='0000102',lifecycle='active',combine_history=True)['dialogs']
+    assert not dialogues.listing(EMPLOYEE,search='0000102',channel='connect:'+B,lifecycle='all',combine_history=True)['dialogs']
     with pytest.raises(TenantLinearError) as denied:
         dialogues.history(PROFILE,'connect',50,channel,LID,combine_history=True)
     assert denied.value.status==404
