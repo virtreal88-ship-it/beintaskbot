@@ -82,6 +82,10 @@ def integration_handler(member: Callable, origin: str, logger):
         action = ""
         try:
             if request.method == "GET":
+                if request.query.get("include_connected_login") == "1":
+                    _context(request.query, profile)
+                    return _json_response({"integration": await asyncio.to_thread(
+                        operator.status, profile, include_connected_login=True)})
                 return _json_response({"integration": await asyncio.to_thread(operator.status, profile)})
             data = await _body(request, profile, origin)
             action = str(data.get("action") or "").strip().lower()
@@ -360,6 +364,8 @@ def employee_users_handler(member: Callable, origin: str, logger):
                                      status=404, headers={"Cache-Control": "no-store"})
         try:
             data = await _body(request, profile, origin)
+            if not data:
+                return _json_response(await asyncio.to_thread(operator.staff_employee_users, profile))
             if set(data) != {"account"}:
                 raise operator.OperatorError("Укажите Operator account.")
             users = await asyncio.to_thread(operator.operator_employee_users, profile, data["account"])
@@ -385,6 +391,16 @@ def employee_links_handler(member: Callable, origin: str, logger):
                 links = await asyncio.to_thread(operator.employee_links, profile)
                 return _json_response({"links": links})
             data = await _body(request, profile, origin)
+            if set(data) == {"member_telegram_id", "login", "selection_revision"}:
+                if (type(data["member_telegram_id"]) is not int
+                        or not 0 < data["member_telegram_id"] < 2**63
+                        or not isinstance(data["selection_revision"], str)):
+                    raise operator.OperatorError("Поля связи сотрудника с Operator некорректны.")
+                link = await asyncio.to_thread(operator.confirm_employee_link, profile,
+                    member_telegram_id=data["member_telegram_id"], account=None,
+                    login=data["login"], evidence_summary=None,
+                    selection_revision=data["selection_revision"])
+                return _json_response({"link": {k: v for k, v in link.items() if k != "account"}}, status=201)
             if set(data) != {"member_telegram_id", "account", "login", "evidence"}:
                 raise operator.OperatorError("Поля связи сотрудника с Operator некорректны.")
             link = await asyncio.to_thread(operator.confirm_employee_link, profile,

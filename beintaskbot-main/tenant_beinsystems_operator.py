@@ -286,7 +286,41 @@ def _public(row, *, pending_auth_received=False, pending_auth_received_at=None,
     }
 
 
-def status(profile):
+def _login_identifier(value):
+    """Keep only an identifier-shaped, bounded provider login, never free text."""
+    if isinstance(value, str) and re.fullmatch(r"[\w][\w.@+\-]{0,239}", value):
+        return value
+    return None
+
+
+def _connected_login(row, tenant):
+    """Project independently verified identity only from this credential instance."""
+    if not row or row.get("status") != "connected" or not row.get("secrets"):
+        return None
+    metadata = row.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    generation = metadata.get("generation")
+    instance = metadata.get("connection_instance_id")
+    if not isinstance(generation, str) or not generation or not isinstance(instance, str) or not instance:
+        return None
+    try:
+        secret = json.loads(_fernet().decrypt(bytes(row["secrets"])).decode("utf-8"))
+    except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError, TenantPlatformError):
+        return None
+    if (not isinstance(secret, dict) or secret.get("tenant_id") != tenant
+            or secret.get("provider") != PROVIDER or secret.get("connection_instance_id") != instance
+            or not isinstance(secret.get("token"), str) or not secret["token"]):
+        return None
+    identity = secret.get("verified_connected_identity")
+    if (not isinstance(identity, dict) or set(identity) != {"generation", "identifier"}
+            or identity["generation"] != generation):
+        return None
+    login = _login_identifier(identity["identifier"])
+    return login if login != secret["token"] else None
+
+
+def status(profile, *, include_connected_login=False):
     from tenant_operator_public_link_proof import probe_configured
 
     tenant = _tenant(profile)
@@ -298,7 +332,11 @@ def status(profile):
         _ensure_schema(conn)
         with conn.cursor() as cur:
             _, actor, current = _authorize(cur, profile, "view")
+            if include_connected_login and (
+                    profile.get("role") != "owner" or current.get("role") != "owner"):
+                raise OperatorError("Этот статус Operator доступен только владельцу.", 403)
             row = _operator_row(cur, tenant)
+            connected_login = _connected_login(row, tenant) if include_connected_login else None
             pending = legacy_pending = None
             accounts_only_ready = False
             if current.get("role") == "owner":
@@ -309,7 +347,7 @@ def status(profile):
                         AND candidate_received_at=%s AND expires_at>now()""",
                       (tenant, actor, pending.get("received_at")))
                     accounts_only_ready = cur.fetchone() is not None
-    return _public(
+    result = _public(
         row,
         pending_auth_received=bool(pending),
         pending_auth_received_at=(pending or {}).get("received_at"),
@@ -322,6 +360,9 @@ def status(profile):
             and probe_configured()),
         batch_plan_enabled=(current.get("role") == "owner" and first_company_batch_plan_enabled(tenant)),
     )
+    if connected_login is not None:
+        result["connected_login"] = connected_login
+    return result
 
 
 def save_token(profile, token, *, verified=False):
@@ -1133,15 +1174,19 @@ def _pending_timestamp_is_current(cur, tenant, actor, received_at):
     return bool(row and row.get("received_at") == received_at)
 
 
-def _activate_candidate_if_unconfigured(cur, tenant, actor, token):
+def _activate_candidate_if_unconfigured(cur, tenant, actor, token, *, verified_identifier=None):
     row = _operator_row(cur, tenant, lock=True)
     if row and row.get("status") in {"connected", "configured"} and row.get("secrets"):
         return False
     instance_id, generation = str(uuid.uuid4()), str(uuid.uuid4())
-    encrypted = _fernet().encrypt(_json({
+    secret = {
         "tenant_id": tenant, "provider": PROVIDER, "token": token,
         "connection_instance_id": instance_id,
-    }).encode("utf-8"))
+    }
+    identifier = _login_identifier(verified_identifier)
+    if identifier and identifier != token:
+        secret["verified_connected_identity"] = {"generation": generation, "identifier": identifier}
+    encrypted = _fernet().encrypt(_json(secret).encode("utf-8"))
     metadata = {"connection_instance_id": instance_id, "generation": generation}
     cur.execute("""INSERT INTO saas_tenant_integrations
       (tenant_id,provider,status,account_domain,metadata,secrets,connected_at,updated_at)
@@ -1225,7 +1270,8 @@ def import_accounts(profile):
                   (identity["identifier"], identity["role"], tenant, actor, candidate["received_at"]))
                 if cur.rowcount != 1:
                     raise OperatorError("JWT Operator был заменён во время импорта. Повторите попытку.", 409)
-                activated = _activate_candidate_if_unconfigured(cur, tenant, actor, credentials["token"])
+                activated = _activate_candidate_if_unconfigured(
+                    cur, tenant, actor, credentials["token"], verified_identifier=identity["identifier"])
         conn.commit()
     return {"imported": len(accounts), "activated": activated,
             "identity": identity, "status": status(profile)}
@@ -1528,8 +1574,109 @@ def operator_employee_users(profile, account):
     return profile_users_payload(response)
 
 
+_STAFF_ACCOUNT_ENV = "BEINSYSTEMS_OPERATOR_STAFF_ACCOUNT"
+_STAFF_SELECTION_PURPOSE = "operator_staff_choice_v1"
+_STAFF_SELECTION_TTL = 300
+_STAFF_SELECTION_EVIDENCE = "Owner selected a listed Operator login and an active CRM employee."
+
+
+def _staff_account():
+    account = _login_identifier(os.environ.get(_STAFF_ACCOUNT_ENV))
+    if not account:
+        raise OperatorError("Список сотрудников Operator пока не настроен.", 409)
+    return account
+
+
+def _staff_connection_scope(profile, account):
+    if profile.get("role") != "owner":
+        raise OperatorError("Список сотрудников Operator доступен только владельцу.", 403)
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor, _ = _operator_owner(profile, cur)
+            row = _operator_row(cur, tenant)
+    generation, instance = _link_connection_scope(row)
+    if not row or row.get("status") != "connected" or not row.get("secrets") or not generation:
+        raise OperatorError("Для списка сотрудников нужно действующее подключение Operator.", 409)
+    if _staff_account() != account:
+        raise OperatorError("Список сотрудников Operator изменился. Откройте его заново.", 409)
+    return {"tenant": tenant, "actor": actor, "account": account,
+            "generation": generation, "instance": instance}
+
+
+def _staff_selection_decode(revision):
+    error = OperatorError("Список сотрудников Operator устарел. Откройте его заново.", 409)
+    if not isinstance(revision, str) or not 0 < len(revision) <= 4096 or not revision.isascii():
+        raise error
+    try:
+        claims = json.loads(_fernet().decrypt(revision.encode("ascii"), ttl=_STAFF_SELECTION_TTL))
+    except (InvalidToken, UnicodeDecodeError, TypeError, ValueError):
+        raise error from None
+    if (not isinstance(claims, dict) or set(claims) != {"purpose", "scope", "members"}
+            or claims["purpose"] != _STAFF_SELECTION_PURPOSE
+            or not isinstance(claims["scope"], dict)
+            or not isinstance(claims["members"], str)):
+        raise error
+    return claims
+
+
+def _staff_directory(profile, account, *, expected_scope=None):
+    scope = _staff_connection_scope(profile, account)
+    error = OperatorError("Список сотрудников Operator изменился. Откройте его заново.", 409)
+    if expected_scope is not None and scope != expected_scope:
+        raise error
+    credentials = _credentials(scope["tenant"])
+    if (credentials["generation"], credentials["connection_instance_id"]) != (
+            scope["generation"], scope["instance"]):
+        raise error
+    _record_operator_read(profile, "profile_users", {"account": account})
+    if _staff_connection_scope(profile, account) != scope:
+        raise error
+    response = _request_operator("profile_users", {"account": account},
+                                 token=credentials["token"], base_url=credentials["base_url"])
+    if _staff_connection_scope(profile, account) != scope:
+        raise error
+    # Reject conflicting scope echoes if provided. The documented request is
+    # account-scoped; never return more than selectable login values.
+    if isinstance(response, dict):
+        status = response.get("status")
+        # Older profileUsers envelopes omit status. A present indicator must
+        # positively confirm success; one indicator never overrides another.
+        if (("status" in response and (not isinstance(status, str)
+                                      or status.strip().casefold() != "success"))
+                or ("success" in response and response["success"] is not True)
+                or response.get("error") or response.get("errors")):
+            raise OperatorError("Operator не подтвердил список сотрудников.", 502)
+        values = response.get("data")
+    else:
+        values = response
+    if not isinstance(values, list) or len(values) > 100:
+        raise OperatorError("Не удалось проверить полный список сотрудников Operator.", 502)
+    if ((isinstance(response, dict) and "account" in response and response["account"] != account)
+            or any(isinstance(item, dict) and "account" in item and item["account"] != account
+                   for item in values)):
+        raise OperatorError("Operator вернул сотрудников другого аккаунта.", 502)
+    if any(not isinstance(item, dict) or not _login_identifier(item.get("login")) for item in values):
+        raise OperatorError("Operator вернул некорректную запись сотрудника.", 502)
+    logins = {item["login"] for item in values}
+    if len(logins) != len(values):
+        raise OperatorError("Operator вернул неоднозначный список сотрудников.", 502)
+    users = [{"login": login, "bindable": True} for login in sorted(logins, key=lambda x: (x.casefold(), x))]
+    fingerprint = hashlib.sha256(_json(sorted(logins)).encode("utf-8")).hexdigest()
+    return scope, users, fingerprint
+
+
+def staff_employee_users(profile):
+    """Read the server-pinned company staff list and bind the rendered choices."""
+    _tenant(profile)
+    scope, users, fingerprint = _staff_directory(profile, _staff_account())
+    revision = _fernet().encrypt(_json({"purpose": _STAFF_SELECTION_PURPOSE,
+        "scope": scope, "members": fingerprint}).encode("utf-8")).decode("ascii")
+    return {"users": users, "selection_revision": revision}
+
+
 def confirm_employee_link(profile, *, member_telegram_id, account, login,
-                          evidence_summary):
+                          evidence_summary, selection_revision=None):
     """Map one active Beintaskbot employee to an exact listed account/login pair."""
     tenant = _tenant(profile)
     try:
@@ -1539,6 +1686,15 @@ def confirm_employee_link(profile, *, member_telegram_id, account, login,
         raise OperatorError("Выберите сотрудника Beintaskbot из списка рабочего пространства.") from None
     if member_id <= 0:
         raise OperatorError("Выберите сотрудника Beintaskbot из списка рабочего пространства.")
+    selection = selection_revision is not None
+    if selection:
+        if profile.get("role") != "owner":
+            raise OperatorError("Связывать сотрудников с Operator может только владелец workspace.", 403)
+        if not _login_identifier(login):
+            raise OperatorError("Выберите сотрудника Operator из списка.", 400)
+        claims = _staff_selection_decode(selection_revision)
+        account = _staff_account()
+        evidence_summary = _STAFF_SELECTION_EVIDENCE
     account = str(account or "").strip()
     login = str(login or "").strip()
     evidence = str(evidence_summary or "").strip()
@@ -1549,7 +1705,13 @@ def confirm_employee_link(profile, *, member_telegram_id, account, login,
 
     # The list is read with the configured restricted Operator JWT. Never trust
     # a login supplied only by the browser.
-    listed = operator_employee_users(profile, account)
+    if selection:
+        selected_scope, listed, fingerprint = _staff_directory(
+            profile, account, expected_scope=claims["scope"])
+        if fingerprint != claims["members"]:
+            raise OperatorError("Список сотрудников Operator изменился. Откройте его заново.", 409)
+    else:
+        listed = operator_employee_users(profile, account)
     if not any(item["login"] == login for item in listed):
         raise OperatorError("Пользователь Operator отсутствует в выбранном аккаунте.", 409)
 
@@ -1565,6 +1727,10 @@ def confirm_employee_link(profile, *, member_telegram_id, account, login,
             instance = str(metadata.get("connection_instance_id") or "")
             if not generation or not instance or not integration or integration.get("status") != "connected":
                 raise OperatorError("Подключение Operator изменилось. Повторите проверку.", 409)
+            if selection and (not integration.get("secrets")
+                    or (generation, instance) != (selected_scope["generation"], selected_scope["instance"])
+                    or _staff_account() != account):
+                raise OperatorError("Список сотрудников Operator изменился. Откройте его заново.", 409)
             cur.execute("""SELECT active FROM saas_tenant_members
               WHERE tenant_id=%s::uuid AND telegram_id=%s FOR UPDATE""", (tenant, member_id))
             member = cur.fetchone()

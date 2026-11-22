@@ -446,6 +446,302 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertNotIn("connection_instance_id", result)
         self.assertNotIn("secrets", result)
 
+    def test_verified_activation_seals_login_without_exposing_metadata(self):
+        from cryptography.fernet import Fernet
+        fernet = Fernet(Fernet.generate_key())
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {"status": "connected"}
+        with patch.object(operator, "_operator_row", return_value=None), \
+             patch.object(operator, "_fernet", return_value=fernet):
+            self.assertTrue(operator._activate_candidate_if_unconfigured(
+                cursor, TENANT, 7, "synthetic-jwt",
+                verified_identifier="Verified.Operator@example.test"))
+            _, arguments = cursor.execute.call_args_list[0].args
+            metadata = json.loads(arguments[3])
+            self.assertEqual(set(metadata), {"generation", "connection_instance_id"})
+            secret = json.loads(fernet.decrypt(arguments[4]))
+            self.assertEqual(secret["verified_connected_identity"], {
+                "identifier": "Verified.Operator@example.test", "generation": metadata["generation"]})
+            self.assertNotIn("Verified.Operator", repr(arguments[3:]))
+            row = {"status": "connected", "metadata": metadata, "secrets": arguments[4]}
+            self.assertEqual(operator._connected_login(row, TENANT), "Verified.Operator@example.test")
+            for rejected in [
+                {**row, "status": "configured"},
+                {**row, "status": "not_connected"},
+                {**row, "secrets": b"not-a-credential"},
+                {**row, "secrets": fernet.encrypt(b'{}')},
+                {**row, "secrets": fernet.encrypt(json.dumps({
+                    key: value for key, value in secret.items() if key != "verified_connected_identity"
+                }).encode())},
+                {**row, "metadata": {**metadata, "generation": "replaced"}},
+                {**row, "metadata": {**metadata, "connection_instance_id": "replaced"}},
+            ]:
+                self.assertIsNone(operator._connected_login(rejected, TENANT))
+            self.assertIsNone(operator._connected_login(row, "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"))
+            self.assertNotIn("connected_login", operator._public(row))
+
+    def test_login_projection_ignores_unsuitable_provider_identifier_without_blocking_activation(self):
+        from cryptography.fernet import Fernet
+        fernet = Fernet(Fernet.generate_key())
+        for identifier in ("synthetic-jwt", "<script>login</script>", "not a login",
+                           "unsafe\u202evalue", "x" * 241, None):
+            with self.subTest(identifier=identifier):
+                cursor = MagicMock()
+                cursor.fetchone.return_value = {"status": "connected"}
+                with patch.object(operator, "_operator_row", return_value=None), \
+                     patch.object(operator, "_fernet", return_value=fernet):
+                    self.assertTrue(operator._activate_candidate_if_unconfigured(
+                        cursor, TENANT, 7, "synthetic-jwt", verified_identifier=identifier))
+                    secret = json.loads(fernet.decrypt(cursor.execute.call_args_list[0].args[1][4]))
+                    self.assertNotIn("verified_connected_identity", secret)
+
+    def test_login_projection_requires_owner_and_explicit_live_status_read(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        conn = MagicMock()
+        conn.__enter__.return_value = conn
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "_connect", return_value=conn), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_authorize", return_value=(TENANT, 7, profile)) as authorize, \
+             patch.object(operator, "_operator_row", return_value={"status": "connected"}), \
+             patch.object(operator, "_pending_auth_state", return_value=(None, None)), \
+             patch.object(operator, "_connected_login", return_value="verified.test") as read_login:
+            self.assertNotIn("connected_login", operator.status(profile))
+            read_login.assert_not_called()
+            self.assertEqual(operator.status(profile, include_connected_login=True)["connected_login"],
+                             "verified.test")
+            read_login.assert_called_once()
+            authorize.return_value = (TENANT, 7, {**profile, "role": "manager"})
+            with self.assertRaises(operator.OperatorError) as revoked:
+                operator.status(profile, include_connected_login=True)
+            self.assertEqual(revoked.exception.status, 403)
+            read_login.assert_called_once()
+            authorize.return_value = (TENANT, 7, profile)
+            with self.assertRaises(operator.OperatorError):
+                operator.status({**profile, "role": "manager"}, include_connected_login=True)
+            read_login.assert_called_once()
+
+    def test_login_projection_http_requires_current_context_and_opt_in_get(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        query = {"expected_tenant_id": TENANT, "expected_user_id": "7", "include_connected_login": "1"}
+        logger = MagicMock()
+        handler = operator_api.integration_handler(lambda _request: profile, "https://crm.example", logger)
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator, "status", side_effect=lambda _p, *, include_connected_login=False: {
+                 "status": "connected", **({"connected_login": "verified.test"} if include_connected_login else {})
+             }) as status:
+            ordinary = asyncio.run(handler(MagicMock(method="GET", query={})))
+            self.assertNotIn("connected_login", json.loads(ordinary.text)["integration"])
+            proof = asyncio.run(handler(MagicMock(method="GET", query=query)))
+            self.assertEqual(proof.status, 200)
+            self.assertEqual(proof.headers["Cache-Control"], "no-store")
+            self.assertEqual(proof.headers["Vary"], "Cookie")
+            self.assertEqual(json.loads(proof.text)["integration"]["connected_login"], "verified.test")
+            status.assert_called_with(profile, include_connected_login=True)
+            for stale_query in ({**query, "expected_user_id": "8"},
+                                {**query, "expected_tenant_id": "wrong"},
+                                {"include_connected_login": "1"}):
+                denied = asyncio.run(handler(MagicMock(method="GET", query=stale_query)))
+                self.assertEqual(denied.status, 409)
+                self.assertNotIn("connected_login", denied.text)
+            self.assertEqual(status.call_count, 2)
+        logger.exception.assert_not_called()
+
+    def test_staff_selectors_require_pinned_account_and_exact_active_connection(self):
+        account = "synthetic-staff"
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        row = {"status": "connected", "secrets": b"synthetic-credential",
+               "metadata": {"generation": "active-gen",
+                            "connection_instance_id": "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"}}
+        scope = {"tenant": TENANT, "actor": 7, "account": account, "generation": "active-gen",
+                 "instance": row["metadata"]["connection_instance_id"]}
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        fernet = Fernet(Fernet.generate_key())
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT, operator._STAFF_ACCOUNT_ENV: account}), \
+             patch.object(operator, "_connect", return_value=connection), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value={**row, "status": "configured"}) as active, \
+             patch.object(operator, "_credentials", return_value={**row["metadata"], "token": "synthetic-token",
+                          "base_url": "https://operator-api.beinsystems.az/v1"}) as credentials, \
+             patch.object(operator, "_fernet", return_value=fernet), \
+             patch.object(operator, "_record_operator_read") as audit, \
+             patch.object(operator, "_request_operator", return_value={"status": "success", "data": [
+                 {"login": "operator_b", "account": account, "private": "not projected"},
+                 {"login": "operator_a", "account": account}
+             ]}) as request:
+            with self.assertRaises(operator.OperatorError) as inactive:
+                operator.staff_employee_users(profile)
+            self.assertEqual(inactive.exception.status, 409)
+            credentials.assert_not_called()
+            request.assert_not_called()
+            active.return_value = row
+            result = operator.staff_employee_users(profile)
+            request.assert_called_once_with("profile_users", {"account": account}, token="synthetic-token",
+                                            base_url="https://operator-api.beinsystems.az/v1")
+            audit.assert_called_once_with(profile, "profile_users", {"account": account})
+            self.assertEqual(set(result), {"users", "selection_revision"})
+            self.assertEqual([x["login"] for x in result["users"]], ["operator_a", "operator_b"])
+            claims = operator._staff_selection_decode(result["selection_revision"])
+            self.assertEqual(claims["scope"], scope)
+            stale_token = fernet.encrypt_at_time(json.dumps(claims).encode(), current_time=1).decode()
+            with self.assertRaises(operator.OperatorError) as expired:
+                operator._staff_selection_decode(stale_token)
+            self.assertEqual(expired.exception.status, 409)
+            self.assertNotIn("private", repr(result))
+            for unauthorized in ({**profile, "role": "operator"}, {**profile, "tenant_id": "wrong"}):
+                with self.assertRaises(operator.OperatorError):
+                    operator.staff_employee_users(unauthorized)
+            with patch.dict("os.environ", {operator._STAFF_ACCOUNT_ENV: ""}):
+                with self.assertRaises(operator.OperatorError):
+                    operator.staff_employee_users(profile)
+            request.assert_called_once()
+
+    def test_staff_selector_accepts_compatible_envelopes_but_rejects_explicit_failure(self):
+        account = "synthetic-staff"
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        scope = {"tenant": TENANT, "actor": 7, "account": account, "generation": "gen1", "instance": "inst1"}
+        values = [{"login": "known", "account": account}]
+        with patch.object(operator, "_staff_connection_scope", return_value=scope), \
+             patch.object(operator, "_credentials", return_value={"generation": "gen1",
+                          "connection_instance_id": "inst1", "token": "synthetic-token", "base_url": "base"}), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator") as request:
+            request.return_value = values
+            baseline = operator._staff_directory(profile, account)
+            self.assertEqual(baseline[1], [{"login": "known", "bindable": True}])
+            for accepted in (
+                    values, {"data": values}, {"success": True, "data": values},
+                    {"status": " SUCCESS ", "data": values},
+                    {"status": "success", "success": True, "data": values, "account": account}):
+                with self.subTest(accepted=accepted):
+                    request.return_value = accepted
+                    self.assertEqual(operator._staff_directory(profile, account), baseline)
+            for rejected in (
+                    {"status": "failed", "success": True, "data": values},
+                    {"status": "success", "success": False, "data": values},
+                    {"status": None, "data": values}, {"status": "", "data": values},
+                    {"success": "true", "data": values}, {"success": 1, "data": values},
+                    {"success": False, "data": values}, {"error": "unavailable", "data": values},
+                    {"errors": ["unavailable"], "data": values},
+                    {"success": True, "data": values, "account": "other"},
+                    {"data": [{"login": "known", "account": "other"}]}, {"data": [{"login": 19}]},
+                    {"data": {"login": "known"}}, {"data": values * 101}, {"unknown": values}):
+                with self.subTest(rejected=rejected):
+                    request.return_value = rejected
+                    with self.assertRaises(operator.OperatorError) as invalid:
+                        operator._staff_directory(profile, account)
+                    self.assertEqual(invalid.exception.status, 502)
+
+    def test_staff_selector_rejects_mixed_provider_scope_and_changed_generation(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        scope = {"tenant": TENANT, "actor": 7, "account": "synthetic-staff",
+                 "generation": "gen1", "instance": "inst1"}
+        with patch.object(operator, "_staff_connection_scope", return_value=scope) as read_scope, \
+             patch.object(operator, "_credentials", return_value={"generation": "gen1",
+                          "connection_instance_id": "inst1", "token": "synthetic-token", "base_url": "base"}), \
+             patch.object(operator, "_record_operator_read"), \
+             patch.object(operator, "_request_operator", return_value={"status": "success", "data": [
+                 {"login": "known", "account": "unexpected"}
+             ]}) as request:
+            with self.assertRaises(operator.OperatorError) as mixed:
+                operator._staff_directory(profile, scope["account"])
+            self.assertEqual(mixed.exception.status, 502)
+            request.return_value = {"status": "success", "data": [{"login": "duplicate"}] * 2}
+            with self.assertRaises(operator.OperatorError) as duplicated:
+                operator._staff_directory(profile, scope["account"])
+            self.assertEqual(duplicated.exception.status, 502)
+            request.reset_mock()
+            with self.assertRaises(operator.OperatorError) as outdated:
+                operator._staff_directory(profile, scope["account"], expected_scope={**scope, "generation": "old"})
+            self.assertEqual(outdated.exception.status, 409)
+            request.assert_not_called()
+            read_scope.side_effect = [scope, scope, {**scope, "generation": "gen2"}]
+            with self.assertRaises(operator.OperatorError) as late:
+                operator._staff_directory(profile, scope["account"])
+            self.assertEqual(late.exception.status, 409)
+            request.assert_called_once()
+
+    def test_staff_bind_requires_fresh_emitted_choice_then_rechecks_transactional_scope(self):
+        from datetime import datetime, timezone
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        instance = "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb"
+        scope = {"tenant": TENANT, "actor": 7, "account": "synthetic-staff",
+                 "generation": "gen1", "instance": instance}
+        integration = {"status": "connected", "secrets": b"synthetic",
+                       "metadata": {"generation": "gen1", "connection_instance_id": instance}}
+        row = {"id": instance, "operator_account": scope["account"], "operator_login": "known",
+               "version": 1, "verified_at": datetime(2026, 1, 1, tzinfo=timezone.utc)}
+        conn, cursor = MagicMock(), MagicMock()
+        conn.__enter__.return_value = conn
+        conn.cursor.return_value.__enter__.return_value = cursor
+        cursor.fetchone.side_effect = [{"active": True}, None, None, row]
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT, operator._STAFF_ACCOUNT_ENV: scope["account"]}), \
+             patch.object(operator, "_connect", return_value=conn), \
+             patch.object(operator, "_ensure_schema"), \
+             patch.object(operator, "_current_profile", return_value=profile), \
+             patch.object(operator, "_operator_row", return_value={**integration, "metadata": {
+                 **integration["metadata"], "generation": "gen2"}}) as locked, \
+             patch.object(operator, "_staff_selection_decode", return_value={"scope": scope, "members": "known-digest"}), \
+             patch.object(operator, "_staff_directory", return_value=(scope, [{"login": "known"}], "new-digest")) as directory:
+            def bind(login="known"):
+                return operator.confirm_employee_link(profile, member_telegram_id=19, account=None,
+                    login=login, evidence_summary=None, selection_revision="synthetic-revision")
+            with self.assertRaises(operator.OperatorError):
+                bind()
+            cursor.execute.assert_not_called()
+            directory.return_value = (scope, [{"login": "known"}], "known-digest")
+            with self.assertRaises(operator.OperatorError):
+                bind("unknown")
+            cursor.execute.assert_not_called()
+            with self.assertRaises(operator.OperatorError):
+                bind()
+            cursor.execute.assert_not_called()
+            locked.return_value = integration
+            self.assertEqual(bind()["login"], "known")
+            directory.assert_called_with(profile, scope["account"], expected_scope=scope)
+            locked.assert_called_with(cursor, TENANT, lock=True)
+            calls = cursor.execute.call_args_list
+            membership = next(index for index, call in enumerate(calls) if "SELECT active FROM" in call.args[0])
+            insert = next(index for index, call in enumerate(calls) if "INSERT INTO" in call.args[0] and
+                          "saas_beinsystems_operator_employee_links" in call.args[0])
+            self.assertLess(membership, insert)
+            self.assertIn("manual_operator_user_selection", calls[insert].args[0])
+            self.assertIn(operator._STAFF_SELECTION_EVIDENCE, calls[insert].args[1])
+            self.assertIn("operator_employee_link_confirmed", calls[-1].args[0])
+            conn.commit.assert_called_once()
+
+    def test_staff_http_accepts_only_exact_new_selector_shape_or_legacy(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner"}
+        logger = MagicMock()
+        users = operator_api.employee_users_handler(lambda _: profile, "https://crm.example", logger)
+        links = operator_api.employee_links_handler(lambda _: profile, "https://crm.example", logger)
+        with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+             patch.object(operator_api, "_body", new=AsyncMock(return_value={})) as body, \
+             patch.object(operator, "staff_employee_users", return_value={
+                 "users": [{"login": "known", "bindable": True}], "selection_revision": "opaque"}) as staff, \
+             patch.object(operator, "operator_employee_users", return_value=[]) as legacy, \
+             patch.object(operator, "confirm_employee_link", return_value={"status": "confirmed"}) as bind:
+            request = MagicMock(method="POST")
+            result = asyncio.run(users(request))
+            self.assertEqual(result.status, 200)
+            self.assertEqual(result.headers["Cache-Control"], "no-store")
+            self.assertEqual(json.loads(result.text)["selection_revision"], "opaque")
+            staff.assert_called_once_with(profile)
+            body.return_value = {"account": "legacy"}
+            self.assertEqual(asyncio.run(users(request)).status, 200)
+            legacy.assert_called_once_with(profile, "legacy")
+            body.return_value = {"member_telegram_id": 19, "login": "known"}
+            self.assertEqual(asyncio.run(links(request)).status, 400)
+            body.return_value["selection_revision"] = "opaque"
+            self.assertEqual(asyncio.run(links(request)).status, 201)
+            bind.assert_called_once_with(profile, member_telegram_id=19, account=None, login="known",
+                                         evidence_summary=None, selection_revision="opaque")
+            body.return_value["account"] = "forged"
+            self.assertEqual(asyncio.run(links(request)).status, 400)
+            bind.assert_called_once()
+
     def test_private_workspace_gate_uses_uuid_not_name(self):
         with patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}):
             self.assertTrue(access.is_operator_workspace(TENANT))
@@ -1424,7 +1720,8 @@ class BeinSystemsOperatorTests(unittest.TestCase):
                             for call in request.call_args_list))
         self.assertEqual(audit.call_count,2)
         upsert.assert_called_once()
-        activate.assert_called_once_with(cursor,TENANT,7,"synthetic-candidate-token")
+        activate.assert_called_once_with(cursor,TENANT,7,"synthetic-candidate-token",
+                                         verified_identifier="synthetic.operator")
         save.assert_not_called()
 
     def test_activation_guard_leaves_an_existing_connected_token_untouched(self):
