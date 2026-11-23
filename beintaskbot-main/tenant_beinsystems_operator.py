@@ -777,8 +777,6 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         if not isinstance(search_value, str):
             raise OperatorError("Поисковый запрос Operator некорректен.")
         search = search_value.strip()
-        if search and len(search) < 4:
-            raise OperatorError("Поиск Operator требует не менее четырёх символов.")
         if len(search) > 120:
             raise OperatorError("Слишком длинный поисковый запрос.")
         limit = payload.get("limit", ACCOUNTS_REQUEST_LIMIT)
@@ -923,7 +921,7 @@ def _record_operator_request(profile, endpoint, payload):
         raise OperatorError("Нет доступа.") from None
     limits = {"me": 12, "accounts": 12, "account_info": 30, "profile_users": 20, "task_list": 20}
     # Keep public-link reads in the existing task-domain rate-limit bucket.
-    bucket = "task_list" if endpoint == "dialog_company_public_link" else endpoint
+    bucket = "task_list" if endpoint in {"dialog_company_public_link","company_tasks","company_modules","company_history"} else endpoint
     if bucket not in limits:
         raise OperatorError("Операция Operator пока не поддерживается.")
     account = str((payload or {}).get("account") or "").strip()

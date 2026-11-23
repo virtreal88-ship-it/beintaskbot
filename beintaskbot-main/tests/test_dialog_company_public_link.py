@@ -188,3 +188,15 @@ def test_company_profile_drops_provider_reply_after_rebinding(monkeypatch):
     assert changed.value.status == 409
     read.assert_called_once_with('account_info', {'account':ACCOUNT}, requests_account_info=True,
         token='synthetic', base_url=operator.OPERATOR_API_BASE_URL)
+
+
+def test_dialogue_lists_are_scoped_and_project_only_visible_fields():
+    row = {'account':ACCOUNT,'linear_id':'BS-7','title':'Example','status':'Done','description':'private'}
+    response={'status':'success','data':[row]}
+    assert link._section_rows(response,'company_tasks',ACCOUNT)=={'rows':[['BS-7','Example','Done']]}
+    for invalid in ({**row,'account':'wrong'},{**row,'title':None}):
+        with pytest.raises(operator.OperatorError):
+            link._section_rows({**response,'data':[invalid]},'company_tasks',ACCOUNT)
+    assert link._section_rows({**response,'data':[]},'company_modules',ACCOUNT)=={'rows':[]}
+    with pytest.raises(operator.OperatorError):
+        link._section_rows({**response,'data':None},'company_history',ACCOUNT)

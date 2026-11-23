@@ -20,8 +20,8 @@ def _term(value, *, exact=False):
     if not isinstance(value,str) or any(ord(ch)<32 or ord(ch)==127 for ch in value):
         raise operator.OperatorError('Некорректный запрос Operator.')
     term=value.strip()
-    if not 4<=len(term)<=120 or (exact and term!=value):
-        raise operator.OperatorError('Укажите от 4 до 120 символов аккаунта Operator.')
+    if not 1<=len(term)<=120 or (exact and term!=value):
+        raise operator.OperatorError('Укажите от 1 до 120 символов аккаунта Operator.')
     return term
 
 
@@ -35,7 +35,7 @@ def _enumerate(response, limit):
         if (not isinstance(value,str) or not value or value.strip()!=value or len(value)>240
                 or any(ord(ch)<32 or ord(ch)==127 for ch in value)):
             raise operator.OperatorError('Operator вернул некорректный идентификатор аккаунта.',502)
-        if 4<=len(value)<=120 and value not in accounts:
+        if 1<=len(value)<=120 and value not in accounts:
             accounts.append(value)
     return accounts
 
@@ -47,8 +47,8 @@ def _authorized(cur,profile,route):
     if policy.profile.get('tenant_status')!='active' or not policy.allows_action('operator_data','view'):
         raise operator.OperatorError('Нет доступа к аккаунтам Operator.',403)
     access(cur,profile,'dialogs','update')
-    if not dialogue._manage(cur,tenant,actor,policy,route,write=True):
-        raise operator.OperatorError('Выбирать аккаунт может только владелец.',403)
+    if not dialogue._operator_choice_allowed(cur,tenant,policy,route):
+        raise operator.OperatorError('Нет доступа к выбору аккаунта в этом диалоге.',403)
     dialogue._prove(cur,tenant,policy,route)
     table,_,_=dialogue._pred(tenant,route)
     if not dialogue._ready(cur,table):
@@ -60,20 +60,32 @@ def _read_live(profile, route, term, *, choice):
     # Do not disclose provider data or spend upstream calls for a forged route.
     with dialogue._connect() as conn:
         with conn.cursor() as cur:
-            expected_tenant, expected_actor, _ = _authorized(cur,profile,route)
-    tenant,actor,source,credentials=imports._selected_source_credentials(profile)
+            expected_tenant, expected_actor, policy = _authorized(cur,profile,route)
+    owner = policy.profile.get('role') == 'owner'
+    if owner:
+        tenant,actor,source,credentials=imports._selected_source_credentials(profile)
+    else:
+        tenant,actor,source=expected_tenant,expected_actor,'active'
+        credentials=operator._credentials(tenant)
     if ((tenant,actor)!=(expected_tenant,expected_actor)
             or source not in {'active','accounts_only'}
             or (source=='active' and credentials.get('status')!='connected')):
         raise operator.OperatorError('Сначала подтвердите действующий доступ к аккаунтам Operator.',409)
-    imports._verify_selected_identity(profile,tenant,actor,source,credentials)
+    if owner:
+        imports._verify_selected_identity(profile,tenant,actor,source,credentials)
     operator._record_operator_read(profile,'accounts',{'account':term} if choice else {})
-    imports._selected_source_fence(profile,tenant,actor,source,credentials)
+    if owner:
+        imports._selected_source_fence(profile,tenant,actor,source,credentials)
     limit=1 if choice else _LIMIT
     # Same documented, bounded read as the existing exact-account workflow.
     # For accounts-only, /me was verified against the stored fingerprint.
-    response=operator._request_operator('accounts',{'search':term,'limit':limit},
-        token=credentials['token'],base_url=credentials['base_url'])
+    try:
+        response=operator._request_operator('accounts',{'search':term,'limit':limit},
+            token=credentials['token'],base_url=credentials['base_url'])
+    except operator.OperatorError as error:
+        if error.upstream_http_status in (401,403):
+            raise operator.OperatorError('Operator не разрешил поиск аккаунтов.',424) from None
+        raise
     accounts=_enumerate(response,limit)
     if choice and accounts!=[term]:
         raise operator.OperatorError('Operator не подтвердил точное совпадение выбранного аккаунта.',409)
@@ -84,8 +96,8 @@ def _fenced_local(cur,profile,route,tenant,actor,source,credentials):
     # Same source/row ordering as the authorized single-account import. The
     # dialogue, credential, and identity are not trusted from the earlier read.
     operator._lock_accounts_capability_scope(cur,tenant)
-    current=operator._current_profile(cur,tenant,actor)
-    imports._owner(profile,current)
+    if source=='accounts_only':
+        imports._owner(profile,operator._current_profile(cur,tenant,actor))
     imports._lock_and_check_selected_source(cur,tenant,actor,source,credentials)
     if source=='active':
         row=operator._operator_row(cur,tenant,lock=True)
@@ -170,10 +182,11 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected):
         if not cur.fetchone() or not imports._put_mapping(cur,tenant,account,company,actor,credentials):
             raise operator.OperatorError('Связь аккаунта с CRM-компанией изменилась. Операция отменена.',409)
         created=True
-    for action in ('view','update'):
-        grant=current_access(cur,tenant,actor,'companies',action)
-        if not locked_resource(cur,grant,'companies',action,dialogue.COMPANIES,tenant,company):
-            raise CRMAccessError()
+    grant=current_access(cur,tenant,actor,'companies','view')
+    if not locked_resource(cur,grant,'companies','view',dialogue.COMPANIES,tenant,company):
+        raise CRMAccessError()
+    if not created and source=='active' and not imports._put_mapping(cur,tenant,account,company,actor,credentials):
+        raise operator.OperatorError(_CONFLICT,409)
     _assert_fresh(cur,tenant,actor,source,credentials)
     if bound!=company:
         if expected is dialogue._UNCHECKED:
@@ -204,9 +217,13 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
             with conn.cursor() as cur:
                 if choice and not lock_name_writes(cur,tenant):
                     raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
-                _fenced_local(cur,profile,route,tenant,actor,source,credentials)
+                policy=_fenced_local(cur,profile,route,tenant,actor,source,credentials)
                 if choice:
-                    result={'binding':_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id)}
+                    if policy.profile.get('role')!='owner' and expected_company_id is dialogue._UNCHECKED:
+                        raise operator.OperatorError('Обновите диалог перед выбором компании.',409)
+                    bound=_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id)
+                    bound['can_unlink']=dialogue._manage(cur,tenant,actor,policy,route,write=False)
+                    result={'binding':bound}
                 else:
                     _assert_fresh(cur,tenant,actor,source,credentials)
                     result={'accounts':[{'account':account} for account in accounts]}

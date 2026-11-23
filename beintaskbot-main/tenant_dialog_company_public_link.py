@@ -175,6 +175,47 @@ def _company_profile_fields(response, account):
     return {'registration_phone':phone, 'balance':balance}
 
 
+_SECTIONS = {'company_tasks': ('/task/list', ('linear_id','title','status')),
+             'company_modules': ('/user/modules', ('module',)),
+             'company_history': ('/user/history', ('moment','amount','payment_source'))}
+
+
+def _section_rows(response, section, account):
+    if not isinstance(response,dict) or response.get('status')!='success' or not isinstance(response.get('data'),list):
+        raise operator.OperatorError('Operator не подтвердил список.',502)
+    fields=_SECTIONS[section][1]
+    rows=[]
+    for item in response['data']:
+        if not isinstance(item,dict) or ('account' in item and item['account']!=account):
+            raise operator.OperatorError('Operator не подтвердил данные выбранной компании.',502)
+        if section=='company_tasks' and item.get('account')!=account:
+            raise operator.OperatorError('Operator не подтвердил аккаунт задачи.',502)
+        values=[item.get(field) for field in fields]
+        if section=='company_tasks' and not values[0]:
+            values[0]=item.get('id')
+        if any(type(value) not in (str,int,float) or not str(value).strip() for value in values):
+            raise operator.OperatorError('В ответе Operator отсутствуют поля списка.',502)
+        rows.append([str(value)[:320] for value in values])
+    return {'rows':rows}
+
+
+def lookup_section(profile, *, section, **query):
+    path,_=_SECTIONS[section]
+    def read(account, *, token, base_url):
+        if base_url!=operator.OPERATOR_API_BASE_URL or base_url!=operator.api_base_url():
+            raise operator.OperatorError('Подключение Operator изменилось.',409)
+        try:
+            raw=operator._post_read_with_requests(base_url+path,{'account':account},token,accept_json=True)
+            return _section_rows(json.loads(raw),section,account)
+        except operator.OperatorError as exc:
+            if exc.upstream_http_status in (401,403):
+                raise operator.OperatorError('Operator отклонил чтение данных.',424) from None
+            raise
+        except (ValueError,UnicodeError):
+            raise operator.OperatorError('Operator вернул неизвестный формат.',502) from None
+    return _read_bound_route(profile,endpoint=section,lookup=read,**query)
+
+
 def lookup_profile(profile, **query):
     def profile_fields(account, **transport):
         response = operator._request_operator('account_info', {'account':account},
