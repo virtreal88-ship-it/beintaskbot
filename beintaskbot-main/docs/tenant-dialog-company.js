@@ -25,9 +25,9 @@
   };
   const profileText=key=>(profileLabels[window.tenantI18n?.language]||profileLabels.az)[key];
   const linkProblems={
-    ru:{not_found:'Operator не вернул существующую ссылку.',not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
-    az:{not_found:'Operator mövcud linki qaytarmadı.',not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
-    en:{not_found:'Operator did not return an existing link.',not_connected:'Operator is disconnected.',not_linked:'This company has no verified Operator account link.',rejected:'Operator rejected the link request.',denied:'You do not have access to this company’s link.'}
+    ru:{unconfirmed:'Выдача ссылки пока не подтверждена. Повторный клик проверит сохранение.',not_found:'Operator не вернул существующую ссылку.',not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
+    az:{unconfirmed:'Linkin verilməsi hələ təsdiqlənməyib. Yenidən klikləyərək yoxlayın.',not_found:'Operator mövcud linki qaytarmadı.',not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
+    en:{unconfirmed:'Link issuance is unconfirmed. Click again to check the saved result.',not_found:'Operator did not return an existing link.',not_connected:'Operator is disconnected.',not_linked:'This company has no verified Operator account link.',rejected:'Operator rejected the link request.',denied:'You do not have access to this company’s link.'}
   };
   const linkProblem=key=>(linkProblems[window.tenantI18n?.language]||linkProblems.az)[key];
   const linkText=key=>(linkLabels[window.tenantI18n?.language]||linkLabels.az)[key];
@@ -165,9 +165,9 @@
     const active=()=>s.linkRequest===read&&linkCurrent(s,company);
     let received=false;
     const pending=request(publicLinkEndpoint,s.member,
-      {...s.route,expected_company_id:company},true,read.signal).then(({public_link:link})=>{
+      {...s.route,action:'copy_customer_link',expected_company_id:company},true,read.signal).then(({public_link:link})=>{
         if(!active())throw Error('stale');
-        if(['not_found','not_connected','not_linked'].includes(link?.state))
+        if(['unconfirmed','not_found','not_connected','not_linked'].includes(link?.state))
           throw Object.assign(Error('unavailable'),{status:404,linkState:link.state});
         if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
           throw Error('unconfirmed');
@@ -205,8 +205,8 @@
     const rect=document.createElementNS(svg.namespaceURI,'rect'),path=document.createElementNS(svg.namespaceURI,'path');
     for(const [key,value] of Object.entries({x:8,y:8,width:12,height:12,rx:2}))rect.setAttribute(key,value);
     path.setAttribute('d','M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2');
-    svg.append(rect,path);s.linkCopy.append(svg);labelPublicLink(s);
-    s.linkBox.append(s.linkLabel,s.linkCopy,s.linkStatus);s.section.append(s.linkBox);
+    svg.append(rect,path);s.linkCopy.append(s.linkLabel,svg);labelPublicLink(s);
+    s.linkBox.append(s.linkCopy,s.linkStatus);s.section.append(s.linkBox);
   }
   function labelPublicLink(s){
     s.linkLabel.textContent=linkText('label');s.linkCopy.title=linkText('copy');
@@ -417,7 +417,7 @@
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}
     [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:.75rem}
-    #operatorCompanyPanel .operator-company-copy-icon{display:inline-grid;place-items:center;width:40px;min-height:40px;padding:4px}
+    #operatorCompanyPanel .operator-company-copy-icon{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;width:100%;min-height:40px;padding:4px 8px}
   `;document.head.append(style);
   for(const event of ['tenant-auth-invalid','tenant-auth-pending','tenant-chat-open','tenant-chat-close'])
     document.addEventListener(event,clear);
