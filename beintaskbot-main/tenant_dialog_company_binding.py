@@ -147,12 +147,27 @@ def _pred(tenant, route):
             (tenant,lead,channel,conversation))
 
 
+def accepted_api_operator(cur,tenant,actor,policy,route):
+    from tenant_beinsystems_operator_access import operator_api_allowed
+    if (policy.profile.get('role')=='owner' or route[0]!='connect'
+            or not operator_api_allowed(policy.profile)
+            or not _operator_choice_allowed(cur,tenant,policy,route)):
+        return False
+    cur.execute("SELECT to_regclass('saas_dialog_workflows') AS present")
+    if not cur.fetchone()['present']:
+        return False
+    cur.execute("""SELECT 1 FROM saas_dialog_workflows WHERE tenant_id=%s::uuid
+        AND channel_id=%s::uuid AND conversation_id=%s AND operator_id=%s
+        AND state='accepted' FOR SHARE""",(tenant,route[2],route[3],actor))
+    return bool(cur.fetchone())
+
+
 def _manage(cur, tenant, actor, policy, route, *, write):
     from tenant_dialog_access import require_source
     from tenant_crm_native_access import CRMAccessError, current_access
     from tenant_operator_access import assert_route
     if policy.profile.get('role')!='owner':
-        return False
+        return accepted_api_operator(cur,tenant,actor,policy,route)
     provider, lead, channel, conversation = route
     try:
         for action in ('view','update'):
@@ -345,7 +360,7 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                     access(cur,profile,'dialogs','update')
                 can_unlink = company_search is None and _manage(cur,tenant,actor,policy,route,write=unlink)
                 if unlink and not can_unlink:
-                    raise OperatorError('Снимать привязку компании может только владелец.',403)
+                    raise OperatorError('Недостаточно прав для снятия привязки в этом диалоге.',403)
                 _prove(cur,tenant,policy,route)
                 table, pred, keys = _pred(tenant,route)
                 if not _ready(cur,table):
