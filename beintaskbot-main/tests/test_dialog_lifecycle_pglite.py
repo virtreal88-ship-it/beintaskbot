@@ -203,12 +203,15 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
         command('dismiss',0,message_id=inbound)
     else:
         command()
+        assert read(PROFILE)['dialog']['lifecycle']['accepted_by_name']=='Owner'
         command('close',1)
     before=read(PROFILE)
     workflow=state(episodes)
     original_episodes=episodes.execute('SELECT * FROM saas_dialog_episodes ORDER BY id')
     episodes.commit()
     assert before['dialog']['lifecycle']['can_transfer'] is True
+    expected_acceptor='Owner' if state_before=='closed' else None
+    assert before['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert {'employee_id':33,'name':'Employee'} in before['dialog']['lifecycle']['transfer_targets']
     with pytest.raises(TenantLinearError) as unassigned:
         read(recipient)
@@ -228,12 +231,18 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
     after=read(recipient)
     assert after['messages']==before['messages']
     assert after['dialog']['lifecycle']['can_start'] is True
+    assert after['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert after['dialog']['lifecycle']['can_submit_case'] is False
     assert after['dialog']['can_send'] is False
     with pytest.raises(TenantLinearError) as former_owner:
         read(PROFILE)
     assert former_owner.value.status==404
     assert lifecycle.transfer_details(recipient,payload())['transfer']['to_name']=='Employee'
+    listed=tenant_operator_dialogs.listing(recipient,lifecycle='completed')['dialogs']
+    assert any(item['lead_id']==41 for item in listed)
+    assert all('accepted_by_name' not in item.get('lifecycle',{}) for item in listed)
+    command('start',result['lifecycle']['revision'],actor=33)
+    assert read(recipient)['dialog']['lifecycle']['accepted_by_name']=='Employee'
 
 
 def test_owner_has_no_bypass_transfer_revokes_prior_operator(episodes):
