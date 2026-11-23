@@ -20,7 +20,7 @@ NOTIFICATION_KEYS = frozenset(item['key'] for item in notification_catalog())
 def editable_permission_modules(tenant_id):
     from tenant_beinsystems_operator_access import is_operator_workspace
     if is_operator_workspace(tenant_id):
-        return PERMISSION_MODULES | {'operator_data:view'}
+        return PERMISSION_MODULES | {'operator_data:view', 'operator_api'}
     return PERMISSION_MODULES
 
 

@@ -7,8 +7,8 @@ from requests import RequestException
 
 import tenant_beinsystems_operator as operator
 import tenant_dialog_company_public_link as links
-from tenant_finance_policy import finance_capabilities, minor_amount, TenantFinanceError
-from tenant_policy import TenantPolicy
+from tenant_finance_policy import minor_amount, TenantFinanceError
+from tenant_beinsystems_operator_access import operator_api_allowed
 
 
 PROJECTS = ("Akul Admin", "Akul POS", "Akul PWA", "Akul Mobile", "Akul Counting",
@@ -17,9 +17,8 @@ PATHS = {"task": "/task/create", "credit": "/finance/addCredit"}
 
 
 def capabilities(profile):
-    policy = TenantPolicy(profile)
-    return {"task": policy.allows_action("tasks", "create"),
-            "credit": finance_capabilities(policy)["can_write"]}
+    enabled = operator_api_allowed(profile)
+    return {"task": enabled, "credit": enabled}
 
 
 def _text(fields, key, limit):

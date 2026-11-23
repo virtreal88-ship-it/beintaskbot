@@ -126,6 +126,10 @@ class TenantPolicy:
         endpoints. New endpoints can require an explicit action grant; owners
         keep tenant-wide authority and inactive memberships fail closed.
         """
+        if module == 'operator_data' and action == 'view':
+            from tenant_beinsystems_operator_access import operator_api_allowed
+            if operator_api_allowed(self.profile):
+                return True
         allowed_actions = {'view', 'create', 'update', 'delete', 'assign', 'manage', 'link'}
         if action not in allowed_actions or self.profile.get('active') is False:
             return False

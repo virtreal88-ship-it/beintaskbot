@@ -116,7 +116,11 @@ def _locked_snapshot(cur,profile,route,expected_company):
     table, _, _ = dialogue._pred(tenant, route)
     if not dialogue._ready(cur, table):
         raise operator.OperatorError('Привязка компании недоступна.', 503)
-    binding = dialogue._read(cur, tenant, actor, route, False)
+    from tenant_beinsystems_operator_access import operator_api_allowed
+    if operator_api_allowed(policy.profile):
+        binding = dialogue._binding_snapshot(cur,tenant,policy,route,False)
+    else:
+        binding = dialogue._read(cur,tenant,actor,route,False)
     if binding['company_id'] != expected_company:
         raise operator.OperatorError('Компания диалога изменилась или недоступна.', 409)
     integration = operator._operator_row(cur, tenant)
