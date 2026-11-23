@@ -90,15 +90,23 @@
       const panel=node('div');panel.id='operatorCompanyView-'+id;panel.setAttribute('role','tabpanel');
       const tab=button('',()=>selectTab(s,id));tab.id='operatorCompanyTab-'+id;tab.setAttribute('role','tab');
       tab.setAttribute('aria-controls',panel.id);panel.setAttribute('aria-labelledby',tab.id);
-      if(action){panel.tabIndex=0;panel.setAttribute('aria-live','polite');}
+      let body=null,toolbar=null;
+      if(action){
+        panel.tabIndex=0;
+        if(id==='tasks'||id==='history'){toolbar=node('div');toolbar.dataset.companyActions='';panel.append(toolbar);}
+        body=node('div');body.dataset.companySectionBody='';panel.append(body);
+      }
       s.tabs.append(tab);s.section.append(panel);
-      return {id,action,panel,tab,read:null};
+      return {id,action,panel,body,toolbar,tab,read:null};
     });
     s.main=s.panels[0].panel;
     s.labelTabs=()=>{
       const lang=window.tenantI18n?.language||'az',names=sectionNames[lang]||sectionNames.az;
       s.tabs.setAttribute('aria-label',t('label'));
       s.panels.forEach(({tab},i)=>tab.textContent=names[i]);
+      for(const trigger of s.section.querySelectorAll('[data-company-action]')){
+        trigger.textContent=(actionLabels[lang]||actionLabels.az)[trigger.dataset.companyAction==='task'?0:1];
+      }
     };
     s.tabs.onkeydown=event=>{
       const index=s.panels.findIndex(item=>item.tab===event.target);
@@ -111,6 +119,7 @@
   }
   function selectTab(s,id){
     const changed=s.activeTab!==id;
+    if(changed&&s.closeAction)s.closeAction(false);
     s.activeTab=id;
     for(const item of s.panels){
       const selected=item.id===id;
@@ -128,49 +137,82 @@
     if(['new','open','todo','to do','pending','новая','новый','открыта','ожидает','yeni','açıq','gözləyir'].includes(key))return 'pending';
     return 'neutral';
   }
+  const pageLabels={
+    ru:['Страницы платежей','Предыдущая страница','Следующая страница','Страница'],
+    az:['Ödəniş səhifələri','Əvvəlki səhifə','Növbəti səhifə','Səhifə'],
+    en:['Payment history pages','Previous page','Next page','Page']
+  };
+  const PAYMENT_PAGE_SIZE=20;
   function renderSection(item,rows){
     const fields=item.id==='modules'?1:3;
     if(rows.some(row=>!Array.isArray(row)||row.length!==fields||row.some(field=>typeof field!=='string')))throw Error();
     const list=node('ul');list.className='operator-company-section-list';
-    for(const row of rows){
-      const card=node('li');card.className='operator-company-section-'+item.id;
-      if(item.id==='tasks'){
-        const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
-        const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
-        card.append(info,badge);
-      }else if(item.id==='modules'){
-        const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
-      }else{
-        const info=node('div');info.append(node('strong',row[2]),node('small',row[0]));
-        const amount=node('span',row[1]);amount.className='operator-company-section-amount';
-        card.append(info,amount);
+    function renderRows(shown){
+      list.replaceChildren();
+      for(const row of shown){
+        const card=node('li');card.className='operator-company-section-'+item.id;
+        if(item.id==='tasks'){
+          const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
+          const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
+          card.append(info,badge);
+        }else if(item.id==='modules'){
+          const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
+        }else{
+          const info=node('div');info.append(node('strong',row[2]),node('small',row[0]));
+          const amount=node('span',row[1]);amount.className='operator-company-section-amount';
+          card.append(info,amount);
+        }
+        list.append(card);
       }
-      list.append(card);
     }
-    item.panel.replaceChildren(list);
+    item.body.replaceChildren(list);
+    if(item.id!=='history'||rows.length<=PAYMENT_PAGE_SIZE){renderRows(rows);return;}
+    // The verified Operator contract supplies rows for the account with no
+    // cursor or page fields. Only paginate the returned snapshot locally.
+    const labels=pageLabels[window.tenantI18n?.language]||pageLabels.az;
+    const pages=Math.ceil(rows.length/PAYMENT_PAGE_SIZE),nav=node('nav'),indicator=node('span');
+    let page=0;
+    nav.className='operator-company-pagination';nav.setAttribute('aria-label',labels[0]);
+    indicator.setAttribute('role','status');
+    const prev=button('‹',()=>draw(page-1,prev)),next=button('›',()=>draw(page+1,next));
+    prev.setAttribute('aria-label',labels[1]);next.setAttribute('aria-label',labels[2]);
+    function draw(index,trigger){
+      if(index<0||index>=pages||!nav.isConnected)return;
+      page=index;
+      renderRows(rows.slice(index*PAYMENT_PAGE_SIZE,(index+1)*PAYMENT_PAGE_SIZE));
+      indicator.textContent=labels[3]+' '+(index+1)+' / '+pages;
+      prev.disabled=index===0;next.disabled=index===pages-1;
+      if(trigger?.disabled)(trigger===prev?next:prev).focus({preventScroll:true});
+    }
+    nav.append(prev,indicator,next);item.body.append(nav);draw(0);
   }
   async function loadTab(s,item){
-    const company=s.binding?.company_id;
-    if(!company||!linkCurrent(s,company)){item.panel.textContent=t(company?'unavailable':'unknown');return;}
+    item.read?.abort();item.read=null;
+    const company=s.binding?.company_id,body=item.body;
+    if(!company||!linkCurrent(s,company)){body.textContent=t(company?'unavailable':'unknown');return;}
     const read=new AbortController();item.read=read;
     const active=()=>item.read===read&&s.activeTab===item.id&&linkCurrent(s,company);
-    item.panel.textContent=t('loading');
+    body.textContent=t('loading');body.setAttribute('aria-busy','true');
     try{
       const {company_section:section}=await request(endpoint,s.member,
         {...s.route,action:item.action,expected_company_id:company},true,read.signal);
       if(!active())return;
       if(section?.state!=='available'){
-        item.panel.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
+        body.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
       }
       if(!Array.isArray(section.rows))throw Error();
-      if(section.rows.length)renderSection(item,section.rows);else item.panel.textContent=profileText('empty');
-    }catch(error){if(active())item.panel.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
-    finally{if(item.read===read)item.read=null;}
+      if(section.rows.length)renderSection(item,section.rows);else body.textContent=profileText('empty');
+    }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
+    finally{if(item.read===read){item.read=null;body.removeAttribute('aria-busy');}}
   }
   function clearProfile(s){
-    for(const item of s.panels.slice(1)){item.read?.abort();item.read=null;item.panel.replaceChildren();}
+    s.closeAction?.(false);
+    s.actionPermissions=null;s.actionBinding=null;
+    for(const item of s.panels.slice(1)){
+      item.read?.abort();item.read=null;item.body.replaceChildren();
+      item.body.removeAttribute('aria-busy');item.toolbar?.replaceChildren();
+    }
     selectTab(s,'main');
-    s.actionHost?.replaceChildren();
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
@@ -191,7 +233,7 @@
             ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
           return;
         }
-        mountActions(s,company,profile.actions);
+        mountActions(s,company,profile.actions,profile.task_options,profile.action_binding);
         s.registrationPhone.textContent=s.balance.textContent=profileText('empty');
         if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
         if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
@@ -200,67 +242,129 @@
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
   }
   const actionLabels={
-    ru:['Создать задачу','Начислить кредит','Название','Описание','Проект','Приоритет','Высокий','Обычный','Низкий','Сумма (AZN)','Причина','Подтвердить','Готово','Operator отклонил операцию','Результат не подтверждён. Проверьте историю в Operator перед повтором.'],
-    az:['Tapşırıq yarat','Kredit əlavə et','Başlıq','Təsvir','Layihə','Prioritet','Yüksək','Normal','Aşağı','Məbləğ (AZN)','Səbəb','Təsdiqlə','Tamamlandı','Operator əməliyyatı rədd etdi','Nəticə təsdiqlənməyib. Təkrarlamadan əvvəl Operator tarixçəsinə baxın.'],
-    en:['Create task','Add credit','Title','Description','Project','Priority','High','Normal','Low','Amount (AZN)','Reason','Confirm','Completed','Operator rejected the operation','Outcome unconfirmed. Check Operator history before retrying.']
+    ru:['Создать задачу','Начислить кредит','Название','Описание','Проект','Приоритет','Высокий','Обычный','Низкий','Сумма (AZN)','Причина','Подтвердить','Готово','Operator отклонил операцию','Результат не подтверждён. Проверьте историю в Operator перед повтором.','Компания или подключение изменились. Откройте панель заново.'],
+    az:['Tapşırıq yarat','Kredit əlavə et','Başlıq','Təsvir','Layihə','Prioritet','Yüksək','Normal','Aşağı','Məbləğ (AZN)','Səbəb','Təsdiqlə','Tamamlandı','Operator əməliyyatı rədd etdi','Nəticə təsdiqlənməyib. Təkrarlamadan əvvəl Operator tarixçəsinə baxın.','Şirkət və ya bağlantı dəyişib. Paneli yenidən açın.'],
+    en:['Create task','Add credit','Title','Description','Project','Priority','High','Normal','Low','Amount (AZN)','Reason','Confirm','Completed','Operator rejected the operation','Outcome unconfirmed. Check Operator history before retrying.','The company or connection changed. Reopen the panel.']
   };
-  function mountActions(s,company,permissions){
-    const host=s.actionHost;
-    host.replaceChildren();
-    const labels=actionLabels[window.tenantI18n?.language]||actionLabels.az;
-    for(const kind of ['task','credit']){
-      if(permissions?.[kind]!==true)continue;
-      const task=kind==='task', box=node('details'), title=node('summary',labels[task?0:1]);
-      const form=node('div'), controls={}, status=node('p');
-      status.setAttribute('role','status');
-      const field=(key,label,tag,options)=>{
-        const row=node('label',label),input=node(tag);
-        input.required=true;input.style.cssText='display:block;width:100%;box-sizing:border-box';
-        if(options)for(const [value,caption] of options){const o=node('option',caption);o.value=value;input.append(o);}
-        row.append(input);form.append(row);controls[key]=input;return input;
-      };
-      if(task){
-        field('title',labels[2],'input').maxLength=240;
-        field('description',labels[3],'textarea').maxLength=8000;
-        field('project',labels[4],'select',[['','—'],...['Akul Admin','Akul POS','Akul PWA','Akul Mobile','Akul Counting','Dine Admin','Dine POS','Dine PWA','Dine QR','Umumi'].map(x=>[x,x])]);
-        field('priority',labels[5],'select',[[2,labels[6]],[3,labels[7]],[4,labels[8]]]).value='3';
-      }else{
-        const amount=field('amount',labels[9],'input');amount.type='number';amount.min='0.01';amount.step='0.01';amount.max='999999999.99';
-        field('info',labels[10],'input').maxLength=500;
-      }
-      let requestId=null;
-      const submit=button(labels[11],async()=>{
-        if(submit.disabled||!linkCurrent(s,company))return;
-        for(const input of Object.values(controls))if(!input.reportValidity())return;
-        const fields=Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value.trim()]));
-        if(task)fields.priority=Number(fields.priority);
-        if(!task&&!window.confirm(labels[1]+' · '+companyName(s.binding)+' · '+fields.amount+' AZN?'))return;
-        requestId??=crypto.randomUUID();
-        for(const el of [...Object.values(controls),submit])el.disabled=true;
-        status.textContent=t('loading');
-        let result;
-        try{
-          result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
-            kind,fields,request_id:requestId},true)).state;
-        }catch(error){result=[400,403,404,409].includes(error.status)?'denied':'unconfirmed';}
-        if(!linkCurrent(s,company)||!host.contains(form))return;
-        status.textContent=labels[result==='done'?12:result==='denied'?13:14];
-        if(result==='unconfirmed')return;
-        for(const el of [...Object.values(controls),submit])el.disabled=false;
-        requestId=null;
-        if(result==='done'){
-          for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
-          // The Tasks/Payment History tabs fetch fresh lists whenever selected.
-          if(!task){
-            // Refresh balance without discarding the visible receipt.
-            void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
-              .then(({company_profile:p})=>{if(linkCurrent(s,company)&&host.contains(form)&&Number.isFinite(p.balance))
-                s.balance.textContent=new Intl.NumberFormat(window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
-          }
-        }
-      });
-      form.append(submit,status);box.append(title,form);host.append(box);
+  const modalLabels={
+    ru:{newTask:'Новая задача',account:'Аккаунт',cancel:'Отмена',back:'Назад',save:'Сохранить'},
+    az:{newTask:'Yeni Tapşırıq',account:'Hesab',cancel:'Ləğv et',back:'Geri',save:'Yadda saxla'},
+    en:{newTask:'New task',account:'Account',cancel:'Cancel',back:'Back',save:'Save'}
+  };
+  const unsettledActions=new Map();
+  const actionContract=options=>options&&typeof options.account==='string'&&options.account.trim()&&
+    Array.isArray(options.projects)&&options.projects.length&&options.projects.every(x=>typeof x==='string'&&x)&&
+    Array.isArray(options.priorities)&&options.priorities.length&&options.priorities.every(x=>[2,3,4].includes(x));
+  function mountActions(s,company,permissions,taskOptions,binding){
+    s.actionPermissions=permissions;s.actionBinding=binding;
+    s.taskOptions=taskOptions;
+    for(const [kind,id,index] of [['task','tasks',0],['credit','history',1]]){
+      const item=s.panels.find(panel=>panel.id===id),host=item.toolbar;
+      host.replaceChildren();
+      if(permissions?.[kind]!==true||typeof binding!=='string'||!(/^[0-9a-f]{64}$/).test(binding)||
+        (kind==='task'&&!actionContract(taskOptions)))continue;
+      const trigger=button((actionLabels[window.tenantI18n?.language]||actionLabels.az)[index],
+        ()=>openAction(s,company,kind,item,trigger));
+      trigger.dataset.companyAction=kind;
+      trigger.className='primary';trigger.setAttribute('aria-haspopup','dialog');host.append(trigger);
     }
+  }
+  function openAction(s,company,kind,item,trigger){
+    if(s.closeAction||s.activeTab!==item.id||!linkCurrent(s,company)||s.actionPermissions?.[kind]!==true)return;
+    const lang=window.tenantI18n?.language||'az',labels=actionLabels[lang]||actionLabels.az,
+      copy=modalLabels[lang]||modalLabels.az,task=kind==='task',options=s.taskOptions,binding=s.actionBinding;
+    if(task&&!actionContract(options))return;
+    const actionKey=JSON.stringify([s.key,company,kind,binding]);
+    const dialog=node('dialog'),header=node('header'),title=node('h2',task?copy.newTask:labels[1]),form=node('form'),
+      controls={},status=node('p'),footer=node('footer');
+    dialog.dataset.companyActionModal=kind;dialog.className='operator-company-action-modal';
+    dialog.setAttribute('aria-labelledby','operatorCompanyActionTitle');dialog.setAttribute('aria-modal','true');
+    title.id='operatorCompanyActionTitle';status.setAttribute('role','status');
+    const back=button('‹',()=>close());back.className='outline operator-company-action-back';back.setAttribute('aria-label',copy.back);
+    header.append(back,title);dialog.append(header,form);
+    const field=(parent,key,label,tag,choices)=>{
+      const row=node('label',label),input=node(tag);
+      if(key)input.required=true;
+      if(choices)for(const [value,caption] of choices){const o=node('option',caption);o.value=value;input.append(o);}
+      row.append(input);parent.append(row);
+      if(key)controls[key]=input;
+      return input;
+    };
+    if(task){
+      field(form,'title',labels[2],'input').maxLength=240;
+      const row=node('div');row.className='operator-company-action-grid';form.append(row);
+      const account=field(row,null,copy.account,'input');account.readOnly=true;account.value=options.account;
+      field(row,'priority',labels[5],'select',options.priorities.map(x=>[x,labels[x+4]])).value=String(options.priorities.includes(3)?3:options.priorities[0]);
+      field(row,'project',labels[4],'select',[['','—'],...options.projects.map(x=>[x,x])]);
+      field(form,'description',labels[3],'textarea').maxLength=8000;
+    }else{
+      const companyLabel=node('p',companyName(s.binding));companyLabel.className='operator-company-action-context';form.append(companyLabel);
+      const amount=field(form,'amount',labels[9],'input');
+      amount.type='number';amount.min='0.01';amount.step='0.01';amount.max='999999999.99';
+      field(form,'info',labels[10],'input').maxLength=500;
+    }
+    const cancel=button(copy.cancel,()=>close());cancel.className='outline';
+    const submit=node('button',task?copy.save:labels[11]);submit.type='submit';submit.className='primary';
+    footer.append(cancel,submit);form.append(status,footer);
+    const live=()=>s.closeAction===close&&dialog.isConnected&&s.activeTab===item.id&&linkCurrent(s,company)&&s.actionBinding===binding&&s.actionPermissions?.[kind]===true;
+    const disable=value=>{for(const el of [...Object.values(controls),submit])el.disabled=value;};
+    function close(restore=true){
+      if(s.closeAction!==close)return;
+      s.closeAction=null;s.settleAction=null;
+      if(typeof dialog.close==='function'&&dialog.open)dialog.close();
+      dialog.remove();
+      if(restore&&trigger.isConnected&&!item.panel.hidden&&linkCurrent(s,company))trigger.focus({preventScroll:true});
+    }
+    // A transfer/source change or a permission rebind discards the modal;
+    // a pending or unconfirmed write can never be restarted by reopening it.
+    const existing=unsettledActions.get(actionKey);
+    if(existing){disable(true);status.textContent=existing==='unconfirmed'?labels[14]:t('loading');}
+    dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
+    dialog.addEventListener('click',event=>{if(event.target===dialog)close();});
+    dialog.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();close();return;}
+      if(event.key!=='Tab')return;
+      const controls=[...dialog.querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&!el.readOnly);
+      if(event.shiftKey&&document.activeElement===controls[0]){event.preventDefault();controls.at(-1)?.focus();}
+      else if(!event.shiftKey&&document.activeElement===controls.at(-1)){event.preventDefault();controls[0]?.focus();}
+    });
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      if(submit.disabled||unsettledActions.has(actionKey)||!live()||!form.reportValidity())return;
+      const fields=Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value.trim()]));
+      if(task)fields.priority=Number(fields.priority);
+      if(!task&&!window.confirm(labels[1]+' · '+companyName(s.binding)+' · '+fields.amount+' AZN?'))return;
+      if(!live())return;
+      const requestId=crypto.randomUUID();
+      unsettledActions.set(actionKey,'pending');disable(true);status.textContent=t('loading');
+      let result;
+      try{
+        result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
+          expected_binding:binding,kind,fields,request_id:requestId},true)).state;
+      }catch(error){result=error.status===409?'stale':[400,403,404].includes(error.status)?'denied':'unconfirmed';}
+      if(['done','denied','stale'].includes(result))unsettledActions.delete(actionKey);
+      else unsettledActions.set(actionKey,'unconfirmed');
+      // A newly opened modal for this same exact route/company/kind may be
+      // waiting on our write; never update the old disconnected surface.
+      state?.settleAction?.(actionKey,result);
+    };
+    s.settleAction=(key,result)=>{
+      if(key!==actionKey||!live())return;
+      const confirmed=result==='done'||result==='denied';
+      status.textContent=labels[result==='done'?12:result==='denied'?13:result==='stale'?15:14];
+      if(!confirmed)return;
+      disable(false);
+      if(result==='done'){
+        for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
+        void loadTab(s,item);
+        if(!task)void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
+          .then(({company_profile:p})=>{if(linkCurrent(s,company)&&Number.isFinite(p.balance))
+            s.balance.textContent=new Intl.NumberFormat(lang,{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
+      }
+    };
+    s.closeAction=close;document.body.append(dialog);
+    if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');
+    const first=(task?controls.title:controls.amount);(first.disabled?back:first).focus({preventScroll:true});
   }
   function mountProfile(s){
     s.profileBox=node('div');s.profileBox.dataset.companyProfile='';s.profileBox.hidden=true;
@@ -272,8 +376,7 @@
     const phone=field('phone'),balance=field('balance');
     s.registrationPhone=phone.value;s.balance=balance.value;
     s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
-    s.actionHost=node('div');s.actionHost.dataset.companyActions='';
-    s.profileBox.append(s.profileStatus,s.actionHost);s.main.append(s.profileBox);
+    s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -562,6 +665,27 @@
     #operatorCompanyPanel .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
     #operatorCompanyPanel .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
     #operatorCompanyPanel .operator-company-badge[data-tone=pending]{color:#644713;background:#fff0d0;border-color:#e8cca0}
+    #operatorCompanyPanel [data-company-actions]{display:flex;justify-content:flex-start;margin-block-end:8px}
+    #operatorCompanyPanel .operator-company-pagination{display:flex;align-items:center;justify-content:center;gap:8px;padding-block-start:10px}
+    #operatorCompanyPanel .operator-company-pagination button{min-width:40px}
+    .operator-company-action-modal{box-sizing:border-box;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);width:min(700px,100%);padding:0;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 56px #0005;overflow:auto;overscroll-behavior:contain}
+    .operator-company-action-modal[data-company-action-modal=credit]{width:min(400px,100%)}
+    .operator-company-action-modal::backdrop{background:#071d1688}
+    .operator-company-action-modal header,.operator-company-action-modal footer{display:flex;align-items:center;gap:10px}
+    .operator-company-action-modal header{padding:12px 16px;border-block-end:1px solid var(--line)}
+    .operator-company-action-modal h2{margin:0;font-size:1.08rem}
+    .operator-company-action-modal form{display:grid;gap:12px;padding:16px}
+    .operator-company-action-modal footer{justify-content:flex-end}
+    .operator-company-action-modal button{min-height:40px}
+    .operator-company-action-modal .operator-company-action-back{min-width:40px}
+    .operator-company-action-modal label{display:grid;gap:4px;font-size:.86rem;min-width:0}
+    .operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{box-sizing:border-box;width:100%;min-width:0;min-height:40px;margin:0}
+    .operator-company-action-modal textarea{min-height:150px;resize:vertical}
+    .operator-company-action-modal input[readonly]{background:var(--paper);color:var(--muted)}
+    .operator-company-action-modal .operator-company-action-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr) minmax(0,1fr);gap:10px}
+    .operator-company-action-modal p{margin:0;overflow-wrap:anywhere}
+    .operator-company-action-modal [role=status]:empty{display:none}
+    @media(max-width:600px){.operator-company-action-modal .operator-company-action-grid{grid-template-columns:minmax(0,1fr)}.operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{font-size:16px}}
     #operatorCompanyPanel .operator-company-section-amount{justify-self:end;text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
     #operatorCompanyPanel [role=tabpanel]>p{overflow-wrap:anywhere}
     #operatorDialogueCompanyPicker [hidden]{display:none!important}

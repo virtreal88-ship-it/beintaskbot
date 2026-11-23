@@ -122,7 +122,7 @@ def delegated_permissions_allowed(current, permissions, *, role=None, recipient_
     """
     if current.get('role') == 'owner':
         return True
-    if set(permissions) - set(current.get('permissions') or []):
+    if 'operator_api' in permissions or set(permissions) - set(current.get('permissions') or []):
         return False
     from tenant_scoped_access import scoped_access_enabled, SCOPE_ACTION_CATALOG
     if not scoped_access_enabled():

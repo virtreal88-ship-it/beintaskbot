@@ -64,3 +64,14 @@ def test_renewal_rejects_different_operator_account(monkeypatch):
         op.renew_connected_token({"telegram_id":11},stamp.isoformat())
     assert error.value.status==409
     conn.__enter__.return_value.commit.assert_not_called()
+
+
+def test_api_switch_is_independent_of_crm_permissions(monkeypatch):
+    import tenant_beinsystems_operator_access as access
+    monkeypatch.setattr(access,"is_operator_workspace",lambda tenant:tenant=="company")
+    staff=dict(tenant_id="company",active=True,role="operator",permissions=["operator_api"])
+    assert actions.capabilities(staff)==dict(task=True,credit=True)
+    for grants in ([],["tasks","finance","customers"],["operator_data:view"],["operator_data"]):
+        assert not any(actions.capabilities(dict(staff,permissions=grants)).values())
+    for change in ({"active":False},{"tenant_id":"other"}):
+        assert not any(actions.capabilities(dict(staff,**change)).values())

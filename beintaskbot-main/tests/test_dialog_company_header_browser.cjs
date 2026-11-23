@@ -42,8 +42,9 @@ const beta='@verified_account';
       if(data.action==='company_profile'){
        if(data.expected_company_id!==fixtures[data.channel_id]?.company_id)throw Error('Inexact company profile');
        window.profilePosts.push(data.channel_id);
-       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0}})};
+       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0,actions:{task:true,credit:true},action_binding:'b'.repeat(64),task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}}})};
       }
+      if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[]}})};
       if(data.company_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
       return {ok:true,json:async()=>({success:true,companies:[{id:'existing',name:'Test company'}]})};
      }
@@ -119,6 +120,22 @@ const beta='@verified_account';
   await page.waitForFunction(()=>window.savedOpen===true);
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
+  assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
+  await companyHeader.getByRole('tab',{name:'Tasks',exact:true}).click();
+  await panel.getByRole('button',{name:'Create task',exact:true}).click();
+  const taskModal=page.getByRole('dialog',{name:'New task',exact:true});
+  await taskModal.waitFor();
+  assert.equal(await taskModal.locator('input[readonly]').inputValue(),'verified-account');
+  assert(await taskModal.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}));
+  assert.equal(await taskModal.locator('.operator-company-action-grid').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width<=600?1:3);
+  const taskWidth=(await taskModal.boundingBox()).width;
+  await taskModal.getByRole('button',{name:'Cancel',exact:true}).click();
+  await companyHeader.getByRole('tab',{name:'Payment history',exact:true}).click();
+  await panel.getByRole('button',{name:'Add credit',exact:true}).click();
+  const creditModal=page.getByRole('dialog',{name:'Add credit',exact:true});await creditModal.waitFor();
+  assert((await creditModal.boundingBox()).width<=Math.min(400,taskWidth));
+  await creditModal.getByRole('button',{name:'Cancel',exact:true}).click();
+  await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   const search=panel.locator('#operatorDialogueCompanySearch');
   assert(!await search.isEditable(),'idle search resists autofill');
   await search.focus();

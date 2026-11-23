@@ -1,5 +1,7 @@
 """Explicit Operator writes against a verified dialogue company."""
 import hashlib
+import hmac
+import re
 import json
 import uuid
 
@@ -7,19 +9,19 @@ from requests import RequestException
 
 import tenant_beinsystems_operator as operator
 import tenant_dialog_company_public_link as links
-from tenant_finance_policy import finance_capabilities, minor_amount, TenantFinanceError
-from tenant_policy import TenantPolicy
+from tenant_finance_policy import minor_amount, TenantFinanceError
+from tenant_beinsystems_operator_access import operator_api_allowed
 
 
 PROJECTS = ("Akul Admin", "Akul POS", "Akul PWA", "Akul Mobile", "Akul Counting",
             "Dine Admin", "Dine POS", "Dine PWA", "Dine QR", "Umumi")
+PRIORITIES = (2, 3, 4)
 PATHS = {"task": "/task/create", "credit": "/finance/addCredit"}
 
 
 def capabilities(profile):
-    policy = TenantPolicy(profile)
-    return {"task": policy.allows_action("tasks", "create"),
-            "credit": finance_capabilities(policy)["can_write"]}
+    enabled = operator_api_allowed(profile)
+    return {"task": enabled, "credit": enabled}
 
 
 def _text(fields, key, limit):
@@ -34,7 +36,7 @@ def payload(kind, fields):
         raise operator.OperatorError("Invalid fields", 400)
     if kind == "task" and set(fields) == {"title","description","project","priority"}:
         priority = fields["priority"]
-        if type(priority) is not int or priority not in (2,3,4) or fields["project"] not in PROJECTS:
+        if type(priority) is not int or priority not in PRIORITIES or fields["project"] not in PROJECTS:
             raise operator.OperatorError("Invalid task options", 400)
         return {"title":_text(fields,"title",240), "description":_text(fields,"description",8000),
                 "project":fields["project"], "priority":priority}
@@ -76,12 +78,14 @@ def _send(kind, data, credentials):
 
 
 def perform(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id,
-            kind, request_id, fields):
+            expected_binding, kind, request_id, fields):
     tenant = operator._tenant(profile)
     actor = int(profile["telegram_id"])
     route = links.dialogue._key(provider,lead_id,channel_id,conversation_id)
     company = links.dialogue.normalize_company_id(expected_company_id)
     data = payload(kind,fields)
+    if not isinstance(expected_binding,str) or not re.fullmatch('[0-9a-f]{64}',expected_binding):
+        raise operator.OperatorError('Refresh the company details',409)
     try:
         token = uuid.UUID(str(request_id))
         if token.version != 4 or not company:
@@ -93,6 +97,8 @@ def perform(profile, *, provider, lead_id, channel_id, conversation_id, expected
         scope = links._locked_snapshot(cur,profile,route,company)
         if isinstance(scope,str):
             raise operator.OperatorError("No verified company",409)
+        if not hmac.compare_digest(expected_binding,links._action_binding_token(actor,route,company,scope)):
+            raise operator.OperatorError('Company binding changed',409)
         _, account, generation, instance = scope
         if (generation,instance) != (credentials["generation"],credentials["connection_instance_id"]):
             raise operator.OperatorError("Connection changed",409)

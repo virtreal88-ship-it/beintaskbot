@@ -175,7 +175,9 @@ def test_company_profile_drops_provider_reply_after_rebinding(monkeypatch):
     monkeypatch.setattr(operator, '_credentials', Mock(return_value={
         'generation':'g', 'connection_instance_id':'i','token':'synthetic','base_url':operator.OPERATOR_API_BASE_URL}))
     before = ('tenant', ACCOUNT, 'g', 'i')
-    monkeypatch.setattr(link, '_snapshot', Mock(side_effect=[before, before, ('tenant','other','g','i')]))
+    monkeypatch.setattr(link, '_snapshot', Mock(return_value=before))
+    monkeypatch.setattr(link.dialogue,'_connect',MagicMock())
+    monkeypatch.setattr(link, '_locked_snapshot', Mock(return_value=('tenant','other','g','i')))
     read = Mock(return_value={'status':'success','data':{'account':ACCOUNT,'balance':10.5}})
     monkeypatch.setattr(operator, '_request_operator', read)
     with pytest.raises(operator.OperatorError) as changed:
@@ -211,3 +213,32 @@ def test_first_copy_posts_only_the_verified_account_to_operator(monkeypatch):
         headers={'Authorization':'Bearer synthetic','Accept':'application/json'},
         timeout=operator.REQUEST_TIMEOUT_SECONDS,allow_redirects=False,stream=True)
     assert session.trust_env is False
+
+
+@pytest.mark.parametrize('allowed',[False,True])
+def test_task_options_project_verified_account_and_current_action_permissions(monkeypatch, allowed):
+    import tenant_dialog_company_actions as actions
+    identity={'telegram_id':17}
+    monkeypatch.setattr(operator,'_tenant',lambda p:'tenant')
+    monkeypatch.setattr(operator,'_record_operator_read', Mock())
+    monkeypatch.setattr(operator,'_credentials',Mock(return_value={
+        'generation':'g','connection_instance_id':'i','token':'synthetic','base_url':operator.OPERATOR_API_BASE_URL}))
+    scope=('tenant',ACCOUNT,'g','i')
+    monkeypatch.setattr(link,'_snapshot',Mock(return_value=scope))
+    monkeypatch.setattr(link,'_locked_snapshot',Mock(return_value=scope))
+    monkeypatch.setattr(operator,'_request_operator',Mock(return_value={'status':'success','data':{'account':ACCOUNT}}))
+    monkeypatch.setattr(link.dialogue,'_connect',MagicMock())
+    monkeypatch.setattr(operator,'_current_profile',Mock(return_value=identity))
+    gate=Mock(return_value={'task':allowed,'credit':not allowed})
+    monkeypatch.setattr(actions,'capabilities',gate)
+    result=link.lookup_profile(identity,**ROUTE)
+    gate.assert_called_once_with(identity)
+    assert '_exact_operator_account' not in result
+    assert len(result['action_binding'])==64
+    assert result['actions']=={'task':allowed,'credit':not allowed}
+    if allowed:
+        assert result['task_options']=={'account':ACCOUNT,'priorities':actions.PRIORITIES,'projects':actions.PROJECTS}
+    else:
+        assert 'task_options' not in result
+    gate.return_value={'task':False,'credit':False}
+    assert 'action_binding' not in link.lookup_profile(identity,**ROUTE)

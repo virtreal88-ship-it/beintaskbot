@@ -301,7 +301,7 @@ def dialog_company_action_handler(member, origin, logger):
             from tenant_dialog_company_actions import perform
             data = await _body(request, profile, origin)
             if set(data) != {"provider","lead_id","channel_id","conversation_id","expected_company_id",
-                             "kind","request_id","fields"}:
+                             "expected_binding","kind","request_id","fields"}:
                 raise operator.OperatorError("Invalid fields", 400)
             state = await asyncio.to_thread(perform, profile, **data)
             return _json_response({"state": state})

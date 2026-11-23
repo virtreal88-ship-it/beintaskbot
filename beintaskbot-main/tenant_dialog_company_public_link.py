@@ -1,4 +1,5 @@
 """Read Operator details for the current company of an exact dialogue."""
+import hashlib
 import json
 import math
 import re
@@ -116,7 +117,11 @@ def _locked_snapshot(cur,profile,route,expected_company):
     table, _, _ = dialogue._pred(tenant, route)
     if not dialogue._ready(cur, table):
         raise operator.OperatorError('Привязка компании недоступна.', 503)
-    binding = dialogue._read(cur, tenant, actor, route, False)
+    from tenant_beinsystems_operator_access import operator_api_allowed
+    if operator_api_allowed(policy.profile):
+        binding = dialogue._binding_snapshot(cur,tenant,policy,route,False)
+    else:
+        binding = dialogue._read(cur,tenant,actor,route,False)
     if binding['company_id'] != expected_company:
         raise operator.OperatorError('Компания диалога изменилась или недоступна.', 409)
     integration = operator._operator_row(cur, tenant)
@@ -127,8 +132,14 @@ def _locked_snapshot(cur,profile,route,expected_company):
     return (tenant, account, generation, instance) if account else 'not_linked'
 
 
+def _action_binding_token(actor, route, company, scope):
+    # Compare-only, never used to select the account, grant rights or sign in.
+    payload = ['operator-company-action/v1',str(actor),list(route),company,list(scope)]
+    return hashlib.sha256(json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
+
+
 def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id,
-                      expected_company_id, endpoint, lookup):
+                      expected_company_id, endpoint, lookup, finish=None):
     operator._tenant(profile)
     route = dialogue._key(provider, lead_id, channel_id, conversation_id)
     company = dialogue.normalize_company_id(expected_company_id)
@@ -147,7 +158,13 @@ def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         # The account never comes from the request or the company display name.
         fields = lookup(account, token=credentials['token'], base_url=credentials['base_url'])
-        if _snapshot(profile, route, company) != before:
+        if finish is not None:
+            with dialogue._connect() as conn, conn.cursor() as cur:
+                if _locked_snapshot(cur,profile,route,company) != before:
+                    raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
+                if fields is not None:
+                    fields = finish(cur,route,company,before,fields)
+        elif _snapshot(profile, route, company) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         return {'state': 'available', **fields} if fields is not None else {'state': 'not_found'}
     except TenantLinearError as error:
@@ -311,10 +328,16 @@ def lookup_profile(profile, **query):
                                               requests_account_info=True, **transport)
         return _company_profile_fields(response, account)
 
-    result = _read_bound_route(profile, endpoint='account_info', lookup=profile_fields, **query)
-    if result['state'] == 'available':
-        from tenant_dialog_company_actions import capabilities
-        with dialogue._connect() as db, db.cursor() as cur:
-            result['actions'] = capabilities(operator._current_profile(cur, operator._tenant(profile),
-                                                                      int(profile['telegram_id'])))
-    return result
+    def with_actions(cur, route, company, scope, fields):
+        from tenant_dialog_company_actions import PRIORITIES, PROJECTS, capabilities
+        tenant, account, _, _ = scope
+        actor = int(profile['telegram_id'])
+        actions = capabilities(operator._current_profile(cur,tenant,actor))
+        result = {**fields,'actions':actions}
+        if any(actions.values()):
+            result['action_binding'] = _action_binding_token(actor,route,company,scope)
+        if actions['task']:
+            result['task_options'] = {'account':account, 'priorities':PRIORITIES, 'projects':PROJECTS}
+        return result
+
+    return _read_bound_route(profile,endpoint='account_info',lookup=profile_fields,finish=with_actions,**query)
