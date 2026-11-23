@@ -267,6 +267,20 @@ def test_confirm_bound_company_after_live_operator_selection(ready):
     assert count(db,'saas_beinsystems_operator_company_imports')==1
 
 
+def test_operator_api_selects_verified_account_without_company_crud(ready):
+    db,_,instance=ready
+    _activate_synthetic(db,instance)
+    db.execute("""UPDATE saas_tenant_members SET permissions='["dialogs","operator_api"]'::jsonb
+        WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
+    db.commit()
+    command('transfer',1,target_employee_id=33)
+    assert service.chooser(STAFF,**ROUTE,term='example')['accounts']==[{'account':'example'}]
+    selected=service.chooser(STAFF,**ROUTE,term='example',choice=True,expected_company_id=None)
+    assert selected['binding']['company_name']=='example'
+    with pytest.raises(provider.OperatorError):
+        service.chooser(STAFF,**{**ROUTE,'channel_id':CB},term='example')
+
+
 def test_employee_reads_active_connection_for_owned_route_only(ready):
     db,calls,instance=ready
     _activate_synthetic(db,instance)

@@ -171,13 +171,16 @@ def _manage(cur, tenant, actor, policy, route, *, write):
 def _operator_choice_allowed(cur, tenant, policy, route, *, enforce=False):
     from tenant_dialog_access import require_source
     from tenant_operator_access import assert_route
-    if not (dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view')
-            and policy.allows_action('dialogs','update')):
+    from tenant_beinsystems_operator_access import operator_api_allowed
+    api_access = operator_api_allowed(policy.profile)
+    action = 'view' if api_access else 'update'
+    if not (dialogue_chooser_enabled(tenant) and (api_access or policy.allows_action('operator_data','view'))
+            and policy.allows_action('dialogs',action)):
         return False
     provider, lead, channel, conversation = route
     try:
-        require_source(cur,tenant,policy,provider,channel,'update')
-        assert_route(cur,tenant,policy,provider,conversation,channel,lead,action='update')
+        require_source(cur,tenant,policy,provider,channel,action)
+        assert_route(cur,tenant,policy,provider,conversation,channel,lead,action=action)
     except TenantLinearError:
         if enforce:
             raise

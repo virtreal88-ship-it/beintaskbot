@@ -94,7 +94,7 @@ def perform(profile, *, provider, lead_id, channel_id, conversation_id, expected
         raise operator.OperatorError("Invalid operation identity",400) from None
     credentials = operator._credentials(tenant)
     with links.dialogue._connect() as db, db.cursor() as cur:
-        scope = links._locked_snapshot(cur,profile,route,company)
+        scope = links._locked_snapshot(cur,profile,route,company,write=True)
         if isinstance(scope,str):
             raise operator.OperatorError("No verified company",409)
         if not hmac.compare_digest(expected_binding,links._action_binding_token(actor,route,company,scope)):
@@ -122,7 +122,7 @@ def perform(profile, *, provider, lead_id, channel_id, conversation_id, expected
     # Reacquire the dialogue and current member locks after committing the reservation.
     with links.dialogue._connect() as db, db.cursor() as cur:
         try:
-            fresh = links._locked_snapshot(cur,profile,route,company)
+            fresh = links._locked_snapshot(cur,profile,route,company,write=True)
             allowed = capabilities(operator._current_profile(cur,tenant,actor))[kind]
             if fresh != scope or not allowed:
                 raise operator.OperatorError("Context changed",409)

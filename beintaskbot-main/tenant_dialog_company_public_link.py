@@ -104,21 +104,21 @@ def _snapshot(profile, route, expected_company):
             return _locked_snapshot(cur,profile,route,expected_company)
 
 
-def _locked_snapshot(cur,profile,route,expected_company):
+def _locked_snapshot(cur,profile,route,expected_company,*,write=False):
     tenant, actor, policy = access(cur, profile, 'dialogs', 'view')
+    from tenant_beinsystems_operator_access import operator_api_allowed
+    api_access = operator_api_allowed(policy.profile)
     if (policy.profile.get('tenant_status') != 'active'
-            or not policy.allows_action('operator_data', 'view')):
+            or not (api_access or policy.allows_action('operator_data','view'))):
         raise operator.OperatorError('Публичная ссылка недоступна.', 403)
-    access(cur, profile, 'dialogs', 'update')
-    # Retain the existing link-access policy. A closed, owned dialogue
-    # remains eligible without starting another conversation.
-    require_source(cur, tenant, policy, route[0], route[2], 'update')
+    action = 'view' if api_access and not write else 'update'
+    access(cur, profile, 'dialogs', action)
+    require_source(cur, tenant, policy, route[0], route[2], action)
     dialogue._prove(cur, tenant, policy, route)
     table, _, _ = dialogue._pred(tenant, route)
     if not dialogue._ready(cur, table):
         raise operator.OperatorError('Привязка компании недоступна.', 503)
-    from tenant_beinsystems_operator_access import operator_api_allowed
-    if operator_api_allowed(policy.profile):
+    if api_access:
         binding = dialogue._binding_snapshot(cur,tenant,policy,route,False)
     else:
         binding = dialogue._read(cur,tenant,actor,route,False)
