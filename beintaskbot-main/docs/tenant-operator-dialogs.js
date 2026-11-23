@@ -756,12 +756,12 @@
       send.onclick=()=>submitAttempt();retry.onclick=()=>retryId?submitAttempt(retryId):undefined;
     }catch(error){if(modal.isConnected)status.textContent=error.message||trainingText('failed');}
   }
-  async function rawApi(url,options={}){
+  async function rawApi(url,options={}, {optionalScopedRead=false}={}){
     const version=epoch,who=identity(member);
     const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:{...(options.body?{'Content-Type':'application/json'}:{}),...((options.method||'GET')==='GET'?{'X-Tenant-Id':String(member?.tenant_id||''),'X-User-Id':String(member?.telegram_id||'')}:{ }),...options.headers}});
     const payload=await response.json();
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
-    if(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true)){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
+    if(!optionalScopedRead&&(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true))){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
     if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
     if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
     return payload;
@@ -991,53 +991,116 @@
       const status=$('operatorChatError');if(status)status.textContent=error.message;
     }
   }
-  const safeName=row=>{const value=String(row.customer_name||'').trim();return value&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(value)?value:'';};
+  const usableDialogName=(value,route)=>{
+    const name=typeof value==='string'?value.trim():'';
+    const lid=route?.provider==='connect'&&String(route.conversation_id).match(/^([1-9][0-9]{5,21})@lid$/);
+    if(lid&&/^[+0-9(). -]+$/.test(name)&&name.replace(/\D/g,'')===lid[1])return '';
+    return name&&name.length<=256&&!/@(?:s\.whatsapp\.net|c\.us|g\.us|lid)$/i.test(name)?name:'';
+  };
+  const safeName=row=>usableDialogName(row.customer_name,row);
   const verifiedDialogPhone=row=>{const phone=String(row?.phone||'').trim(),digits=phone.replace(/\D/g,'');return /^\+?[0-9 ()-]+$/.test(phone)&&digits.length>=7&&digits.length<=15?phone:'';};
   // Device contact details are presentation only and never change the route.
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}`;
-  const contactDetails=route=>{const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&Date.now()-cached.at<=30000?cached:null;};
+  const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
   const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
+  const isDialogGroup=route=>route.customer_kind==='group'||route.conversation_kind==='group';
   const hasContactName=route=>{
     const name=safeName(route);
-    return Boolean(route.manual_display_name?.trim()||(name&&name!==t('whatsappContact')&&!/^[+0-9(). -]+$/.test(name)));
+    return Boolean(usableDialogName(route.manual_display_name,route)||(name&&!['whatsapp contact','контакт whatsapp','whatsapp kontaktı'].includes(name.toLowerCase())&&!/^[+0-9(). -]+$/.test(name)));
   };
-  function hydrateContactDetails(route,head){
-    if(route.provider!=='connect'||(verifiedDialogPhone(route)&&hasContactName(route))||route.customer_kind==='group'||route.conversation_kind==='group'||! /^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||''))return;
-    const key=contactPhoneKey(route),version=epoch,revision=openRevision,owner=identity(member);
-    let entry=contactPhoneLookups.get(key);
-    if(!entry||Date.now()-entry.at>30000){
-      entry={at:Date.now(),phone:'',name:''};
-      if(contactPhoneLookups.size>=64)contactPhoneLookups.delete(contactPhoneLookups.keys().next().value);
-      contactPhoneLookups.set(key,entry);
-      entry.flight=api('dialogs/contact-phone?'+historyQuery(route)).then(result=>{
-        if(version!==epoch||owner!==identity(member)||result?.display_only!==true||result.status!=='available'||!sameDialog(result,route)||Number(result.lead_id)!==Number(route.lead_id))return;
-        if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
-        if(typeof result.display_name==='string'&&result.display_name.length<=256)entry.name=result.display_name;
-      }).catch(()=>{}); // Optional metadata failure must not close the chat.
+  const canLookupContact=route=>route?.provider==='connect'&&!isDialogGroup(route)
+    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment
+    &&!(verifiedDialogPhone(route)&&hasContactName(route))
+    &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
+  const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');
+  function lookupContactDetails(route,fromList=false){
+    let entry=contactDetails(route);
+    if(entry)return entry.flight;
+    const key=contactPhoneKey(route),owner=identity(member);
+    entry={retryAt:0,done:false,phone:'',name:''};
+    contactPhoneLookups.delete(key);
+    if(contactPhoneLookups.size>=64){
+      for(const [old,cached] of contactPhoneLookups)if(cached.done){contactPhoneLookups.delete(old);break;}
     }
-    entry.flight.then(()=>{
-      if(version!==epoch||revision!==openRevision||owner!==identity(member)||!hasRight('dialogs')||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
+    contactPhoneLookups.set(key,entry);
+    entry.flight=rawApi(endpoint+'dialogs/contact-phone?'+historyQuery(route),{}, {optionalScopedRead:true}).then(({result})=>{
+      if(key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||result.status!=='available'||result.provider!=='connect'||!sameDialog(result,route))return;
+      if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
+      entry.name=usableDialogName(result.display_name,route);
+    }).catch(()=>{}).finally(()=>{
+      entry.retryAt=Date.now()+(fromList?(entry.phone||entry.name?300000:120000):30000);
+      entry.done=true;
+    });
+    return entry.flight;
+  }
+  function updateRowContact(route){
+    if(!inDialogsView())return;
+    const index=rows.findIndex(row=>sameDialog(row,route)&&canLookupContact(row));
+    if(index<0)return;
+    const card=$('operatorRows')?.querySelector(`[data-open-operator="${index}"]`);
+    const title=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
+    if(title)title.textContent=dialogTitle(rows[index]);
+    if(subtitle)subtitle.textContent=dialogRowSubtitle(rows[index]);
+  }
+  let contactRowObserver,contactRowActive=0;
+  const contactRowQueue=new Map();
+  function pumpRowContacts(){
+    while(contactRowActive<2&&contactRowQueue.size){
+      const [button,route]=contactRowQueue.entries().next().value;
+      contactRowQueue.delete(button);
+      if(!button.isConnected||document.hidden||!inDialogsView()||!sameDialog(rows[Number(button.dataset.openOperator)],route))continue;
+      const key=contactPhoneKey(route);
+      contactRowActive++;
+      lookupContactDetails(route,true).then(()=>{
+        if(key===contactPhoneKey(route))updateRowContact(route);
+      }).finally(()=>{contactRowActive--;pumpRowContacts();});
+    }
+  }
+  function hydrateRowContacts(){
+    contactRowObserver?.disconnect();
+    contactRowObserver=null;
+    contactRowQueue.clear();
+    if(document.hidden||!inDialogsView())return;
+    const enqueue=button=>{
+      const row=rows[Number(button.dataset.openOperator)];
+      if(button.isConnected&&row&&canLookupContact(row)&&!contactDetails(row))contactRowQueue.set(button,row);
+    };
+    const buttons=[...$('operatorRows').querySelectorAll('[data-open-operator]')]
+      .filter(button=>canLookupContact(rows[Number(button.dataset.openOperator)])&&!contactDetails(rows[Number(button.dataset.openOperator)]));
+    if(!('IntersectionObserver' in window)){buttons.slice(0,8).forEach(enqueue);pumpRowContacts();return;}
+    const observer=new IntersectionObserver(entries=>{
+      if(contactRowObserver!==observer)return;
+      for(const entry of entries){
+        const button=entry.target;
+        if(entry.isIntersecting){observer.unobserve(button);enqueue(button);}
+      }
+      pumpRowContacts();
+    });
+    contactRowObserver=observer;
+    buttons.forEach(button=>observer.observe(button));
+  }
+  function hydrateContactDetails(route,head){
+    if(!canLookupContact(route))return;
+    const key=contactPhoneKey(route),revision=openRevision;
+    lookupContactDetails(route).then(()=>{
+      if(key!==contactPhoneKey(route)||revision!==openRevision||!inDialogsView()||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
       const phone=displayDialogPhone(currentDialog)||phoneUnavailable();
       for(const label of [head.querySelector('[data-header-phone]'),$('operatorClientCard')?.querySelector('[data-panel-phone]')])if(label)label.textContent=phone;
       const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
       const panelName=$('operatorClientCard')?.querySelector('[data-panel-name]');if(panelName)panelName.textContent=dialogTitle(currentDialog);
-      const index=rows.findIndex(row=>sameDialog(row,route)&&Number(row.lead_id)===Number(route.lead_id));
-      if(index>=0){
-        const card=$('operatorRows').querySelector(`[data-open-operator="${index}"]`);
-        const cardTitle=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
-        if(cardTitle)cardTitle.textContent=dialogTitle(rows[index]);
-        if(subtitle)subtitle.textContent=dialogIdentity(rows[index]);
-      }
+      updateRowContact(route);
     });
   }
   const phoneUnavailable=()=>({ru:'Номер не подтверждён',az:'Nömrə təsdiqlənməyib',en:'Phone not confirmed'}[i18n.language]||'Phone not confirmed');
   const dialogTitle=row=>{
     const known=safeName(row);
-    if(row.customer_kind==='group')return known||t('whatsappGroup');
-    return (hasContactName(row)?known:contactDetails(row)?.name||known)||row.phone||t('whatsappContact');
+    if(isDialogGroup(row))return known||t('whatsappGroup');
+    if(row.provider!=='connect')return known||row.phone||t('whatsappContact');
+    return usableDialogName(row.manual_display_name,row)||(hasContactName(row)?known:'')||contactDetails(row)?.name||displayDialogPhone(row)||t('whatsappContact');
   };
-  const dialogIdentity=row=>row.customer_kind==='group'?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):displayDialogPhone(row);
+  const dialogIdentity=row=>isDialogGroup(row)?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):displayDialogPhone(row);
+  const dialogRowSubtitle=row=>{const identity=dialogIdentity(row);return !isDialogGroup(row)&&identity===dialogTitle(row)?'':identity;};
   const avatarUrl=row=>'/api/platform/ai/dialogs/avatar?'+new URLSearchParams({provider:row.provider||'connect',lead_id:String(row.lead_id||''),channel_id:String(row.channel_id||''),conversation_id:String(row.conversation_id||'')});
   const avatarAttempts=new Set(),avatarReady=new Set(),avatarQueue=[];let avatarActive=0,avatarObserver;
   const avatarMarkup=(row,header=false)=>{
@@ -1079,7 +1142,7 @@
       const selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
       const unread=Math.max(0,Number(row.unread_count)||0);
-      const identityText=dialogIdentity(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
+      const identityText=dialogRowSubtitle(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
       const lifecycle=cardLifecycleBadge(row),previewMarkup=preview?`<span class="operator-row-preview" data-user-content>${esc(preview)}</span>`:'';
       const shareSourceLine=!companyName&&Boolean(sourceName&&previewMarkup);
       return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}">
@@ -1098,6 +1161,7 @@
       </button>`;
     }).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
     hydrateAvatars();
+    hydrateRowContacts();
     window.tenantSharedReminders?.markRows(rows.map(row=>row.group_sources?.length?activeGroupSources(row):[row]));
     renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||(ownerOverviewMode()&&sources.find(source=>sameDialog(source,row)))||sources[0]||row,false,'',{userOpened:true});} );
   }
@@ -2467,6 +2531,7 @@ if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPref
     scheduleAutoRefresh();
   });
   document.addEventListener('visibilitychange',()=>{
+    if($('operatorRows'))hydrateRowContacts();
     if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}
     else if(!window.tenantRequestCoordinator){refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}
   });
