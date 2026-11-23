@@ -40,3 +40,8 @@ def api_base_url() -> str:
 def dialogue_chooser_enabled(tenant_id: object) -> bool:
     return (os.environ.get('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED','').lower()=='true'
             and is_operator_workspace(tenant_id))
+
+
+def operator_api_allowed(profile):
+    return bool(profile.get("active") and is_operator_workspace(profile.get("tenant_id"))
+                and (profile.get("role") == "owner" or "operator_api" in (profile.get("permissions") or [])))

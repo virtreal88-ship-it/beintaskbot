@@ -36,7 +36,7 @@ def _permissions(value, role: str, *, deny_unset=False) -> list[str]:
     modules = {permission for values in _ROLE_PERMISSIONS.values() for permission in values}
     allowed = modules | {f'{module}:{action}' for module in modules
                          for action in ('view','create','update','delete','assign','manage')}
-    allowed.add('operator_data:link')
+    allowed.update({'operator_data:link','operator_api'})
     if not isinstance(value, list):
         return [] if deny_unset else list(_ROLE_PERMISSIONS.get(role, ["tasks"]))
     requested = [str(item) for item in value if str(item) in allowed]
@@ -50,7 +50,7 @@ def _known_permissions() -> set[str]:
     modules = {permission for values in _ROLE_PERMISSIONS.values() for permission in values}
     return (modules | {f'{module}:{action}' for module in modules
                        for action in ('view','create','update','delete','assign','manage')}
-            | {'operator_data:link'})
+            | {'operator_data:link','operator_api'})
 
 
 def _slug(name: str) -> str:
