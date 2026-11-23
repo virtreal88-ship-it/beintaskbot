@@ -1,4 +1,4 @@
-"""External push payloads; Connect message details are included only for an
+"""External push payloads; message previews are included only for an
 already-authorized incoming-message delivery to an opted-in device.
 """
 import re
