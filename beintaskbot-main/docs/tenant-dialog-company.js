@@ -14,9 +14,9 @@
     en:{empty:'No Operator accounts found.',error:'Could not find Operator accounts.',bindError:'Could not link the Operator account.',}
   };
   const linkLabels={
-    ru:{label:'Ссылка для клиента',copy:'Скопировать ссылку',copied:'Ссылка скопирована',error:'Не удалось получить ссылку. Повторите попытку.',copyError:'Браузер не скопировал ссылку. Повторите попытку.',unsupported:'Копирование недоступно в этом браузере.'},
-    az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',error:'Linki almaq mümkün olmadı. Yenidən cəhd edin.',copyError:'Brauzer linki kopyalamadı. Yenidən cəhd edin.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
-    en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.'}
+    ru:{label:'Ссылка для клиента',copy:'Скопировать ссылку',copied:'Ссылка скопирована',error:'Не удалось получить ссылку. Повторите попытку.',copyError:'Браузер не скопировал ссылку. Повторите попытку.',unsupported:'Копирование недоступно в этом браузере.',notFound:'Ссылка пока не создана.'},
+    az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',error:'Linki almaq mümkün olmadı. Yenidən cəhd edin.',copyError:'Brauzer linki kopyalamadı. Yenidən cəhd edin.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.',notFound:'Link hələ yaradılmayıb.'},
+    en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.',notFound:'The link has not been created yet.'}
   };
   const profileLabels={
     ru:{phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
@@ -66,13 +66,36 @@
   const linkCurrent=(s,company)=>current(s)&&s.section.closest('dialog')?.open===true&&
     !s.writing&&s.binding?.company_id===company;
   function clearPublicLink(s){
-    s.linkRequest?.abort();s.linkRequest=null;s.linkCompany=null;
+    s.linkRequest?.abort();s.linkRequest=null;s.linkLookupRequest?.abort();s.linkLookupRequest=null;
+    s.linkCompany=null;s.linkLoadedCompany=null;s.linkUrl='';
     s.linkBox.hidden=true;s.linkCopy.disabled=false;s.linkStatus.textContent='';
+    if(s.linkAnchor){s.linkAnchor.hidden=true;s.linkAnchor.removeAttribute('href');s.linkAnchor.textContent='';}
   }
   function syncPublicLink(s,force=false){
     const company=s.binding?.company_id;
     if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
-    if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
+    if(!company||!linkCurrent(s,company))return;
+    s.linkCompany=company;s.linkBox.hidden=false;
+    if(s.linkLoadedCompany!==company&&!s.linkLookupRequest)void loadExistingPublicLink(s,company);
+  }
+  async function loadExistingPublicLink(s,company){
+    const read=new AbortController();s.linkLookupRequest=read;
+    const active=()=>s.linkLookupRequest===read&&linkCurrent(s,company);
+    try{
+      const {public_link:link}=await request(publicLinkEndpoint,s.member,
+        {...s.route,expected_company_id:company},true,read.signal);
+      if(!active())return;
+      if(link?.state==='available'&&typeof link.url==='string'&&/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url)){
+        s.linkUrl=link.url;s.linkAnchor.href=link.url;s.linkAnchor.textContent=link.url;s.linkAnchor.hidden=false;s.linkStatus.textContent='';
+      }else if(link?.state==='not_found'){
+        s.linkStatus.textContent=linkText('notFound');
+      }else if(link?.state&&linkProblem(link.state)){
+        s.linkStatus.textContent=linkProblem(link.state);
+      }else{
+        s.linkStatus.textContent=linkText('error');
+      }
+    }catch(error){if(active())s.linkStatus.textContent=[401,403,424].includes(error.status)?linkProblem(error.status===424?'rejected':'denied'):linkText('error');}
+    finally{if(s.linkLookupRequest===read){s.linkLookupRequest=null;s.linkLoadedCompany=company;}}
   }
   const sectionNames={
     ru:['Главная','Задачи','Модули','Платежи'],
@@ -467,6 +490,7 @@
         if(link?.state!=='available'||typeof link.url!=='string'||!/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url))
           throw Error('unconfirmed');
         received=true;
+        s.linkUrl=link.url;s.linkAnchor.href=link.url;s.linkAnchor.textContent=link.url;s.linkAnchor.hidden=false;
         return link.url;
       });
     // Call write in the original gesture. Safari requires this even when the
@@ -491,6 +515,7 @@
   }
   function mountPublicLink(s){
     s.linkBox=node('div');s.linkBox.dataset.companyPublicLink='';s.linkBox.hidden=true;
+    s.linkAnchor=node('a');s.linkAnchor.className='operator-company-public-url';s.linkAnchor.target='_blank';s.linkAnchor.rel='noopener noreferrer';s.linkAnchor.hidden=true;
     s.linkLabel=node('span',linkText('label'));s.linkStatus=node('p');s.linkStatus.setAttribute('role','status');
     s.linkCopy=button('',()=>void copyPublicLink(s));s.linkCopy.className='operator-company-copy-icon';
     const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
@@ -500,8 +525,8 @@
     const rect=document.createElementNS(svg.namespaceURI,'rect'),path=document.createElementNS(svg.namespaceURI,'path');
     for(const [key,value] of Object.entries({x:8,y:8,width:12,height:12,rx:2}))rect.setAttribute(key,value);
     path.setAttribute('d','M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2');
-    svg.append(rect,path);s.linkCopy.append(s.linkLabel,svg);labelPublicLink(s);
-    s.linkBox.append(s.linkCopy,s.linkStatus);s.main.append(s.linkBox);
+    svg.append(rect,path);s.linkCopy.append(svg);labelPublicLink(s);
+    s.linkBox.append(s.linkLabel,s.linkAnchor,s.linkCopy,s.linkStatus);s.main.append(s.linkBox);
   }
   function labelPublicLink(s){
     s.linkLabel.textContent=linkText('label');s.linkCopy.title=linkText('copy');
@@ -717,13 +742,13 @@
     dialog#operatorCompanyPanel > .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
     #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
     #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
-    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
+    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:13px;white-space:nowrap;overflow-wrap:normal}
     #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
     #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
-    #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:.8rem;overflow-wrap:anywhere}
+    #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:14px;line-height:1.35;overflow-wrap:anywhere}
     #operatorCompanyPanel .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
-    #operatorCompanyPanel .operator-company-section-list small{color:var(--muted);font-size:.72rem}
-    #operatorCompanyPanel .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:.72rem;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+    #operatorCompanyPanel .operator-company-section-list small{color:var(--muted);font-size:12px;line-height:1.35}
+    #operatorCompanyPanel .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:12px;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
     #operatorCompanyPanel .operator-company-badge[data-tone=success]{color:#114d30;background:#dcf5e6;border-color:#a5d7ba}
     #operatorCompanyPanel .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
     #operatorCompanyPanel .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
@@ -767,21 +792,21 @@
       .operator-company-action-modal[data-company-action-modal=task] footer button{width:100%}
     }
     @media(max-width:600px){.operator-company-action-modal .operator-company-action-grid{grid-template-columns:minmax(0,1fr)}.operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{font-size:16px}}
-    #operatorCompanyPanel .operator-company-payment-history{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--card);font-size:.8rem;--payment-credit:#14543b;--payment-credit-bg:#e3f6ec;--payment-expense:#7c2932;--payment-expense-bg:#fcebed}
+    #operatorCompanyPanel .operator-company-payment-history{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--card);font-size:13px;--payment-credit:#14543b;--payment-credit-bg:#e3f6ec;--payment-expense:#7c2932;--payment-expense-bg:#fcebed}
     html[data-app-theme=dark] #operatorCompanyPanel .operator-company-payment-history{--payment-credit:#87d9af;--payment-credit-bg:#203d31;--payment-expense:#ffadb5;--payment-expense-bg:#4b282f}
     #operatorCompanyPanel .operator-company-payment-intro{padding:9px 10px}
-    #operatorCompanyPanel .operator-company-payment-intro h3{margin:0;font-size:.91rem;line-height:1.3}
-    #operatorCompanyPanel .operator-company-payment-intro p{margin:3px 0 0;color:var(--muted);font-size:.72rem}
+    #operatorCompanyPanel .operator-company-payment-intro h3{margin:0;font-size:14px;line-height:1.3}
+    #operatorCompanyPanel .operator-company-payment-intro p{margin:3px 0 0;color:var(--muted);font-size:12px}
     #operatorCompanyPanel .operator-company-payment-history table{box-sizing:border-box;width:100%;table-layout:fixed;border-collapse:collapse;margin:0}
     #operatorCompanyPanel .operator-company-payment-history :is(th,td){padding:7px 8px;text-align:start;border-block-start:1px solid var(--line);background:transparent;overflow-wrap:anywhere;vertical-align:middle;line-height:1.35}
     #operatorCompanyPanel .operator-company-payment-history th{color:var(--muted);font-weight:600;background:var(--paper)}
     #operatorCompanyPanel .operator-company-payment-history :is(th,td):last-child{text-align:end;width:43%}
-    #operatorCompanyPanel .operator-company-payment-kind{box-sizing:border-box;display:inline-flex;align-items:center;gap:3px;max-width:100%;padding:2px 5px;border-radius:999px;background:var(--paper);color:var(--ink);font-size:.7rem;font-weight:600}
+    #operatorCompanyPanel .operator-company-payment-kind{box-sizing:border-box;display:inline-flex;align-items:center;gap:3px;max-width:100%;padding:2px 5px;border-radius:999px;background:var(--paper);color:var(--ink);font-size:12px;font-weight:600}
     #operatorCompanyPanel .operator-company-payment-kind>span{min-width:0;overflow-wrap:anywhere}
     #operatorCompanyPanel .operator-company-payment-kind svg{width:12px;height:12px;flex:none}
     #operatorCompanyPanel .operator-company-payment-kind[data-kind=credit]{color:var(--payment-credit);background:var(--payment-credit-bg)}
     #operatorCompanyPanel .operator-company-payment-kind[data-kind=expense]{color:var(--payment-expense);background:var(--payment-expense-bg)}
-    #operatorCompanyPanel .operator-company-payment-history :is(time,small){display:block;margin-block-start:3px;color:var(--muted);font-size:.68rem}
+    #operatorCompanyPanel .operator-company-payment-history :is(time,small){display:block;margin-block-start:3px;color:var(--muted);font-size:12px}
     #operatorCompanyPanel .operator-company-section-amount{text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
     #operatorCompanyPanel .operator-company-section-amount[data-positive-credit]{color:var(--payment-credit)}
     #operatorCompanyPanel .operator-company-payment-history .operator-company-pagination{padding:8px;border-block-start:1px solid var(--line)}
@@ -805,14 +830,16 @@
     #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
-    [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:.75rem}
+    [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:12px;line-height:1.35}
     [data-company-profile]>p{margin:0}
     [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
-    [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:3px}
+    [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) 36px;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:8px}
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}
-    [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:.75rem}
-    #operatorCompanyPanel .operator-company-copy-icon{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;width:100%;min-height:40px;padding:4px 8px}
+    [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:12px;line-height:1.35}
+    #operatorCompanyPanel .operator-company-public-url{grid-column:1;min-width:0;overflow:hidden;color:var(--brand);font-size:13px;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+    #operatorCompanyPanel .operator-company-public-url[hidden]{display:none!important}
+    #operatorCompanyPanel .operator-company-copy-icon{grid-column:2;display:grid;place-items:center;width:36px;min-width:36px;height:36px;min-height:36px;padding:0}
   `;document.head.append(style);
   for(const event of ['tenant-auth-invalid','tenant-auth-pending','tenant-chat-open','tenant-chat-close'])
     document.addEventListener(event,clear);
