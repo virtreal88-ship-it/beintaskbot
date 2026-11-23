@@ -23,7 +23,7 @@ const beta='@verified_account';
      handoff_active:true,handoff_assignee_name:'Transfer history person'},
     {...group('b',42),assignee_name:'Other chat-only person'},
    ];
-   const fixtures={a:{company_id:'alpha',company_name:alpha,can_manage:true},
+   const fixtures={a:{company_id:'alpha',company_name:alpha,can_manage:true,can_search_operator:true},
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
@@ -46,8 +46,8 @@ const beta='@verified_account';
       }
       if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{
         state:'available',rows:data.action==='company_history'?[['2026-11-03','4.50 AZN','credit'],['2026-11-02','-2.00','daily_expense']]:[]}})};
-      if(data.company_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
-      return {ok:true,json:async()=>({success:true,companies:[{id:'existing',name:'Test company'}]})};
+      if(data.operator_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
+      return {ok:true,json:async()=>({success:true,accounts:[{account:'Test company'}]})};
      }
      if(opt.method!=='GET')throw Error('Unexpected method');
      const channel=q.get('channel_id'),route=sources.find(r=>r.channel_id===channel);
@@ -215,7 +215,7 @@ const beta='@verified_account';
   await search.press('ControlOrMeta+a');
   await search.pressSequentially('Test company');
   assert.equal(await search.inputValue(),'Test company');
-  await panel.getByRole('button',{name:'Test company',exact:true}).waitFor();
+  await panel.getByRole('button',{name:'@Test company',exact:true}).waitFor();
   await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
   await page.locator('#operatorCompanyPanelOpen').click();

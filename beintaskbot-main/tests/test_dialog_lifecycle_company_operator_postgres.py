@@ -251,6 +251,22 @@ def _activate_synthetic(db,instance):
     db.commit()
 
 
+def test_confirm_bound_company_after_live_operator_selection(ready):
+    db,_,instance=ready
+    _activate_synthetic(db,instance)
+    company=str(uuid.uuid4())
+    db.execute("INSERT INTO saas_crm_native_companies (id,tenant_id,name) VALUES(%s::uuid,%s::uuid,'example')",(company,A))
+    db.commit()
+    binding.binding(OWNER,**ROUTE,company_id=company,expected_company_id=None)
+    selection=dict(term='example',choice=True,expected_company_id=company)
+    assert service.chooser(OWNER,**ROUTE,**selection)=={'confirm_existing_company':True}
+    assert count(db,'saas_beinsystems_operator_company_imports')==0
+    for _ in range(2):
+        result=service.chooser(OWNER,**ROUTE,**selection,confirm_existing=True)
+        assert result['binding']['company_id']==company
+    assert count(db,'saas_beinsystems_operator_company_imports')==1
+
+
 def test_employee_reads_active_connection_for_owned_route_only(ready):
     db,calls,instance=ready
     _activate_synthetic(db,instance)
