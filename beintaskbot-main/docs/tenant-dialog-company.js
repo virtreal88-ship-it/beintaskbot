@@ -617,7 +617,8 @@
       for(const [label,fields] of items){
         const result=button('',()=>{if(active()&&result.isConnected)void changeBinding(s,fields);});
         result.onpointerdown=event=>event.preventDefault();
-        result.append(node('strong',label));rows.append(result);
+        result.append(node('strong',label),node('small',fields.operator_account?'Operator':'CRM'));
+        rows.append(result);
       }
     }
     async function find(term,seq){
