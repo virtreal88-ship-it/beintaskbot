@@ -185,8 +185,17 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected):
     grant=current_access(cur,tenant,actor,'companies','view')
     if not locked_resource(cur,grant,'companies','view',dialogue.COMPANIES,tenant,company):
         raise CRMAccessError()
-    if not created and source=='active' and not imports._put_mapping(cur,tenant,account,company,actor,credentials):
-        raise operator.OperatorError(_CONFLICT,409)
+    if not created and source=='active':
+        # Refresh only a pre-existing, exact imported identity after live re-verification.
+        # A manually confirmed link remains its own sole identity record.
+        cur.execute("""UPDATE saas_beinsystems_operator_company_imports SET
+          last_seen_generation=%s,last_seen_connection_instance_id=%s::uuid,
+          updated_by=%s,last_seen_at=now(),updated_at=now()
+          WHERE tenant_id=%s::uuid AND external_account=%s AND company_id=%s::uuid
+            AND (last_seen_generation,last_seen_connection_instance_id)
+                IS DISTINCT FROM (%s,%s::uuid)""",
+          (credentials['generation'],credentials['connection_instance_id'],actor,tenant,account,company,
+           credentials['generation'],credentials['connection_instance_id']))
     _assert_fresh(cur,tenant,actor,source,credentials)
     if bound!=company:
         if expected is dialogue._UNCHECKED:
