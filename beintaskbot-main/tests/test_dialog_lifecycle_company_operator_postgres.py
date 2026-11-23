@@ -284,6 +284,21 @@ def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready)
         binding.binding(STAFF,**{**ROUTE,'channel_id':CB},company_id=None,expected_company_id=None)
 
 
+def test_owner_reads_bound_company_after_transfer_without_taking_dialogue(ready):
+    from tenant_dialog_company_public_link import _snapshot
+    db,_,instance=ready
+    _activate_synthetic(db,instance)
+    company=choose('example',expected_company_id=None)['company_id']
+    command('transfer',1,target_employee_id=33)
+    visible=binding.binding(OWNER,**ROUTE)
+    assert visible['company_id']==company and visible['can_manage'] is False
+    route=binding._key(ROUTE['provider'],ROUTE['lead_id'],ROUTE['channel_id'],ROUTE['conversation_id'])
+    assert _snapshot(OWNER,route,company,owner_read=True)[1]=='example'
+    assert db.execute("SELECT operator_id FROM saas_dialog_workflows WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s",
+                      (A,CA,ROUTE['conversation_id']))[0]['operator_id']==33
+    db.commit()
+
+
 def test_employee_reads_active_connection_for_owned_route_only(ready):
     db,calls,instance=ready
     _activate_synthetic(db,instance)

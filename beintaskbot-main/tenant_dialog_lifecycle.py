@@ -453,6 +453,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
             state in {'closed','dismissed'} and dialog.get('channel_active') is True)),
         'can_submit_case':state=='closed' and own}
     if owner_observer:
+        dialog['lifecycle']['can_takeover']=bool(_policy and _policy.profile.get('role')=='owner'
+            and state=='accepted' and not own and rollout.admission_enabled and dialog.get('channel_active'))
         dialog['owner_overview_read_only']=True
         for key in ('can_accept','can_start','can_dismiss','can_close','can_transfer','can_submit_case'):
             dialog['lifecycle'][key]=False
@@ -543,7 +545,9 @@ def _mutate_once(profile, payload):
     from tenant_dialog_access import require_source
     from tenant_ai_dialog_scope import lock_dialog
     action=payload.get('action')
-    if action not in {'accept','start','close','transfer','case','dismiss'}: raise TenantLinearError('Неизвестное действие.')
+    if action not in {'accept','start','close','transfer','case','dismiss','takeover'}: raise TenantLinearError('Неизвестное действие.')
+    if action == 'takeover' and {'target_employee_id', 'episode_id'} & payload.keys():
+        raise TenantLinearError('Некорректный запрос.',400)
     online_only=payload.get('online_only',False)
     if 'online_only' in payload and (action!='transfer' or type(online_only) is not bool):
         raise TenantLinearError('Некорректный запрос.',400)
@@ -558,13 +562,13 @@ def _mutate_once(profile, payload):
             tenant = str(uuid.UUID(str(profile.get('tenant_id'))))
             if not enabled(cur, tenant):
                 raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
-            if action in {'accept','start','dismiss'} and not acceptance_enabled(cur, tenant):
+            if action in {'accept','start','dismiss','takeover'} and not acceptance_enabled(cur, tenant):
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             if online_only and not all(payload.get(key) for key in ('channel_id','conversation_id','lead_id')):
                 raise TenantLinearError('Выберите источник Connect.',400)
-            route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only)
+            route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action!="takeover")
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
             from tenant_dialog_presence import is_online, is_sidebar_transfer_online, work_status_routing_requested
             target = None
@@ -585,6 +589,16 @@ def _mutate_once(profile, payload):
                   and (action in {'accept','start'}
                        or (action == 'dismiss' and work_status_routing_requested(tenant,channel)))):
                 eligible = is_online(cur,tenant,actor,lock=True,source_channel=channel)
+            takeover = action=='takeover'
+            if takeover or (action=='accept' and policy.profile.get('role')=='owner'):
+                if policy.profile.get('role')!='owner':
+                    raise TenantLinearError('Недостаточно прав.',403)
+                if (payload.get('channel_id')!=channel or payload.get('conversation_id')!=conversation
+                        or int(payload['lead_id'])!=int(route['lead_id'])):
+                    raise TenantLinearError('Обновите диалог.',409)
+                cur.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active FOR SHARE',(tenant,channel))
+                if not cur.fetchone():
+                    raise TenantLinearError('Источник недоступен.',403)
             if action == 'transfer':
                 target=payload.get('target_employee_id')
                 # Preserve all existing locked membership/source checks, but
@@ -611,7 +625,7 @@ def _mutate_once(profile, payload):
                     AND ch.active""",(tenant,channel))
                 start_source_ready = bool(cur.fetchone())
             lock_dialog(cur,tenant,'connect',channel,conversation)
-            fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only)
+            fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action!="takeover")
             if (str(fresh_route['connect_channel_id']),fresh_route['conversation_id'],int(fresh_route['lead_id'])) != (channel,conversation,int(route['lead_id'])):
                 raise TenantLinearError('Адрес диалога изменился. Обновите диалог.',409)
             cur.execute('SELECT * FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request_id))
@@ -683,7 +697,12 @@ def _mutate_once(profile, payload):
                   WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
                     AND conversation_id=%s AND state IN ('queued','processing')''',(tenant,channel,conversation))
             else:
-                if not row or row.get('operator_id')!=actor: raise TenantLinearError('Диалог недоступен.',404)
+                if takeover:
+                    if not row or row['state']!='accepted' or row['operator_id']==actor:
+                        raise TenantLinearError('Диалог уже изменился.',409)
+                    target=actor
+                    action='transfer'
+                elif not row or row.get('operator_id')!=actor: raise TenantLinearError('Диалог недоступен.',404)
                 if action=='transfer':
                     if row['state'] not in {'accepted','closed','dismissed'}:
                         raise TenantLinearError('Диалог недоступен для передачи.',409)

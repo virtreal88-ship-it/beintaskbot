@@ -53,7 +53,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  d.querySelector('#operatorLifecycle').value='active';
  route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',can_dismiss:true,last_inbound_id:'latest-inbound'}};await w.tenantOperator.openDialog(route);d.querySelector('[data-operator-lifecycle=dismiss]').click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');assert(!d.querySelector('#chatRows'),'dismiss removes the active conversation without a case');assert.equal(calls.filter(c=>c.body?.action==='case').length,3);
  assert.equal(calls.find(c=>c.body?.action==='dismiss').body.individual_no_reply,true);
- route={...route,lifecycle:{state:'waiting',revision:5,can_accept:true,last_inbound_id:null}};await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-lifecycle=accept]'),'no incoming message means no accept action');
+ route={...route,lifecycle:{state:'waiting',revision:5,can_accept:true,last_inbound_id:null}};await w.tenantOperator.openDialog(route);assert(d.querySelector('[data-operator-lifecycle=accept]'),'owner can explicitly accept a waiting dialogue without an incoming message');
  route={...route,archive_read_only:true,can_send:false,lifecycle:{state:'closed',revision:7,operator_id:22,can_start:true}};
  let archiveAcknowledged=0;w.tenantSharedReminders={markRows(){},mountCard(){},dialogOpened(){archiveAcknowledged++;}};
  const beforeArchive=calls.filter(c=>c.url.includes('/dialogs/read')).length;

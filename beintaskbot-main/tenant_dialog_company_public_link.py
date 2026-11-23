@@ -97,23 +97,25 @@ def _linked_account(cur, tenant, company, generation, instance):
     return None
 
 
-def _snapshot(profile, route, expected_company):
+def _snapshot(profile, route, expected_company, **read_mode):
     """Recheck route, current grants, exact binding and link generation."""
     with dialogue._connect() as conn:
         with conn.cursor() as cur:
-            return _locked_snapshot(cur,profile,route,expected_company)
+            return _locked_snapshot(cur,profile,route,expected_company,**read_mode)
 
 
-def _locked_snapshot(cur,profile,route,expected_company):
+def _locked_snapshot(cur,profile,route,expected_company,*,owner_read=False):
     tenant, actor, policy = access(cur, profile, 'dialogs', 'view')
     if (policy.profile.get('tenant_status') != 'active'
             or not policy.allows_action('operator_data', 'view')):
         raise operator.OperatorError('Публичная ссылка недоступна.', 403)
-    access(cur, profile, 'dialogs', 'update')
-    # Retain the existing link-access policy. A closed, owned dialogue
-    # remains eligible without starting another conversation.
-    require_source(cur, tenant, policy, route[0], route[2], 'update')
-    dialogue._prove(cur, tenant, policy, route)
+    overview = owner_read and policy.profile.get('role')=='owner'
+    if overview:
+        dialogue._prove(cur,tenant,policy,route,owner_overview=True)
+    else:
+        access(cur, profile, 'dialogs', 'update')
+        require_source(cur, tenant, policy, route[0], route[2], 'update')
+        dialogue._prove(cur, tenant, policy, route)
     table, _, _ = dialogue._pred(tenant, route)
     if not dialogue._ready(cur, table):
         raise operator.OperatorError('Привязка компании недоступна.', 503)
@@ -145,8 +147,9 @@ def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id
     company = dialogue.normalize_company_id(expected_company_id)
     if company is None:
         raise operator.OperatorError('Компания диалога не указана.')
+    read_mode = {'owner_read':True} if profile.get('role')=='owner' else {}
     try:
-        before = _snapshot(profile, route, company)
+        before = _snapshot(profile, route, company, **read_mode)
         if isinstance(before, str):
             return {'state': before}
         tenant, account, generation, instance = before
@@ -154,17 +157,17 @@ def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id
         if (credentials['generation'], credentials['connection_instance_id']) != (generation, instance):
             raise operator.OperatorError('Подключение Operator изменилось.', 409)
         operator._record_operator_read(profile, endpoint, {'account': account})
-        if _snapshot(profile, route, company) != before:
+        if _snapshot(profile, route, company, **read_mode) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         # The account never comes from the request or the company display name.
         fields = lookup(account, token=credentials['token'], base_url=credentials['base_url'])
         if finish is not None:
             with dialogue._connect() as conn, conn.cursor() as cur:
-                if _locked_snapshot(cur,profile,route,company) != before:
+                if _locked_snapshot(cur,profile,route,company,**read_mode) != before:
                     raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
                 if fields is not None:
                     fields = finish(cur,route,company,before,fields)
-        elif _snapshot(profile, route, company) != before:
+        elif _snapshot(profile, route, company, **read_mode) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         return {'state': 'available', **fields} if fields is not None else {'state': 'not_found'}
     except TenantLinearError as error:
