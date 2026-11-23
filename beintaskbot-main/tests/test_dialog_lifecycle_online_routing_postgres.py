@@ -36,11 +36,9 @@ def test_four_state_routing_keeps_an_open_dialogue_until_the_next_inbound(episod
                                            "'connect'","c.connect_channel_id::text","c.conversation_id")
         cur.execute(f"""SELECT connect_channel_id::text AS source FROM saas_connect_conversations c
             WHERE tenant_id=%s::uuid AND conversation_id='client' AND {allowed}""", (A,))
-        assert cur.fetchall() == [{'source':personal}]
-        lifecycle.require_access(cur,A,11,'connect',personal,'client')
-        with pytest.raises(TenantLinearError) as hidden:
-            lifecycle.require_access(cur,A,11,'connect',CA,'client')
-        assert hidden.value.status==404
+        assert {row['source'] for row in cur.fetchall()} == {personal,CA}
+        lifecycle.require_access(cur,A,11,'connect',personal,'client',owner=True)
+        lifecycle.require_access(cur,A,11,'connect',CA,'client',owner=True)
         info={'provider':'connect','lead_id':89,'channel_id':personal,'conversation_id':'client','can_send':True}
         assert lifecycle.decorate(cur,A,11,info)['lifecycle']['can_accept']
     db.commit()

@@ -120,7 +120,8 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
         _,_,dialog_policy=dialogs_access(cur,{'tenant_id':tenant,'telegram_id':actor},'dialogs')
         require_source(cur,tenant,dialog_policy,'connect',channel,'view')
         require_source(cur,tenant,dialog_policy,'connect',channel,'update')
-        require_access(cur,tenant,actor,'connect',channel,conversation,'view')
+        require_access(cur,tenant,actor,'connect',channel,conversation,'view',
+                       owner=dialog_policy.profile.get('role')=='owner')
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('support:' + tenant + ':' + channel + ':' + conversation,))
     event_key = str(event_key)
     if not event_key or len(event_key) > 500:
