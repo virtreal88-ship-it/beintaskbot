@@ -103,7 +103,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   search().blur();
 
   const tabs=()=>[...$('#operatorCompanyPanel .operator-client-panel-header').querySelectorAll('[role=tab]')];
-  for(const [lang,labels] of Object.entries({en:['Main','Tasks','Modules','Payment history'],ru:['Главная','Задачи','Модули','История платежей'],az:['Əsas','Tapşırıqlar','Modullar','Ödəniş tarixçəsi']})){
+  for(const [lang,labels] of Object.entries({en:['Main','Tasks','Modules','Payments'],ru:['Главная','Задачи','Модули','Платежи'],az:['Əsas','Tapşırıqlar','Modullar','Ödənişlər']})){
     w.tenantI18n.setLanguage(lang);
     assert.deepEqual(tabs().map(x=>x.textContent),labels);
   }

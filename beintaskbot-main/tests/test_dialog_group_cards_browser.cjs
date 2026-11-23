@@ -42,7 +42,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
       result={transfer:channel==='b'?{from_name:'Synthetic sender',to_name:'Synthetic recipient',at:'2026-11-16T09:11:22Z'}:null};
     }
     else if(url.includes('/dialogs/group-participants'))result={status:'available',phones:[],total:0};
-    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},dialog_company_name:i===0?'Long <b>stored</b> company name '.repeat(10):undefined,unread_count:7,last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
+    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},dialog_company_name:i===0?'Long <b>stored</b> company name '.repeat(10):undefined,unread_count:7,last_message_preview:'Latest message',last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
     else if(!url.includes('/dialogs/read'))throw Error('Unexpected request '+url);
     return{ok:true,status:200,json:async()=>({success:true,result})};};
   });
@@ -82,6 +82,22 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,sameLine:true,right:true,sameInk:true,noGrowth:true});
   assert.equal(await page.locator('#operatorRows .operator-row-status').count(),0);
   assert(await companyCard.locator('.operator-row-company').evaluate(n=>n.parentElement.nextElementSibling.matches('.operator-row-preview')),'company precedes the preview');
+  const sourceOnly=page.locator('.operator-row').filter({has:page.locator('.operator-row-context-with-preview')});
+  assert.equal(await sourceOnly.count(),2);
+  for(const row of await sourceOnly.all()){
+   const g=await row.evaluate(el=>{
+    const rect=selector=>el.querySelector(selector).getBoundingClientRect();
+    return {preview:rect('.operator-row-preview').toJSON(),source:rect('.operator-row-source').toJSON(),
+     context:rect('.operator-row-context').toJSON(),time:rect('.operator-row-time').toJSON()};
+   });
+   assert(g.preview.right<=g.source.left&&Math.abs(g.source.right-g.context.right)<1,'preview fills the unused left slot without moving the source from the right');
+   assert(Math.abs((g.preview.top+g.preview.bottom)-(g.source.top+g.source.bottom))<2,'no blank row above a preview without a company');
+   assert(g.time.width>0,'right-side timestamp stays visible');
+  }
+  const group=page.locator('.operator-row').first();
+  assert.equal(await group.locator('.operator-row-sub').isVisible(),false,'missing group phone does not take space');
+  assert.equal(await group.locator('.operator-row-preview').count(),0,'missing preview does not take space');
+  assert.equal(await group.locator('.operator-row-source').isVisible(),true,'keep a row if it contains a source on the right');
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));

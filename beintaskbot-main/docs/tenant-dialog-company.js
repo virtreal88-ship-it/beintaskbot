@@ -75,9 +75,9 @@
     if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
   }
   const sectionNames={
-    ru:['Главная','Задачи','Модули','История платежей'],
-    az:['Əsas','Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
-    en:['Main','Tasks','Modules','Payment history']
+    ru:['Главная','Задачи','Модули','Платежи'],
+    az:['Əsas','Tapşırıqlar','Modullar','Ödənişlər'],
+    en:['Main','Tasks','Modules','Payments']
   };
   const tabs=[['main',null],['tasks','company_tasks'],['modules','company_modules'],['history','company_history']];
   function attachTabs(s){
@@ -148,12 +148,12 @@
   const PAYMENT_PAGE_SIZE=20;
   const paymentLabels={
     ru:{title:'История операций',hint:'Операции по балансу компании',type:'Тип',amount:'Сумма',credit:'Кредит',expense:'Ежедневный расход'},
-    az:{title:'Əməliyyat tarixçəsi',hint:'Şirkət balansı üzrə əməliyyatlar',type:'Növ',amount:'Məbləğ',credit:'Kredit',expense:'Gündəlik xərc'},
+    az:{title:'Əməliyyat tarixçəsi',hint:'Şirkət balansı üzrə əməliyyatlar',type:'Növ',amount:'Məbləğ',credit:'Kredit',expense:'günlük xərc'},
     en:{title:'Transaction history',hint:'Company balance transactions',type:'Type',amount:'Amount',credit:'Credit',expense:'Daily expense'}
   };
   const localeFor=lang=>({ru:'ru-RU',az:'az-AZ',en:'en-US'}[lang]||'az-AZ');
   const paymentKinds=new Map([['credit','credit'],['kredit','credit'],['кредит','credit'],
-    ['daily expense','expense'],['gündəlik xərc','expense'],['ежедневный расход','expense']]);
+    ['daily charge','expense'],['daily expense','expense'],['günlük xərc','expense'],['gündəlik xərc','expense'],['ежедневный расход','expense']]);
   const paymentKind=value=>paymentKinds.get(value.trim().toLowerCase().replace(/[\s_-]+/g,' '))||'';
   const supportedCurrencies=typeof Intl.supportedValuesOf==='function'
     ?new Set(Intl.supportedValuesOf('currency')):null;
@@ -714,10 +714,10 @@
     [data-operator-dialog-company]{min-width:0;color:var(--ink)}
     #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
     #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
-    #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:8px}
+    #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
     #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
     #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
-    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:5px;min-height:40px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
+    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
     #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
     #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
     #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:.8rem;overflow-wrap:anywhere}

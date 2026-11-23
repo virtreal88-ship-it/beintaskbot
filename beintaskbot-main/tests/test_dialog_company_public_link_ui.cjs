@@ -34,7 +34,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
       sectionReads.push(data);
       const rows=data.action==='company_history'?[
         ['2026-11-03T23:59:00-12:00','+1234.50 USD','credit'],
-        ['2026-11-04','-2.00','Daily Expense'],
+        ['2026-11-04','-2.00','daily_charge'],
         ['not-a-date','amount unknown','<b>Custom payment</b>'],
         ['2026-02-30','12.50','credit','EUR'],
         ['2026-11-06','1,200 AZN','credit','AZN'],
@@ -95,7 +95,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   for(const [lang,locale,labels] of [
     ['ru','ru-RU',['История операций','Тип','Сумма','Кредит','Ежедневный расход']],
     ['en','en-US',['Transaction history','Type','Amount','Credit','Daily expense']],
-    ['az','az-AZ',['Əməliyyat tarixçəsi','Növ','Məbləğ','Kredit','Gündəlik xərc']]
+    ['az','az-AZ',['Əməliyyat tarixçəsi','Növ','Məbləğ','Kredit','günlük xərc']]
   ]){
     w.tenantI18n.language=lang;d.dispatchEvent(new w.Event('tenant-language'));
     assert.equal(pay.querySelector('h3').textContent,labels[0]);

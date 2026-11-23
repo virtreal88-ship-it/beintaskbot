@@ -124,15 +124,19 @@ const beta='@verified_account';
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
   assert(!await card.isVisible());
   const companyHeader=panel.locator('.operator-client-panel-header');
-  assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payment history']);
+  assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payments']);
   assert.equal(await panel.locator('#operatorCompanyPanelClose').count(),0);
   assert.equal(await panel.getAttribute('aria-label'),'Company details');
   assert.equal(await companyHeader.getByRole('tablist',{name:'Company',exact:true}).count(),1);
   assert.equal(await companyHeader.getByRole('heading').count(),0,'remove only the visual company title');
   assert(await companyHeader.evaluate(el=>{
     const h=el.getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
-    return h.height<=60&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
-  }),'four tabs fit the same existing header strip');
+    return h.height<=42&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
+  }),'four tabs fit a header no taller than 42px');
+  for(const tab of await companyHeader.getByRole('tab').all()){
+    assert.deepEqual(await tab.evaluate(corners),['0px','0px','0px','0px'],'tab edges and the active underline are square');
+    assert((await tab.boundingBox()).height>=32,'compact tabs retain a usable click target');
+  }
   assert.deepEqual((await panel.evaluate(corners)).slice(2),['0px','0px']);
   assert.deepEqual(await pane.evaluate(corners),[...originalPaneCorners.slice(0,3),'0px'],'the pane must not clip the lower right corner');
   assert(await toggle.evaluate(el=>!el.closest('[inert]')),'the original-slot toggle remains active');
@@ -181,7 +185,7 @@ const beta='@verified_account';
   assert.equal(await taskModal.locator('.operator-company-action-grid').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width<=600?1:3);
   const taskWidth=(await taskModal.boundingBox()).width;
   await taskModal.getByRole('button',{name:'Cancel',exact:true}).click();
-  await companyHeader.getByRole('tab',{name:'Payment history',exact:true}).click();
+  await companyHeader.getByRole('tab',{name:'Payments',exact:true}).click();
   const paymentTable=panel.getByRole('table',{name:'Transaction history',exact:true});
   await paymentTable.waitFor();
   assert.deepEqual(await paymentTable.getByRole('columnheader').allTextContents(),['Type','Amount']);
