@@ -1,4 +1,5 @@
 """Read projection over existing conversations, AI state, tickets and cached messages. No new inbox tables."""
+import json
 import re
 import uuid
 from tenant_ai_agents_schema import ensure_schema
@@ -652,15 +653,50 @@ def _agent_scope_available(item):
 _HANDOFF_REASONS={'human_handoff','operator_handoff','trigger_reply_sent_then_handoff','customer_requested_manager','connect_human_takeover','verified_employee_reply'}
 
 
-def _attach_verified_phone(cur,tenant,dialog):
-    """Read a single channel-scoped verified phone alias; never infer LID digits."""
-    if dialog.get('phone') or dialog.get('customer_kind')=='group' or dialog.get('conversation_kind')=='group':return
+def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
+    """Batch only authorized, exact direct routes; LID digits are not phones."""
+    from tenant_connect_direct_identity import direct_identity, phone_jid
+    pending={(str(d['channel_id']),d['conversation_id']):d for d in dialogs
+             if d.get('provider','connect')=='connect'
+             and d.get('customer_kind')!='group' and d.get('conversation_kind')!='group'
+             and direct_identity(d.get('conversation_id'))}
+    if check_conflicts:
+        lids=[{'channel':ch,'conversation':conv} for ch,conv in pending if conv.endswith('@lid')]
+        if lids:
+            cur.execute("SELECT to_regclass('public.saas_connect_identity_conflicts') AS relation")
+            if (cur.fetchone() or {}).get('relation'):
+                cur.execute('''SELECT r.channel::text AS channel,r.conversation
+                  FROM jsonb_to_recordset(%s::jsonb) AS r(channel uuid,conversation text)
+                  JOIN saas_connect_identity_conflicts i ON i.tenant_id=%s::uuid
+                   AND i.connect_channel_id=r.channel AND i.conversation_id=r.conversation''',
+                  (json.dumps(lids),tenant))
+                for row in cur.fetchall():
+                    dialog=pending.pop((row['channel'],row['conversation']),None)
+                    if dialog is not None:
+                        dialog.update(phone='',contact_identity_conflict=True)
+    pending={key:d for key,d in pending.items() if not d.get('phone')}
+    if not pending:return
+    phones={key:{phone_jid(key[1])}-{''} for key in pending}
     cur.execute("SELECT to_regclass('public.saas_connect_direct_identities') AS relation")
-    if not (cur.fetchone() or {}).get('relation'):return
-    from tenant_connect_direct_identity import verified_phone_jid
-    jid=verified_phone_jid(cur,tenant,dialog['channel_id'],dialog['conversation_id'])
-    match=re.fullmatch(r'([1-9][0-9]{6,14})@s\.whatsapp\.net',jid)
-    if match:dialog['phone']='+'+match[1]
+    if (cur.fetchone() or {}).get('relation'):
+        cur.execute('''SELECT i.connect_channel_id::text AS channel,i.canonical_conversation_id AS conversation,i.identity_key
+          FROM jsonb_to_recordset(%s::jsonb) AS r(channel uuid,conversation text)
+          JOIN saas_connect_direct_identities i ON i.tenant_id=%s::uuid
+           AND i.connect_channel_id=r.channel AND i.canonical_conversation_id=r.conversation''',
+          (json.dumps([{'channel':ch,'conversation':conv} for ch,conv in pending]),tenant))
+        for row in cur.fetchall():
+            phone=phone_jid(row['identity_key'])
+            if phone:phones[(row['channel'],row['conversation'])].add(phone)
+    for key,candidates in phones.items():
+        if len(candidates)==1:
+            match=re.fullmatch(r'([1-9][0-9]{6,14})@s\.whatsapp\.net',next(iter(candidates)))
+            if match:pending[key]['phone']='+'+match[1]
+        elif check_conflicts and len(candidates)>1 and key[1].endswith('@lid'):
+            pending[key]['contact_identity_conflict']=True
+
+
+def _attach_verified_phone(cur,tenant,dialog):
+    _attach_verified_phones(cur,tenant,[dialog])
 
 
 def decorate(row):
@@ -1182,6 +1218,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 company_cards = rows[:50]
                 if policy.profile.get('role') != 'owner':
                     company_cards = [r for r in company_cards if not r.get('archive_read_only')]
+                _attach_verified_phones(cur,tenant,company_cards,check_conflicts=True)
+                from tenant_contact_phone import attach_list_source_revisions
+                attach_list_source_revisions(cur,tenant,company_cards)
                 attach_list_company_names(cur,tenant,company_cards)
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,

@@ -159,15 +159,16 @@ def _retained_alias(db, identity, lead, age, names, *, active=True, kind='contac
 def _application_labels(list_dialog, open_dialog, message):
     source = (Path(__file__).resolve().parents[1] / 'docs/tenant-operator-dialogs.js').read_text()
     declarations = []
-    for signature in ('const safeName=', 'function messageAuthor('):
+    for signature in ('const safeName=', 'const isDialogGroup=', 'function messageAuthor('):
         declarations.append(next(line.strip() for line in source.splitlines() if line.strip().startswith(signature)))
-    for signature in ('  const hasContactName=', '  const dialogTitle='):
+    for signature in ('  const usableDialogName=', '  const hasContactName=', '  const dialogTitle='):
         start = source.index(signature)
         end = source.index('\n  };', start) + len('\n  };')
         declarations.append(source[start:end])
     script = '\n'.join(declarations) + """
         const t=key=>({whatsappContact:'Unknown contact',customer:'Customer'})[key];
         const contactDetails=()=>null;
+        const displayDialogPhone=row=>row.phone||'';
         const [row,header,message]=JSON.parse(require('node:fs').readFileSync(0,'utf8'));
         console.log(JSON.stringify([dialogTitle(row),dialogTitle(header),messageAuthor(message)]));
     """
@@ -218,3 +219,48 @@ def test_legacy_direct_aliases_still_resolve_but_never_use_group_names(scoped):
     scoped.commit()
     for profile in (PROFILE, EMPLOYEE):
         assert _listed(profile)['customer_name'] == _open(profile)['customer_name'] == 'Legacy direct display'
+
+
+@pytest.mark.parametrize("name", ["@example_fixture", "Synthetic sender"])
+def test_first_list_shows_exact_verified_phone_and_inbound_name_without_opening(scoped,name):
+    scoped.execute("""UPDATE saas_connect_conversations SET contact_name=%s
+        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s""",(name,A,CA,JID))
+    scoped.execute("""CREATE TABLE IF NOT EXISTS saas_connect_direct_identities
+        (tenant_id UUID,connect_channel_id UUID,identity_key TEXT,canonical_conversation_id TEXT)""")
+    for tenant,channel,digits in ((A,CB,'441100000111'),(B,CB,'441100000222')):
+        scoped.execute("""INSERT INTO saas_connect_direct_identities
+          (tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES (%s,%s,%s,%s)""",
+          (tenant,channel,digits+'@s.whatsapp.net',JID))
+    scoped.commit()
+    first=_listed(EMPLOYEE)
+    assert first['customer_name']==name and not first.get('phone')
+    for jid in ('441100000333@s.whatsapp.net','441100000333@c.us'):
+        scoped.execute("""INSERT INTO saas_connect_direct_identities
+          (tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES (%s,%s,%s,%s)""",
+          (A,CA,jid,JID))
+    scoped.commit()
+    assert _listed(EMPLOYEE)['phone']=='+441100000333'
+
+    scoped.execute("""INSERT INTO saas_connect_direct_identities
+      (tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES (%s,%s,%s,%s)""",
+      (A,CA,'441100000444@s.whatsapp.net',JID))
+    scoped.commit()
+    assert not _listed(EMPLOYEE).get('phone'), 'distinct aliases are ambiguous'
+    scoped.execute("""UPDATE saas_connect_conversations SET phone='441100000555'
+        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s""",(A,CA,JID))
+    scoped.commit()
+    assert _listed(EMPLOYEE)['phone']=='441100000555', 'a stored phone is not overwritten'
+    scoped.execute("""INSERT INTO saas_connect_identity_conflicts
+      (tenant_id,connect_channel_id,conversation_id,event_id,evidence) VALUES (%s,%s,%s,'fixture','{}')""",
+      (A,CA,JID))
+    try:
+        scoped.commit()
+        listed=_listed(EMPLOYEE)
+        assert listed['contact_identity_conflict'] and not listed['phone']
+        assert listed['customer_name']==name
+        assert _open(EMPLOYEE)['phone']=='441100000555', 'history projection remains unchanged'
+    finally:
+        scoped.rollback()
+        scoped.execute("""DELETE FROM saas_connect_identity_conflicts
+          WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s""",(A,CA,JID))
+        scoped.commit()

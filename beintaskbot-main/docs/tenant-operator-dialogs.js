@@ -756,12 +756,12 @@
       send.onclick=()=>submitAttempt();retry.onclick=()=>retryId?submitAttempt(retryId):undefined;
     }catch(error){if(modal.isConnected)status.textContent=error.message||trainingText('failed');}
   }
-  async function rawApi(url,options={}){
+  async function rawApi(url,options={}, {optionalScopedRead=false}={}){
     const version=epoch,who=identity(member);
     const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:{...(options.body?{'Content-Type':'application/json'}:{}),...((options.method||'GET')==='GET'?{'X-Tenant-Id':String(member?.tenant_id||''),'X-User-Id':String(member?.telegram_id||'')}:{ }),...options.headers}});
     const payload=await response.json();
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
-    if(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true)){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
+    if(!optionalScopedRead&&(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true))){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
     if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
     if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
     return payload;
@@ -991,53 +991,156 @@
       const status=$('operatorChatError');if(status)status.textContent=error.message;
     }
   }
-  const safeName=row=>{const value=String(row.customer_name||'').trim();return value&&!/@(?:s\.whatsapp\.net|g\.us|lid)$/i.test(value)?value:'';};
+  const usableDialogName=(value,route)=>{
+    const name=typeof value==='string'?value.trim():'';
+    const lid=route?.provider==='connect'&&String(route.conversation_id).match(/^([1-9][0-9]{5,21})@lid$/);
+    if(lid&&/^[+0-9(). -]+$/.test(name)&&name.replace(/\D/g,'')===lid[1])return '';
+    return name&&name.length<=256&&!/@(?:s\.whatsapp\.net|c\.us|g\.us|lid)$/i.test(name)?name:'';
+  };
+  const safeName=row=>usableDialogName(row.customer_name,row);
   const verifiedDialogPhone=row=>{const phone=String(row?.phone||'').trim(),digits=phone.replace(/\D/g,'');return /^\+?[0-9 ()-]+$/.test(phone)&&digits.length>=7&&digits.length<=15?phone:'';};
   // Device contact details are presentation only and never change the route.
   const contactPhoneLookups=new Map();
-  const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}`;
-  const contactDetails=route=>{const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&Date.now()-cached.at<=30000?cached:null;};
+  const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
+  const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
   const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
+  const isDialogGroup=route=>route.customer_kind==='group'||route.conversation_kind==='group';
   const hasContactName=route=>{
     const name=safeName(route);
-    return Boolean(route.manual_display_name?.trim()||(name&&name!==t('whatsappContact')&&!/^[+0-9(). -]+$/.test(name)));
+    return Boolean(usableDialogName(route.manual_display_name,route)||(name&&!['whatsapp contact','контакт whatsapp','whatsapp kontaktı'].includes(name.toLowerCase())&&!/^[+0-9(). -]+$/.test(name)));
   };
-  function hydrateContactDetails(route,head){
-    if(route.provider!=='connect'||(verifiedDialogPhone(route)&&hasContactName(route))||route.customer_kind==='group'||route.conversation_kind==='group'||! /^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||''))return;
-    const key=contactPhoneKey(route),version=epoch,revision=openRevision,owner=identity(member);
-    let entry=contactPhoneLookups.get(key);
-    if(!entry||Date.now()-entry.at>30000){
-      entry={at:Date.now(),phone:'',name:''};
-      if(contactPhoneLookups.size>=64)contactPhoneLookups.delete(contactPhoneLookups.keys().next().value);
-      contactPhoneLookups.set(key,entry);
-      entry.flight=api('dialogs/contact-phone?'+historyQuery(route)).then(result=>{
-        if(version!==epoch||owner!==identity(member)||result?.display_only!==true||result.status!=='available'||!sameDialog(result,route)||Number(result.lead_id)!==Number(route.lead_id))return;
-        if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
-        if(typeof result.display_name==='string'&&result.display_name.length<=256)entry.name=result.display_name;
-      }).catch(()=>{}); // Optional metadata failure must not close the chat.
+  const canLookupContact=route=>route?.provider==='connect'&&!isDialogGroup(route)
+    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment&&!route.contact_identity_conflict
+    &&!(verifiedDialogPhone(route)&&hasContactName(route))
+    &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
+  const canLookupRowContact=route=>canLookupContact(route)&&/^[a-f0-9]{64}$/.test(route.contact_source_revision||'');
+  const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');
+  function lookupContactDetails(route,fromList=false){
+    let entry=contactDetails(route);
+    if(entry){if(!fromList)entry.fromList=false;return entry.flight;}
+    const key=contactPhoneKey(route),owner=identity(member);
+    entry={retryAt:0,done:false,phone:'',name:'',fromList,controller:new AbortController()};
+    contactPhoneLookups.delete(key);
+    if(contactPhoneLookups.size>=64){
+      for(const [old,cached] of contactPhoneLookups)if(cached.done){contactPhoneLookups.delete(old);break;}
     }
-    entry.flight.then(()=>{
-      if(version!==epoch||revision!==openRevision||owner!==identity(member)||!hasRight('dialogs')||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
+    contactPhoneLookups.set(key,entry);
+    const query=historyQuery(route);
+    if(route.contact_source_revision)query.set('contact_source_revision',route.contact_source_revision);
+    entry.flight=rawApi(endpoint+'dialogs/contact-phone?'+query,{signal:entry.controller.signal}, {optionalScopedRead:true}).then(({result})=>{
+      if(entry.controller.signal.aborted||key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||result.status!=='available'||result.provider!=='connect'||!sameDialog(result,route))return;
+      if(route.contact_source_revision&&result.contact_source_revision!==route.contact_source_revision)return;
+      if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
+      entry.name=usableDialogName(result.display_name,route);
+    }).catch(()=>{}).finally(()=>{
+      entry.retryAt=Date.now()+(fromList&&!entry.phone&&!entry.name?120000:30000);
+      entry.done=true;
+    });
+    return entry.flight;
+  }
+  function abortContactLookup(key,entry){
+    if(entry?.done||!entry)return;
+    if(contactPhoneLookups.get(key)===entry)contactPhoneLookups.delete(key);
+    entry.controller.abort();
+  }
+  function clearContactLookups(){
+    stopRowContacts();
+    for(const [key,entry] of contactPhoneLookups)abortContactLookup(key,entry);
+    contactPhoneLookups.clear();
+  }
+  function updateRowContact(route){
+    if(!inDialogsView())return;
+    const index=rows.findIndex(row=>sameDialog(row,route)&&canLookupContact(row)&&contactPhoneKey(row)===contactPhoneKey(route));
+    if(index<0)return;
+    const card=$('operatorRows')?.querySelector(`[data-open-operator="${index}"]`);
+    const title=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
+    if(title)title.textContent=dialogTitle(rows[index]);
+    if(subtitle)subtitle.textContent=dialogRowSubtitle(rows[index]);
+  }
+  let contactRowObserver;
+  const contactRowQueue=new Map(),contactRowActive=new Map(),contactRowStarts=[];
+  const rowContactView=()=>!document.hidden&&inDialogsView()
+    &&!(window.matchMedia?.('(max-width:900px)')?.matches&&$('operatorDialogs')?.dataset.conversationOpen==='true');
+  const rowContactVisible=button=>{
+    if(!button.isConnected||!rowContactView()||!button.getClientRects().length)return false;
+    const rect=button.getBoundingClientRect();
+    if(!(rect.bottom>0&&rect.right>0&&rect.top<window.innerHeight&&rect.left<window.innerWidth))return false;
+    // The desktop list scrolls internally; the mobile wrapper can use display:contents.
+    // Fall back to the rows container when the wrapper has no own box.
+    const scroller=operatorListScroller(),clip=(scroller?.getClientRects().length?scroller:$('operatorRows'))?.getBoundingClientRect();
+    return !clip||rect.bottom>clip.top&&rect.right>clip.left&&rect.top<clip.bottom&&rect.left<clip.right;
+  };
+  function cancelRowContact(button){
+    const active=contactRowActive.get(button);
+    if(active?.entry?.fromList)abortContactLookup(active.key,active.entry);
+  }
+  function stopRowContacts(){
+    contactRowObserver?.disconnect();
+    contactRowObserver=null;
+    contactRowQueue.clear();
+    for(const button of contactRowActive.keys())cancelRowContact(button);
+  }
+  function pumpRowContacts(){
+    const now=Date.now();
+    while(contactRowStarts.length&&now-contactRowStarts[0]>=15000)contactRowStarts.shift();
+    while(contactRowActive.size<2&&contactRowQueue.size&&contactRowStarts.length<8){
+      const [button,route]=contactRowQueue.entries().next().value;
+      contactRowQueue.delete(button);
+      if(!rowContactVisible(button)||!sameDialog(rows[Number(button.dataset.openOperator)],route)||contactPhoneKey(rows[Number(button.dataset.openOperator)])!==contactPhoneKey(route)||contactDetails(route))continue;
+      const key=contactPhoneKey(route);
+      contactRowStarts.push(now);
+      const flight=lookupContactDetails(route,true),entry=contactDetails(route);
+      contactRowActive.set(button,{key,entry});
+      flight.then(()=>{
+        if(!entry.controller.signal.aborted&&key===contactPhoneKey(route)&&rowContactVisible(button))updateRowContact(route);
+      }).finally(()=>{
+        contactRowActive.delete(button);
+        pumpRowContacts();
+      });
+    }
+  }
+  function hydrateRowContacts(){
+    // Preserve an already-started exact-route lookup when opening that conversation.
+    const selected=currentDialog&&contactDetails(currentDialog);
+    if(selected&&!selected.done)selected.fromList=false;
+    stopRowContacts();
+    if(!rowContactView()||!('IntersectionObserver' in window))return;
+    const observer=new IntersectionObserver(entries=>{
+      if(contactRowObserver!==observer)return;
+      for(const entry of entries){
+        const button=entry.target,row=rows[Number(button.dataset.openOperator)];
+        if(entry.isIntersecting&&rowContactVisible(button)&&canLookupRowContact(row)&&!contactDetails(row))contactRowQueue.set(button,row);
+        else if(!entry.isIntersecting){contactRowQueue.delete(button);cancelRowContact(button);}
+      }
+      pumpRowContacts();
+    });
+    contactRowObserver=observer;
+    for(const button of $('operatorRows').querySelectorAll('[data-open-operator]')){
+      const row=rows[Number(button.dataset.openOperator)];
+      if(canLookupRowContact(row)&&!contactDetails(row))observer.observe(button);
+    }
+  }
+  function hydrateContactDetails(route,head){
+    if(!canLookupContact(route))return;
+    const key=contactPhoneKey(route),revision=openRevision;
+    lookupContactDetails(route).then(()=>{
+      if(key!==contactPhoneKey(route)||revision!==openRevision||!inDialogsView()||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
       const phone=displayDialogPhone(currentDialog)||phoneUnavailable();
       for(const label of [head.querySelector('[data-header-phone]'),$('operatorClientCard')?.querySelector('[data-panel-phone]')])if(label)label.textContent=phone;
       const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
       const panelName=$('operatorClientCard')?.querySelector('[data-panel-name]');if(panelName)panelName.textContent=dialogTitle(currentDialog);
-      const index=rows.findIndex(row=>sameDialog(row,route)&&Number(row.lead_id)===Number(route.lead_id));
-      if(index>=0){
-        const card=$('operatorRows').querySelector(`[data-open-operator="${index}"]`);
-        const cardTitle=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
-        if(cardTitle)cardTitle.textContent=dialogTitle(rows[index]);
-        if(subtitle)subtitle.textContent=dialogIdentity(rows[index]);
-      }
+      updateRowContact(route);
     });
   }
   const phoneUnavailable=()=>({ru:'Номер не подтверждён',az:'Nömrə təsdiqlənməyib',en:'Phone not confirmed'}[i18n.language]||'Phone not confirmed');
   const dialogTitle=row=>{
     const known=safeName(row);
-    if(row.customer_kind==='group')return known||t('whatsappGroup');
-    return (hasContactName(row)?known:contactDetails(row)?.name||known)||row.phone||t('whatsappContact');
+    if(isDialogGroup(row))return known||t('whatsappGroup');
+    if(row.provider!=='connect')return known||row.phone||t('whatsappContact');
+    return usableDialogName(row.manual_display_name,row)||(hasContactName(row)?known:'')||contactDetails(row)?.name||displayDialogPhone(row)||t('whatsappContact');
   };
-  const dialogIdentity=row=>row.customer_kind==='group'?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):displayDialogPhone(row);
+  const dialogIdentity=row=>isDialogGroup(row)?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):displayDialogPhone(row);
+  const dialogRowSubtitle=row=>{const identity=dialogIdentity(row);return !isDialogGroup(row)&&identity===dialogTitle(row)?'':identity;};
   const avatarUrl=row=>'/api/platform/ai/dialogs/avatar?'+new URLSearchParams({provider:row.provider||'connect',lead_id:String(row.lead_id||''),channel_id:String(row.channel_id||''),conversation_id:String(row.conversation_id||'')});
   const avatarAttempts=new Set(),avatarReady=new Set(),avatarQueue=[];let avatarActive=0,avatarObserver;
   const avatarMarkup=(row,header=false)=>{
@@ -1079,7 +1182,7 @@
       const selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
       const unread=Math.max(0,Number(row.unread_count)||0);
-      const identityText=dialogIdentity(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
+      const identityText=dialogRowSubtitle(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
       const lifecycle=cardLifecycleBadge(row),previewMarkup=preview?`<span class="operator-row-preview" data-user-content>${esc(preview)}</span>`:'';
       const shareSourceLine=!companyName&&Boolean(sourceName&&previewMarkup);
       return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}">
@@ -1098,6 +1201,7 @@
       </button>`;
     }).join('')||`<p class="operator-conversation-placeholder">${t('empty')}</p>`;
     hydrateAvatars();
+    hydrateRowContacts();
     window.tenantSharedReminders?.markRows(rows.map(row=>row.group_sources?.length?activeGroupSources(row):[row]));
     renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||(ownerOverviewMode()&&sources.find(source=>sameDialog(source,row)))||sources[0]||row,false,'',{userOpened:true});} );
   }
@@ -2449,15 +2553,16 @@
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
-if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();contactPhoneLookups.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
+if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();clearContactLookups();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
+  document.addEventListener('tenant-auth-pending',stopRowContacts);
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{stopRowContacts();if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{
     // A list issued before the fresh profile may still be in flight.
     listFlight=null;
@@ -2467,6 +2572,7 @@ if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPref
     scheduleAutoRefresh();
   });
   document.addEventListener('visibilitychange',()=>{
+    if($('operatorRows'))hydrateRowContacts();
     if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}
     else if(!window.tenantRequestCoordinator){refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}
   });
