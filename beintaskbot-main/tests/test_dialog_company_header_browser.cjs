@@ -44,7 +44,8 @@ const beta='@verified_account';
        window.profilePosts.push(data.channel_id);
        return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0,actions:{task:true,credit:true},action_binding:'b'.repeat(64),task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}}})};
       }
-      if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[]}})};
+      if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{
+        state:'available',rows:data.action==='company_history'?[['2026-11-03','4.50 AZN','credit'],['2026-11-02','-2.00','daily_expense']]:[]}})};
       if(data.company_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
       return {ok:true,json:async()=>({success:true,companies:[{id:'existing',name:'Test company'}]})};
      }
@@ -105,14 +106,19 @@ const beta='@verified_account';
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
   assert(!await panel.isVisible());
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),[]);
+  const pane=page.locator('#operatorConversationPane');
+  const corners=el=>{const c=getComputedStyle(el);return [c.borderTopLeftRadius,c.borderTopRightRadius,c.borderBottomLeftRadius,c.borderBottomRightRadius];};
+  const originalPaneCorners=await pane.evaluate(corners);
   const toggle=page.locator('#operatorCompanyPanelOpen');
-  await toggle.scrollIntoViewIfNeeded();
-  assert(await toggle.evaluate(el=>{
+  const hitTarget=el=>{
     const a=el.getBoundingClientRect();
-    const avatar=document.querySelector('#operatorClientCardOpen').getBoundingClientRect();
     const target=document.elementFromPoint(a.left+a.width/2,a.top+a.height/2);
-    return a.width>=34&&a.height>=34&&a.left>=avatar.right&&el.contains(target);
-  }),'company toggle keeps its own real hit target beside the avatar');
+    return a.width>=34&&a.height>=34&&el.contains(target);
+  };
+  assert.equal(await page.locator('#operatorConversationHeader #operatorCompanyPanelOpen').count(),0);
+  assert.equal(await page.locator('.operator-history-tools #operatorCompanyPanelOpen').count(),1);
+  await toggle.scrollIntoViewIfNeeded();
+  assert(await toggle.evaluate(hitTarget),'closed sidebar has a real toggle in the previous history toolbar');
   await toggle.click();
   await panel.locator('[data-company-profile]').getByText('+994501234567',{exact:true}).waitFor();
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
@@ -120,11 +126,21 @@ const beta='@verified_account';
   const companyHeader=panel.locator('.operator-client-panel-header');
   assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payment history']);
   assert.equal(await panel.locator('#operatorCompanyPanelClose').count(),0);
+  assert.equal(await panel.getAttribute('aria-label'),'Company details');
+  assert.equal(await companyHeader.getByRole('tablist',{name:'Company',exact:true}).count(),1);
+  assert.equal(await companyHeader.getByRole('heading').count(),0,'remove only the visual company title');
   assert(await companyHeader.evaluate(el=>{
-    const h=el.getBoundingClientRect(),title=el.querySelector('h2').getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
-    return h.height<=60&&title.top>=h.top&&title.bottom<=h.bottom&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
+    const h=el.getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
+    return h.height<=60&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
   }),'four tabs fit the same existing header strip');
-  assert(await page.locator('#operatorCompanyPanelOpen').evaluate(el=>!el.closest('[inert]')),'header toggle can close the mobile panel');
+  assert.deepEqual((await panel.evaluate(corners)).slice(2),['0px','0px']);
+  assert.deepEqual(await pane.evaluate(corners),[...originalPaneCorners.slice(0,3),'0px'],'the pane must not clip the lower right corner');
+  assert(await toggle.evaluate(el=>!el.closest('[inert]')),'the original-slot toggle remains active');
+  assert(await toggle.evaluate(hitTarget),'the open panel does not intercept the toggle');
+  if(width<=900){
+    assert(await panel.evaluate(el=>el.getBoundingClientRect().top>=document.querySelector('.operator-history-tools').getBoundingClientRect().bottom));
+    assert(await page.locator('#chatRows').evaluate(el=>el.inert),'only the content behind the mobile panel becomes inert');
+  }
   await page.waitForFunction(()=>window.savedOpen===true);
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
@@ -134,14 +150,62 @@ const beta='@verified_account';
   const taskModal=page.getByRole('dialog',{name:'New task',exact:true});
   await taskModal.waitFor();
   assert.equal(await taskModal.locator('input[readonly]').inputValue(),'verified-account');
-  assert(await taskModal.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}));
+  assert(await taskModal.evaluate(el=>{
+    const r=el.getBoundingClientRect();
+    return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&
+      Math.abs((r.left+r.right)/2-innerWidth/2)<=1&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<=1;
+  }),'task modal stays centered horizontally and vertically');
+  const modalForm=taskModal.locator('form');
+  const previousTheme=await page.evaluate(()=>document.documentElement.getAttribute('data-app-theme'));
+  const borders=[];
+  for(const theme of ['light','dark']){
+    await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
+    const fields=await modalForm.evaluate(el=>{
+      el.querySelector('button').focus();
+      return [el.querySelector('input:not([readonly])'),el.querySelector('textarea')].map(field=>{
+      const c=getComputedStyle(field);
+      return [c.borderTopWidth,c.borderTopStyle,c.borderTopColor,c.backgroundColor,c.borderTopLeftRadius];
+      });
+    });
+    assert.deepEqual(fields[0],fields[1],'description border matches other task fields');
+    assert(fields[1][0]==='1px'&&fields[1][1]==='solid'&&fields[1][2]!==fields[1][3]&&fields[1][4]==='9px');
+    const focus=await modalForm.locator('textarea').evaluate(field=>{
+      field.focus();const c=getComputedStyle(field);
+      return [c.borderTopWidth,c.borderTopColor,c.outlineWidth,c.boxShadow];
+    });
+    assert(focus[0]==='1px'&&focus[1]!==fields[1][2]&&parseFloat(focus[2])<=1&&focus[3]==='none','task focus is a restrained border cue');
+    borders.push(fields[1][2]);
+  }
+  assert.notEqual(...borders,'task border follows light and dark theme');
+  await page.evaluate(theme=>{if(theme===null)delete document.documentElement.dataset.appTheme;else document.documentElement.dataset.appTheme=theme;},previousTheme);
   assert.equal(await taskModal.locator('.operator-company-action-grid').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width<=600?1:3);
   const taskWidth=(await taskModal.boundingBox()).width;
   await taskModal.getByRole('button',{name:'Cancel',exact:true}).click();
   await companyHeader.getByRole('tab',{name:'Payment history',exact:true}).click();
+  const paymentTable=panel.getByRole('table',{name:'Transaction history',exact:true});
+  await paymentTable.waitFor();
+  assert.deepEqual(await paymentTable.getByRole('columnheader').allTextContents(),['Type','Amount']);
+  assert(await paymentTable.evaluate(el=>{
+    const table=el.getBoundingClientRect(),panel=el.closest('dialog').getBoundingClientRect();
+    return table.left>=panel.left&&table.right<=panel.right&&el.scrollWidth<=el.clientWidth;
+  }),'payment table fits the panel with no horizontal overflow');
   await panel.getByRole('button',{name:'Add credit',exact:true}).click();
   const creditModal=page.getByRole('dialog',{name:'Add credit',exact:true});await creditModal.waitFor();
   assert((await creditModal.boundingBox()).width<=Math.min(400,taskWidth));
+  assert(await creditModal.evaluate(el=>{
+    const r=el.getBoundingClientRect(),outer=getComputedStyle(el);
+    const thin=[...el.querySelectorAll('input')].every(field=>{
+      const c=getComputedStyle(field);return c.borderTopWidth==='1px'&&c.borderTopStyle==='solid';
+    });
+    return Math.abs((r.left+r.right)/2-innerWidth/2)<=1&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<=1&&
+      outer.borderTopWidth==='1px'&&thin;
+  }),'credit modal is centered and keeps thin borders');
+  assert(await creditModal.locator('input').last().evaluate(field=>{
+    field.blur();const idle=getComputedStyle(field).borderTopColor;
+    field.focus();const active=getComputedStyle(field);
+    return active.borderTopWidth==='1px'&&active.borderTopLeftRadius==='9px'&&active.borderTopColor!==idle&&
+      parseFloat(active.outlineWidth)<=1&&active.boxShadow==='none';
+  }),'credit reason focus keeps the rounded one-pixel cue');
   await creditModal.getByRole('button',{name:'Cancel',exact:true}).click();
   await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   const search=panel.locator('#operatorDialogueCompanySearch');
@@ -152,11 +216,13 @@ const beta='@verified_account';
   await search.pressSequentially('Test company');
   assert.equal(await search.inputValue(),'Test company');
   await panel.getByRole('button',{name:'Test company',exact:true}).waitFor();
-  await panel.locator('h2').click();
+  await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
   await page.locator('#operatorCompanyPanelOpen').click();
   await page.waitForFunction(()=>window.savedOpen===false);
   await panel.waitFor({state:'hidden'});
+  assert.deepEqual(await pane.evaluate(corners),originalPaneCorners,'closing restores the pane corners');
+  assert(!await page.locator('#chatRows').evaluate(el=>el.inert),'closing makes history interactive again');
   await page.locator('#operatorClientCardOpen').click();
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
   await caseField('status').waitFor();

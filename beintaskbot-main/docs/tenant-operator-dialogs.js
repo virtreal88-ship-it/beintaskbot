@@ -1451,19 +1451,17 @@
     #operatorDialogTitleText{font:inherit;text-align:start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;margin:0}
     .operator-history-tools{display:flex;align-items:center;gap:4px;flex:none;padding-inline-end:12px}
     .operator-history-tools button[hidden]{display:none}
-    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-conversation-head-copy{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;width:0}
-    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-row{min-width:0;max-width:100%;overflow:hidden}
-    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-main{min-width:0;max-width:100%}
-    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-secondary{position:relative;inset:auto;display:flex;flex-wrap:nowrap;align-items:center;min-width:0;z-index:1}
-    #operatorConversationHeader #operatorCompanyPanelOpen{display:grid;flex:none;place-items:center;margin:0;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
-    #operatorConversationHeader #operatorCompanyPanelOpen[hidden]{display:none!important}
-    #operatorConversationHeader #operatorCompanyPanelOpen:hover,#operatorConversationHeader #operatorCompanyPanelOpen[aria-expanded="true"]{color:var(--brand);background:var(--paper)}
+    .operator-history-tools #operatorCompanyPanelOpen{display:grid;flex:none;place-items:center;margin:4px 0 4px auto;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
+    .operator-history-tools #operatorCompanyPanelOpen[hidden]{display:none!important}
+    .operator-history-tools #operatorCompanyPanelOpen:hover,.operator-history-tools #operatorCompanyPanelOpen[aria-expanded="true"]{color:var(--brand);background:var(--paper)}
     :is(#operatorClientCard,#operatorCompanyPanel){box-sizing:border-box;min-height:0;padding:0;background:var(--card);color:var(--ink);overflow:hidden;text-align:start}
     :is(#operatorClientCard,#operatorCompanyPanel):not([open]){display:none!important}
     :is(#operatorClientCard,#operatorCompanyPanel)[open]{display:flex;flex-direction:column}
     #operatorClientCard{position:fixed;inset:auto;inset-inline-start:50%;top:var(--operator-client-center,50%);transform:translate(-50%,-50%);width:min(420px,calc(100% - 24px));max-height:min(640px,calc(var(--operator-client-viewport-height,100dvh) - 24px));margin:0;border:1px solid var(--line);border-radius:15px;box-shadow:0 14px 52px #0003}
     #operatorClientCard::backdrop{background:#13223455}
-    #operatorCompanyPanel{position:static;inset:auto;margin:0;width:clamp(255px,31%,355px);max-width:none;max-height:var(--operator-client-available-height,100dvh);flex:none;align-self:stretch;border:0;border-inline-start:1px solid var(--line)}
+    #operatorCompanyPanel{position:static;inset:auto;margin:0;width:clamp(255px,31%,355px);max-width:none;max-height:var(--operator-client-available-height,100dvh);flex:none;align-self:stretch;border:0;border-inline-start:1px solid var(--line);border-bottom-left-radius:0;border-bottom-right-radius:0}
+    /* The desktop pane clips its children to its own radius. Keep the other three corners unchanged. */
+    .operator-conversation-pane:has(#operatorConversationLayout > #operatorCompanyPanel[open]){border-bottom-right-radius:0}
     :is(#operatorClientCard,#operatorCompanyPanel) .operator-client-panel-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card)}
     :is(#operatorClientCard,#operatorCompanyPanel) h2{margin:0;font-size:1.05rem;line-height:1.3}
     #operatorCompanyPanel h2{font-size:.94rem}
@@ -1505,8 +1503,8 @@
     #operatorClientDeveloperStatus{font-size:12px;color:var(--muted)}
     #operatorClientCard [data-client-card-error]{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger,#ad2831)}
     @media(max-width:900px){
-      #operatorConversationHeader #operatorCompanyPanelOpen{width:44px;min-width:44px;height:44px;min-height:44px}
-      #operatorCompanyPanel{position:absolute;z-index:15;inset:0 0 0 auto;width:min(100%,380px);max-height:var(--operator-client-available-height,100dvh);box-shadow:-8px 0 22px #0002}
+      .operator-history-tools #operatorCompanyPanelOpen{width:44px;min-width:44px;height:44px;min-height:44px;margin-block:0}
+      #operatorCompanyPanel{position:absolute;z-index:15;inset:var(--operator-company-mobile-top,0px) 0 0 auto;width:min(100%,380px);max-height:var(--operator-client-available-height,100dvh);box-shadow:-8px 0 22px #0002}
       #operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;min-width:0}
       #operatorConversationHeader .operator-dialog-head-row{flex:1;min-width:0}
       #operatorConversationHeader .operator-dialog-head-main{flex:1;min-width:0}
@@ -1629,7 +1627,7 @@
     const developerNodes=sameCard?[...($('operatorClientDeveloperHost')?.childNodes||[])]:[],developerStatus=sameCard?[...($('operatorClientDeveloperStatus')?.childNodes||[])]:[];
     clientCardDispose(Boolean(companySnapshot));
     oldCard?.remove();oldCompany?.remove();
-    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div class="operator-dialog-head-identity"><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button></div><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span>${hasCompany()||hasTransfer?`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`:''}<details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
+    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div class="operator-dialog-head-identity"><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button></div><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span><details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
     head.parentElement.querySelector('[data-identity-warning]')?.remove();if(route.identity_conflict){const warning=document.createElement('p');warning.dataset.identityWarning='true';warning.className='operator-ai-context';warning.setAttribute('role','status');warning.textContent=({ru:'История WhatsApp разделена между JID/LID. AI остановлен до проверки связи диалогов.',az:'WhatsApp tarixçəsi JID/LID arasında bölünüb. Əlaqə yoxlanana qədər AI dayandırılıb.',en:'WhatsApp history is split between JID/LID. AI is blocked pending identity review.'})[i18n.language];head.after(warning);}
     const trigger=$('operatorClientCardOpen'),title=$('operatorDialogTitleText');
     const avatar=document.createElement('span');
@@ -1658,11 +1656,13 @@
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span><span class="operator-state operator-dialog-agent-status" data-panel-agent-status data-state="${esc(route.agent_status||route.display_state)}">${esc(agentModeLabel(route))}</span><div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`+reminder);
     card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}" autofocus>×</button></header><div class="operator-client-panel-content"><div class="operator-client-panel-block">${nameForm||display}${phoneRow}</div>${conversation}<div data-client-support-case hidden></div>${roster}</div>`;
     layout.append(card);
+    const historyToolbar=$('operatorConversationContent')?.querySelector('.operator-history-tools');
+    if(hasCompany()||hasTransfer)historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);
     const companyTrigger=$('operatorCompanyPanelOpen');
     const companyPanel=companyTrigger?document.createElement('dialog'):null;
     if(companyPanel){
-      companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-labelledby','operatorCompanyPanelTitle');
-      companyPanel.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorCompanyPanelTitle">${esc(panelTitle)}</h2></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:''}</div>`;
+      companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}</header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:''}</div>`;
       layout.append(companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
       status.setAttribute('role','status');head.append(status);
@@ -1710,9 +1710,22 @@
       finally{if(check===caseRead)caseInFlight=false;}
     };
     refreshClientSupportCase=refreshCase;
+    const mobileCompany=()=>companyPanel?.open===true&&window.matchMedia?.('(max-width: 900px)').matches===true;
+    const inertBefore=new Map();
     const syncChatInteraction=()=>{
-      const chat=$('operatorConversationContent');
-      if(chat)chat.inert=companyPanel?.open===true&&window.matchMedia?.('(max-width: 900px)').matches===true;
+      const chat=$('operatorConversationContent'),behind=new Set();
+      // The toggle occupies its original history slot. Keep its ancestor
+      // chain active and isolate only the other branches underneath the panel.
+      if(mobileCompany()&&chat?.contains(companyTrigger)){
+        for(let node=companyTrigger;node!==chat;node=node.parentElement)
+          for(const sibling of node.parentElement.children)if(sibling!==node)behind.add(sibling);
+      }
+      for(const [node,value] of inertBefore)if(!behind.has(node)){
+        node.inert=value;inertBefore.delete(node);
+      }
+      for(const node of behind)if(!inertBefore.has(node)){
+        inertBefore.set(node,node.inert);node.inert=true;
+      }
     };
     const close=(restore=true)=>{
       if(restore&&document.activeElement===input)void persistName();
@@ -1740,7 +1753,10 @@
         card.style.setProperty('--operator-client-viewport-height',height+'px');
       }
       if(companyPanel?.open){
-        companyPanel.style.setProperty('--operator-client-available-height',Math.max(1,top+height-Math.max(top,layout.getBoundingClientRect().top))+'px');
+        const layoutTop=layout.getBoundingClientRect().top;
+        const offset=mobileCompany()?Math.max(0,Math.ceil((historyToolbar?.getBoundingClientRect().bottom??layoutTop)-layoutTop)):0;
+        companyPanel.style.setProperty('--operator-company-mobile-top',offset+'px');
+        companyPanel.style.setProperty('--operator-client-available-height',Math.max(1,top+height-Math.max(top,layoutTop+offset))+'px');
         syncChatInteraction();
       }
     };

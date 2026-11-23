@@ -117,7 +117,7 @@ const read=p=>fs.readFileSync(p,'utf8');
     assert(section.textContent.includes(action+' for Company K'));
     if(key==='tasks')assert.equal(section.querySelector('.operator-company-badge').dataset.tone,'progress');
     if(key==='modules')assert.equal(section.querySelector('.operator-company-badge').dataset.tone,'neutral');
-    if(key==='history')assert.equal(section.querySelector('.operator-company-section-amount').textContent,'0.00 AZN');
+    if(key==='history')assert.equal(section.querySelector('.operator-company-section-amount').textContent,new Intl.NumberFormat('en-US',{style:'currency',currency:'AZN',currencyDisplay:'code',minimumFractionDigits:2,maximumFractionDigits:2}).format(0));
   }
   tabs()[3].dispatchEvent(new w.KeyboardEvent('keydown',{key:'Home',bubbles:true}));
   assert(!$('#operatorCompanyView-main').hidden);

@@ -242,3 +242,14 @@ def test_task_options_project_verified_account_and_current_action_permissions(mo
         assert 'task_options' not in result
     gate.return_value={'task':False,'credit':False}
     assert 'action_binding' not in link.lookup_profile(identity,**ROUTE)
+
+
+def test_payment_history_projects_only_explicit_currency_and_original_amount():
+    response={'status':'success','data':[
+        {'account':ACCOUNT,'moment':'2026-11-03','amount':'-4.00','payment_source':'daily_expense'},
+        {'account':ACCOUNT,'moment':'2026-11-04','amount':'+10.00','currency':'USD','payment_source':'credit',
+         'customer_email':'private@example.test'},
+        {'account':ACCOUNT,'moment':'unknown date','amount':'unknown','currency':'not an ISO code','payment_source':'provider text'}]}
+    assert link._section_rows(response,'company_history',ACCOUNT)=={'rows':[
+        ['2026-11-03','-4.00','daily_expense'],['2026-11-04','+10.00','credit','USD'],
+        ['unknown date','unknown','provider text']]}
