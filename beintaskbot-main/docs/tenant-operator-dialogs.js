@@ -21,6 +21,8 @@
   `;document.head.append(filterStyle);
   let filterPopoverCleanup=()=>{},filterPreferencesLoaded=false,filterPreferencesFlight=null,filterSaveQueue=Promise.resolve();
   let companyPanelPreference=null;
+  const isMobileCompanyPanelViewport=()=>window.matchMedia?.('(max-width: 900px)').matches===true;
+  const shouldRestoreCompanyPanel=()=>!isMobileCompanyPanelViewport()&&panelPreference().open;
   function panelPreference(){
     const key=identity(member);
     if(companyPanelPreference?.key!==key)companyPanelPreference={key,open:false,changed:false,load:null,save:Promise.resolve()};
@@ -1827,7 +1829,9 @@
       finally{if(check===caseRead)caseInFlight=false;}
     };
     refreshClientSupportCase=refreshCase;
-    const mobileCompany=()=>companyPanel?.open===true&&window.matchMedia?.('(max-width: 900px)').matches===true;
+    const companyPanelViewport=window.matchMedia?.('(max-width: 900px)');
+    let companyPanelWasMobile=companyPanelViewport?.matches===true;
+    const mobileCompany=()=>companyPanel?.open===true&&companyPanelViewport?.matches===true;
     const inertBefore=new Map();
     const syncChatInteraction=()=>{
       const chat=$('operatorConversationContent'),behind=new Set();
@@ -1895,14 +1899,24 @@
       window.tenantDialogueCompany?.refreshPublicLink?.();
       if(!restore)($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary'))?.focus({preventScroll:true});
     };
+    if(companyPanelViewport?.addEventListener){
+      const onCompanyPanelViewportChange=event=>{
+        const mobile=event.matches===true;
+        if(mobile&&!companyPanelWasMobile)closeCompany(false);
+        else if(!mobile&&companyPanelWasMobile&&companyPanel&&shouldRestoreCompanyPanel())openCompany(true);
+        companyPanelWasMobile=mobile;
+      };
+      companyPanelViewport.addEventListener('change',onCompanyPanelViewportChange);
+      listeners.push(()=>companyPanelViewport.removeEventListener('change',onCompanyPanelViewportChange));
+    }
     if(companyPanel){
       companyTrigger.onclick=()=>{
         if(!companyAllowed())return;
         const open=!companyPanel.open;
-        savePanelPreference(open);
+        if(!isMobileCompanyPanelViewport())savePanelPreference(open);
         if(open)openCompany();else closeCompany();
       };
-      void loadPanelPreference()?.then(()=>{if(current()&&companyPanel.isConnected&&panelPreference().open)openCompany(true);});
+      void loadPanelPreference()?.then(()=>{if(current()&&companyPanel.isConnected&&shouldRestoreCompanyPanel())openCompany(true);});
     }
     for(const target of [window,window.visualViewport])if(target?.addEventListener){
       target.addEventListener('resize',resizePanel);
@@ -1913,14 +1927,14 @@
       if(event.key!=='Escape'||(!card.open&&!companyPanel?.open)||event.defaultPrevented||
          document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
       event.preventDefault();event.stopImmediatePropagation();
-      if(card.open)close();else if(companyAllowed()){savePanelPreference(false);closeCompany();}
+      if(card.open)close();else if(companyAllowed()){if(!isMobileCompanyPanelViewport())savePanelPreference(false);closeCompany();}
     },true);
     const destroy=()=>{clientCardDispose();card.remove();};
     listen('tenant-chat-close',destroy);
     listen('tenant-auth-invalid',destroy);
     const closeAll=()=>{close(false);closeCompany(false);};
     listen('tenant-auth-pending',()=>{authorized=false;closeAll();});
-    listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')closeAll();else if(companyPanel&&panelPreference().open)openCompany(true);});
+    listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')closeAll();else if(companyPanel&&shouldRestoreCompanyPanel())openCompany(true);});
     listen('tenant-profile',()=>{
       authorized=owner===identity(member)&&hasRight('dialogs');
       if(!current()){closeAll();return;}
@@ -1929,7 +1943,7 @@
       companyTrigger.hidden=!companyAllowed();
       if(!companyAllowed())closeCompany(false);
       else if(companyPanel.open)window.tenantDialogueCompany?.refreshPublicLink?.(true);
-      else if(panelPreference().open)openCompany(true);
+      else if(shouldRestoreCompanyPanel())openCompany(true);
     });
     listen('tenant-dialog-reauthorized',()=>{if(card.open)void refreshCase(true);});
     clientCardDispose=(preservePublicLink=false)=>{if(refreshClientSupportCase===refreshCase)refreshClientSupportCase=()=>{};listeners.forEach(remove=>remove());close(false);closeCompany(false,preservePublicLink);companyPanel?.remove();};
@@ -1964,7 +1978,7 @@
       input.onblur=()=>void persistName();
       input.oninput=()=>{saved.hidden=true;error.textContent='';};
     }
-    if(companySnapshot&&companyPanel&&panelPreference().open){
+    if(companySnapshot&&companyPanel&&shouldRestoreCompanyPanel()){
       openCompany(true);
       if(companySnapshot.focus&&companyPanel.contains($(companySnapshot.focus)))$(companySnapshot.focus).focus({preventScroll:true});
       companyPanel.querySelector('.operator-client-panel-content').scrollTop=companySnapshot.scroll;
