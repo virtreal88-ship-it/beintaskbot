@@ -18,6 +18,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
   for(const [width,height,language] of [[320,760,'ru'],[360,800,'ru'],[390,844,'az'],[430,900,'az'],[1280,900,'en'],[390,420,'ru']]){
+   const withCompany=width===1280||(width===390&&language==='ru');
    const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];let marker=true,nameFailure=false,nameGate=null,releaseName;const savedNames=new Map();
    page.on('pageerror',error=>errors.push(error.stack));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
    // Production stores question templates in this tenant/employee scoped key.
@@ -30,11 +31,11 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
       const filename=({'external-1':realName,'external-2':technicalName})[url.searchParams.get('message_id')]||'attachment.pdf';
       return route.fulfill({contentType:'application/pdf',headers:{'Content-Disposition':'inline; filename="'+filename+'"'},body:'%PDF-1.4\n%%EOF'});
     }
-    if(name==='/api/platform/me')return route.fulfill({json:profile});
+    if(name==='/api/platform/me')return route.fulfill({json:withCompany?{...profile,capabilities:{...profile.capabilities,dialog_company_binding:true}}:profile});
     let result={tickets:[],agents:[],members:[],channels:[],items:[]};
     if(name.endsWith('/dialogs/display-name')){if(nameGate)await nameGate;if(nameFailure)return route.fulfill({status:500,json:{error:'Synthetic name save failure'}});const body=JSON.parse(request.postData());savedNames.set(body.conversation_id,body.display_name);result={};}
     else if(name.endsWith('/dialogs/history')&&url.searchParams.get('conversation_id')===oldPhoneCard.conversation_id){assert.equal(url.searchParams.get('paired_history_redirect'),'1');result={combined_dialog:{provider:'connect',lead_id:41,channel_id:channel,conversation_id:dialog.conversation_id}};}
-    else if(name.endsWith('/dialogs/history')){const conversation=url.searchParams.get('conversation_id')||dialog.conversation_id,original=conversation===dialog.conversation_id?'Very long customer name / Очень длинное имя клиента':'Other customer';result={dialog:{...dialog,lead_id:conversation===dialog.conversation_id?41:42,conversation_id:conversation,...(conversation===dialog.conversation_id?{history_pair_id:'verified-pair'}:{}),customer_name:savedNames.get(conversation)||original,manual_display_name:savedNames.get(conversation)||'',agent_name:'Assigned agent / Назначенный агент с очень длинным названием / Uzun agent adı'},messages:[{id:'text',external_id:'e1',direction:'incoming',message_type:'text',body:'Synthetic conversation',happened_at:'2026-10-21T10:00:00Z'},...pdfs],next_before:null};}
+    else if(name.endsWith('/dialogs/history')){const conversation=url.searchParams.get('conversation_id')||dialog.conversation_id,original=conversation===dialog.conversation_id?'Very long customer name / Очень длинное имя клиента':'Other customer';result={dialog:{...dialog,lead_id:conversation===dialog.conversation_id?41:42,conversation_id:conversation,...(conversation===dialog.conversation_id?{history_pair_id:'verified-pair'}:{}),customer_name:savedNames.get(conversation)||original,manual_display_name:savedNames.get(conversation)||'',...(withCompany?{company_binding:{company_id:'sample',company_name:'Sample company',can_manage:true}}:{}),agent_name:'Assigned agent / Назначенный агент с очень длинным названием / Uzun agent adı'},messages:[{id:'text',external_id:'e1',direction:'incoming',message_type:'text',body:'Synthetic conversation',happened_at:'2026-10-21T10:00:00Z'},...pdfs],next_before:null};}
     else if(name.endsWith('/dialogs'))result={dialogs:[{...dialog,last_message_id:'m1',last_message_direction:'incoming',last_message_text:'Customer question',last_message_at:'2026-10-21T10:00:00Z'}],channels:[{id:'connect:'+channel,name:'WhatsApp'}],agents:[],next_offset:null};
     else if(name.endsWith('/developer-marker')){if(request.method()==='POST'&&typeof JSON.parse(request.postData()).enabled==='boolean')marker=JSON.parse(request.postData()).enabled;result={enabled:marker};}
     else if(name.endsWith('/replies'))result={replies:[],consultations:[]};
@@ -57,6 +58,14 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     const phoneBox=await number.boundingBox(),titleBox=await page.locator('#operatorDialogTitleText').boundingBox();
     assert(phoneBox.y>=avatarPicture.y+avatarPicture.height+2,'the phone has a gap below the avatar');
     assert(Math.abs((titleBox.y+titleBox.height/2)-(avatarPicture.y+avatarPicture.height/2))<=2,JSON.stringify({width, titleBox, avatarPicture, titleLayout: await page.locator('#operatorDialogTitleSlot').evaluate(e=>({height:e.offsetHeight, minHeight:getComputedStyle(e).minHeight, alignItems:getComputedStyle(e).alignItems}))}));
+    if(withCompany){
+      const badge=page.locator('#operatorDialogCompanyName');await badge.waitFor();
+      const companyBox=await badge.boundingBox();
+      assert(companyBox.y>=titleBox.y+titleBox.height,'company is below the customer name');
+      assert(Math.abs((companyBox.y+companyBox.height/2)-(phoneBox.y+phoneBox.height/2))<=1,
+        'company and phone share the same line');
+      assert(Math.abs(companyBox.x-titleBox.x)<=1,'company starts beneath the name');
+    }
     if(language==='az')assert.match(await page.locator('[data-operator-create-ticket]').innerText(),/\+\s*sorğu/);
     const pdfLabel={ru:'Документ PDF',az:'PDF sənədi',en:'PDF document'}[language];
     const cards=page.locator('#chatRows article').filter({has:page.locator('[data-media-title]')});
