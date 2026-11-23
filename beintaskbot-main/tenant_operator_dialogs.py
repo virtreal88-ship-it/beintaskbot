@@ -463,7 +463,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -476,7 +476,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         kommo_scope='TRUE';params=[]
     from tenant_dialog_access import sql_filter
     from tenant_dialog_lifecycle import visibility_sql
-    dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(cur, policy,'routes.provider','routes.channel_id','routes.conversation_id')
+    dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(cur, policy,'routes.provider','routes.channel_id','routes.conversation_id',allow_closed_archive=allow_closed_archive)
     from tenant_support_access import sql_filter as support_filter
     ticket_filter=support_filter(policy,'st')
     handoff_filter=support_filter(policy,'ht')
@@ -1000,7 +1000,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
-            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+            allow_closed_archive=lifecycle=='completed' and not (all_rows or completion_preview or include_read_cursors)
+            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,allow_closed_archive=allow_closed_archive);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1076,7 +1077,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 if rollout.enforced or policy.has_scoped_access('dialogs'):
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
-                    lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,
+                    lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,allow_closed_archive=allow_closed_archive,
                         _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
                         _online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources),
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
@@ -1092,17 +1093,29 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         row_lifecycle['bulk_company_gate']=bulk_gate
             # Mode is a read-only view over already-authorized physical routes.
             # Recheck lifecycle ownership from the later snapshot as well.
-            rows=[r for r in rows if not (r.get('lifecycle') or {}).get('operator_id')
+            rows=[r for r in rows if r.get('archive_read_only') or not (r.get('lifecycle') or {}).get('operator_id')
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
+            if allow_closed_archive:
+                # Only exclude options introduced exclusively by the new
+                # archive rows, not existing options from another UI filter.
+                prior_agents={str(r['agent_id']) for r in rows if r.get('agent_id')}
+                agents=[a for a in agents if str(a.get('id')) in prior_agents]
+                count=len({('group',r['conversation_id']) if r['provider']=='connect' and group_jid(r['conversation_id'])
+                           else (r['provider'],r['channel_id'],r['lead_id']) for r in rows
+                           if not r.get('archive_read_only') and r['display_state'] in {'human','paused','blocked','error'}})
             history_companions={}
             if history_pairs:
+                if allow_closed_archive:
+                    exact_shared={r['lead_id'] for r in rows if r.get('archive_read_only')}
+                    history_pairs=[p for p in history_pairs
+                                   if p['primary_lead'] not in exact_shared and p['alternate_lead'] not in exact_shared]
                 rows,history_companions=fold_cards(rows,history_pairs)
             if lifecycle != 'all':
                 rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
             if history_pairs:
                 count=len({('group',r['conversation_id']) if r['provider']=='connect' and group_jid(r['conversation_id'])
                            else (r['provider'],r['channel_id'],r['lead_id']) for r in rows
-                           if r['display_state'] in {'human','paused','blocked','error'}})
+                           if not r.get('archive_read_only') and r['display_state'] in {'human','paused','blocked','error'}})
             if lifecycle == 'active' and rollout.enforced and not completion_preview:
                 # A source with only outgoing history has no active request.
                 # Keep it in All and in completion previews (for skip auditing),
@@ -1111,12 +1124,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                       and (r.get('lifecycle') or {}).get('state') == 'waiting'
                       and (r.get('lifecycle') or {}).get('has_inbound') is False)]
             if restricted_ai:
-                _assignment_display(cur,tenant,policy,rows)
+                _assignment_display(cur,tenant,policy,[r for r in rows if not r.get('archive_read_only')])
                 rows=[_hide_shared_ai(r) for r in rows]
                 agents=[]
                 count=None
             # Preparation must not initialize read cursors or mark anything read.
-            unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),rows)
+            unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),
+                [r for r in rows if not r.get('archive_read_only')])
             if search:
                 query_text=str(search)[:200].casefold()
                 def matches(row):
@@ -1130,7 +1144,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     and matches(companion))]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
             for r in rows:
-                if r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
+                if not r.get('archive_read_only') and r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
                     agents.append({'id':str(r['agent_id']),'name':r['agent_name']})
             if agent=='unassigned':rows=[r for r in rows if not r.get('agent_id')]
             elif agent:
@@ -1143,7 +1157,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             if not all_rows:rows=rows[offset:offset+51]
             if not all_rows and not completion_preview:
                 from tenant_dialog_company_binding import attach_list_company_names
-                attach_list_company_names(cur,tenant,rows[:50])
+                attach_list_company_names(cur,tenant,[r for r in rows[:50] if not r.get('archive_read_only')])
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
@@ -1261,21 +1275,26 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
             transfer_targets=[]
-            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets, _row, is_shared_archive
             if not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant):
                 from tenant_operator_access import _resolve_connect_route
                 candidate=_resolve_connect_route(cur,tenant,conversation,str(channel),lead_id,allow_merged=True)
                 transfer_targets=_targets(cur,tenant,policy,str(candidate['connect_channel_id']),int(profile['telegram_id']))
-            selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True)
+            selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True,
+                allow_closed_archive=not support_case_only)
             if provider=='connect':
                 channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead_id=int(selected['lead_id'])
+            workflow=_row(cur,tenant,channel,conversation) if provider=='connect' and lifecycle_enabled(cur,tenant) else None
+            shared_archive=is_shared_archive(workflow,actor)
+            if shared_archive and requested_route != {'provider':provider,'channel_id':channel,'conversation_id':conversation,'lead_id':lead_id}:
+                raise TenantLinearError('Диалог недоступен.',404)
             history_members={conversation:lead_id}
-            if provider=='connect':
+            if provider=='connect' and not shared_archive:
                 from tenant_connect_dialog_equivalence import members
                 history_members=members(cur,tenant,channel,conversation)
             history_leads=list(history_members.values())
             paired_history=None
-            if combine_history and not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant) and len(history_members)==1:
+            if combine_history and not support_case_only and not shared_archive and provider=='connect' and lifecycle_enabled(cur,tenant) and len(history_members)==1:
                 from tenant_whatsapp_history_pairs import history_pair
                 paired_history=history_pair(cur,tenant,policy,channel,conversation,lead_id,
                     include_alternate=redirect_paired_history and not before and not anchor)
@@ -1287,7 +1306,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             message_leads=history_leads.copy()
             if paired_history:
                 message_leads.append(paired_history['alternate_lead'])
-            sql,scopes=projection(cur, policy,include_contact_names=not support_case_only)
+            sql,scopes=projection(cur, policy,include_contact_names=not support_case_only,allow_closed_archive=shared_archive)
             columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
             cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
@@ -1307,7 +1326,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                            'canonical_route':{key:dialog[key] for key in requested_route}}
             if provider=='connect':_attach_verified_phone(cur,tenant,dialog)
             from tenant_ai_group_coordination import group_jid, view as group_view
-            if not restricted_ai and provider=='connect' and group_jid(conversation):
+            if not shared_archive and not restricted_ai and provider=='connect' and group_jid(conversation):
                 apply_group_view(cur,tenant,dialog)
                 from tenant_operator_assignment import group_options_in_transaction
                 dialog['group_assignment_preview']=group_options_in_transaction(cur,tenant,channel,conversation)
@@ -1336,7 +1355,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     dialog['group_coordination']['agents']=primary
                 except TenantLinearError:
                     dialog['group_coordination']['can_configure']=False
-            if not restricted_ai and provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
+            if not shared_archive and not restricted_ai and provider=='connect' and not group_jid(conversation) and not dialog.get('agent_id'):
                 if dialog.get('unambiguous') and dialog.get('controls_allowed'):
                     from tenant_operator_assignment import options_in_transaction
                     dialog['agent_assignment']=options_in_transaction(cur,profile,{
@@ -1355,22 +1374,24 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_dialog_access import sql_filter
                 # Resolve anchor only within the authorized route / exact tenant group.
                 cur.execute('''SELECT m.id,m.external_id,m.kommo_lead_id,COALESCE(m.happened_at,m.created_at) AS at FROM saas_crm_messages m
-                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
+                  WHERE m.tenant_id=%s::uuid AND m.id=%s::uuid AND (NOT %s OR m.direction IN ('incoming','outgoing'))
+                    AND ((m.kommo_lead_id=ANY(%s::bigint[]) AND m.channel=%s)
                     OR (%s AND EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=m.tenant_id
                       AND c.conversation_id=%s AND c.lead_id=m.kommo_lead_id AND m.channel='connect:'||c.connect_channel_id::text))) AND '''+sql_filter(policy,"CASE WHEN m.channel LIKE 'connect:%%' THEN 'connect' ELSE 'kommo' END","substring(m.channel from 9)"),
-                  (tenant,identifier(anchor),message_leads,row['history_channel'],bool(provider=='connect' and group_jid(conversation)),conversation))
+                  (tenant,identifier(anchor),shared_archive,message_leads,row['history_channel'],bool(not shared_archive and provider=='connect' and group_jid(conversation)),conversation))
                 anchor_row=dict(cur.fetchone() or {});anchor_at=anchor_row.get('at')
                 if not anchor_row:
                     raise TenantLinearError('The requested message is unavailable or outside the permitted conversation.',404)
                 from tenant_dialog_access import require_lead
-                require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
+                if not shared_archive:
+                    require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
             group_channels=None
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 from tenant_dialog_access import allowed_channels
-                group_channels=allowed_channels(cur,tenant,policy,conversation=conversation)
+                group_channels=[channel] if shared_archive else allowed_channels(cur,tenant,policy,conversation=conversation)
                 messages=group_history(cur,tenant,conversation,before=identifier(before) if before else None,through=anchor_at,
-                  channel_ids=group_channels)
+                  channel_ids=group_channels,transcript_only=shared_archive)
                 for message in messages:
                     message['source_conversation_id']=conversation
             else:
@@ -1380,8 +1401,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     args.extend((anchor_at,str(anchor_row['id'])))
                 if before:
                     clause=''' AND (COALESCE(happened_at,created_at),id)<(SELECT COALESCE(happened_at,created_at),id FROM saas_crm_messages
-                      WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid)'''
-                    args += [tenant,message_leads,row['history_channel'],identifier(before)]
+                      WHERE tenant_id=%s::uuid AND kommo_lead_id=ANY(%s::bigint[]) AND channel=%s AND id=%s::uuid
+                        AND (NOT %s OR direction IN ('incoming','outgoing')))'''
+                    args += [tenant,message_leads,row['history_channel'],identifier(before),shared_archive]
+                if shared_archive:
+                    clause+=" AND m.direction IN ('incoming','outgoing')"
                 if paired_history:
                     clause+=" AND (m.kommo_lead_id<>%s OR m.direction='outgoing')"
                     args.append(paired_history['alternate_lead'])
@@ -1444,11 +1468,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             action_capabilities={}
             apply_capabilities(cur,tenant,policy,dialog,_action_capabilities=action_capabilities)
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
-            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,
+            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,_workflow=workflow,allow_closed_archive=shared_archive,
                 _can_update=action_capabilities.get('update',False),_policy=policy)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
-            if before is None:
+            if before is None and not shared_archive:
                 from tenant_dialog_company_binding import read_dialogue_binding
                 dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)
                 from tenant_shared_dialog_reminders import dialogue_marker
@@ -1456,10 +1480,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 if reminder is not None:
                     dialog['shared_reminder']=reminder
             if restricted_ai:
-                _assignment_display(cur,tenant,policy,[dialog])
+                if not shared_archive:
+                    _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)
             lifecycle=dialog.get('lifecycle')
-            if (include_operator_events and provider=='connect' and lifecycle and not anchor
+            if (include_operator_events and not shared_archive and provider=='connect' and lifecycle and not anchor
                     and requested_route==history_scope['canonical_route']
                     and (before or str(lifecycle['revision'])!=str(operator_events_revision))):
                 from tenant_dialog_operator_timeline import page as operator_event_page
@@ -1468,7 +1493,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     history_channel=row['history_channel'],group_channels=group_channels)
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
-            if (include_shared_reminder_events and provider=='connect' and not anchor
+            if (include_shared_reminder_events and not shared_archive and provider=='connect' and not anchor
                     and requested_route==history_scope['canonical_route']):
                 from tenant_shared_dialog_reminders import timeline_page
                 shared_reminder_timeline=timeline_page(conn,cur,tenant,channel,conversation,lead_id,
@@ -1482,12 +1507,12 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
               and m.get('created_at') and str(m.get('channel') or '')==str(row['history_channel'])
               and int(m.get('source_lead_id') or 0) in history_leads]
     eligible.extend(captured_group)
-    read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible else None
+    read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible and not shared_archive else None
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
     from tenant_call_recordings import offer_import
-    dialog['test_recording_import_allowed']=offer_import({**profile,'role':policy.profile.get('role')},dialog)
+    dialog['test_recording_import_allowed']=not shared_archive and offer_import({**profile,'role':policy.profile.get('role')},dialog)
     from tenant_browser_calls import offer as offer_browser_call
-    dialog['browser_call_available']=offer_browser_call(profile,dialog)
+    dialog['browser_call_available']=not shared_archive and offer_browser_call(profile,dialog)
     return {**operator_timeline,**shared_reminder_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '',
                                          contact_route=str(dialog.get('conversation_id') or ''))

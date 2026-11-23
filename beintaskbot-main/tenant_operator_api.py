@@ -82,7 +82,7 @@ def handler(member_from_request,origin,logger,resource):
                     read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
-                    if not case_only:
+                    if not case_only and not (result.get('dialog') or {}).get('archive_read_only'):
                         from tenant_message_delivery import enrich_history
                         result=await enrich_history(profile,result)
                 elif resource=='agent_assignment':

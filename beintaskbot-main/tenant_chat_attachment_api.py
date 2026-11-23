@@ -154,6 +154,8 @@ def handler(member_from_request, request_provider, logger):
             lead, message = request.query.get('lead_id'), request.query.get('message_id')
             scope={'channel_id':request.query.get('channel_id') or None,
                    'conversation_id':request.query.get('conversation_id') or None}
+            if all(scope.values()) and not {'case_id','case_message_id'} & request.query.keys():
+                scope['allow_closed_archive']=True
             item = await asyncio.to_thread(load, session, lead, message, **scope)
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             automatic_photo = request.query.get('auto_preview') == '1'

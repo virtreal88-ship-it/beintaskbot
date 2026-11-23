@@ -91,7 +91,7 @@ def test_owner_can_start_new_cycle_from_closed_dialog_without_sending(episodes):
     start=payload('start',2)
     with pytest.raises(TenantLinearError) as other_owner:
         lifecycle.mutate({'tenant_id':A,'telegram_id':33},start)
-    assert other_owner.value.status==404
+    assert other_owner.value.status==403  # No connected source in this fixture.
     first=lifecycle.mutate(PROFILE,start)
     assert first['lifecycle']['state']=='accepted' and first['lifecycle']['revision']==3
     assert lifecycle.mutate(PROFILE,start)==first
@@ -142,7 +142,7 @@ def test_manual_restart_remains_for_own_closed_history_after_operator_routing(ep
     episodes.commit()
     with pytest.raises(TenantLinearError) as other:
         command('start',2,actor=33)
-    assert other.value.status==404
+    assert other.value.status==403  # No connected source, unlike the prior owner's preserved behavior.
 
     episodes.execute("UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid",(A,CA))
     episodes.commit()
@@ -213,9 +213,12 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
     expected_acceptor='Owner' if state_before=='closed' else None
     assert before['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert {'employee_id':33,'name':'Employee'} in before['dialog']['lifecycle']['transfer_targets']
-    with pytest.raises(TenantLinearError) as unassigned:
-        read(recipient)
-    assert unassigned.value.status==404
+    if state_before=='dismissed':
+        with pytest.raises(TenantLinearError) as unassigned:
+            read(recipient)
+        assert unassigned.value.status==404
+    else:
+        assert read(recipient)['dialog']['archive_read_only']
     set_status(recipient,{'status':'away'})
     with pytest.raises(TenantLinearError) as unavailable:
         command('transfer',workflow['revision'],target_employee_id=33)
@@ -234,9 +237,12 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
     assert after['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert after['dialog']['lifecycle']['can_submit_case'] is False
     assert after['dialog']['can_send'] is False
-    with pytest.raises(TenantLinearError) as former_owner:
-        read(PROFILE)
-    assert former_owner.value.status==404
+    if state_before=='dismissed':
+        with pytest.raises(TenantLinearError) as former_owner:
+            read(PROFILE)
+        assert former_owner.value.status==404
+    else:
+        assert read(PROFILE)['dialog']['archive_read_only']
     assert lifecycle.transfer_details(recipient,payload())['transfer']['to_name']=='Employee'
     listed=tenant_operator_dialogs.listing(recipient,lifecycle='completed')['dialogs']
     assert any(item['lead_id']==41 for item in listed)
