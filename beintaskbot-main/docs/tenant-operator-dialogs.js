@@ -1536,7 +1536,7 @@
     }catch{if(current()&&card.open)status.textContent=groupParticipantsText('unavailable');}finally{host.dataset.loading='false';}
   }
   function mountDialogCompany(route,useSnapshot=true){
-    if(route.archive_read_only||route.owner_overview_read_only){window.tenantDialogueCompany?.clear();return;}
+    if((route.archive_read_only||route.owner_overview_read_only)&&member?.role!=='owner'){window.tenantDialogueCompany?.clear();return;}
     if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
     const host=$('operatorClientCompanyHost'),owner=identity(member);
     const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
@@ -1613,7 +1613,7 @@
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
-    const hasCompany=()=>capabilities.dialog_company_binding===true&&!route.archive_read_only&&!route.owner_overview_read_only;
+    const hasCompany=()=>capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
     const hasTransfer=canSidebarTransfer(route),panelTitle=hasCompany()?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';
     const name=dialogTitle(route),phone=displayDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');

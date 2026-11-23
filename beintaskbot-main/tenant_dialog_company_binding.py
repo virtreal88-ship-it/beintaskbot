@@ -123,14 +123,15 @@ def _key(provider, lead_id, channel_id, conversation_id):
     return provider, lead, channel_id, conversation_id
 
 
-def _prove(cur, tenant, policy, route, *, action='view'):
+def _prove(cur, tenant, policy, route, *, action='view', owner_overview=False):
     from tenant_operator_access import assert_route
     from tenant_operator_dialogs import projection, runtime_flag
     provider, lead, channel, conversation = route
-    assert_route(cur,tenant,policy,provider,conversation,channel,lead,action=action)
+    overview = {'owner_overview':True,'allow_closed_archive':True} if (owner_overview and action=='view' and policy.profile.get('role')=='owner') else {}
+    assert_route(cur,tenant,policy,provider,conversation,channel,lead,action=action,**overview)
     # Same exact visible route as history. Kommo assert_route alone proves only
     # the deal and permissions; a fabricated channel/conversation will not do.
-    sql, params = projection(cur,policy)
+    sql, params = projection(cur,policy,**overview)
     cur.execute(sql+"""SELECT 1 FROM visible WHERE provider=%s AND lead_id=%s
       AND channel_id=%s AND conversation_id=%s LIMIT 2""",
       (tenant,tenant,*params,runtime_flag('AI_AGENTS_ENABLED'),*route))
@@ -361,6 +362,10 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                 can_unlink = company_search is None and _manage(cur,tenant,actor,policy,route,write=unlink)
                 if unlink and not can_unlink:
                     raise OperatorError('Недостаточно прав для снятия привязки в этом диалоге.',403)
+                owner_read = not write and company_search is None and policy.profile.get("role")=="owner" and not can_unlink
+                if owner_read:
+                    _prove(cur,tenant,policy,route,owner_overview=True)
+                    return _read(cur,tenant,actor,route,False) if _ready(cur,_pred(tenant,route)[0]) else None
                 _prove(cur,tenant,policy,route)
                 table, pred, keys = _pred(tenant,route)
                 if not _ready(cur,table):
