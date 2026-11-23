@@ -35,6 +35,8 @@ function gate(){
         return sessionDenied?fulfill({success:false},401):fulfill(profile);
       }
       if(name.endsWith('/dialog-company')){
+        if(route.request().postDataJSON()?.action==='company_profile')
+          return fulfill({success:true,company_profile:{state:'not_linked'}});
         if(companyGate)await companyGate.hold();
         return featuresDenied?fulfill({success:false},403):fulfill({success:true,binding:{company_id:'company',company_name:'Example CRM',can_manage:true}});
       }
@@ -54,8 +56,8 @@ function gate(){
     const company=page.locator('.operator-company-unlink');
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
-    const avatar=page.locator('#operatorClientCardOpen');
-    await avatar.click();
+    const companyPanel=page.locator('#operatorCompanyPanelOpen');
+    await companyPanel.click();
     await company.waitFor();await templates.waitFor();await input.fill('Unsaved reply');
     await page.evaluate(()=>{
       window.initialNodes=['#operatorDialogs','#chatRows','#chatText','.operator-company-unlink','#operatorReplyTemplatesOpen']
@@ -87,7 +89,7 @@ function gate(){
     // App navigation retains the chat body but must restore controls removed by view exit.
     await page.evaluate(()=>window.tenantAppNavigate('tasks',false));
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
-    await avatar.click();await company.waitFor();await templates.waitFor();
+    await companyPanel.click();await company.waitFor();await templates.waitFor();
     assert.equal(await input.inputValue(),'Unsaved reply');
     historyGate.release();historyGate=null;
     await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');
@@ -104,7 +106,7 @@ function gate(){
     dialogDenied=false;featuresDenied=false;
     await tab(true);await tab(false);
     await page.locator('.operator-row').first().click();
-    await input.waitFor();await avatar.click();await company.waitFor();await templates.waitFor();
+    await input.waitFor();await companyPanel.click();await company.waitFor();await templates.waitFor();
     // A revoked browser session clears the actual chat because old data is no longer authorized.
     sessionDenied=true;
     await tab(true);await tab(false);

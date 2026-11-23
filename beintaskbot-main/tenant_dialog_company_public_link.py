@@ -1,5 +1,6 @@
-"""Read the existing Operator link for the current company of an exact dialogue."""
+"""Read Operator details for the current company of an exact dialogue."""
 import json
+import math
 import re
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -123,7 +124,8 @@ def _snapshot(profile, route, expected_company):
             return (tenant, account, generation, instance) if account else 'not_linked'
 
 
-def lookup_link(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id):
+def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id,
+                      expected_company_id, endpoint, lookup):
     operator._tenant(profile)
     route = dialogue._key(provider, lead_id, channel_id, conversation_id)
     company = dialogue.normalize_company_id(expected_company_id)
@@ -137,13 +139,47 @@ def lookup_link(profile, *, provider, lead_id, channel_id, conversation_id, expe
         credentials = operator._credentials(tenant)
         if (credentials['generation'], credentials['connection_instance_id']) != (generation, instance):
             raise operator.OperatorError('Подключение Operator изменилось.', 409)
-        operator._record_operator_read(profile, _ENDPOINT, {'account': account})
+        operator._record_operator_read(profile, endpoint, {'account': account})
         if _snapshot(profile, route, company) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
         # The account never comes from the request or the company display name.
-        url = _lookup_public_link(account, token=credentials['token'], base_url=credentials['base_url'])
+        fields = lookup(account, token=credentials['token'], base_url=credentials['base_url'])
         if _snapshot(profile, route, company) != before:
             raise operator.OperatorError('Компания или подключение Operator изменились.', 409)
-        return {'state': 'available', 'url': url} if url else {'state': 'not_found'}
+        return {'state': 'available', **fields} if fields is not None else {'state': 'not_found'}
     except TenantLinearError as error:
         raise operator.OperatorError(str(error), error.status) from error
+
+
+def lookup_link(profile, **query):
+    def link_fields(account, **transport):
+        url = _lookup_public_link(account, **transport)
+        return {'url': url} if url else None
+
+    return _read_bound_route(profile, endpoint=_ENDPOINT, lookup=link_fields, **query)
+
+
+def _company_profile_fields(response, account):
+    # Reuse exact account validation and project only the panel fields. Partner
+    # PIN, personal names, email and other account metadata stay upstream.
+    operator.account_info_payload(response, account)
+    data = response.get('data', response)
+    if not isinstance(data, dict):
+        raise operator.OperatorError('Operator не подтвердил профиль компании.', 502)
+    phone = data.get('phone')
+    if not (isinstance(phone, str) and re.fullmatch(r'\+?[0-9 ()-]{7,24}', phone)
+            and 7 <= sum(char.isdigit() for char in phone) <= 15):
+        phone = None
+    balance = data.get('balance')
+    if type(balance) not in (int, float) or not -10**12 <= balance <= 10**12 or not math.isfinite(balance):
+        balance = None
+    return {'registration_phone':phone, 'balance':balance}
+
+
+def lookup_profile(profile, **query):
+    def profile_fields(account, **transport):
+        response = operator._request_operator('account_info', {'account':account},
+                                              requests_account_info=True, **transport)
+        return _company_profile_fields(response, account)
+
+    return _read_bound_route(profile, endpoint='account_info', lookup=profile_fields, **query)

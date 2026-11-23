@@ -105,8 +105,13 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     const header=page.locator('#operatorConversationHeader'),headerHeight=(await header.boundingBox()).height;
     await avatar.focus();await page.keyboard.press('Enter');await card.waitFor();assert.equal((await header.boundingBox()).height,headerHeight);assert.equal(await avatar.getAttribute('aria-expanded'),'true');assert.equal(await page.evaluate(()=>document.activeElement.id),'operatorCancelConversationName','opening the panel never focuses the name field or opens the keyboard');assert.match(await card.locator('.operator-agent-label').innerText(),/Assigned agent/);assert.equal(await card.locator('select').count(),0,'moving the agent name never changes assignment');
     assert.equal(await card.locator('.operator-client-panel-block').count(),2,'the display-name block stays available even when company binding is unavailable');
-    assert.equal(await field.evaluate(n=>n.closest('details')===document.querySelector('#operatorClientCard .operator-client-panel-block')),true);
-    assert.equal(await card.locator('[data-panel-phone],#operatorBeinContext').count(),0);
+    assert.equal(await field.evaluate(n=>n.closest('.operator-client-panel-block')===document.querySelector('#operatorClientCard .operator-client-panel-block')),true);
+    assert.equal(await card.locator('[data-panel-phone]').textContent(),dialog.phone);
+    assert.equal(await card.locator('#operatorBeinContext,[data-operator-dialog-company]').count(),0);
+    assert.equal(await card.evaluate(n=>n.matches(':modal')),true);
+    const source=page.locator('#operatorRows .operator-row-source').first();
+    assert.equal(await source.textContent(),'WhatsApp');
+    assert.deepEqual(await source.evaluate(n=>[n===n.parentElement.lastElementChild,getComputedStyle(n).fontWeight]),[true,'400']);
     assert.equal(calls.some(c=>c.method==='POST'&&(c.path.endsWith('/display-name')||(c.path.endsWith('/developer-marker')&&typeof JSON.parse(c.body).enabled==='boolean'))),false,'opening card never saves or toggles anything');
     await field.fill('Unsaved / Несохранённое имя');await field.evaluate(n=>n.setSelectionRange(3,9));await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));await card.waitFor();assert.equal(await field.inputValue(),'Unsaved / Несохранённое имя');assert.equal(await field.evaluate(n=>n.selectionStart),3,'same-source background rendering preserves typed name and selection');
     const saveMark=card.locator('[data-client-name-saved]');
