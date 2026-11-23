@@ -752,7 +752,8 @@ def _request_me_with_requests(url, token):
 
 
 def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
-                      requests_me=False, first_batch_accounts=False, requests_staff_directory=False):
+                      requests_me=False, first_batch_accounts=False, requests_staff_directory=False,
+                      requests_account_info=False):
     """Call one allowlisted documented read method; never follows redirects."""
     if endpoint not in READ_ENDPOINTS:
         raise OperatorError("Операция Operator пока не поддерживается.")
@@ -762,6 +763,9 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
             endpoint != "profile_users" or opener is not None or not isinstance(payload, dict)
             or set(payload) != {"account"} or not _login_identifier(payload["account"])):
         raise OperatorError("Параметры запроса списка сотрудников Operator некорректны.")
+    if requests_account_info and (endpoint != "account_info" or opener is not None
+            or not isinstance(payload, dict) or set(payload) != {"account"}):
+        raise OperatorError("Параметры запроса профиля Operator некорректны.")
     if first_batch_accounts and (endpoint != "accounts" or payload not in (
             {"search": "", "limit": 100}, {"search": "", "limit": ACCOUNTS_REQUEST_LIMIT})):
         raise OperatorError("Параметры запроса первой выборки Operator некорректны.")
@@ -796,7 +800,7 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         raw = _request_accounts_with_requests(base + path, payload, token)
     elif endpoint == "me" and requests_me:
         raw = _request_me_with_requests(base + path, token)
-    elif requests_staff_directory:
+    elif requests_staff_directory or requests_account_info:
         raw = _post_read_with_requests(base + path, payload, token, accept_json=True)
     else:
         method = "GET" if endpoint == "me" else "POST"

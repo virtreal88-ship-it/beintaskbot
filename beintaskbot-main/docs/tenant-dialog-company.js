@@ -18,6 +18,12 @@
     az:{label:'Müştəri linki',copy:'Linki kopyala',copied:'Link kopyalandı',error:'Linki almaq mümkün olmadı. Yenidən cəhd edin.',copyError:'Brauzer linki kopyalamadı. Yenidən cəhd edin.',unsupported:'Bu brauzerdə kopyalama əlçatan deyil.'},
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.'}
   };
+  const profileLabels={
+    ru:{phone:'Телефон регистрации',balance:'Баланс компании',unavailable:'Данные Operator недоступны'},
+    az:{phone:'Qeydiyyat nömrəsi',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil'},
+    en:{phone:'Registration phone',balance:'Company balance',unavailable:'Operator details are unavailable'}
+  };
+  const profileText=key=>(profileLabels[window.tenantI18n?.language]||profileLabels.az)[key];
   const linkProblems={
     ru:{not_found:'Operator не вернул существующую ссылку.',not_connected:'Operator не подключён.',not_linked:'У компании нет подтверждённой привязки к аккаунту Operator.',rejected:'Operator отклонил запрос ссылки.',denied:'У вас нет доступа к ссылке этой компании.'},
     az:{not_found:'Operator mövcud linki qaytarmadı.',not_connected:'Operator qoşulmayıb.',not_linked:'Şirkət təsdiqlənmiş Operator hesabı ilə əlaqələndirilməyib.',rejected:'Operator link sorğusunu rədd etdi.',denied:'Bu şirkətin linkinə giriş icazəniz yoxdur.'},
@@ -43,7 +49,7 @@
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    paintHeader(old);clearPublicLink(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    paintHeader(old);clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -67,6 +73,41 @@
     const company=s.binding?.company_id;
     if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
     if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
+  }
+  function clearProfile(s){
+    s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
+    s.profileBox.hidden=true;s.profileStatus.textContent='';
+    s.registrationPhone.textContent=s.balance.textContent='—';
+  }
+  function syncProfile(s){
+    const company=s.binding?.company_id;
+    if(!company||!linkCurrent(s,company)){clearProfile(s);return;}
+    if(s.profileCompany===company)return;
+    clearProfile(s);
+    s.profileCompany=company;s.profileBox.hidden=false;
+    const read=new AbortController();s.profileRequest=read;
+    const active=()=>s.profileRequest===read&&linkCurrent(s,company);
+    void request(endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
+      .then(({company_profile:profile})=>{
+        if(!active())return;
+        if(profile?.state!=='available'){s.profileStatus.textContent=profileText('unavailable');return;}
+        if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
+        if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
+          window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(profile.balance);
+      },()=>{if(active())s.profileStatus.textContent=profileText('unavailable');})
+      .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
+  }
+  function mountProfile(s){
+    s.profileBox=node('div');s.profileBox.dataset.companyProfile='';s.profileBox.hidden=true;
+    s.profileStatus=node('p');s.profileStatus.setAttribute('role','status');
+    const field=(key)=>{
+      const row=node('div'),label=node('small',profileText(key)),value=node('span','—');
+      row.append(label,value);s.profileBox.append(row);return {label,value};
+    };
+    const phone=field('phone'),balance=field('balance');
+    s.registrationPhone=phone.value;s.balance=balance.value;
+    s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
+    s.profileBox.append(s.profileStatus);s.section.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -142,7 +183,7 @@
     s.value.textContent=name||t(binding?'unknown':'unavailable');
     s.value.title=s.value.textContent;
     if(!same||binding?.can_manage!==true||!s.editing)s.reset();
-    s.sync();syncPublicLink(s);
+    s.sync();syncPublicLink(s);syncProfile(s);
   }
   function refresh(s=state){
     if(!s||!current(s)||s.read||s.writing)return;
@@ -157,7 +198,7 @@
         (fields.operator_account&&s.binding.can_search_operator!==true))return;
     const expected_company_id=s.binding.company_id||null;
     let recheck=false;
-    s.writing=true;clearPublicLink(s);s.read?.abort();s.read=null;s.cancelSearch();s.sync();
+    s.writing=true;clearPublicLink(s);clearProfile(s);s.read?.abort();s.read=null;s.cancelSearch();s.sync();
     s.status.textContent=t('loading');
     try{
       const {binding}=await request(endpoint,s.member,{...s.route,...fields,expected_company_id},true);
@@ -173,7 +214,7 @@
       }
     }finally{
       s.writing=false;
-      if(current(s)){s.sync();if(recheck)refresh(s);else syncPublicLink(s);}
+      if(current(s)){s.sync();if(recheck)refresh(s);else{syncPublicLink(s);syncProfile(s);}}
     }
   }
   function mountEditor(s){
@@ -294,7 +335,7 @@
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
       headerHosts.set(s.section,nameHost);
-      labelPublicLink(s);
+      labelPublicLink(s);s.labelProfile();
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
       }else{paintHeader(s);s.sync();}
@@ -308,7 +349,7 @@
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
     const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
-    section.append(value,status);host.append(section);state=s;mountEditor(s);mountPublicLink(s);paintHeader(s);
+    section.append(value,status);host.append(section);state=s;mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
@@ -320,20 +361,24 @@
     #operatorDialogueCompanyPicker [role=status]{margin:0;color:var(--muted);font-size:.75rem}
     #operatorDialogueCompanyPicker [role=status]:empty,#operatorDialogueCompanyPicker .operator-dialog-company-results>div:empty{display:none}
     #operatorDialogueCompanyPicker .operator-dialog-company-results{display:grid;gap:4px;max-height:clamp(112px,35dvh,205px);overflow:auto;overscroll-behavior:auto}
-    #operatorClientCard #operatorDialogueCompanyPicker .operator-dialog-company-results button{display:block;width:100%;min-height:36px;text-align:start;border:0;color:inherit;background:var(--card)}
-    #operatorClientCard #operatorDialogueCompanyPicker .operator-dialog-company-results button:hover{background:var(--paper)}
+    #operatorCompanyPanel #operatorDialogueCompanyPicker .operator-dialog-company-results button{display:block;width:100%;min-height:36px;text-align:start;border:0;color:inherit;background:var(--card)}
+    #operatorCompanyPanel #operatorDialogueCompanyPicker .operator-dialog-company-results button:hover{background:var(--paper)}
     .operator-company-link-row{position:relative;display:block;min-width:0}
     [data-operator-dialog-company] [data-company-value]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-    #operatorClientCard #operatorDialogueCompanySearch{padding-inline-end:32px}
-    #operatorClientCard #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
-    #operatorClientCard .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
-    #operatorClientCard .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
+    #operatorCompanyPanel #operatorDialogueCompanySearch{padding-inline-end:32px}
+    #operatorCompanyPanel #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
+    #operatorCompanyPanel .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
+    #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
+    [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
+    [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:.75rem}
+    [data-company-profile]>p{margin:0}
+    [data-company-profile][hidden],[data-company-profile]>p:empty{display:none!important}
     [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:3px}
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}
     [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:.75rem}
-    #operatorClientCard .operator-company-copy-icon{display:inline-grid;place-items:center;width:40px;min-height:40px;padding:4px}
+    #operatorCompanyPanel .operator-company-copy-icon{display:inline-grid;place-items:center;width:40px;min-height:40px;padding:4px}
   `;document.head.append(style);
   for(const event of ['tenant-auth-invalid','tenant-auth-pending','tenant-chat-open','tenant-chat-close'])
     document.addEventListener(event,clear);
@@ -346,7 +391,7 @@
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
   document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
   window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
-    refreshPublicLink(force=false){if(state)syncPublicLink(state,force);},
-    hidePublicLink(){if(state)clearPublicLink(state);}
+    refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},
+    hidePublicLink(){if(state){clearPublicLink(state);clearProfile(state);}}
   };
 })();

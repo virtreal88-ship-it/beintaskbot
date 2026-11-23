@@ -156,3 +156,33 @@ async def test_handler_rejects_get_cross_origin_forged_account_and_never_caches(
     assert response.headers['Vary'] == 'Cookie'
     assert URL.encode() in response.body
     lookup.assert_called_once_with(profile, **ROUTE)
+
+
+def test_company_profile_projects_only_exact_verified_account_and_keeps_zero():
+    as_read = {'status':'success', 'data':{'account':ACCOUNT,'phone':'+994 50 123 45 67',
+        'balance':0,'partnerpin':'sensitive','email':'private@example.test'}}
+    assert link._company_profile_fields(as_read, ACCOUNT) == {
+        'registration_phone':'+994 50 123 45 67','balance':0}
+    as_read['data']['phone'] = 'unknown'
+    as_read['data']['balance'] = float('nan')
+    assert link._company_profile_fields(as_read, ACCOUNT) == {'registration_phone':None,'balance':None}
+    as_read['data']['account'] = 'different'
+    with pytest.raises(operator.OperatorError) as denied:
+        link._company_profile_fields(as_read, ACCOUNT)
+    assert denied.value.status == 403
+
+
+def test_company_profile_drops_provider_reply_after_rebinding(monkeypatch):
+    monkeypatch.setattr(operator, '_tenant', lambda p: 'tenant')
+    monkeypatch.setattr(operator, '_record_operator_read', Mock())
+    monkeypatch.setattr(operator, '_credentials', Mock(return_value={
+        'generation':'g', 'connection_instance_id':'i','token':'synthetic','base_url':operator.OPERATOR_API_BASE_URL}))
+    before = ('tenant', ACCOUNT, 'g', 'i')
+    monkeypatch.setattr(link, '_snapshot', Mock(side_effect=[before, before, ('tenant','other','g','i')]))
+    read = Mock(return_value={'status':'success','data':{'account':ACCOUNT,'balance':10.5}})
+    monkeypatch.setattr(operator, '_request_operator', read)
+    with pytest.raises(operator.OperatorError) as changed:
+        link.lookup_profile({}, **ROUTE)
+    assert changed.value.status == 409
+    read.assert_called_once_with('account_info', {'account':ACCOUNT}, requests_account_info=True,
+        token='synthetic', base_url=operator.OPERATOR_API_BASE_URL)
