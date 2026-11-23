@@ -714,7 +714,7 @@
     [data-operator-dialog-company]{min-width:0;color:var(--ink)}
     #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
     #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
-    #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
+    dialog#operatorCompanyPanel > .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
     #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
     #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
     #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}

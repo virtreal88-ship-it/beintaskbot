@@ -129,10 +129,14 @@ const beta='@verified_account';
   assert.equal(await panel.getAttribute('aria-label'),'Company details');
   assert.equal(await companyHeader.getByRole('tablist',{name:'Company',exact:true}).count(),1);
   assert.equal(await companyHeader.getByRole('heading').count(),0,'remove only the visual company title');
-  assert(await companyHeader.evaluate(el=>{
+  const compactHeader=await companyHeader.evaluate(el=>{
     const h=el.getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
-    return h.height<=42&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
-  }),'four tabs fit a header no taller than 42px');
+    const style=getComputedStyle(el);
+    return {height:h.height,tabHeight:tabs.height,contained:tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right,
+      paddingStart:style.paddingBlockStart,paddingEnd:style.paddingBlockEnd};
+  });
+  assert(compactHeader.contained&&compactHeader.height<=42,'four tabs fit a header no taller than 42px: '+JSON.stringify(compactHeader));
+  assert.deepEqual([compactHeader.paddingStart,compactHeader.paddingEnd],['4px','4px'],'company-specific padding wins when shared styles load last');
   for(const tab of await companyHeader.getByRole('tab').all()){
     assert.deepEqual(await tab.evaluate(corners),['0px','0px','0px','0px'],'tab edges and the active underline are square');
     assert((await tab.boundingBox()).height>=32,'compact tabs retain a usable click target');
