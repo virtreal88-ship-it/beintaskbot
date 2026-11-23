@@ -105,14 +105,33 @@ def test_owned_closed_has_exact_access_but_other_operator_and_pending_do_not(com
         sent.append((kind,data["account"]))
         return "done" if kind == "task" else "unconfirmed"
     monkeypatch.setattr("tenant_dialog_company_actions._send", send)
-    task = dict(kind="task",request_id=str(uuid.uuid4()),fields={
+    monkeypatch.setattr(operator,'_request_operator',lambda _kind, fields, **kw:
+                        {'status':'success','data':{'account':fields['account'],'balance':0}})
+    captured=link.lookup_profile(PROFILE,**route)
+    assert captured['task_options']['account']=='synthetic-account'
+    action_binding=captured['action_binding']
+    task = dict(expected_binding=action_binding,kind="task",request_id=str(uuid.uuid4()),fields={
         "title":"Example","description":"Test","project":"Umumi","priority":3})
     assert perform(PROFILE,**route,**task) == "done"
     assert perform(PROFILE,**route,**task) == "done"
-    credit = dict(kind="credit",request_id=str(uuid.uuid4()),fields={"amount":"1.05","info":"Test"})
+    credit = dict(expected_binding=action_binding,kind="credit",request_id=str(uuid.uuid4()),fields={"amount":"1.05","info":"Test"})
     assert perform(PROFILE,**route,**credit) == "unconfirmed"
     credit["request_id"] = str(uuid.uuid4())
     assert perform(PROFILE,**route,**credit) == "unconfirmed"
     with pytest.raises((operator.OperatorError, link.TenantLinearError)):
         perform({"tenant_id":A,"telegram_id":33},**route,**credit)
     assert sent == [("task","synthetic-account"),("credit","synthetic-account")]
+    # Relinking the very same CRM UUID must not turn an authorized preview
+    # of account A into a remote dispatch to B, for either operation.
+    database.execute('''UPDATE saas_beinsystems_operator_company_imports SET external_account='changed-account'
+                        WHERE tenant_id=%s::uuid AND company_id=%s::uuid''',(A,company))
+    database.commit()
+    fresh_profile=link.lookup_profile(PROFILE,**route)
+    assert fresh_profile['task_options']['account']=='changed-account'
+    assert fresh_profile['action_binding']!=action_binding
+    for offered in (task,credit):
+        with pytest.raises(operator.OperatorError) as stale:
+            perform(PROFILE,**route,**{**offered,'request_id':str(uuid.uuid4())})
+        assert stale.value.status==409
+    assert sent == [("task","synthetic-account"),("credit","synthetic-account")]
+    assert database.execute("SELECT count(*) AS count FROM saas_operator_company_actions WHERE tenant_id=%s",(A,))[0]['count']==2

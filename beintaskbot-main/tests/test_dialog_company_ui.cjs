@@ -17,17 +17,27 @@ const read=p=>fs.readFileSync(p,'utf8');
   const all=[a,b,kommo,kommoWithoutJob,operatorCandidate,freshCandidate];
   const named=(name,manage=false)=>({company_id:name,company_name:name,can_manage:manage});
   const bindings=new Map([[41,named('Company A',true)],[42,named('Company B')],[43,named('Company K',true)],[44,named('Company without job',true)],[45,{company_id:null,can_manage:true}],[46,{company_id:null,can_manage:true}]]);
-  const calls=[];let delayRead=false,delaySearch=false,releaseRead,releaseSearch,holdOperator=false,releaseOperator,failedOperator=false,confirmations=0,confirmUnlink=true,inlineSnapshot=false;
+  const calls=[];let savedPanelOpen=false,releaseTab,delayTab=false,delayRead=false,delaySearch=false,releaseRead,releaseSearch,holdOperator=false,releaseOperator,failedOperator=false,confirmations=0,confirmUnlink=true,inlineSnapshot=false;
   w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};w.confirm=()=>{confirmations++;return confirmUnlink;};
   w.fetch=async(url,opt={})=>{
     const u=new URL(String(url),w.location.origin),body=opt.body?JSON.parse(opt.body):null;
     assert.equal(u.origin,w.location.origin,'no external Operator requests');
     calls.push({path:u.pathname,query:u.searchParams,body});let result;
     if(u.pathname==='/api/platform/me')return{ok:true,json:async()=>profile};
+    if(u.pathname.endsWith('/dialogs/company-panel/preferences')){
+      if(body){assert.deepEqual([body.expected_tenant_id,body.expected_user_id],['tenant',33]);savedPanelOpen=body.open;}
+      else assert.deepEqual([opt.headers['X-Tenant-Id'],opt.headers['X-User-Id']],['tenant','33']);
+      return{ok:true,json:async()=>({success:true,result:{open:savedPanelOpen}})};
+    }
     if(u.pathname==='/api/platform/operator/dialog-company'){
       const q=body||Object.fromEntries(u.searchParams),route=all.find(r=>String(r.lead_id)===q.lead_id);
       assert.deepEqual([q.provider,q.channel_id,q.conversation_id],[route.provider,route.channel_id,route.conversation_id]);
       assert.deepEqual([q.expected_tenant_id,q.expected_user_id],['tenant','33']);
+      if(['company_tasks','company_modules','company_history'].includes(q.action)){
+        assert.equal(q.expected_company_id,bindings.get(route.lead_id).company_id);
+        if(delayTab)await new Promise(resolve=>{releaseTab=resolve;});
+        return{ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[{company_tasks:['BUG-1',q.action+' for '+q.expected_company_id,'In progress'],company_modules:[q.action+' for '+q.expected_company_id],company_history:['2026-11-03','0.00 AZN',q.action+' for '+q.expected_company_id]}[q.action]]}})};
+      }
       if(q.action==='company_profile')return{ok:true,json:async()=>({success:true,company_profile:{state:'not_linked'}})};
       if(body&&'company_search' in q){
         assert.equal('company_id' in q,false);
@@ -67,7 +77,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   const search=()=>$('#operatorDialogueCompanySearch');
   const openPanel=()=>{if(!$('#operatorCompanyPanel').open)$('#operatorCompanyPanelOpen').click();};
   const openSearch=()=>{openPanel();search().focus();search().click();};
-  const type=value=>{const input=search();input.value=value;input.dispatchEvent(new w.Event('input'));};
+  const type=value=>{const input=search();input.focus();input.value=value;input.dispatchEvent(new w.InputEvent('input',{inputType:'insertText'}));};
   const unbind=async()=>{openPanel();section().querySelector('.operator-company-unlink').click();search().blur();await tick();await tick();};
   const localReads=()=>calls.filter(c=>c.body?.company_search);
   const localWrites=()=>calls.filter(c=>c.body?.company_id);
@@ -81,6 +91,50 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal($('#operatorConversationName'),null,'Kommo company access never creates a display-name form');
   openPanel();
   assert.equal(search().value,'Company K','linked company is in the same input');
+  assert(search().readOnly,'idle picker is not an autofill target');
+  const readsBeforeAutofill=localReads().length;
+  search().value='synthetic-saved-login';search().dispatchEvent(new w.Event('input'));
+  assert.equal(search().value,'Company K','autofill does not overwrite the linked company');
+  search().focus();search().value='synthetic-saved-login';
+  search().dispatchEvent(new w.InputEvent('input',{inputType:'insertReplacementText'}));
+  await debounce();
+  assert.equal(search().value,'Company K','focused field rejects automatic replacements');
+  assert.equal(localReads().length,readsBeforeAutofill,'browser-injected text is never searched');
+  search().blur();
+
+  const tabs=()=>[...$('#operatorCompanyPanel .operator-client-panel-header').querySelectorAll('[role=tab]')];
+  for(const [lang,labels] of Object.entries({en:['Main','Tasks','Modules','Payment history'],ru:['Главная','Задачи','Модули','История платежей'],az:['Əsas','Tapşırıqlar','Modullar','Ödəniş tarixçəsi']})){
+    w.tenantI18n.setLanguage(lang);
+    assert.deepEqual(tabs().map(x=>x.textContent),labels);
+  }
+  w.tenantI18n.setLanguage('en');await tick();
+  assert(!$('#operatorCompanyPanelClose'),'no second panel close button');
+  for(const [i,key,action] of [[1,'tasks','company_tasks'],[2,'modules','company_modules'],[3,'history','company_history']]){
+    tabs()[i].click();await tick();
+    assert.equal(tabs()[i].getAttribute('aria-selected'),'true');
+    assert($('#operatorCompanyView-main').hidden);
+    const section=$('#operatorCompanyView-'+key);
+    assert(section.textContent.includes(action+' for Company K'));
+    if(key==='tasks')assert.equal(section.querySelector('.operator-company-badge').dataset.tone,'progress');
+    if(key==='modules')assert.equal(section.querySelector('.operator-company-badge').dataset.tone,'neutral');
+    if(key==='history')assert.equal(section.querySelector('.operator-company-section-amount').textContent,'0.00 AZN');
+  }
+  tabs()[3].dispatchEvent(new w.KeyboardEvent('keydown',{key:'Home',bubbles:true}));
+  assert(!$('#operatorCompanyView-main').hidden);
+  assert.equal(d.activeElement.id,'operatorCompanyTab-main');
+  await tick();assert.equal(savedPanelOpen,true);
+  $('#operatorCompanyPanelOpen').click();await tick();
+  assert.equal(savedPanelOpen,false);assert(!$('#operatorCompanyPanel').open);
+  $('#operatorCompanyPanelOpen').click();await tick();
+  delayTab=true;tabs()[1].click();await tick();
+  assert.equal(typeof releaseTab,'function');
+  await w.tenantOperator.openDialog(kommoWithoutJob);await tick();
+  delayTab=false;releaseTab();await tick();
+  assert($('#operatorCompanyPanel').open,'open preference applies to the next dialogue');
+  assert.equal(tabs()[0].getAttribute('aria-selected'),'true');
+  assert(!section().textContent.includes('for Company K'),'company-specific section data never crosses dialogues');
+  await w.tenantOperator.openDialog(kommo);await tick();
+
   assert.equal(section().querySelector('.operator-company-unlink').textContent,'×');
   section().querySelector('.operator-company-unlink').click();
   assert.equal(search().value,'');
@@ -106,14 +160,20 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(value(),'Company without job','exact empty Kommo fields still mount');
   const emptyRead=calls.filter(c=>c.path.endsWith('/dialog-company')&&!c.body).at(-1);
   assert.equal(emptyRead.query.get('conversation_id'),'');assert.equal(emptyRead.query.get('channel_id'),'');
-  await unbind();openSearch();panel=$('#operatorDialogueCompanyPicker');
-  const oldHost=section().parentElement,readCount=calls.filter(c=>c.path.endsWith('/dialog-company')).length;
-  panel.querySelector('input').value='Unsubmitted search';
+  await unbind();
+  const readsBeforeEmpty=localReads().length;
+  search().value='synthetic-browser-prefill';search().dispatchEvent(new w.Event('input'));
+  assert.equal(search().value,'','unlinked picker stays empty after autofill');
+  await debounce();assert.equal(localReads().length,readsBeforeEmpty);
+  openSearch();panel=$('#operatorDialogueCompanyPicker');
+  const bindingReads=()=>calls.filter(c=>c.path.endsWith('/dialog-company')&&!c.body).length;
+  const oldHost=section().parentElement,readCount=bindingReads();
+  type('Unsubmitted search');
   w.tenantI18n.setLanguage('ru');await tick();
   assert.notEqual(section().parentElement,oldHost,'full header rerender occurred');
   assert.equal($('#operatorDialogueCompanyPicker'),panel,'same-route redraw preserves the open picker');
   assert.equal(panel.querySelector('input').value,'Unsubmitted search');
-  assert.equal(calls.filter(c=>c.path.endsWith('/dialog-company')).length,readCount,'no duplicate company request while picker stays open');
+  assert.equal(bindingReads(),readCount,'no duplicate binding read while picker stays open; a manually typed query may debounce independently');
   w.tenantI18n.setLanguage('en');await tick();
   await w.tenantOperator.openDialog(a);await tick();assert.equal(value(),'Company A');assert($('#operatorClientCard'),'existing Connect roster/name card retained');
   await unbind();delaySearch=true;openSearch();type('bind');panel=$('#operatorDialogueCompanyPicker');await debounce();assert(releaseSearch);
@@ -179,7 +239,8 @@ const read=p=>fs.readFileSync(p,'utf8');
   inlineSnapshot=true;
   const priorReads=calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length;
   await w.tenantOperator.openDialog(freshCandidate);await tick();
-  assert(!search().readOnly,'authorized history makes inline editing available immediately');
+  assert(search().readOnly,'authorized search stays autofill-safe until focused');
+  openSearch();assert(!search().readOnly,'authorized history makes inline editing available on focus');
   assert.equal(search().placeholder,'Find a company');
   assert.equal(calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length,priorReads,'no follow-up company GET for an authorized snapshot');
   assert(!calls.some(c=>c.path.includes('/send')));

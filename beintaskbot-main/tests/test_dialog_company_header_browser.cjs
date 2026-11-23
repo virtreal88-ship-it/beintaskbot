@@ -27,19 +27,24 @@ const beta='@verified_account';
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
-   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];
+   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.savedOpen=false;
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
     if(api==='/api/platform/me')return {ok:true,json:async()=>profile};
+    if(api.endsWith('/dialogs/company-panel/preferences')){
+      if(opt.method==='POST')window.savedOpen=JSON.parse(opt.body).open;
+      return ok({open:window.savedOpen});
+    }
     if(api==='/api/platform/operator/dialog-company'){
      if(opt.method==='POST'){
       const data=JSON.parse(opt.body);
       if(data.action==='company_profile'){
        if(data.expected_company_id!==fixtures[data.channel_id]?.company_id)throw Error('Inexact company profile');
        window.profilePosts.push(data.channel_id);
-       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0}})};
+       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0,actions:{task:true,credit:true},action_binding:'b'.repeat(64),task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}}})};
       }
+      if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[]}})};
       if(data.company_search!=='Test company'||data.channel_id!=='a'||data.lead_id!=='41')throw Error('Unexpected company search');
       return {ok:true,json:async()=>({success:true,companies:[{id:'existing',name:'Test company'}]})};
      }
@@ -100,22 +105,58 @@ const beta='@verified_account';
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
   assert(!await panel.isVisible());
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),[]);
-  await page.locator('#operatorCompanyPanelOpen').click();
+  const toggle=page.locator('#operatorCompanyPanelOpen');
+  await toggle.scrollIntoViewIfNeeded();
+  assert(await toggle.evaluate(el=>{
+    const a=el.getBoundingClientRect();
+    const avatar=document.querySelector('#operatorClientCardOpen').getBoundingClientRect();
+    const target=document.elementFromPoint(a.left+a.width/2,a.top+a.height/2);
+    return a.width>=34&&a.height>=34&&a.left>=avatar.right&&el.contains(target);
+  }),'company toggle keeps its own real hit target beside the avatar');
+  await toggle.click();
   await panel.locator('[data-company-profile]').getByText('+994501234567',{exact:true}).waitFor();
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
   assert(!await card.isVisible());
+  const companyHeader=panel.locator('.operator-client-panel-header');
+  assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payment history']);
+  assert.equal(await panel.locator('#operatorCompanyPanelClose').count(),0);
+  assert(await companyHeader.evaluate(el=>{
+    const h=el.getBoundingClientRect(),title=el.querySelector('h2').getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
+    return h.height<=60&&title.top>=h.top&&title.bottom<=h.bottom&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
+  }),'four tabs fit the same existing header strip');
+  assert(await page.locator('#operatorCompanyPanelOpen').evaluate(el=>!el.closest('[inert]')),'header toggle can close the mobile panel');
+  await page.waitForFunction(()=>window.savedOpen===true);
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
+  assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
+  await companyHeader.getByRole('tab',{name:'Tasks',exact:true}).click();
+  await panel.getByRole('button',{name:'Create task',exact:true}).click();
+  const taskModal=page.getByRole('dialog',{name:'New task',exact:true});
+  await taskModal.waitFor();
+  assert.equal(await taskModal.locator('input[readonly]').inputValue(),'verified-account');
+  assert(await taskModal.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight;}));
+  assert.equal(await taskModal.locator('.operator-company-action-grid').evaluate(el=>getComputedStyle(el).gridTemplateColumns.split(' ').length),width<=600?1:3);
+  const taskWidth=(await taskModal.boundingBox()).width;
+  await taskModal.getByRole('button',{name:'Cancel',exact:true}).click();
+  await companyHeader.getByRole('tab',{name:'Payment history',exact:true}).click();
+  await panel.getByRole('button',{name:'Add credit',exact:true}).click();
+  const creditModal=page.getByRole('dialog',{name:'Add credit',exact:true});await creditModal.waitFor();
+  assert((await creditModal.boundingBox()).width<=Math.min(400,taskWidth));
+  await creditModal.getByRole('button',{name:'Cancel',exact:true}).click();
+  await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   const search=panel.locator('#operatorDialogueCompanySearch');
-  assert(await search.isEditable(),'authorized user can type in the company picker');
+  assert(!await search.isEditable(),'idle search resists autofill');
   await search.focus();
+  assert(await search.isEditable(),'authorized user can type after focusing the company picker');
   await search.press('ControlOrMeta+a');
   await search.pressSequentially('Test company');
   assert.equal(await search.inputValue(),'Test company');
   await panel.getByRole('button',{name:'Test company',exact:true}).waitFor();
   await panel.locator('h2').click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
-  await page.locator('#operatorCompanyPanelClose').click();
+  await page.locator('#operatorCompanyPanelOpen').click();
+  await page.waitForFunction(()=>window.savedOpen===false);
+  await panel.waitFor({state:'hidden'});
   await page.locator('#operatorClientCardOpen').click();
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
   await caseField('status').waitFor();
@@ -183,7 +224,7 @@ const beta='@verified_account';
   await page.locator('#operatorCompanyPanelOpen').click();
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
-  await page.locator('#operatorCompanyPanelClose').click();
+  await page.locator('#operatorCompanyPanelOpen').click();
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'tasks'}})));
   assert(!await name.isVisible()&&!(await name.textContent()),'leaving Dialogs clears company name');
   await page.evaluate(()=>{window.mode.b='denied';document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'dialogs'}}));});

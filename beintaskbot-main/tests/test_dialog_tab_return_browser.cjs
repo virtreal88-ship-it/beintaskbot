@@ -20,6 +20,7 @@ function gate(){
   try{
     const page=await browser.newPage({viewport:{width:1280,height:840}});
     let meGate,companyGate,templatesGate,historyGate,featuresDenied=false,dialogDenied=false,sessionDenied=false,profileReads=0;
+    let savedOpen=false,preferenceReads=0;const preferenceWrites=[];
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',async route=>{
       const name=new URL(route.request().url()).pathname;
@@ -33,6 +34,17 @@ function gate(){
         profileReads++;
         if(meGate)await meGate.hold();
         return sessionDenied?fulfill({success:false},401):fulfill(profile);
+      }
+      if(name.endsWith('/dialogs/company-panel/preferences')){
+        if(route.request().method()==='POST'){
+          const {open,expected_tenant_id,expected_user_id}=route.request().postDataJSON();
+          assert.equal(typeof open,'boolean');assert.equal(expected_tenant_id,tenant);assert.equal(expected_user_id,33);
+          savedOpen=open;preferenceWrites.push(open);
+        }else{
+          const headers=route.request().headers();
+          assert.equal(headers['x-tenant-id'],tenant);assert.equal(headers['x-user-id'],'33');preferenceReads++;
+        }
+        return fulfill({success:true,result:{open:savedOpen}});
       }
       if(name.endsWith('/dialog-company')){
         if(route.request().postDataJSON()?.action==='company_profile')
@@ -57,8 +69,11 @@ function gate(){
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
     const companyPanel=page.locator('#operatorCompanyPanelOpen');
-    await companyPanel.click();
+    const saved=page.waitForResponse(res=>res.url().endsWith('/dialogs/company-panel/preferences')&&res.request().method()==='POST');
+    await companyPanel.click();assert.equal((await saved).status(),200);
     await company.waitFor();await templates.waitFor();await input.fill('Unsaved reply');
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true');
+    assert.deepEqual(preferenceWrites,[true]);
     await page.evaluate(()=>{
       window.initialNodes=['#operatorDialogs','#chatRows','#chatText','.operator-company-unlink','#operatorReplyTemplatesOpen']
         .map(selector=>document.querySelector(selector));
@@ -89,7 +104,8 @@ function gate(){
     // App navigation retains the chat body but must restore controls removed by view exit.
     await page.evaluate(()=>window.tenantAppNavigate('tasks',false));
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
-    await companyPanel.click();await company.waitFor();await templates.waitFor();
+    await company.waitFor();await templates.waitFor();
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','saved open panel reappears on return');
     assert.equal(await input.inputValue(),'Unsaved reply');
     historyGate.release();historyGate=null;
     await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');
@@ -106,7 +122,18 @@ function gate(){
     dialogDenied=false;featuresDenied=false;
     await tab(true);await tab(false);
     await page.locator('.operator-row').first().click();
-    await input.waitFor();await companyPanel.click();await company.waitFor();await templates.waitFor();
+    await input.waitFor();await company.waitFor();await templates.waitFor();
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','panel is already restored after authorized reopening');
+    assert.deepEqual(preferenceWrites,[true],'access loss and recovery are not preference writes');
+    // A fresh document must read the saved value from the server, not reuse
+    // in-memory UI state or perform an unsolicited write.
+    const readsBeforeReload=preferenceReads;
+    await page.reload();
+    await page.locator('.operator-row').first().click();
+    await company.waitFor();await templates.waitFor();await input.waitFor();
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','server preference restores open after reload');
+    assert(preferenceReads>readsBeforeReload);
+    assert.deepEqual(preferenceWrites,[true]);
     // A revoked browser session clears the actual chat because old data is no longer authorized.
     sessionDenied=true;
     await tab(true);await tab(false);

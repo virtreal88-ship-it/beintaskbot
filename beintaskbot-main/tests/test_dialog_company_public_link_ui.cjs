@@ -1,7 +1,7 @@
 const fs=require('node:fs'),assert=require('node:assert/strict'),{JSDOM}=require('jsdom');
 const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
 (async()=>{
-  const dom=new JSDOM('<dialog><div id="host"></div></dialog><span id="name"></span>',
+  const dom=new JSDOM('<dialog><header class="operator-client-panel-header"></header><div id="host"></div></dialog><span id="name"></span>',
     {url:'https://crm.test/app',runScripts:'outside-only'});
   const w=dom.window,d=w.document,card=d.querySelector('dialog'),host=d.querySelector('#host');
   const URL='https://1000.az/AbC123',copied=[],calls=[],profiles=[];let clipboardFails=false,gestureWrites=0;
@@ -16,18 +16,24 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
       const r=new w.FileReader();r.onload=()=>{copied.push(r.result);resolve();};r.onerror=reject;r.readAsText(blob);
     }));
   }}});
-  const submissions=[];
+  const actionBinding='c'.repeat(64),submissions=[],sectionReads=[];let holdWrite=false,releaseWrite;
   w.fetch=(path,{signal,method,body,cache,headers})=>{
     assert.equal(method,'POST');assert.equal(cache,'no-store');assert.equal(headers['Content-Type'],'application/json');
     const data=JSON.parse(body);
     if(path.endsWith('/action')){
       submissions.push(data);
+      if(holdWrite)return new Promise(resolve=>{releaseWrite=(state='unconfirmed')=>resolve({ok:true,json:async()=>({success:true,state})});});
       return Promise.resolve({ok:true,json:async()=>({success:true,state:'done'})});
     }
     if(data.action==='company_profile'){
       assert.equal(path,'/api/platform/operator/dialog-company');
       return new Promise(resolve=>profiles.push(profile=>resolve({ok:true,json:async()=>({
         success:true,company_profile:profile})})));
+    }
+    if(data.action==='company_tasks'||data.action==='company_history'){
+      sectionReads.push(data);
+      const rows=data.action==='company_history'?Array.from({length:41},(_,i)=>['day-'+i,'0.00 AZN','payment-'+i]):[];
+      return Promise.resolve({ok:true,json:async()=>({success:true,company_section:{state:'available',rows}})});
     }
     assert.equal(path,'/api/platform/operator/dialog-company/public-link');
     assert.equal(data.action,'copy_customer_link');assert.equal('account' in data,false);assert.equal('public_base_url' in data,false);
@@ -53,22 +59,46 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   mount('second');assert(calls[0].signal.aborted);assert.equal(calls.length,1);
   profiles[0]({state:'available',registration_phone:'111111111',balance:123});await tick();
   assert(!host.querySelector('[data-company-profile]').textContent.includes('111111111'));
-  profiles[1]({state:'available',registration_phone:'222222222',balance:0,actions:{task:true,credit:true}});await tick();
+  profiles[1]({state:'available',registration_phone:'222222222',balance:0,actions:{task:true,credit:true},action_binding:actionBinding,
+    task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}});await tick();
   assert(host.querySelector('[data-company-profile]').textContent.includes('222222222'));
-  const actionForm=caption=>Array.from(host.querySelectorAll('details')).find(el=>el.querySelector('summary').textContent===caption);
-  const task=actionForm('Tapşırıq yarat');
-  task.querySelector('input').value='Test';
+  const area=id=>d.querySelector('#operatorCompanyView-'+id),tab=id=>d.querySelector('#operatorCompanyTab-'+id);
+  assert(!area('main').querySelector('[data-company-action]'),'Main contains no task or credit control');
+  const taskTrigger=area('tasks').querySelector('[data-company-action=task]');
+  assert(!area('tasks').querySelector('[data-company-action=credit]'));
+  tab('tasks').click();await tick();taskTrigger.click();
+  const task=d.querySelector('[data-company-action-modal=task]');
+  assert(task.open);assert.equal(task.querySelector('h2').textContent,'Yeni Tapşırıq');
+  assert.equal(task.querySelector('input[readonly]').value,'verified-account');
+  assert.equal(submissions.length,0,'opening the modal never writes');
+  task.querySelector('input:not([readonly])').value='Test';
   task.querySelector('textarea').value='Details';
-  task.querySelector('select').value='Umumi';
-  task.querySelector('button').click();task.querySelector('button').click();await tick();
+  task.querySelectorAll('.operator-company-action-grid select')[1].value='Umumi';
+  task.querySelector('button[type=submit]').click();task.querySelector('button[type=submit]').click();await tick();
   assert.equal(submissions.length,1);
-  assert.equal(submissions[0].fields.project,'Umumi');assert.equal(submissions[0].expected_company_id,'second');
-  const credit=actionForm('Kredit əlavə et');
+  assert.equal(submissions[0].fields.project,'Umumi');assert.equal(submissions[0].expected_company_id,'second');assert.equal(submissions[0].expected_binding,actionBinding);
+  assert(!('account' in submissions[0].fields),'bound account is displayed, not accepted as a caller field');
+  task.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));assert(!task.isConnected);
+  assert.equal(d.activeElement,taskTrigger,'closing returns focus to the opening control');
+  tab('history').click();await tick();
+  const pay=area('history'),historyReadCount=()=>sectionReads.filter(r=>r.action==='company_history').length;
+  const readBeforePaging=historyReadCount(),shown=()=>[...pay.querySelectorAll('li')];
+  assert.equal(shown().length,20);assert.match(shown()[0].textContent,/payment-0/);
+  const pageButtons=()=>[...pay.querySelectorAll('.operator-company-pagination button')];
+  assert(pageButtons()[0].disabled);
+  pageButtons()[1].click();assert.equal(shown().length,20);assert.match(shown()[0].textContent,/payment-20/);
+  pageButtons()[1].click();assert.equal(shown().length,1);assert.match(shown()[0].textContent,/payment-40/);
+  assert(pageButtons()[1].disabled);assert.equal(historyReadCount(),readBeforePaging,'page buttons only slice the verified returned snapshot');
+  const creditTrigger=pay.querySelector('[data-company-action=credit]');creditTrigger.click();
+  const credit=d.querySelector('[data-company-action-modal=credit]');
+  assert(credit.open);assert(!pay.querySelector('[data-company-action=task]'));
   credit.querySelector('input[type=number]').value='1.50';
   credit.querySelector('input:not([type=number])').value='Example';
-  w.confirm=()=>false;credit.querySelector('button').click();assert.equal(submissions.length,1);
-  w.confirm=()=>true;credit.querySelector('button').click();await tick();
-  assert.equal(submissions[1].fields.amount,'1.50');assert(!('account' in submissions[1].fields));
+  w.confirm=()=>false;credit.querySelector('button[type=submit]').click();assert.equal(submissions.length,1);
+  w.confirm=()=>true;credit.querySelector('button[type=submit]').click();await tick();
+  assert.equal(submissions[1].fields.amount,'1.50');assert.equal(submissions[1].expected_binding,actionBinding);assert(!('account' in submissions[1].fields));
+  credit.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  tab('main').click();
   calls[0].finish({state:'available',url:'https://1000.az/Wrong1'});await tick();
   assert.equal(copied.length,0,'late first-company receipt cannot enter clipboard');
   press();clipboardFails=true;calls[1].finish({state:'available',url:URL});await tick();await tick();
@@ -103,7 +133,48 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   Object.defineProperty(w.navigator,'clipboard',{value:undefined});
   press();await tick();assert.equal(calls.length,13,'unsupported clipboard does not make a request');
   assert.match(box().textContent,/kopyalama əlçatan deyil/);
-  api.clear();assert.equal(box(),null);
+  // Route change disposes the modal and a late ambiguous write never enables
+  // a second submission by closing/reopening this route's modal.
+  mount('fourth','d');
+  profiles.at(-1)({state:'available',actions:{task:true,credit:false},action_binding:actionBinding,task_options:{
+    account:'fourth-account',projects:['Umumi'],priorities:[3]}});await tick();
+  assert(!area('history').querySelector('[data-company-action=credit]'));
+  tab('tasks').click();await tick();area('tasks').querySelector('[data-company-action=task]').click();
+  const pending=d.querySelector('[data-company-action-modal=task]');
+  pending.querySelector('input:not([readonly])').value='Pending task';
+  pending.querySelector('textarea').value='Details';
+  pending.querySelectorAll('select')[1].value='Umumi';
+  holdWrite=true;pending.querySelector('button[type=submit]').click();assert.equal(submissions.length,3);
+  mount('fifth','e');assert(!pending.isConnected);
+  releaseWrite();await tick();holdWrite=false;
+  mount('fourth','d');
+  profiles.at(-1)({state:'available',actions:{task:true,credit:false},action_binding:actionBinding,task_options:{
+    account:'fourth-account',projects:['Umumi'],priorities:[3]}});await tick();
+  tab('tasks').click();await tick();area('tasks').querySelector('[data-company-action=task]').click();
+  const reopened=d.querySelector('[data-company-action-modal=task]');
+  assert(reopened.querySelector('button[type=submit]').disabled);
+  assert.match(reopened.querySelector('[role=status]').textContent,/təsdiqlənməyib/);
+  reopened.querySelector('button[type=submit]').click();assert.equal(submissions.length,3);
+  for(const result of ['done','denied','unconfirmed']){
+    mount('latest-'+result,'f');
+    profiles.at(-1)({state:'available',actions:{task:true,credit:false},action_binding:actionBinding,task_options:{
+      account:'active-account',projects:['Umumi'],priorities:[3]}});await tick();
+    tab('tasks').click();await tick();
+    const open=()=>{area('tasks').querySelector('[data-company-action=task]').click();return d.querySelector('[data-company-action-modal=task]');};
+    const old=open();
+    old.querySelector('input:not([readonly])').value='Held task';old.querySelector('textarea').value='Details';
+    old.querySelectorAll('select')[1].value='Umumi';
+    holdWrite=true;old.querySelector('button[type=submit]').click();
+    const writes=submissions.length;
+    old.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+    assert(!old.isConnected);
+    const fresh=open();assert(fresh.querySelector('button[type=submit]').disabled);
+    fresh.querySelector('button[type=submit]').click();assert.equal(submissions.length,writes);
+    releaseWrite(result);holdWrite=false;await tick();
+    assert.equal(fresh.querySelector('button[type=submit]').disabled,result==='unconfirmed');
+    assert.match(fresh.querySelector('[role=status]').textContent,{done:/Tamamlandı/,denied:/rədd etdi/,unconfirmed:/təsdiqlənməyib/}[result]);
+  }
+  api.clear();assert.equal(box(),null);assert(!d.querySelector('[data-company-action-modal]'));
   dom.window.close();
   console.log('dialog company one-click public-link assertions passed');
 })().catch(e=>{console.error(e);process.exitCode=1;});

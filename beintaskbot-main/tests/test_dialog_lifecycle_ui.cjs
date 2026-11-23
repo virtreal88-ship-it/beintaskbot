@@ -2,7 +2,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
 const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0));
 (async()=>{
- await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();await verifyOwnerOverview();
+ await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();await verifyOwnerOverview();await verifySidebarTransfer();
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'client',agent_id:'agent',agent_name:'Agent',state:'human',can_send:false,send_block_reason:'dialog_accept_required',controls_allowed:true,available_actions:['resume'],lifecycle_enabled:true,lifecycle:{id:'episode',state:'waiting',revision:1,can_accept:true,last_inbound_id:'latest-inbound'}};
@@ -43,7 +43,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  assert.equal(d.querySelector('#chatText'),composerBeforeNameChange,'name-only refresh keeps the editor intact');
  assert(d.querySelector('[data-client-accepted-by]').hidden,'clearing the name hides the same row');
  assert.equal(acceptedBy.querySelector('span').textContent,'','clearing the name removes old text');
- d.querySelector('[data-operator-lifecycle=transfer]').click();assert.equal(d.querySelector('#operatorLifecycleModal select option:last-child').textContent,'Hüseyn');d.querySelector('#operatorLifecycleModal [data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));assert.equal(calls.filter(c=>c.body?.action==='transfer').length,0);
+ assert(d.querySelector('#operatorSidebarTransfer [data-operator-lifecycle=transfer]'));assert(!d.querySelector('#operatorMoreActions [data-operator-lifecycle=transfer]'));assert(!d.querySelector('#operatorLifecycleModal'));
  d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();assert(d.querySelector('[data-operator-lifecycle=case]'));assert(!d.querySelector('[data-operator-lifecycle=accept]'));assert(!d.querySelector('[data-operator-lifecycle=close]'));assert(d.querySelector('#sendChat').disabled);assert.equal(calls.filter(c=>c.body?.action==='case').length,0,'close never creates a case');assert(!calls.some(c=>c.url.includes('support-tickets/complete')||c.url.includes('knowledge-candidates')));
  d.querySelector('[data-operator-lifecycle=case]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='case').length,1);
  route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',completed_episodes:[{id:'old-completed',accepted_at:'2026-01-01T00:00:00Z',closed_at:'2026-01-01T00:01:00Z',case_id:null},{id:'already-sent',accepted_at:'2025-01-01T00:00:00Z',closed_at:'2025-01-01T00:01:00Z',case_id:'saved'}]}};
@@ -238,5 +238,67 @@ async function verifyCompanyCompletion(){
  archived.querySelector('[data-company-skip]').click();await tick();await tick();
  const archiveClose=calls.find(c=>c.body?.action==='close');assert.equal(archiveClose.body.company_choice,'none');
  assert(!('company_id' in archiveClose.body));
+ dom.window.close();
+}
+
+
+async function verifySidebarTransfer(){
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const profile={member:{tenant_id:'tenant',telegram_id:33,role:'operator',active:true},capabilities:{modules:{dialogs:true}}};
+ const own={provider:'connect',lead_id:41,channel_id:'exact-source',conversation_id:'client',can_send:true,lifecycle_enabled:true,
+  lifecycle:{state:'accepted',operator_id:33,revision:3,can_transfer:true}};
+ const passive={...own,channel_id:'passive',lead_id:42,archive_read_only:true};
+ let mode='empty',failed=false,release;const requests=[];
+ w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:true,addListener(){},removeListener(){}});w.alert=()=>{};
+ w.confirm=()=>{throw Error('transfer must not ask for a second confirmation');};
+ w.fetch=async(url,opt={})=>{
+   const path=new URL(url,w.location.origin),body=opt.body?JSON.parse(opt.body):null;
+   const ok=result=>({ok:true,status:200,json:async()=>({success:true,result})});
+   if(path.pathname.endsWith('/dialogs/history'))return ok({dialog:path.searchParams.get('channel_id')==='passive'?passive:own,messages:[]});
+   if(path.pathname.endsWith('/dialogs/transfer-candidates')){
+     assert.equal(path.searchParams.get('channel_id'),'exact-source');assert.equal(path.searchParams.get('expected_revision'),'3');
+     assert.equal(path.searchParams.get('expected_user_id'),'33');
+     if(mode==='delay')await new Promise(r=>release=r);
+     return ok({targets:mode==='empty'?[]:[{employee_id:33,name:'Self'},{employee_id:44,name:'Online operator'}]});
+   }
+   if(path.pathname.endsWith('/dialogs_lifecycle')){
+     requests.push(body);
+     if(failed)return{ok:false,status:403,json:async()=>({success:false})};
+     return ok({lifecycle:{...own.lifecycle,revision:4,operator_id:44}});
+   }
+   if(path.pathname.endsWith('/dialogs/company-panel/preferences'))return ok({open:body?.open||false});
+   if(path.pathname.endsWith('/dialogs'))return ok({dialogs:[],channels:[],agents:[]});
+   return ok({});
+ };
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+ w.tenantI18n.setLanguage('en');
+ d.querySelector('#view-dialogs').classList.add('active');
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await w.tenantOperator.refresh();
+ await w.tenantOperator.openDialog(own);
+ d.querySelector('#operatorCompanyPanelOpen').click();
+ assert(d.querySelector('#operatorCompanyPanel').open);
+ assert(!d.querySelector('#operatorCompanyPanelOpen').closest('[inert]'),'mobile toggle stays usable');
+ const menu=d.querySelector('#operatorSidebarTransfer details');menu.open=true;
+ await tick();await tick();
+ assert.match(menu.textContent,/No eligible operators online/);
+ const refresh=()=>{menu.open=false;return tick().then(()=>{menu.open=true;return tick();}).then(tick);};
+ mode='online';await refresh();
+ assert.deepEqual([...menu.querySelectorAll('[data-transfer-targets] button')].map(b=>b.textContent),['Online operator']);
+ assert(!d.querySelector('#operatorLifecycleModal'));
+ failed=true;menu.querySelector('[data-transfer-targets] button').click();await tick();
+ assert.match(menu.querySelector('[role=status]').textContent,/status changed/);
+ assert(!menu.querySelector('[data-transfer-retry]').hidden);
+ assert(d.querySelector('#chatRows'),'rejected recipient does not close sender’s chat');
+ mode='delay';menu.querySelector('[data-transfer-retry]').click();await tick();
+ await w.tenantOperator.openDialog(passive);
+ mode='online';release();await tick();
+ assert(!d.querySelector('#operatorSidebarTransfer'),'archive route cannot use a late candidate response');
+ await w.tenantOperator.openDialog(own);await tick();await tick();
+ const next=d.querySelector('#operatorSidebarTransfer details');next.open=true;await tick();await tick();
+ failed=false;const target=next.querySelector('[data-transfer-targets] button');target.click();target.click();await tick();await tick();
+ assert.equal(requests.length,2,'one POST per confirmed choice, even with rapid repeated click');
+ assert.equal(requests[1].online_only,true);assert.equal(requests[1].target_employee_id,44);assert.equal(requests[1].expected_revision,3);
+ assert.equal(requests[1].channel_id,'exact-source');assert(!d.querySelector('#operatorLifecycleModal'));
+ assert(!d.querySelector('#chatRows'),'successful transfer leaves the transferred chat');
  dom.window.close();
 }

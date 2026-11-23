@@ -49,7 +49,7 @@
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    paintHeader(old);clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -75,40 +75,144 @@
     if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
   }
   const sectionNames={
-    ru:['Задачи','Модули','История платежей'],az:['Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
-    en:['Tasks','Modules','Payment history']
+    ru:['Главная','Задачи','Модули','История платежей'],
+    az:['Əsas','Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
+    en:['Main','Tasks','Modules','Payment history']
   };
-  function mountOperatorLists(s){
-    s.lists=['company_tasks','company_modules','company_history'].map((action,index)=>{
-      const box=node('details'),title=node('summary'),body=node('div');
-      title.textContent=(sectionNames[window.tenantI18n?.language]||sectionNames.az)[index];
-      box.append(title,body);s.profileBox.append(box);
-      const list={box,body,read:null};
-      box.ontoggle=async()=>{
-        list.read?.abort();list.read=null;body.replaceChildren();
-        const company=s.binding?.company_id;
-        if(!box.open||!company||!linkCurrent(s,company))return;
-        const read=new AbortController();list.read=read;
-        const active=()=>list.read===read&&box.open&&linkCurrent(s,company);
-        body.textContent=t('loading');
-        try{
-          const {company_section:section}=await request(endpoint,s.member,
-            {...s.route,action,expected_company_id:company},true,read.signal);
-          if(!active())return;
-          if(section?.state!=='available'){
-            body.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
-          }
-          if(!Array.isArray(section.rows))throw Error();
-          body.replaceChildren(...section.rows.map(row=>node('p',row.join(' · '))));
-          if(!section.rows.length)body.textContent=profileText('empty');
-        }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
-      };
-      return list;
+  const tabs=[['main',null],['tasks','company_tasks'],['modules','company_modules'],['history','company_history']];
+  function attachTabs(s){
+    const header=s.section.closest('dialog')?.querySelector('.operator-client-panel-header');
+    if(header&&s.tabs.parentElement!==header)header.append(s.tabs);
+  }
+  function mountOperatorTabs(s){
+    s.tabs=node('div');s.tabs.className='operator-company-tabs';s.tabs.setAttribute('role','tablist');
+    s.panels=tabs.map(([id,action])=>{
+      const panel=node('div');panel.id='operatorCompanyView-'+id;panel.setAttribute('role','tabpanel');
+      const tab=button('',()=>selectTab(s,id));tab.id='operatorCompanyTab-'+id;tab.setAttribute('role','tab');
+      tab.setAttribute('aria-controls',panel.id);panel.setAttribute('aria-labelledby',tab.id);
+      let body=null,toolbar=null;
+      if(action){
+        panel.tabIndex=0;
+        if(id==='tasks'||id==='history'){toolbar=node('div');toolbar.dataset.companyActions='';panel.append(toolbar);}
+        body=node('div');body.dataset.companySectionBody='';panel.append(body);
+      }
+      s.tabs.append(tab);s.section.append(panel);
+      return {id,action,panel,body,toolbar,tab,read:null};
     });
+    s.main=s.panels[0].panel;
+    s.labelTabs=()=>{
+      const lang=window.tenantI18n?.language||'az',names=sectionNames[lang]||sectionNames.az;
+      s.tabs.setAttribute('aria-label',t('label'));
+      s.panels.forEach(({tab},i)=>tab.textContent=names[i]);
+      for(const trigger of s.section.querySelectorAll('[data-company-action]')){
+        trigger.textContent=(actionLabels[lang]||actionLabels.az)[trigger.dataset.companyAction==='task'?0:1];
+      }
+    };
+    s.tabs.onkeydown=event=>{
+      const index=s.panels.findIndex(item=>item.tab===event.target);
+      if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+      selectTab(s,s.panels[next].id);s.panels[next].tab.focus();
+    };
+    attachTabs(s);s.labelTabs();selectTab(s,'main');
+  }
+  function selectTab(s,id){
+    const changed=s.activeTab!==id;
+    if(changed&&s.closeAction)s.closeAction(false);
+    s.activeTab=id;
+    for(const item of s.panels){
+      const selected=item.id===id;
+      item.tab.setAttribute('aria-selected',String(selected));item.tab.tabIndex=selected?0:-1;
+      item.panel.hidden=!selected;
+      if(!selected&&item.read){item.read.abort();item.read=null;}
+    }
+    if(changed&&id!=='main')void loadTab(s,s.panels.find(item=>item.id===id));
+  }
+  function statusTone(status){
+    const key=status.trim().toLowerCase().replace(/[-_]+/g,' ');
+    if(['done','completed','resolved','closed','approved','готово','решено','завершено','bağlanıb','tamamlanıb','həll olunub'].includes(key))return 'success';
+    if(['in progress','in work','testing','in review','в работе','тестирование','проверка','icrada','işdə','testdə'].includes(key))return 'progress';
+    if(['blocked','failed','canceled','cancelled','rejected','заблокировано','отменено','отклонено','ləğv edilib','bloklanıb','rədd edilib'].includes(key))return 'danger';
+    if(['new','open','todo','to do','pending','новая','новый','открыта','ожидает','yeni','açıq','gözləyir'].includes(key))return 'pending';
+    return 'neutral';
+  }
+  const pageLabels={
+    ru:['Страницы платежей','Предыдущая страница','Следующая страница','Страница'],
+    az:['Ödəniş səhifələri','Əvvəlki səhifə','Növbəti səhifə','Səhifə'],
+    en:['Payment history pages','Previous page','Next page','Page']
+  };
+  const PAYMENT_PAGE_SIZE=20;
+  function renderSection(item,rows){
+    const fields=item.id==='modules'?1:3;
+    if(rows.some(row=>!Array.isArray(row)||row.length!==fields||row.some(field=>typeof field!=='string')))throw Error();
+    const list=node('ul');list.className='operator-company-section-list';
+    function renderRows(shown){
+      list.replaceChildren();
+      for(const row of shown){
+        const card=node('li');card.className='operator-company-section-'+item.id;
+        if(item.id==='tasks'){
+          const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
+          const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
+          card.append(info,badge);
+        }else if(item.id==='modules'){
+          const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
+        }else{
+          const info=node('div');info.append(node('strong',row[2]),node('small',row[0]));
+          const amount=node('span',row[1]);amount.className='operator-company-section-amount';
+          card.append(info,amount);
+        }
+        list.append(card);
+      }
+    }
+    item.body.replaceChildren(list);
+    if(item.id!=='history'||rows.length<=PAYMENT_PAGE_SIZE){renderRows(rows);return;}
+    // The verified Operator contract supplies rows for the account with no
+    // cursor or page fields. Only paginate the returned snapshot locally.
+    const labels=pageLabels[window.tenantI18n?.language]||pageLabels.az;
+    const pages=Math.ceil(rows.length/PAYMENT_PAGE_SIZE),nav=node('nav'),indicator=node('span');
+    let page=0;
+    nav.className='operator-company-pagination';nav.setAttribute('aria-label',labels[0]);
+    indicator.setAttribute('role','status');
+    const prev=button('‹',()=>draw(page-1,prev)),next=button('›',()=>draw(page+1,next));
+    prev.setAttribute('aria-label',labels[1]);next.setAttribute('aria-label',labels[2]);
+    function draw(index,trigger){
+      if(index<0||index>=pages||!nav.isConnected)return;
+      page=index;
+      renderRows(rows.slice(index*PAYMENT_PAGE_SIZE,(index+1)*PAYMENT_PAGE_SIZE));
+      indicator.textContent=labels[3]+' '+(index+1)+' / '+pages;
+      prev.disabled=index===0;next.disabled=index===pages-1;
+      if(trigger?.disabled)(trigger===prev?next:prev).focus({preventScroll:true});
+    }
+    nav.append(prev,indicator,next);item.body.append(nav);draw(0);
+  }
+  async function loadTab(s,item){
+    item.read?.abort();item.read=null;
+    const company=s.binding?.company_id,body=item.body;
+    if(!company||!linkCurrent(s,company)){body.textContent=t(company?'unavailable':'unknown');return;}
+    const read=new AbortController();item.read=read;
+    const active=()=>item.read===read&&s.activeTab===item.id&&linkCurrent(s,company);
+    body.textContent=t('loading');body.setAttribute('aria-busy','true');
+    try{
+      const {company_section:section}=await request(endpoint,s.member,
+        {...s.route,action:item.action,expected_company_id:company},true,read.signal);
+      if(!active())return;
+      if(section?.state!=='available'){
+        body.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
+      }
+      if(!Array.isArray(section.rows))throw Error();
+      if(section.rows.length)renderSection(item,section.rows);else body.textContent=profileText('empty');
+    }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
+    finally{if(item.read===read){item.read=null;body.removeAttribute('aria-busy');}}
   }
   function clearProfile(s){
-    for(const list of s.lists||[]){list.read?.abort();list.read=null;list.box.open=false;list.body.replaceChildren();}
-    s.actionHost?.replaceChildren();
+    s.closeAction?.(false);
+    s.actionPermissions=null;s.actionBinding=null;
+    for(const item of s.panels.slice(1)){
+      item.read?.abort();item.read=null;item.body.replaceChildren();
+      item.body.removeAttribute('aria-busy');item.toolbar?.replaceChildren();
+    }
+    selectTab(s,'main');
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
@@ -129,7 +233,7 @@
             ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
           return;
         }
-        mountActions(s,company,profile.actions);
+        mountActions(s,company,profile.actions,profile.task_options,profile.action_binding);
         s.registrationPhone.textContent=s.balance.textContent=profileText('empty');
         if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
         if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
@@ -138,67 +242,129 @@
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
   }
   const actionLabels={
-    ru:['Создать задачу','Начислить кредит','Название','Описание','Проект','Приоритет','Высокий','Обычный','Низкий','Сумма (AZN)','Причина','Подтвердить','Готово','Operator отклонил операцию','Результат не подтверждён. Проверьте историю в Operator перед повтором.'],
-    az:['Tapşırıq yarat','Kredit əlavə et','Başlıq','Təsvir','Layihə','Prioritet','Yüksək','Normal','Aşağı','Məbləğ (AZN)','Səbəb','Təsdiqlə','Tamamlandı','Operator əməliyyatı rədd etdi','Nəticə təsdiqlənməyib. Təkrarlamadan əvvəl Operator tarixçəsinə baxın.'],
-    en:['Create task','Add credit','Title','Description','Project','Priority','High','Normal','Low','Amount (AZN)','Reason','Confirm','Completed','Operator rejected the operation','Outcome unconfirmed. Check Operator history before retrying.']
+    ru:['Создать задачу','Начислить кредит','Название','Описание','Проект','Приоритет','Высокий','Обычный','Низкий','Сумма (AZN)','Причина','Подтвердить','Готово','Operator отклонил операцию','Результат не подтверждён. Проверьте историю в Operator перед повтором.','Компания или подключение изменились. Откройте панель заново.'],
+    az:['Tapşırıq yarat','Kredit əlavə et','Başlıq','Təsvir','Layihə','Prioritet','Yüksək','Normal','Aşağı','Məbləğ (AZN)','Səbəb','Təsdiqlə','Tamamlandı','Operator əməliyyatı rədd etdi','Nəticə təsdiqlənməyib. Təkrarlamadan əvvəl Operator tarixçəsinə baxın.','Şirkət və ya bağlantı dəyişib. Paneli yenidən açın.'],
+    en:['Create task','Add credit','Title','Description','Project','Priority','High','Normal','Low','Amount (AZN)','Reason','Confirm','Completed','Operator rejected the operation','Outcome unconfirmed. Check Operator history before retrying.','The company or connection changed. Reopen the panel.']
   };
-  function mountActions(s,company,permissions){
-    const host=s.actionHost;
-    host.replaceChildren();
-    const labels=actionLabels[window.tenantI18n?.language]||actionLabels.az;
-    for(const kind of ['task','credit']){
-      if(permissions?.[kind]!==true)continue;
-      const task=kind==='task', box=node('details'), title=node('summary',labels[task?0:1]);
-      const form=node('div'), controls={}, status=node('p');
-      status.setAttribute('role','status');
-      const field=(key,label,tag,options)=>{
-        const row=node('label',label),input=node(tag);
-        input.required=true;input.style.cssText='display:block;width:100%;box-sizing:border-box';
-        if(options)for(const [value,caption] of options){const o=node('option',caption);o.value=value;input.append(o);}
-        row.append(input);form.append(row);controls[key]=input;return input;
-      };
-      if(task){
-        field('title',labels[2],'input').maxLength=240;
-        field('description',labels[3],'textarea').maxLength=8000;
-        field('project',labels[4],'select',[['','—'],...['Akul Admin','Akul POS','Akul PWA','Akul Mobile','Akul Counting','Dine Admin','Dine POS','Dine PWA','Dine QR','Umumi'].map(x=>[x,x])]);
-        field('priority',labels[5],'select',[[2,labels[6]],[3,labels[7]],[4,labels[8]]]).value='3';
-      }else{
-        const amount=field('amount',labels[9],'input');amount.type='number';amount.min='0.01';amount.step='0.01';amount.max='999999999.99';
-        field('info',labels[10],'input').maxLength=500;
-      }
-      let requestId=null;
-      const submit=button(labels[11],async()=>{
-        if(submit.disabled||!linkCurrent(s,company))return;
-        for(const input of Object.values(controls))if(!input.reportValidity())return;
-        const fields=Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value.trim()]));
-        if(task)fields.priority=Number(fields.priority);
-        if(!task&&!window.confirm(labels[1]+' · '+companyName(s.binding)+' · '+fields.amount+' AZN?'))return;
-        requestId??=crypto.randomUUID();
-        for(const el of [...Object.values(controls),submit])el.disabled=true;
-        status.textContent=t('loading');
-        let result;
-        try{
-          result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
-            kind,fields,request_id:requestId},true)).state;
-        }catch(error){result=[400,403,404,409].includes(error.status)?'denied':'unconfirmed';}
-        if(!linkCurrent(s,company)||!host.contains(form))return;
-        status.textContent=labels[result==='done'?12:result==='denied'?13:14];
-        if(result==='unconfirmed')return;
-        for(const el of [...Object.values(controls),submit])el.disabled=false;
-        requestId=null;
-        if(result==='done'){
-          for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
-          const list=s.lists[task?0:2];if(list.box.open)void list.box.ontoggle();
-          if(!task){
-            // Refresh balance without discarding the visible receipt.
-            void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
-              .then(({company_profile:p})=>{if(linkCurrent(s,company)&&host.contains(form)&&Number.isFinite(p.balance))
-                s.balance.textContent=new Intl.NumberFormat(window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
-          }
-        }
-      });
-      form.append(submit,status);box.append(title,form);host.append(box);
+  const modalLabels={
+    ru:{newTask:'Новая задача',account:'Аккаунт',cancel:'Отмена',back:'Назад',save:'Сохранить'},
+    az:{newTask:'Yeni Tapşırıq',account:'Hesab',cancel:'Ləğv et',back:'Geri',save:'Yadda saxla'},
+    en:{newTask:'New task',account:'Account',cancel:'Cancel',back:'Back',save:'Save'}
+  };
+  const unsettledActions=new Map();
+  const actionContract=options=>options&&typeof options.account==='string'&&options.account.trim()&&
+    Array.isArray(options.projects)&&options.projects.length&&options.projects.every(x=>typeof x==='string'&&x)&&
+    Array.isArray(options.priorities)&&options.priorities.length&&options.priorities.every(x=>[2,3,4].includes(x));
+  function mountActions(s,company,permissions,taskOptions,binding){
+    s.actionPermissions=permissions;s.actionBinding=binding;
+    s.taskOptions=taskOptions;
+    for(const [kind,id,index] of [['task','tasks',0],['credit','history',1]]){
+      const item=s.panels.find(panel=>panel.id===id),host=item.toolbar;
+      host.replaceChildren();
+      if(permissions?.[kind]!==true||typeof binding!=='string'||!(/^[0-9a-f]{64}$/).test(binding)||
+        (kind==='task'&&!actionContract(taskOptions)))continue;
+      const trigger=button((actionLabels[window.tenantI18n?.language]||actionLabels.az)[index],
+        ()=>openAction(s,company,kind,item,trigger));
+      trigger.dataset.companyAction=kind;
+      trigger.className='primary';trigger.setAttribute('aria-haspopup','dialog');host.append(trigger);
     }
+  }
+  function openAction(s,company,kind,item,trigger){
+    if(s.closeAction||s.activeTab!==item.id||!linkCurrent(s,company)||s.actionPermissions?.[kind]!==true)return;
+    const lang=window.tenantI18n?.language||'az',labels=actionLabels[lang]||actionLabels.az,
+      copy=modalLabels[lang]||modalLabels.az,task=kind==='task',options=s.taskOptions,binding=s.actionBinding;
+    if(task&&!actionContract(options))return;
+    const actionKey=JSON.stringify([s.key,company,kind,binding]);
+    const dialog=node('dialog'),header=node('header'),title=node('h2',task?copy.newTask:labels[1]),form=node('form'),
+      controls={},status=node('p'),footer=node('footer');
+    dialog.dataset.companyActionModal=kind;dialog.className='operator-company-action-modal';
+    dialog.setAttribute('aria-labelledby','operatorCompanyActionTitle');dialog.setAttribute('aria-modal','true');
+    title.id='operatorCompanyActionTitle';status.setAttribute('role','status');
+    const back=button('‹',()=>close());back.className='outline operator-company-action-back';back.setAttribute('aria-label',copy.back);
+    header.append(back,title);dialog.append(header,form);
+    const field=(parent,key,label,tag,choices)=>{
+      const row=node('label',label),input=node(tag);
+      if(key)input.required=true;
+      if(choices)for(const [value,caption] of choices){const o=node('option',caption);o.value=value;input.append(o);}
+      row.append(input);parent.append(row);
+      if(key)controls[key]=input;
+      return input;
+    };
+    if(task){
+      field(form,'title',labels[2],'input').maxLength=240;
+      const row=node('div');row.className='operator-company-action-grid';form.append(row);
+      const account=field(row,null,copy.account,'input');account.readOnly=true;account.value=options.account;
+      field(row,'priority',labels[5],'select',options.priorities.map(x=>[x,labels[x+4]])).value=String(options.priorities.includes(3)?3:options.priorities[0]);
+      field(row,'project',labels[4],'select',[['','—'],...options.projects.map(x=>[x,x])]);
+      field(form,'description',labels[3],'textarea').maxLength=8000;
+    }else{
+      const companyLabel=node('p',companyName(s.binding));companyLabel.className='operator-company-action-context';form.append(companyLabel);
+      const amount=field(form,'amount',labels[9],'input');
+      amount.type='number';amount.min='0.01';amount.step='0.01';amount.max='999999999.99';
+      field(form,'info',labels[10],'input').maxLength=500;
+    }
+    const cancel=button(copy.cancel,()=>close());cancel.className='outline';
+    const submit=node('button',task?copy.save:labels[11]);submit.type='submit';submit.className='primary';
+    footer.append(cancel,submit);form.append(status,footer);
+    const live=()=>s.closeAction===close&&dialog.isConnected&&s.activeTab===item.id&&linkCurrent(s,company)&&s.actionBinding===binding&&s.actionPermissions?.[kind]===true;
+    const disable=value=>{for(const el of [...Object.values(controls),submit])el.disabled=value;};
+    function close(restore=true){
+      if(s.closeAction!==close)return;
+      s.closeAction=null;s.settleAction=null;
+      if(typeof dialog.close==='function'&&dialog.open)dialog.close();
+      dialog.remove();
+      if(restore&&trigger.isConnected&&!item.panel.hidden&&linkCurrent(s,company))trigger.focus({preventScroll:true});
+    }
+    // A transfer/source change or a permission rebind discards the modal;
+    // a pending or unconfirmed write can never be restarted by reopening it.
+    const existing=unsettledActions.get(actionKey);
+    if(existing){disable(true);status.textContent=existing==='unconfirmed'?labels[14]:t('loading');}
+    dialog.addEventListener('cancel',event=>{event.preventDefault();close();});
+    dialog.addEventListener('click',event=>{if(event.target===dialog)close();});
+    dialog.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();close();return;}
+      if(event.key!=='Tab')return;
+      const controls=[...dialog.querySelectorAll('button,input,select,textarea')].filter(el=>!el.disabled&&!el.readOnly);
+      if(event.shiftKey&&document.activeElement===controls[0]){event.preventDefault();controls.at(-1)?.focus();}
+      else if(!event.shiftKey&&document.activeElement===controls.at(-1)){event.preventDefault();controls[0]?.focus();}
+    });
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      if(submit.disabled||unsettledActions.has(actionKey)||!live()||!form.reportValidity())return;
+      const fields=Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value.trim()]));
+      if(task)fields.priority=Number(fields.priority);
+      if(!task&&!window.confirm(labels[1]+' · '+companyName(s.binding)+' · '+fields.amount+' AZN?'))return;
+      if(!live())return;
+      const requestId=crypto.randomUUID();
+      unsettledActions.set(actionKey,'pending');disable(true);status.textContent=t('loading');
+      let result;
+      try{
+        result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
+          expected_binding:binding,kind,fields,request_id:requestId},true)).state;
+      }catch(error){result=error.status===409?'stale':[400,403,404].includes(error.status)?'denied':'unconfirmed';}
+      if(['done','denied','stale'].includes(result))unsettledActions.delete(actionKey);
+      else unsettledActions.set(actionKey,'unconfirmed');
+      // A newly opened modal for this same exact route/company/kind may be
+      // waiting on our write; never update the old disconnected surface.
+      state?.settleAction?.(actionKey,result);
+    };
+    s.settleAction=(key,result)=>{
+      if(key!==actionKey||!live())return;
+      const confirmed=result==='done'||result==='denied';
+      status.textContent=labels[result==='done'?12:result==='denied'?13:result==='stale'?15:14];
+      if(!confirmed)return;
+      disable(false);
+      if(result==='done'){
+        for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
+        void loadTab(s,item);
+        if(!task)void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
+          .then(({company_profile:p})=>{if(linkCurrent(s,company)&&Number.isFinite(p.balance))
+            s.balance.textContent=new Intl.NumberFormat(lang,{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
+      }
+    };
+    s.closeAction=close;document.body.append(dialog);
+    if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');
+    const first=(task?controls.title:controls.amount);(first.disabled?back:first).focus({preventScroll:true});
   }
   function mountProfile(s){
     s.profileBox=node('div');s.profileBox.dataset.companyProfile='';s.profileBox.hidden=true;
@@ -210,7 +376,7 @@
     const phone=field('phone'),balance=field('balance');
     s.registrationPhone=phone.value;s.balance=balance.value;
     s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
-    s.profileBox.append(s.profileStatus);mountOperatorLists(s);s.actionHost=node('div');s.profileBox.append(s.actionHost);s.section.append(s.profileBox);
+    s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -271,7 +437,7 @@
     for(const [key,value] of Object.entries({x:8,y:8,width:12,height:12,rx:2}))rect.setAttribute(key,value);
     path.setAttribute('d','M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2');
     svg.append(rect,path);s.linkCopy.append(s.linkLabel,svg);labelPublicLink(s);
-    s.linkBox.append(s.linkCopy,s.linkStatus);s.section.append(s.linkBox);
+    s.linkBox.append(s.linkCopy,s.linkStatus);s.main.append(s.linkBox);
   }
   function labelPublicLink(s){
     s.linkLabel.textContent=linkText('label');s.linkCopy.title=linkText('copy');
@@ -324,11 +490,25 @@
     const panel=node('div'),label=node('label',t('label')),field=node('span'),input=node('input'),results=node('div');
     panel.id='operatorDialogueCompanyPicker';
     label.htmlFor=input.id='operatorDialogueCompanySearch';field.className='operator-company-link-row';
-    input.type='search';input.maxLength=180;input.autocomplete='off';
-    input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.type='search';input.maxLength=180;input.autocomplete='off';input.readOnly=true;
+    input.setAttribute('data-search-input','');input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.setAttribute('data-bwignore','true');input.setAttribute('data-form-type','other');
+    input.setAttribute('autocapitalize','none');input.setAttribute('autocorrect','off');input.spellcheck=false;
+    let editingValue='';
+    const restoreTypedValue=()=>{if(input.value!==editingValue)input.value=editingValue;};
+    const primeInput=()=>{
+      if(!active()||!s.section.closest('dialog')?.open||s.writing||s.binding?.can_manage!==true)return;
+      restoreTypedValue();input.readOnly=false;
+    };
+    // Like other app searches, remain read-only while idle. This control owns
+    // readOnly because it must additionally enforce exact-route write access.
+    input.addEventListener('pointerdown',primeInput);
+    input.addEventListener('focus',primeInput);
+    input.addEventListener('blur',()=>{input.readOnly=true;restoreTypedValue();});
+    input.addEventListener('animationstart',event=>{if(event.animationName==='operatorCompanyAutofill')restoreTypedValue();});
     const unlink=button('×',()=>{
       if(!active()||s.writing||s.binding?.can_manage!==true)return;
-      input.value='';schedule();input.focus({preventScroll:true});
+      input.focus({preventScroll:true});primeInput();editingValue=input.value='';schedule();
     });
     unlink.className='operator-company-unlink';unlink.title=t('remove');unlink.setAttribute('aria-label',t('remove'));
     unlink.onpointerdown=event=>event.preventDefault();
@@ -346,7 +526,7 @@
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
     });
-    s.section.append(panel);
+    s.main.append(panel);
     let serial=0,timer=null,search=null,composing=false;
     const active=()=>current(s)&&panel.isConnected;
     s.cancelSearch=()=>{serial++;clearTimeout(timer);timer=null;search?.abort();search=null;};
@@ -356,11 +536,11 @@
     };
     s.reset=()=>{
       clearResults();suggestions.hidden=true;
-      s.editing=false;input.value=companyName(s.binding);
+      s.editing=false;editingValue=input.value=companyName(s.binding);
     };
     s.sync=()=>{
       const allowed=s.binding?.can_manage===true;
-      input.readOnly=!allowed||s.writing;
+      input.readOnly=!allowed||s.writing||document.activeElement!==input;
       const hint=allowed?'search':s.binding===undefined?'loading':s.binding?'restricted':'unavailable';
       input.placeholder=t(hint);
       input.title=allowed?'':input.placeholder;
@@ -415,9 +595,18 @@
         timer=setTimeout(()=>void find(query,seq),300);
       }
     }
-    input.oninput=schedule;
-    input.oncompositionstart=()=>{composing=true;schedule();};
-    input.oncompositionend=()=>{composing=false;schedule();};
+    input.oninput=event=>{
+      // Autofill/replacement events are not company searches. Keep the last
+      // manually edited value; do not send injected text to either endpoint.
+      const typed=event.inputType||'';
+      if(input.readOnly||document.activeElement!==input||
+         !(/^(?:insert(?:Text|CompositionText|FromPaste|FromDrop)|delete[A-Za-z]+|history(?:Undo|Redo))$/.test(typed))){
+        restoreTypedValue();return;
+      }
+      editingValue=input.value;schedule();
+    };
+    input.oncompositionstart=()=>{if(!input.readOnly){composing=true;schedule();}};
+    input.oncompositionend=()=>{if(!input.readOnly&&composing){composing=false;editingValue=input.value;schedule();}};
     input.onkeydown=event=>{
       if(event.key==='ArrowDown'&&results.querySelector('button')){
         event.preventDefault();results.querySelector('button').focus();
@@ -439,7 +628,7 @@
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
       headerHosts.set(s.section,nameHost);
-      labelPublicLink(s);s.labelProfile();
+      attachTabs(s);labelPublicLink(s);s.labelProfile();s.labelTabs();
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
       }else{paintHeader(s);s.sync();}
@@ -453,12 +642,52 @@
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
     const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
-    section.append(value,status);host.append(section);state=s;mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
+    host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
   style.textContent=`
-    [data-operator-dialog-company]{display:grid;gap:7px;min-width:0;color:var(--ink)}
+    [data-operator-dialog-company]{min-width:0;color:var(--ink)}
+    #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
+    #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
+    #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:8px}
+    #operatorCompanyPanelTitle{max-width:32%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
+    #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
+    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:5px;min-height:40px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
+    #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
+    #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
+    #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:.8rem;overflow-wrap:anywhere}
+    #operatorCompanyPanel .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
+    #operatorCompanyPanel .operator-company-section-list small{color:var(--muted);font-size:.72rem}
+    #operatorCompanyPanel .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:.72rem;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+    #operatorCompanyPanel .operator-company-badge[data-tone=success]{color:#114d30;background:#dcf5e6;border-color:#a5d7ba}
+    #operatorCompanyPanel .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
+    #operatorCompanyPanel .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
+    #operatorCompanyPanel .operator-company-badge[data-tone=pending]{color:#644713;background:#fff0d0;border-color:#e8cca0}
+    #operatorCompanyPanel [data-company-actions]{display:flex;justify-content:flex-start;margin-block-end:8px}
+    #operatorCompanyPanel .operator-company-pagination{display:flex;align-items:center;justify-content:center;gap:8px;padding-block-start:10px}
+    #operatorCompanyPanel .operator-company-pagination button{min-width:40px}
+    .operator-company-action-modal{box-sizing:border-box;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);width:min(700px,100%);padding:0;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 56px #0005;overflow:auto;overscroll-behavior:contain}
+    .operator-company-action-modal[data-company-action-modal=credit]{width:min(400px,100%)}
+    .operator-company-action-modal::backdrop{background:#071d1688}
+    .operator-company-action-modal header,.operator-company-action-modal footer{display:flex;align-items:center;gap:10px}
+    .operator-company-action-modal header{padding:12px 16px;border-block-end:1px solid var(--line)}
+    .operator-company-action-modal h2{margin:0;font-size:1.08rem}
+    .operator-company-action-modal form{display:grid;gap:12px;padding:16px}
+    .operator-company-action-modal footer{justify-content:flex-end}
+    .operator-company-action-modal button{min-height:40px}
+    .operator-company-action-modal .operator-company-action-back{min-width:40px}
+    .operator-company-action-modal label{display:grid;gap:4px;font-size:.86rem;min-width:0}
+    .operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{box-sizing:border-box;width:100%;min-width:0;min-height:40px;margin:0}
+    .operator-company-action-modal textarea{min-height:150px;resize:vertical}
+    .operator-company-action-modal input[readonly]{background:var(--paper);color:var(--muted)}
+    .operator-company-action-modal .operator-company-action-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr) minmax(0,1fr);gap:10px}
+    .operator-company-action-modal p{margin:0;overflow-wrap:anywhere}
+    .operator-company-action-modal [role=status]:empty{display:none}
+    @media(max-width:600px){.operator-company-action-modal .operator-company-action-grid{grid-template-columns:minmax(0,1fr)}.operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{font-size:16px}}
+    #operatorCompanyPanel .operator-company-section-amount{justify-self:end;text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
+    #operatorCompanyPanel [role=tabpanel]>p{overflow-wrap:anywhere}
     #operatorDialogueCompanyPicker [hidden]{display:none!important}
     #operatorDialogueCompanyPicker{display:grid;gap:5px;min-width:0}
     #operatorDialogueCompanyPicker .operator-company-suggestions{display:grid;gap:6px;min-width:0;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
@@ -471,13 +700,16 @@
     [data-operator-dialog-company] [data-company-value]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
     #operatorCompanyPanel #operatorDialogueCompanySearch{padding-inline-end:32px}
     #operatorCompanyPanel #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
+    @keyframes operatorCompanyAutofill{from{opacity:1}to{opacity:1}}
+    #operatorDialogueCompanySearch:autofill{animation:operatorCompanyAutofill .01s}
+    #operatorDialogueCompanySearch:-webkit-autofill{animation:operatorCompanyAutofill .01s}
     #operatorCompanyPanel .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
     #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
     [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:.75rem}
     [data-company-profile]>p{margin:0}
-    [data-company-profile][hidden],[data-company-profile]>p:empty{display:none!important}
+    [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
     [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:3px}
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}
@@ -493,6 +725,7 @@
         String(next.tenant_id)!==String(state.member.tenant_id)||String(next.telegram_id)!==String(state.member.telegram_id))clear();
   });
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
+  document.addEventListener('tenant-language',()=>{if(state){state.labelTabs();state.labelProfile();labelPublicLink(state);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
   window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
     refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},

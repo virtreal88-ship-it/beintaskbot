@@ -235,8 +235,8 @@ def _allows(policy, action):
 
 
 def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, operators_only=False,
-                       source_channel=None):
-    required = absent is not None
+                       source_channel=None, work_status_only=None):
+    required = (absent is not None) if work_status_only is None else work_status_only
     if not (work_status_enabled() if required else _status_requested(tenant)):
         return None
     if not status_schema_ready(cur, require_offline=required):
@@ -286,6 +286,19 @@ def is_effectively_online(cur, tenant, employee, *, lock=False):
     """
     return _authorized_status(cur, tenant, employee, lock=lock,
                               require_update=False, absent=DEFAULT_STATUS) == DEFAULT_STATUS
+
+
+def is_sidebar_transfer_online(cur, tenant, employee, *, lock=False, source_channel):
+    """Manual menu presence, independent of automatic routing flags."""
+    if not _status_requested(tenant) or not status_schema_ready(
+            cur, require_offline=work_status_enabled(), require_dialog_acl=work_status_enabled()):
+        return False
+    # The status picker authoritatively defaults a missing row to Online.
+    # Legacy deployments may know only three states but still use this default.
+    return _authorized_status(cur, tenant, employee, lock=lock, require_update=True,
+                              absent=DEFAULT_STATUS, operators_only=True,
+                              source_channel=source_channel,
+                              work_status_only=work_status_enabled()) == DEFAULT_STATUS
 
 
 def is_online(cur, tenant, employee, *, lock=False, _routing=None, source_channel=None):

@@ -739,3 +739,49 @@ def test_offline_operator_cannot_claim_but_owner_can_manually_accept(episodes):
     assert accepted['state']=='accepted' and accepted['operator_id']==11
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==2
     episodes.commit()
+
+
+def test_sidebar_transfer_only_current_online_operator_same_source(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+    # Manual picker checks real current status even when automatic routing is off.
+    monkeypatch.delenv('TENANT_DIALOG_PRESENCE_ROUTING_ENABLED', raising=False)
+    command()
+    route = dict(provider='connect', channel_id=CA, conversation_id='client', lead_id='41', expected_revision='1')
+    employee = {'tenant_id':A,'telegram_id':33}
+    assert lifecycle.transfer_candidates(PROFILE, route) == {'targets':[{'employee_id':33,'name':'Employee'}]}
+    for profile, changed in [(employee,route), (PROFILE,{**route,'channel_id':CB}),
+                             (PROFILE,{**route,'expected_revision':'2'})]:
+        with pytest.raises(TenantLinearError):
+            lifecycle.transfer_candidates(profile,changed)
+    presence.set_status(employee,{'status':'away'})
+    assert lifecycle.transfer_candidates(PROFILE,route)=={'targets':[]}
+    with pytest.raises(TenantLinearError) as error:
+        command('transfer',1,target_employee_id=33,online_only=True)
+    assert error.value.status==403
+    assert state(episodes)['operator_id']==11 and state(episodes)['revision']==1
+    # No saved status follows existing picker semantics (default Online).
+    episodes.execute('DELETE FROM saas_dialog_employee_presence WHERE tenant_id=%s::uuid AND employee_id=33',(A,))
+    episodes.commit()
+    assert lifecycle.transfer_candidates(PROFILE,route)['targets'][0]['employee_id']==33
+    with pytest.raises(TenantLinearError) as bad_episode:
+        command('transfer',1,target_employee_id=33,online_only=True,episode_id=str(uuid.uuid4()))
+    assert bad_episode.value.status==400
+    accepted_id=str(state(episodes)['id'])
+    assert command('transfer',1,target_employee_id=33,online_only=True)['lifecycle']['operator_id']==33
+    events=episodes.execute("SELECT entity_id FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_transfer'",(A,))
+    assert events[-1]['entity_id']==accepted_id
+    assert episodes.execute('SELECT accepted_by FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,accepted_id))[0]['accepted_by']==11
+    assert lifecycle.transfer_candidates(employee,{**route,'expected_revision':'2'})=={'targets':[]}
+
+
+def test_sidebar_transfer_rechecks_source_active_under_lock(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+    command()
+    # Simulate deactivation after the presence helper observed an active source.
+    episodes.execute('UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+    episodes.commit()
+    monkeypatch.setattr(presence,'is_sidebar_transfer_online',lambda *args,**kwargs:True)
+    with pytest.raises(TenantLinearError) as error:
+        command('transfer',1,target_employee_id=33,online_only=True)
+    assert error.value.status==403 and 'Источник' in str(error.value)
+    assert state(episodes)['operator_id']==11 and state(episodes)['revision']==1

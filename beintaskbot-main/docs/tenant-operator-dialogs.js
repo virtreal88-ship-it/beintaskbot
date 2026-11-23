@@ -20,6 +20,40 @@
     #operatorDialogs #operatorAdvanced{position:fixed;z-index:80;display:none;grid-template-columns:minmax(0,1fr);gap:12px;width:min(320px,calc(100vw - 16px));max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;overscroll-behavior:contain;box-sizing:border-box;padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);box-shadow:0 8px 24px #0002}#operatorDialogs #operatorAdvanced[data-open=true]{display:grid}#operatorAdvanced label{display:grid;gap:5px;min-width:0}#operatorAdvanced select{width:100%;min-width:0;min-height:44px;margin:0}#operatorFilterSaveStatus{margin:0;font-size:12px;color:var(--muted)}#operatorFilterSaveStatus:empty{display:none}#operatorFiltersToggle[data-active=true]{color:var(--brand);border-color:var(--brand)}
   `;document.head.append(filterStyle);
   let filterPopoverCleanup=()=>{},filterPreferencesLoaded=false,filterPreferencesFlight=null,filterSaveQueue=Promise.resolve();
+  let companyPanelPreference=null;
+  function panelPreference(){
+    const key=identity(member);
+    if(companyPanelPreference?.key!==key)companyPanelPreference={key,open:false,changed:false,load:null,save:Promise.resolve()};
+    return companyPanelPreference;
+  }
+  async function panelPreferenceRequest(profile,open){
+    const post=typeof open==='boolean';
+    const response=await fetch(endpoint+'dialogs/company-panel/preferences',{
+      cache:'no-store',credentials:'same-origin',
+      ...(post?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({open,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id})}:
+        {headers:{'X-Tenant-Id':String(profile.tenant_id),'X-User-Id':String(profile.telegram_id)}})
+    });
+    const payload=await response.json();
+    if(!response.ok||payload?.success!==true||typeof payload.result?.open!=='boolean')throw Error();
+    return payload.result.open;
+  }
+  function loadPanelPreference(){
+    const pref=panelPreference(),profile=member;
+    if(!pref.load)pref.load=panelPreferenceRequest(profile).then(open=>{
+      if(pref===companyPanelPreference&&pref.key===identity(member)&&!pref.changed)pref.open=open;
+    }).catch(()=>{pref.load=null;});
+    return pref.load;
+  }
+  const panelSaveFailed=()=>({ru:'Не удалось сохранить состояние панели компании.',az:'Şirkət panelinin vəziyyəti saxlanmadı.',en:'Could not save the company panel setting.'})[i18n.language];
+  function savePanelPreference(open){
+    const pref=panelPreference(),profile=member;
+    pref.open=open;pref.changed=true;
+    pref.save=pref.save.then(async()=>{
+      if(pref!==companyPanelPreference||pref.key!==identity(member))return;
+      try{await panelPreferenceRequest(profile,open);}
+      catch{const status=$('operatorCompanyPanelSaveStatus');if(status&&pref===companyPanelPreference&&pref.key===identity(member))status.textContent=panelSaveFailed();}
+    });
+  }
   const filterIds=['operatorChannel','operatorAgent','operatorState','operatorLifecycle'],filterKeys=['channel','agent','state','lifecycle'];
   const filterCopy=key=>({scope:{ru:'Диалоги',az:'Dialoqlar',en:'Conversations'},loadFailed:{ru:'Не удалось загрузить сохранённые фильтры.',az:'Saxlanmış filtrlər yüklənmədi.',en:'Saved filters could not be loaded.'},saving:{ru:'Сохраняем…',az:'Saxlanılır…',en:'Saving…'},saved:{ru:'Сохранено',az:'Saxlanıldı',en:'Saved'},saveFailed:{ru:'Не удалось сохранить фильтры. Выбор действует только сейчас.',az:'Filtrlər saxlanmadı. Seçim yalnız indi tətbiq olunur.',en:'Filters could not be saved. This selection applies only now.'}}[key]?.[i18n.language]||'');
   const filterSnapshot=()=>Object.fromEntries(filterIds.map((id,i)=>[filterKeys[i],$(id)?.value||(i===3?'all':'')]));
@@ -445,12 +479,12 @@
       if(!startHost||!primaryHost)return;
       const missing=new Set();
       if(fresh.lifecycle.can_start===true&&!startHost.querySelector('[data-operator-lifecycle="start"]'))missing.add('start');
-      if(fresh.lifecycle.can_transfer===true&&!primaryHost.querySelector('[data-operator-lifecycle="transfer"]'))missing.add('transfer');
-      if(!missing.size)return;
-      Object.assign(currentDialog.lifecycle,{can_start:fresh.lifecycle.can_start,can_transfer:fresh.lifecycle.can_transfer,
-        transfer_targets:fresh.lifecycle.transfer_targets});
+      const transferNew=canSidebarTransfer(fresh)&&!$('operatorSidebarTransfer');
+      if(!missing.size&&!transferNew)return;
+      Object.assign(currentDialog.lifecycle,{can_start:fresh.lifecycle.can_start,can_transfer:fresh.lifecycle.can_transfer});
       currentPage.dialog=currentDialog;
-      renderLifecycleActions(currentDialog,primaryHost,missing);
+      if(transferNew)renderDialog(currentPage,{suppressRead:true});
+      else renderLifecycleActions(currentDialog,primaryHost,missing);
     }catch{} // Keep actions disabled until the server confirms them.
   }
   let closeLifecycleModal=()=>{};
@@ -503,17 +537,76 @@
       }
     }
   }
-  function openLifecycleTransfer(route){
-    closeLifecycleModal();
-    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
-    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle"><h2 id="operatorLifecycleTitle">${esc(lifecycleText('transfer'))}</h2><form><label>${esc(lifecycleText('recipient'))}<select required><option value=""></option></select></label><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="submit" class="primary">${esc(lifecycleText('transfer'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></form></section>`;
-    const select=modal.querySelector('select'),submit=modal.querySelector('[type=submit]');
-    for(const employee of route.lifecycle.transfer_targets||[]){const option=document.createElement('option');option.value=String(employee.employee_id);option.textContent=employee.name||String(employee.employee_id);select.append(option);}
-    const events=['tenant-chat-close','tenant-auth-invalid','tenant-profile','tenant-view'];
-    const close=()=>{modal.remove();document.removeEventListener('keydown',key);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};};
-    const key=event=>{if(event.key==='Escape')close();else if(event.key==='Tab'){const controls=[...modal.querySelectorAll('select,button')].filter(node=>!node.disabled);const first=controls[0],last=controls.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}};document.addEventListener('keydown',key);for(const name of events)document.addEventListener(name,close);closeLifecycleModal=close;
-    modal.querySelector('[data-cancel]').onclick=close;modal.onclick=event=>{if(event.target===modal)close();};
-    modal.querySelector('form').onsubmit=event=>{event.preventDefault();if(select.value)void lifecycleAction(route,'transfer',submit,select.value);};document.body.append(modal);
+  const transferSidebarText=key=>({
+    ru:{empty:'Нет доступных операторов в сети.',loading:'Проверяем, кто в сети…',failed:'Не удалось передать диалог. Проверьте список и попробуйте снова.',stale:'Диалог или статус оператора изменился. Обновите список.',sending:'Передаём диалог…',retry:'Обновить список'},
+    az:{empty:'Əlçatan onlayn operator yoxdur.',loading:'Onlayn operatorlar yoxlanılır…',failed:'Dialoqu ötürmək olmadı. Siyahını yoxlayıb yenidən cəhd edin.',stale:'Dialoq və ya operatorun statusu dəyişib. Siyahını yeniləyin.',sending:'Dialoq ötürülür…',retry:'Siyahını yenilə'},
+    en:{empty:'No eligible operators online.',loading:'Checking who is online…',failed:'Could not transfer the conversation. Check the list and try again.',stale:'The conversation or operator status changed. Refresh the list.',sending:'Transferring conversation…',retry:'Refresh list'}
+  }[i18n.language]||{})[key];
+  const canSidebarTransfer=route=>route?.provider==='connect'&&!route.archive_read_only&&!route.owner_overview_read_only&&route.lifecycle?.can_transfer===true;
+  const sidebarTransferFlights=new Set();
+  function mountSidebarTransfer(host,route,current){
+    const menu=host?.querySelector('details');if(!menu||!canSidebarTransfer(route))return ()=>{};
+    const results=menu.querySelector('[data-transfer-targets]'),status=menu.querySelector('[role=status]'),retry=menu.querySelector('[data-transfer-retry]');
+    const profile=member, owner=identity(profile), revision=route.lifecycle.revision;
+    const exact={provider:'connect',channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:revision};
+    const flightKey=contextKey('sidebar-transfer',route)+'.'+revision;
+    const routeCurrent=()=>current()&&host.isConnected&&menu.closest('dialog')?.open&&
+      canSidebarTransfer(currentDialog)&&currentDialog.lifecycle.revision===revision;
+    let choiceRead=null;
+    const cancel=()=>{choiceRead?.abort();choiceRead=null;results.replaceChildren();};
+    const eligibleTarget=employee=>employee&&Number.isSafeInteger(employee.employee_id)&&
+      employee.employee_id!==Number(profile.telegram_id)&&typeof employee.name==='string'&&employee.name.trim();
+    async function load(){
+      cancel();retry.hidden=true;
+      if(!menu.open||!routeCurrent())return;
+      if(sidebarTransferFlights.has(flightKey)){status.textContent=transferSidebarText('sending');return;}
+      const read=new AbortController();choiceRead=read;
+      const live=()=>choiceRead===read&&menu.open&&routeCurrent();
+      status.textContent=transferSidebarText('loading');
+      try{
+        const query=new URLSearchParams({...exact,expected_tenant_id:String(profile.tenant_id),expected_user_id:String(profile.telegram_id)});
+        const req=await fetch(endpoint+'dialogs/transfer-candidates?'+query,{cache:'no-store',credentials:'same-origin',signal:read.signal});
+        const payload=await req.json();
+        if(!live())return;
+        if(!req.ok||payload?.success!==true||!Array.isArray(payload.result?.targets))throw Object.assign(Error(),{status:req.status});
+        const seen=new Set();
+        for(const employee of payload.result.targets){
+          if(!eligibleTarget(employee)||seen.has(employee.employee_id))continue;
+          seen.add(employee.employee_id);
+          const b=document.createElement('button');b.type='button';b.textContent=employee.name;
+          b.onclick=()=>void transfer(employee.employee_id);
+          results.append(b);
+        }
+        status.textContent=seen.size?'':transferSidebarText('empty');
+      }catch(error){if(live()){status.textContent=transferSidebarText([403,404,409].includes(error.status)?'stale':'failed');retry.hidden=false;}}
+      finally{if(choiceRead===read)choiceRead=null;}
+    }
+    async function transfer(target){
+      if(!menu.open||!routeCurrent()||sidebarTransferFlights.has(flightKey))return;
+      const requestKey=flightKey+'.'+target;
+      let request=lifecycleRequests.get(requestKey);
+      if(!request){
+        request={...exact,action:'transfer',target_employee_id:target,online_only:true,request_id:crypto.randomUUID()};
+        lifecycleRequests.set(requestKey,request);
+      }
+      sidebarTransferFlights.add(flightKey);cancel();retry.hidden=true;status.textContent=transferSidebarText('sending');
+      try{
+        const res=await fetch(endpoint+'dialogs_lifecycle',{method:'POST',cache:'no-store',credentials:'same-origin',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({...request,expected_tenant_id:profile.tenant_id,expected_user_id:profile.telegram_id})});
+        const payload=await res.json();
+        if(!res.ok||payload?.success!==true)throw Object.assign(Error(),{status:res.status});
+        lifecycleRequests.delete(requestKey);
+        if(owner!==identity(member)||!hasRight('dialogs'))return;
+        if(sameDialog(route,currentDialog)&&currentDialog.lifecycle?.revision===revision)removeLifecycleDialog(route);
+        void refresh();
+      }catch(error){
+        if([400,403,404,409,422].includes(error.status))lifecycleRequests.delete(requestKey);
+        if(menu.open&&routeCurrent()){status.textContent=transferSidebarText([403,404,409].includes(error.status)?'stale':'failed');retry.hidden=false;}
+      }finally{sidebarTransferFlights.delete(flightKey);}
+    }
+    retry.onclick=()=>void load();
+    menu.ontoggle=()=>{if(menu.open)void load();else cancel();};
+    return ()=>{menu.open=false;cancel();};
   }
   function openLifecycleEpisodeCase(route){
     closeLifecycleModal();
@@ -605,9 +698,9 @@
       reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
-    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['transfer',state.can_transfer],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='transfer'?openLifecycleTransfer(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
+      button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
   function openCompletion(route){
@@ -1358,8 +1451,13 @@
     #operatorDialogTitleText{font:inherit;text-align:start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;margin:0}
     .operator-history-tools{display:flex;align-items:center;gap:4px;flex:none;padding-inline-end:12px}
     .operator-history-tools button[hidden]{display:none}
-    .operator-history-tools #operatorCompanyPanelOpen{display:grid;place-items:center;margin:4px 0 4px auto;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
-    .operator-history-tools #operatorCompanyPanelOpen:hover,.operator-history-tools #operatorCompanyPanelOpen[aria-expanded="true"]{color:var(--brand);background:var(--paper)}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-conversation-head-copy{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;width:0}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-row{min-width:0;max-width:100%;overflow:hidden}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-main{min-width:0;max-width:100%}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-secondary{position:relative;inset:auto;display:flex;flex-wrap:nowrap;align-items:center;min-width:0;z-index:1}
+    #operatorConversationHeader #operatorCompanyPanelOpen{display:grid;flex:none;place-items:center;margin:0;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
+    #operatorConversationHeader #operatorCompanyPanelOpen[hidden]{display:none!important}
+    #operatorConversationHeader #operatorCompanyPanelOpen:hover,#operatorConversationHeader #operatorCompanyPanelOpen[aria-expanded="true"]{color:var(--brand);background:var(--paper)}
     :is(#operatorClientCard,#operatorCompanyPanel){box-sizing:border-box;min-height:0;padding:0;background:var(--card);color:var(--ink);overflow:hidden;text-align:start}
     :is(#operatorClientCard,#operatorCompanyPanel):not([open]){display:none!important}
     :is(#operatorClientCard,#operatorCompanyPanel)[open]{display:flex;flex-direction:column}
@@ -1368,7 +1466,17 @@
     #operatorCompanyPanel{position:static;inset:auto;margin:0;width:clamp(255px,31%,355px);max-width:none;max-height:var(--operator-client-available-height,100dvh);flex:none;align-self:stretch;border:0;border-inline-start:1px solid var(--line)}
     :is(#operatorClientCard,#operatorCompanyPanel) .operator-client-panel-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card)}
     :is(#operatorClientCard,#operatorCompanyPanel) h2{margin:0;font-size:1.05rem;line-height:1.3}
-    :is(#operatorCancelConversationName,#operatorCompanyPanelClose){border:0;background:transparent;font-size:23px;min-width:40px;min-height:40px;padding:0}
+    #operatorCompanyPanel h2{font-size:.94rem}
+    #operatorCompanyPanel .operator-client-panel-content:has(#operatorCompanyView-main[hidden]) #operatorSidebarTransfer,
+    #operatorClientCompanyHost:empty,#operatorSidebarTransfer [data-transfer-retry][hidden],#operatorSidebarTransfer [role=status]:empty{display:none!important}
+    #operatorSidebarTransfer{display:grid;gap:6px;border-block-start:1px solid var(--line);padding-block-start:8px;font-size:.8rem}
+    #operatorSidebarTransfer summary{min-height:36px;cursor:pointer;padding:8px;color:var(--brand);border:1px solid var(--line);border-radius:8px}
+    #operatorSidebarTransfer [data-transfer-targets]{display:grid;gap:4px;max-height:190px;overflow:auto}
+    #operatorSidebarTransfer [data-transfer-targets] button{margin-top:4px;width:100%;min-height:40px;text-align:start}
+    #operatorSidebarTransfer p{margin:5px 0;color:var(--muted)}
+    #operatorCompanyPanelSaveStatus:empty{display:none}
+    #operatorCompanyPanelSaveStatus{margin:0;color:var(--muted);font-size:.75rem}
+    #operatorCancelConversationName{border:0;background:transparent;font-size:23px;min-width:40px;min-height:40px;padding:0}
     :is(#operatorClientCard,#operatorCompanyPanel) .operator-client-panel-content{min-height:0;flex:1 1 auto;display:grid;grid-auto-rows:max-content;align-content:start;gap:10px;padding:12px;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
     #operatorClientCard .operator-client-panel-block{min-width:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
     #operatorClientCard .operator-client-panel-block>summary{display:flex;align-items:center;gap:8px;padding:9px 11px;font-weight:650;cursor:pointer;background:var(--paper);list-style:none}
@@ -1397,6 +1505,7 @@
     #operatorClientDeveloperStatus{font-size:12px;color:var(--muted)}
     #operatorClientCard [data-client-card-error]{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger,#ad2831)}
     @media(max-width:900px){
+      #operatorConversationHeader #operatorCompanyPanelOpen{width:44px;min-width:44px;height:44px;min-height:44px}
       #operatorCompanyPanel{position:absolute;z-index:15;inset:0 0 0 auto;width:min(100%,380px);max-height:var(--operator-client-available-height,100dvh);box-shadow:-8px 0 22px #0002}
       #operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;min-width:0}
       #operatorConversationHeader .operator-dialog-head-row{flex:1;min-width:0}
@@ -1429,7 +1538,7 @@
     }catch{if(current()&&card.open)status.textContent=groupParticipantsText('unavailable');}finally{host.dataset.loading='false';}
   }
   function mountDialogCompany(route,useSnapshot=true){
-    if(route.archive_read_only){window.tenantDialogueCompany?.clear();return;}
+    if(route.archive_read_only||route.owner_overview_read_only){window.tenantDialogueCompany?.clear();return;}
     if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
     const host=$('operatorClientCompanyHost'),owner=identity(member);
     const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
@@ -1506,6 +1615,8 @@
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
+    const hasCompany=()=>capabilities.dialog_company_binding===true&&!route.archive_read_only&&!route.owner_overview_read_only;
+    const hasTransfer=canSidebarTransfer(route),panelTitle=hasCompany()?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';
     const name=dialogTitle(route),phone=displayDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
     const oldCompany=$('operatorCompanyPanel');
@@ -1518,7 +1629,7 @@
     const developerNodes=sameCard?[...($('operatorClientDeveloperHost')?.childNodes||[])]:[],developerStatus=sameCard?[...($('operatorClientDeveloperStatus')?.childNodes||[])]:[];
     clientCardDispose(Boolean(companySnapshot));
     oldCard?.remove();oldCompany?.remove();
-    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div class="operator-dialog-head-identity"><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button></div><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span><details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
+    head.className='operator-conversation-header';head.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head-row"><div class="operator-dialog-head-main"><button type="button" id="operatorClientCardOpen" title="${esc(clientCardText('title'))}" aria-label="${esc(clientCardText('title'))}" aria-controls="operatorClientCard" aria-expanded="false"></button><div class="operator-dialog-head-identity"><div id="operatorDialogTitleSlot" class="operator-dialog-title" role="heading" aria-level="2"><button type="button" id="operatorDialogTitleText" class="operator-dialog-title-text" aria-controls="operatorClientCard" aria-expanded="false" data-user-content>${esc(name)}</button></div><span id="operatorDialogCompanyName" data-user-content hidden></span></div></div></div><div class="operator-dialog-head-secondary">${!editable?`<span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>`:''}<span id="operatorCreateTicketHost"></span><span id="operatorBrowserCallHost"></span>${hasCompany()||hasTransfer?`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`:''}<details id="operatorMoreActions" class="operator-more-actions"><summary class="operator-icon-button" aria-label="${esc(t('moreActions'))}" title="${esc(t('moreActions'))}">⋯</summary><div class="operator-action-menu" role="menu">${!editable?`<div class="operator-menu-agent"><small>${esc(t('agent'))}</small><span data-user-content>${esc(assignmentLabel(route))}</span></div>`:''}<div id="operatorPrimaryAction" class="operator-primary-action"></div><div id="operatorMenuExtra"></div></div></details></div></div><p id="operatorActionReason" class="operator-status-explanation" role="status" hidden></p>`;
     head.parentElement.querySelector('[data-identity-warning]')?.remove();if(route.identity_conflict){const warning=document.createElement('p');warning.dataset.identityWarning='true';warning.className='operator-ai-context';warning.setAttribute('role','status');warning.textContent=({ru:'История WhatsApp разделена между JID/LID. AI остановлен до проверки связи диалогов.',az:'WhatsApp tarixçəsi JID/LID arasında bölünüb. Əlaqə yoxlanana qədər AI dayandırılıb.',en:'WhatsApp history is split between JID/LID. AI is blocked pending identity review.'})[i18n.language];head.after(warning);}
     const trigger=$('operatorClientCardOpen'),title=$('operatorDialogTitleText');
     const avatar=document.createElement('span');
@@ -1551,8 +1662,10 @@
     const companyPanel=companyTrigger?document.createElement('dialog'):null;
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-labelledby','operatorCompanyPanelTitle');
-      companyPanel.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorCompanyPanelTitle">${esc(clientCardText('companyPanel'))}</h2><button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div></div>`;
+      companyPanel.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorCompanyPanelTitle">${esc(panelTitle)}</h2></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:''}</div>`;
       layout.append(companyPanel);
+      const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
+      status.setAttribute('role','status');head.append(status);
     }
     updateDialogueAcceptor(route,card);
     hydrateContactDetails(route,head);
@@ -1608,8 +1721,10 @@
       for(const button of [trigger,title])button.setAttribute('aria-expanded','false');
       if(restore){if(groupBlock)groupBlock.open=false;if(opener.isConnected)opener.focus({preventScroll:true});}
     };
+    const closeTransferMenu=mountSidebarTransfer($('operatorSidebarTransfer'),route,current);
     const closeCompany=(restore=true,preservePublicLink=false)=>{
       if(!companyPanel?.open)return;
+      closeTransferMenu();
       if(!preservePublicLink)window.tenantDialogueCompany?.hidePublicLink?.();
       if(restore)window.tenantDialogueCompany?.closePicker?.();
       companyPanel.removeAttribute('open');companyTrigger.setAttribute('aria-expanded','false');
@@ -1640,15 +1755,21 @@
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
     card.addEventListener('cancel',event=>{event.preventDefault();close();});
+    const companyAllowed=()=>current()&&(hasCompany()||canSidebarTransfer(currentDialog));
     const openCompany=(restore=false)=>{
-      if(!current()||!companyPanel||companyPanel.open)return;
+      if(!companyAllowed()||!companyPanel||companyPanel.open)return;
       companyPanel.setAttribute('open','');companyTrigger.setAttribute('aria-expanded','true');resizePanel();
       window.tenantDialogueCompany?.refreshPublicLink?.();
-      if(!restore)$('operatorCompanyPanelClose').focus({preventScroll:true});
+      if(!restore)($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary'))?.focus({preventScroll:true});
     };
     if(companyPanel){
-      companyTrigger.onclick=()=>companyPanel.open?closeCompany():openCompany();
-      $('operatorCompanyPanelClose').onclick=()=>closeCompany();
+      companyTrigger.onclick=()=>{
+        if(!companyAllowed())return;
+        const open=!companyPanel.open;
+        savePanelPreference(open);
+        if(open)openCompany();else closeCompany();
+      };
+      void loadPanelPreference()?.then(()=>{if(current()&&companyPanel.isConnected&&panelPreference().open)openCompany(true);});
     }
     for(const target of [window,window.visualViewport])if(target?.addEventListener){
       target.addEventListener('resize',resizePanel);
@@ -1659,15 +1780,24 @@
       if(event.key!=='Escape'||(!card.open&&!companyPanel?.open)||event.defaultPrevented||
          document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
       event.preventDefault();event.stopImmediatePropagation();
-      if(card.open)close();else closeCompany();
+      if(card.open)close();else if(companyAllowed()){savePanelPreference(false);closeCompany();}
     },true);
     const destroy=()=>{clientCardDispose();card.remove();};
     listen('tenant-chat-close',destroy);
     listen('tenant-auth-invalid',destroy);
     const closeAll=()=>{close(false);closeCompany(false);};
     listen('tenant-auth-pending',()=>{authorized=false;closeAll();});
-    listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')closeAll();});
-    listen('tenant-profile',()=>{authorized=owner===identity(member)&&hasRight('dialogs');if(!current())closeAll();else{if(card.open)void refreshCase(true);if(companyPanel?.open)window.tenantDialogueCompany?.refreshPublicLink?.(true);}});
+    listen('tenant-view',event=>{if(event.detail?.view!=='dialogs')closeAll();else if(companyPanel&&panelPreference().open)openCompany(true);});
+    listen('tenant-profile',()=>{
+      authorized=owner===identity(member)&&hasRight('dialogs');
+      if(!current()){closeAll();return;}
+      if(card.open)void refreshCase(true);
+      if(!companyPanel)return;
+      companyTrigger.hidden=!companyAllowed();
+      if(!companyAllowed())closeCompany(false);
+      else if(companyPanel.open)window.tenantDialogueCompany?.refreshPublicLink?.(true);
+      else if(panelPreference().open)openCompany(true);
+    });
     listen('tenant-dialog-reauthorized',()=>{if(card.open)void refreshCase(true);});
     clientCardDispose=(preservePublicLink=false)=>{if(refreshClientSupportCase===refreshCase)refreshClientSupportCase=()=>{};listeners.forEach(remove=>remove());close(false);closeCompany(false,preservePublicLink);companyPanel?.remove();};
     const activeCard=()=>{
@@ -1701,7 +1831,7 @@
       input.onblur=()=>void persistName();
       input.oninput=()=>{saved.hidden=true;error.textContent='';};
     }
-    if(companySnapshot&&companyPanel){
+    if(companySnapshot&&companyPanel&&panelPreference().open){
       openCompany(true);
       if(companySnapshot.focus&&companyPanel.contains($(companySnapshot.focus)))$(companySnapshot.focus).focus({preventScroll:true});
       companyPanel.querySelector('.operator-client-panel-content').scrollTop=companySnapshot.scroll;
@@ -1992,7 +2122,7 @@
     const revision=openRevision,version=epoch,who=identity(member),renderSerial=++dialogRenderSerial;
     const same=()=>renderSerial===dialogRenderSerial&&version===epoch&&revision===openRevision&&currentDialog?.lead_id===route.lead_id&&currentDialog?.channel_id===route.channel_id&&currentDialog?.conversation_id===route.conversation_id&&host.querySelector('[data-operator-dialog]');
     const reasonText=dialogReason(route);
-    host.innerHTML=`<section data-operator-dialog data-dialog-key="${esc(dialogKey(route))}" ${route.owner_overview_read_only?'data-owner-overview-read-only':''} class="operator-dialog-shell"><p id="operatorChatError" class="operator-error" role="status"></p><div class="operator-dialog-body" id="operatorDialogBody"><section class="operator-chat-main"><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" class="outline" id="operatorEarlier" ${page.next_before?'':'hidden'}>${t('earlier')}</button><button type="button" id="operatorLatestIncoming" hidden>${esc(({ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'})[i18n.language]||'Latest incoming')}</button>${!route.archive_read_only&&capabilities.dialog_company_binding===true?`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(clientCardText('companyPanel'))}" title="${esc(clientCardText('companyPanel'))}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`:''}</div><div id="chatRows" class="operator-chat-history">${messageMarkup(page.messages)||t('emptyHistory')}</div><button type="button" class="outline" id="operatorNewMessages" hidden>${esc(({ru:'Новые сообщения ↓',az:'Yeni mesajlar ↓',en:'New messages ↓'})[i18n.language]||'New messages ↓')}</button></div><p id="operatorAIReplyStatus" class="operator-error" role="status" aria-live="polite"></p><div id="operatorAIContextUsage" class="operator-ai-context" hidden></div><p id="operatorSendReason" class="sub"></p><div id="operatorAcceptAction" class="operator-accept-action"></div><div class="operator-composer"><div id="operatorComposerSource" hidden></div><div id="operatorReplyQuote" hidden></div><textarea id="chatText" data-operator-composer rows="1" aria-label="${esc(t('message'))}" placeholder="${esc(t('message'))}"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-icon-action" id="operatorCopilotToggle" aria-label="${esc(copilotText('title'))}" title="${esc(copilotText('title'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.5 6.5L20 11l-6.5 1.5L12 19l-1.5-6.5L4 11l6.5-1.5L12 3Zm7 11 .8 3.2L23 18l-3.2.8L19 22l-.8-3.2L15 18l3.2-.8L19 14Z"/></svg></button><button type="button" class="outline operator-icon-action" id="operatorAIReply" aria-label="${esc(t('aiReply'))}" title="${esc(t('aiReply'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7-5.7-1.8L10.2 9 12 3.5Zm7.2 11.8.9 2.6 2.4.8-2.4.8-.9 2.5-.8-2.5-2.5-.8 2.5-.8.8-2.6ZM5 15l.8 2.2 2.2.8-2.2.8L5 21l-.8-2.2-2.2-.8 2.2-.8L5 15Z"/></svg></button><button type="button" class="outline operator-icon-action operator-voice-launcher" id="operatorCopilotVoiceToggle" aria-label="${esc(copilotText('voice'))}" title="${esc(copilotText('voice'))}" data-voice-state="idle"><span class="operator-voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button><button type="button" class="outline" id="operatorTraining">${esc(trainingText('button'))}</button><button type="button" class="primary" id="sendChat" aria-label="${esc(t('send'))}" title="${esc(t('send'))}">↑</button></div></div></section><div class="operator-copilot-backdrop" id="operatorCopilotBackdrop" hidden aria-hidden="true"></div><section class="operator-copilot" id="operatorCopilot" role="dialog" aria-label="${esc(copilotText('title'))}" hidden><header class="operator-copilot-header"><div><strong>${copilotText('title')}</strong><small>${esc(dialogTitle(route))}</small></div><button type="button" class="operator-icon-button" id="operatorCopilotClose" aria-label="${esc(completionText('close'))}" title="${esc(completionText('close'))}">×</button></header><div class="operator-copilot-actions operator-copilot-modes" aria-label="${esc(copilotText('title'))}"><button type="button" class="outline" data-copilot-mode="chat">${copilotText('question')}</button><button type="button" class="outline" data-copilot-mode="solution">${copilotText('solution')}</button><button type="button" class="outline" data-copilot-mode="instruction">${copilotText('instruction')}</button></div><label class="operator-copilot-prompt-label" for="operatorCopilotPrompt">${copilotText('prompt')}</label><textarea id="operatorCopilotPrompt" maxlength="1600" aria-label="${copilotText('prompt')}" placeholder="${copilotText('prompt')}"></textarea><div class="operator-copilot-actions"><button type="button" class="primary" id="operatorCopilotAsk">${copilotText('ask')}</button><button type="button" class="outline" id="operatorCopilotClear">${copilotText('clear')}</button></div><p id="operatorCopilotStatus" class="operator-error" role="status"></p><div id="operatorCopilotResult" class="operator-copilot-result" hidden></div><button type="button" class="outline" id="operatorCopilotInsert" hidden>${copilotTemplateText('insertResult')}</button><details id="operatorCopilotTemplates" class="operator-copilot-templates" hidden aria-label="${copilotTemplateText('title')}"><summary>${copilotTemplateText('title')}</summary><div id="operatorCopilotTemplateList" class="operator-copilot-template-list"></div><button type="button" class="outline" id="operatorCopilotTemplateCreate">${copilotTemplateText('create')}</button><form id="operatorCopilotTemplateForm" hidden><label>${copilotTemplateText('name')}<input id="operatorCopilotTemplateName" maxlength="80" required></label><label>${copilotTemplateText('question')}<textarea id="operatorCopilotTemplateQuestion" maxlength="1600" required></textarea></label><div class="operator-copilot-actions"><button type="submit" class="primary">${copilotTemplateText('save')}</button><button type="button" class="outline" id="operatorCopilotTemplateCancel">${copilotTemplateText('cancel')}</button></div></form><p id="operatorCopilotTemplateStatus" class="operator-error" role="status" aria-live="polite"></p></details></section></div></section>`;
+    host.innerHTML=`<section data-operator-dialog data-dialog-key="${esc(dialogKey(route))}" ${route.owner_overview_read_only?'data-owner-overview-read-only':''} class="operator-dialog-shell"><p id="operatorChatError" class="operator-error" role="status"></p><div class="operator-dialog-body" id="operatorDialogBody"><section class="operator-chat-main"><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" class="outline" id="operatorEarlier" ${page.next_before?'':'hidden'}>${t('earlier')}</button><button type="button" id="operatorLatestIncoming" hidden>${esc(({ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'})[i18n.language]||'Latest incoming')}</button></div><div id="chatRows" class="operator-chat-history">${messageMarkup(page.messages)||t('emptyHistory')}</div><button type="button" class="outline" id="operatorNewMessages" hidden>${esc(({ru:'Новые сообщения ↓',az:'Yeni mesajlar ↓',en:'New messages ↓'})[i18n.language]||'New messages ↓')}</button></div><p id="operatorAIReplyStatus" class="operator-error" role="status" aria-live="polite"></p><div id="operatorAIContextUsage" class="operator-ai-context" hidden></div><p id="operatorSendReason" class="sub"></p><div id="operatorAcceptAction" class="operator-accept-action"></div><div class="operator-composer"><div id="operatorComposerSource" hidden></div><div id="operatorReplyQuote" hidden></div><textarea id="chatText" data-operator-composer rows="1" aria-label="${esc(t('message'))}" placeholder="${esc(t('message'))}"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-icon-action" id="operatorCopilotToggle" aria-label="${esc(copilotText('title'))}" title="${esc(copilotText('title'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.5 6.5L20 11l-6.5 1.5L12 19l-1.5-6.5L4 11l6.5-1.5L12 3Zm7 11 .8 3.2L23 18l-3.2.8L19 22l-.8-3.2L15 18l3.2-.8L19 14Z"/></svg></button><button type="button" class="outline operator-icon-action" id="operatorAIReply" aria-label="${esc(t('aiReply'))}" title="${esc(t('aiReply'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7-5.7-1.8L10.2 9 12 3.5Zm7.2 11.8.9 2.6 2.4.8-2.4.8-.9 2.5-.8-2.5-2.5-.8 2.5-.8.8-2.6ZM5 15l.8 2.2 2.2.8-2.2.8L5 21l-.8-2.2-2.2-.8 2.2-.8L5 15Z"/></svg></button><button type="button" class="outline operator-icon-action operator-voice-launcher" id="operatorCopilotVoiceToggle" aria-label="${esc(copilotText('voice'))}" title="${esc(copilotText('voice'))}" data-voice-state="idle"><span class="operator-voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button><button type="button" class="outline" id="operatorTraining">${esc(trainingText('button'))}</button><button type="button" class="primary" id="sendChat" aria-label="${esc(t('send'))}" title="${esc(t('send'))}">↑</button></div></div></section><div class="operator-copilot-backdrop" id="operatorCopilotBackdrop" hidden aria-hidden="true"></div><section class="operator-copilot" id="operatorCopilot" role="dialog" aria-label="${esc(copilotText('title'))}" hidden><header class="operator-copilot-header"><div><strong>${copilotText('title')}</strong><small>${esc(dialogTitle(route))}</small></div><button type="button" class="operator-icon-button" id="operatorCopilotClose" aria-label="${esc(completionText('close'))}" title="${esc(completionText('close'))}">×</button></header><div class="operator-copilot-actions operator-copilot-modes" aria-label="${esc(copilotText('title'))}"><button type="button" class="outline" data-copilot-mode="chat">${copilotText('question')}</button><button type="button" class="outline" data-copilot-mode="solution">${copilotText('solution')}</button><button type="button" class="outline" data-copilot-mode="instruction">${copilotText('instruction')}</button></div><label class="operator-copilot-prompt-label" for="operatorCopilotPrompt">${copilotText('prompt')}</label><textarea id="operatorCopilotPrompt" maxlength="1600" aria-label="${copilotText('prompt')}" placeholder="${copilotText('prompt')}"></textarea><div class="operator-copilot-actions"><button type="button" class="primary" id="operatorCopilotAsk">${copilotText('ask')}</button><button type="button" class="outline" id="operatorCopilotClear">${copilotText('clear')}</button></div><p id="operatorCopilotStatus" class="operator-error" role="status"></p><div id="operatorCopilotResult" class="operator-copilot-result" hidden></div><button type="button" class="outline" id="operatorCopilotInsert" hidden>${copilotTemplateText('insertResult')}</button><details id="operatorCopilotTemplates" class="operator-copilot-templates" hidden aria-label="${copilotTemplateText('title')}"><summary>${copilotTemplateText('title')}</summary><div id="operatorCopilotTemplateList" class="operator-copilot-template-list"></div><button type="button" class="outline" id="operatorCopilotTemplateCreate">${copilotTemplateText('create')}</button><form id="operatorCopilotTemplateForm" hidden><label>${copilotTemplateText('name')}<input id="operatorCopilotTemplateName" maxlength="80" required></label><label>${copilotTemplateText('question')}<textarea id="operatorCopilotTemplateQuestion" maxlength="1600" required></textarea></label><div class="operator-copilot-actions"><button type="submit" class="primary">${copilotTemplateText('save')}</button><button type="button" class="outline" id="operatorCopilotTemplateCancel">${copilotTemplateText('cancel')}</button></div></form><p id="operatorCopilotTemplateStatus" class="operator-error" role="status" aria-live="polite"></p></details></section></div></section>`;
     const saveDisplayName=async(kind,displayName,participantJid='',source=route)=>{await api('dialogs/display-name','POST',{provider:'connect',lead_id:source.source_lead_id||route.lead_id,channel_id:source.source_channel_id||route.channel_id,conversation_id:route.conversation_id,kind,display_name:displayName,...(participantJid?{participant_jid:participantJid}:{})});const sourceViewCurrent=()=>who===identity(member)&&hasRight('dialogs')&&sameDialog(route,currentDialog)&&$('view-dialogs')?.classList.contains('active');if(!sourceViewCurrent())return false;const saved=t(kind==='participant'?'participantNameSaved':'nameSaved');if(kind==='participant')notice(saved);await refresh();if(!sourceViewCurrent())return false;if(!await openDialog({...currentDialog},true))throw Error(saved+' '+t('error'));return true;};
     configureDialogHead(route,saveDisplayName);
     if(companyToggleFocused)$('operatorCompanyPanelOpen')?.focus({preventScroll:true});
@@ -2299,7 +2429,7 @@
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
-if(changed){filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();contactPhoneLookups.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
+if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();contactPhoneLookups.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
