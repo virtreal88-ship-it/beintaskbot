@@ -251,9 +251,9 @@ def attach_list_company_names(cur, tenant, cards):
             companies[(provider, row['lead_id'], row['channel_id'], row['conversation_id'])] = (row['company_id'], row['name'])
 
     for card, routes in zip(cards, keys_by_card):
-        # Show one unambiguous company across the visible source chats in a folded group.
-        linked = {companies[key] for key in routes if key in companies}
-        if len(linked) == 1:
+        # A folded group shows a name only when its visible routes agree on one company.
+        linked = {companies.get(key) for key in routes}
+        if len(linked) == 1 and None not in linked:
             card['dialog_company_name'] = linked.pop()[1]
 
 

@@ -1180,7 +1180,7 @@
     $('operatorRows').innerHTML=rows.map((row,index)=>{
       const sources=row.group_sources?.length?activeGroupSources(row):null;
       const sourceName=sources?(sources.map(source=>source.channel_name).filter(Boolean).join(' · ')||clientCardText('sourceDisabled')):row.channel_name;
-      const companyName=capabilities.dialog_company_binding===true?row.dialog_company_name:'';
+      const companyName=(member?.role==='owner'||capabilities.dialog_company_binding===true)?row.dialog_company_name:'';
       const name=dialogTitle(row),preview=dialogPreview(row);
       const selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
