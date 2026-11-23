@@ -2,9 +2,8 @@
 import json
 import math
 import re
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener
+from requests import RequestException
 
 import tenant_beinsystems_operator as operator
 import tenant_dialog_company_binding as dialogue
@@ -34,31 +33,31 @@ def _public_link(response, account):
     raise operator.OperatorError('Operator вернул некорректную публичную ссылку.', 502)
 
 
-def _lookup_public_link(account, *, token, base_url, opener=None):
-    """Use only Operator's read endpoint, with no redirects or issuance fallback."""
+def _lookup_public_link(account, *, token, base_url):
+    """Pinned, read-only GET with the same direct TLS transport as account search."""
     if base_url != operator.OPERATOR_API_BASE_URL or base_url != operator.api_base_url():
         raise operator.OperatorError('Адрес Operator API не настроен.', 503)
-    query = urlencode({'account': account})
-    request = Request(f'{base_url}{_API_PATH}?{query}', method='GET', headers={
-        'Authorization': 'Bearer ' + token,
-        'Accept': 'application/json',
-    })
+    url = f"{base_url}{_API_PATH}?{urlencode({'account': account})}"
     try:
-        with (opener or build_opener(operator._NoRedirect())).open(
-                request, timeout=operator.REQUEST_TIMEOUT_SECONDS) as response:
-            raw = response.read(_MAX_RESULT_BYTES + 1)
-        if len(raw) <= _MAX_RESULT_BYTES:
-            return _public_link(json.loads(raw.decode('utf-8')), account)
-    except HTTPError as error:
-        if error.code in (401, 403):
-            raise operator.OperatorError('Operator не разрешил прочитать ссылку.', 424) from None
-        if error.code == 404:
-            return None
-        if 400 <= error.code < 500:
-            raise operator.OperatorError('Operator отклонил запрос ссылки.', 424) from None
-    except (URLError, TimeoutError, OSError, ValueError):
+        with operator._NoRedirectRequestsSession() as session:
+            session.trust_env = False
+            with session.get(url,headers={'Authorization':'Bearer '+token,'Accept':'application/json'},
+                             timeout=operator.REQUEST_TIMEOUT_SECONDS,allow_redirects=False,stream=True) as reply:
+                if reply.status_code in (401,403):
+                    raise operator.OperatorError('Operator не разрешил прочитать ссылку.',424)
+                if 400 <= reply.status_code < 500:
+                    raise operator.OperatorError('Operator отклонил запрос ссылки.',424)
+                if reply.status_code == 200:
+                    raw = bytearray()
+                    for chunk in reply.iter_content(4096):
+                        if len(raw)+len(chunk)>_MAX_RESULT_BYTES:
+                            break
+                        raw.extend(chunk)
+                    else:
+                        return _public_link(json.loads(raw),account)
+    except (RequestException,ValueError):
         pass
-    raise operator.OperatorError('Чтение ссылки Operator не подтверждено.', 502)
+    raise operator.OperatorError('Чтение ссылки Operator не подтверждено.',502)
 
 
 def _linked_account(cur, tenant, company, generation, instance):
@@ -174,6 +173,47 @@ def _company_profile_fields(response, account):
     if type(balance) not in (int, float) or not -10**12 <= balance <= 10**12 or not math.isfinite(balance):
         balance = None
     return {'registration_phone':phone, 'balance':balance}
+
+
+_SECTIONS = {'company_tasks': ('/task/list', ('linear_id','title','status')),
+             'company_modules': ('/user/modules', ('module',)),
+             'company_history': ('/user/history', ('moment','amount','payment_source'))}
+
+
+def _section_rows(response, section, account):
+    if not isinstance(response,dict) or response.get('status')!='success' or not isinstance(response.get('data'),list):
+        raise operator.OperatorError('Operator не подтвердил список.',502)
+    fields=_SECTIONS[section][1]
+    rows=[]
+    for item in response['data']:
+        if not isinstance(item,dict) or ('account' in item and item['account']!=account):
+            raise operator.OperatorError('Operator не подтвердил данные выбранной компании.',502)
+        if section=='company_tasks' and item.get('account')!=account:
+            raise operator.OperatorError('Operator не подтвердил аккаунт задачи.',502)
+        values=[item.get(field) for field in fields]
+        if section=='company_tasks' and not values[0]:
+            values[0]=item.get('id')
+        if any(type(value) not in (str,int,float) or not str(value).strip() for value in values):
+            raise operator.OperatorError('В ответе Operator отсутствуют поля списка.',502)
+        rows.append([str(value)[:320] for value in values])
+    return {'rows':rows}
+
+
+def lookup_section(profile, *, section, **query):
+    path,_=_SECTIONS[section]
+    def read(account, *, token, base_url):
+        if base_url!=operator.OPERATOR_API_BASE_URL or base_url!=operator.api_base_url():
+            raise operator.OperatorError('Подключение Operator изменилось.',409)
+        try:
+            raw=operator._post_read_with_requests(base_url+path,{'account':account},token,accept_json=True)
+            return _section_rows(json.loads(raw),section,account)
+        except operator.OperatorError as exc:
+            if exc.upstream_http_status in (401,403):
+                raise operator.OperatorError('Operator отклонил чтение данных.',424) from None
+            raise
+        except (ValueError,UnicodeError):
+            raise operator.OperatorError('Operator вернул неизвестный формат.',502) from None
+    return _read_bound_route(profile,endpoint=section,lookup=read,**query)
 
 
 def lookup_profile(profile, **query):

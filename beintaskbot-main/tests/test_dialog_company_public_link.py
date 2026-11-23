@@ -1,5 +1,5 @@
 from io import BytesIO
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 from urllib.error import HTTPError
 import json
 import uuid
@@ -48,32 +48,29 @@ def test_shape_and_account_fail_closed():
 
 def test_only_get_encodes_account_and_never_retries(monkeypatch):
     monkeypatch.setattr(operator, 'api_base_url', lambda: operator.OPERATOR_API_BASE_URL)
-    opener = Mock()
-    def response(request, *, timeout):
-        assert request.full_url == 'https://operator-api.beinsystems.az/v1/task/getPublicLink?account=account%2Ba%26b'
-        assert request.get_method() == 'GET'
-        assert request.data is None
-        assert request.get_header('Authorization') == 'Bearer synthetic'
-        assert timeout == operator.REQUEST_TIMEOUT_SECONDS
-        return BytesIO(json.dumps(envelope()).encode())
-    base = operator.OPERATOR_API_BASE_URL
-    opener.open.side_effect = response
-    assert link._lookup_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener) == URL
-    for error, status in (
-            (TimeoutError('unconfirmed'), 502),
-            (HTTPError(base, 403, 'forbidden', {}, None), 424),
-            (HTTPError(base, 302, 'redirect', {}, None), 502)):
-        prior = opener.open.call_count
-        opener.open.side_effect = error
-        with pytest.raises(operator.OperatorError) as denied:
-            link._lookup_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener)
-        assert denied.value.status == status and opener.open.call_count == prior + 1
-    opener.open.side_effect = HTTPError(base,404,'missing link',{},None)
-    assert link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base,opener=opener) is None
-    assert opener.open.call_count == 5
+    session=MagicMock()
+    response=MagicMock()
+    session.__enter__.return_value=session
+    session.get.return_value.__enter__.return_value=response
+    monkeypatch.setattr(operator,'_NoRedirectRequestsSession',lambda:session)
+    response.status_code=200
+    response.iter_content.return_value=[json.dumps(envelope()).encode()]
+    base=operator.OPERATOR_API_BASE_URL
+    assert link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base)==URL
+    session.get.assert_called_once_with(base+'/task/getPublicLink?account=account%2Ba%26b',
+        headers={'Authorization':'Bearer synthetic','Accept':'application/json'},
+        timeout=operator.REQUEST_TIMEOUT_SECONDS,allow_redirects=False,stream=True)
+    assert session.trust_env is False
+    for status,expected in ((403,424),(404,424),(302,502),(500,502)):
+        response.status_code=status
+        before=session.get.call_count
+        with pytest.raises(operator.OperatorError) as error:
+            link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base)
+        assert error.value.status==expected and session.get.call_count==before+1
+    session.post.assert_not_called()
     with pytest.raises(operator.OperatorError):
-        link._lookup_public_link(ACCOUNT, token='synthetic', base_url='https://unknown.test', opener=opener)
-    assert opener.open.call_count == 5
+        link._lookup_public_link(ACCOUNT,token='synthetic',base_url='https://unknown.test')
+    assert session.get.call_count==5
 
 
 def test_no_provider_call_without_proven_mapping_and_recheck_after(monkeypatch):
@@ -186,3 +183,15 @@ def test_company_profile_drops_provider_reply_after_rebinding(monkeypatch):
     assert changed.value.status == 409
     read.assert_called_once_with('account_info', {'account':ACCOUNT}, requests_account_info=True,
         token='synthetic', base_url=operator.OPERATOR_API_BASE_URL)
+
+
+def test_dialogue_lists_are_scoped_and_project_only_visible_fields():
+    row = {'account':ACCOUNT,'linear_id':'BS-7','title':'Example','status':'Done','description':'private'}
+    response={'status':'success','data':[row]}
+    assert link._section_rows(response,'company_tasks',ACCOUNT)=={'rows':[['BS-7','Example','Done']]}
+    for invalid in ({**row,'account':'wrong'},{**row,'title':None}):
+        with pytest.raises(operator.OperatorError):
+            link._section_rows({**response,'data':[invalid]},'company_tasks',ACCOUNT)
+    assert link._section_rows({**response,'data':[]},'company_modules',ACCOUNT)=={'rows':[]}
+    with pytest.raises(operator.OperatorError):
+        link._section_rows({**response,'data':None},'company_history',ACCOUNT)

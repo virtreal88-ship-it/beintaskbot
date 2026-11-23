@@ -168,6 +168,23 @@ def _manage(cur, tenant, actor, policy, route, *, write):
     return True
 
 
+def _operator_choice_allowed(cur, tenant, policy, route, *, enforce=False):
+    from tenant_dialog_access import require_source
+    from tenant_operator_access import assert_route
+    if not (dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view')
+            and policy.allows_action('dialogs','update')):
+        return False
+    provider, lead, channel, conversation = route
+    try:
+        require_source(cur,tenant,policy,provider,channel,'update')
+        assert_route(cur,tenant,policy,provider,conversation,channel,lead,action='update')
+    except TenantLinearError:
+        if enforce:
+            raise
+        return False
+    return True
+
+
 def _read(cur, tenant, actor, route, can_manage):
     from tenant_crm_native_access import CRMAccessError, current_access, locked_resource
     empty = {'company_id':None,'company_name':None,'can_manage':can_manage}
@@ -287,7 +304,7 @@ def _binding_snapshot(cur, tenant, policy, route, can_unlink):
         WHERE c.archived_at IS NULL""", (*keys,tenant))
     found = cur.fetchone() or {'company_id':None,'company_name':None}
     result = {**found,'can_manage':True,'can_unlink':can_unlink}
-    if can_unlink and policy.allows_action('operator_data','view') and dialogue_chooser_enabled(tenant):
+    if _operator_choice_allowed(cur, tenant, policy, route):
         result['can_search_operator'] = True
     return result
 

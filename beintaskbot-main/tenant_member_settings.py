@@ -17,6 +17,13 @@ PERMISSION_MODULES = frozenset({'tasks', 'deals', 'customers', 'dialogs', 'suppo
 NOTIFICATION_KEYS = frozenset(item['key'] for item in notification_catalog())
 
 
+def editable_permission_modules(tenant_id):
+    from tenant_beinsystems_operator_access import is_operator_workspace
+    if is_operator_workspace(tenant_id):
+        return PERMISSION_MODULES | {'operator_data:view'}
+    return PERMISSION_MODULES
+
+
 def settings_snapshot(workflow, target):
     policies = policy_values(workflow or {})
     settings = (policies.get('members') or {}).get(str(target['telegram_id']), {})

@@ -382,9 +382,9 @@ def list_members(*, tenant_id: str, owner_id: int, include_work_status: bool = F
         value['email_assign_available'] = value['password_assign_available']
         value['profile_assign_available'] = value['password_assign_available']
         if current.get('role') == 'owner':
-            from tenant_member_settings import settings_snapshot, PERMISSION_MODULES
+            from tenant_member_settings import settings_snapshot, editable_permission_modules
             value['work_settings'] = settings_snapshot(workflow, row)
-            value['permission_modules'] = sorted(PERMISSION_MODULES)
+            value['permission_modules'] = sorted(editable_permission_modules(tenant_id))
             from tenant_member_access import access_snapshot
             value['access_settings'] = access_snapshot(row)
             from tenant_member_kommo_settings import snapshot as kommo_settings_snapshot
@@ -502,9 +502,9 @@ def _strict_card_update(*, tenant_id, owner_id, telegram_id, expected_version, c
             or any(not isinstance(item, str) for item in changes['permissions'])):
         raise MemberCardError('member_card_invalid', fields={'permissions': 'invalid'})
     if 'permission_changes' in changes:
-        from tenant_member_settings import PERMISSION_MODULES
+        from tenant_member_settings import editable_permission_modules
         patch = changes['permission_changes']
-        if (not isinstance(patch, dict) or not patch or set(patch) - PERMISSION_MODULES
+        if (not isinstance(patch, dict) or not patch or set(patch) - editable_permission_modules(tenant_id)
                 or any(type(value) is not bool for value in patch.values()) or 'permissions' in changes):
             raise MemberCardError('member_card_invalid', fields={'permissions': 'invalid'})
     if 'access_settings' in changes:
