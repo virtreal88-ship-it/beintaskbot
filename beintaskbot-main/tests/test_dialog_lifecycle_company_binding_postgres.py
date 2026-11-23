@@ -256,3 +256,15 @@ def test_unexpected_kommo_shape_does_not_adopt_or_write(local,alter):
     assert database.execute(f'SELECT count(*) AS n FROM {store.KOMMO}')==[{'n':0}]
     database.execute(f'DROP TABLE {store.KOMMO}')
     database.commit()
+
+
+def test_owner_list_shows_company_on_employee_dialogue(local):
+    _, company, *_ = local
+    command()
+    store.binding(PROFILE, **_route('connect', 41, CA, 'client'), company_id=company)
+    command('transfer', 1, target_employee_id=33)
+    rows = dialogs.listing(PROFILE, lifecycle='all', owner_overview=True)['dialogs']
+    row = next(row for row in rows if row['lead_id'] == 41)
+    assert row['owner_overview_read_only'] is True
+    assert row['dialog_company_name'] == 'Synthetic company'
+    assert row['lifecycle']['operator_id'] == 33
