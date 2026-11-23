@@ -25,7 +25,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
         success:true,company_profile:profile})})));
     }
     assert.equal(path,'/api/platform/operator/dialog-company/public-link');
-    assert.equal('account' in data,false);assert.equal('public_base_url' in data,false);
+    assert.equal(data.action,'copy_customer_link');assert.equal('account' in data,false);assert.equal('public_base_url' in data,false);
     return new Promise(resolve=>calls.push({id:data.expected_company_id,channel:data.channel_id,signal,
       finish(link,status=200){resolve({ok:status===200,status,json:async()=>({success:status===200,public_link:link})});}}));
   };

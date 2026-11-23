@@ -195,3 +195,19 @@ def test_dialogue_lists_are_scoped_and_project_only_visible_fields():
     assert link._section_rows({**response,'data':[]},'company_modules',ACCOUNT)=={'rows':[]}
     with pytest.raises(operator.OperatorError):
         link._section_rows({**response,'data':None},'company_history',ACCOUNT)
+
+
+def test_first_copy_posts_only_the_verified_account_to_operator(monkeypatch):
+    session=MagicMock()
+    session.__enter__.return_value=session
+    reply=session.post.return_value.__enter__.return_value
+    reply.status_code=200
+    reply.iter_content.return_value=[json.dumps(envelope()).encode()]
+    monkeypatch.setattr(operator,'_NoRedirectRequestsSession',lambda:session)
+    base=operator.OPERATOR_API_BASE_URL
+    assert link._issue(ACCOUNT,{'token':'synthetic','base_url':base})==URL
+    session.post.assert_called_once_with(base+'/task/publicLink',
+        json={'account':ACCOUNT,'public_base_url':'https://operator.beinsystems.az'},
+        headers={'Authorization':'Bearer synthetic','Accept':'application/json'},
+        timeout=operator.REQUEST_TIMEOUT_SECONDS,allow_redirects=False,stream=True)
+    assert session.trust_env is False

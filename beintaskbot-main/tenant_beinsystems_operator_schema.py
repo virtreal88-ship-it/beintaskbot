@@ -6,7 +6,16 @@ explicit confirmation, connection generations, and revocation history.
 """
 
 
+def migrate_customer_links(cur):
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_customer_links (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      instance_id UUID NOT NULL, generation TEXT NOT NULL, account TEXT NOT NULL,
+      encrypted_url BYTEA, requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,instance_id,generation,account))""")
+
+
 def migrate_operator_identity_links(cur) -> None:
+    migrate_customer_links(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
