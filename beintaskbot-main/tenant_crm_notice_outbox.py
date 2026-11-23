@@ -22,6 +22,21 @@ def fresh(event: str, row: dict | None, payload: dict) -> bool:
     return True
 
 
+def _incoming_push_context(row: dict | None) -> dict | None:
+    """Build a minimal preview from the exact persisted inbound message row."""
+    if not row or row.get('direction') != 'incoming':
+        return None
+    deal = row.get('deal') or {}
+    return {
+        'conversation_kind': 'contact',
+        'display_name': deal.get('contact_name') or deal.get('name') or row.get('author_name') or '',
+        'phone': deal.get('phone') or '',
+        'author': row.get('author_name') or '',
+        'text': row.get('body') or row.get('text') or '',
+        'message_type': row.get('message_type') or '',
+    }
+
+
 def claim(channel: str) -> dict | None:
     if channel not in {'telegram', 'push'}: raise ValueError('Invalid channel')
     with _connect() as conn:
@@ -48,7 +63,13 @@ def claim(channel: str) -> dict | None:
             connect_route=None
             connect_route_ok=True
             push_context=None
+            if item['event']=='incoming_message' and item['kind']=='message':
+                # Use the exact tenant-scoped message row for non-Connect sources.
+                # Recipient and source access are rechecked below before context
+                # is attached to the push delivery.
+                push_context=_incoming_push_context(row)
             if item['event']=='incoming_message' and item['kind']=='message' and str((row or {}).get('channel') or '').startswith('connect:'):
+                push_context=None
                 connect_route=connect_dialog_route(row or {})
                 stored_route=(item.get('payload') or {}).get('connect_dialog')
                 connect_route_ok=bool(connect_route and (not stored_route or stored_route==connect_route))
