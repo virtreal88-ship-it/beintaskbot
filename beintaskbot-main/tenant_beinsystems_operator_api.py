@@ -261,26 +261,22 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                     logger.error("Operator dialogue company profile request failed")
                     raise operator.OperatorError("Данные компании недоступны.", 503) from None
                 return _json_response({"company_profile": result})
-            if set(data) == exact | {"company_search"} and isinstance(data["company_search"],str):
-                choices = await asyncio.to_thread(exact_binding, profile, **data)
-                return _json_response({"companies": choices})
             if set(data) in (exact | {"operator_search"}, exact | {"operator_account"},
-                             exact | {"operator_account", "expected_company_id"}):
+                             exact | {"operator_account", "expected_company_id"},
+                             exact | {"operator_account", "expected_company_id","confirm_existing"}):
                 from tenant_dialog_company_operator import chooser
                 choice = "operator_account" in data
+                if "confirm_existing" in data and data["confirm_existing"] is not True:
+                    raise operator.OperatorError("Invalid confirmation.")
                 term = data["operator_account" if choice else "operator_search"]
                 result = await asyncio.to_thread(chooser,profile,**{key:data[key] for key in exact},
-                                                 term=term,choice=choice,**({"expected_company_id":data["expected_company_id"]}
+                                                 term=term,choice=choice,**({"confirm_existing":True} if "confirm_existing" in data else {}),**({"expected_company_id":data["expected_company_id"]}
                                                      if "expected_company_id" in data else {}))
                 return _json_response(result)
-            if set(data) in (exact | {"company_id"}, exact | {"company_id", "expected_company_id"}):
+            if set(data) == exact | {"company_id", "expected_company_id"} and data["company_id"] is None:
                 found = await asyncio.to_thread(exact_binding, profile, **data)
-            elif set(data) in (legacy, legacy | {"company_id"}):
-                found = await asyncio.to_thread(operator.set_dialog_company_binding, profile,
-                    channel_id=data["channel_id"], conversation_id=data["conversation_id"],
-                    company_id=data.get("company_id"))
             else:
-                raise operator.OperatorError("Поля привязки компании некорректны.")
+                raise operator.OperatorError("Выберите аккаунт Operator в поиске диалога.")
             return _json_response({"binding": found})
         except operator.OperatorError as error:
             return web.json_response({"success": False, "error": str(error)}, status=error.status,

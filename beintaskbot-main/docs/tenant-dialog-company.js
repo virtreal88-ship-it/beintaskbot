@@ -534,7 +534,17 @@
     s.writing=true;clearPublicLink(s);clearProfile(s);s.read?.abort();s.read=null;s.cancelSearch();s.sync();
     s.status.textContent=t('loading');
     try{
-      const {binding}=await request(endpoint,s.member,{...s.route,...fields,expected_company_id},true);
+      const selection={...s.route,...fields,expected_company_id};
+      let response=await request(endpoint,s.member,selection,true);
+      if(response.confirm_existing_company&&current(s)){
+        const pair=companyName(s.binding)+' ↔ @'+fields.operator_account;
+        const prompt={az:'CRM şirkətini Operator hesabına bağlamaq istəyirsiniz?',ru:'Связать компанию CRM с аккаунтом Operator?',en:'Link this CRM company to this Operator account?'};
+        if(!window.confirm((prompt[window.tenantI18n?.language]||prompt.az)+'\n'+pair)){
+          s.reset();s.status.textContent='';return;
+        }
+        response=await request(endpoint,s.member,{...selection,confirm_existing:true},true);
+      }
+      const {binding}=response;
       if(!current(s))return;
       if(!binding||(fields.company_id===null?binding.company_id:!binding.company_id))throw Error(t('error'));
       s.reset();s.status.textContent='';paint(s,binding);
@@ -578,10 +588,10 @@
     unlink.onpointerdown=event=>event.preventDefault();
     field.append(input,unlink);panel.append(label,field);
     results.className='operator-dialog-company-results';
-    const operatorRows=node('div'),localRows=node('div'),operatorStatus=node('p'),localStatus=node('p');
-    operatorRows.dataset.operatorAccountResults='';localRows.dataset.localCompanyResults='';
-    operatorStatus.setAttribute('role','status');localStatus.setAttribute('role','status');
-    results.append(operatorRows,operatorStatus,localRows,localStatus);
+    const operatorRows=node('div'),operatorStatus=node('p');
+    operatorRows.dataset.operatorAccountResults='';
+    operatorStatus.setAttribute('role','status');
+    results.append(operatorRows,operatorStatus);
     const suggestions=node('div');suggestions.className='operator-company-suggestions';suggestions.hidden=true;
     suggestions.id='operatorDialogueCompanySuggestions';suggestions.append(results);panel.append(suggestions);
     panel.addEventListener('focusout',event=>{
@@ -595,8 +605,8 @@
     const active=()=>current(s)&&panel.isConnected;
     s.cancelSearch=()=>{serial++;clearTimeout(timer);timer=null;search?.abort();search=null;};
     const clearResults=()=>{
-      s.cancelSearch();operatorRows.replaceChildren();localRows.replaceChildren();
-      operatorStatus.textContent='';localStatus.textContent='';
+      s.cancelSearch();operatorRows.replaceChildren();
+      operatorStatus.textContent='';
     };
     s.reset=()=>{
       clearResults();suggestions.hidden=true;
@@ -617,7 +627,7 @@
       for(const [label,fields] of items){
         const result=button('',()=>{if(active()&&result.isConnected)void changeBinding(s,fields);});
         result.onpointerdown=event=>event.preventDefault();
-        result.append(node('strong',label),node('small',fields.operator_account?'Operator':'CRM'));
+        result.append(node('strong',label));
         rows.append(result);
       }
     }
@@ -625,19 +635,8 @@
       if(!active()||seq!==serial||s.writing)return;
       const query=term.slice(0,120);
       search=new AbortController();const {signal}=search;
-      const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=2;
-      localStatus.textContent=t('loading');operatorStatus.textContent=operatorSearch?t('loading'):'';
-      void request(endpoint,s.member,{...s.route,company_search:query},true,signal)
-        .then(payload=>{
-          if(!active()||seq!==serial)return;
-          const choices=new Map();
-          for(const row of payload.companies||[]){
-            if(row.id&&row.name)choices.set(String(row.id),String(row.name));
-          }
-          const items=[...choices].slice(0,5).map(([id,name])=>[name,{company_id:id}]);
-          render(localRows,items);localStatus.textContent=items.length?'':t('empty');
-        },()=>{if(active()&&seq===serial)localStatus.textContent=t('error');});
-      if(!operatorSearch)return;
+      if(s.binding?.can_search_operator!==true){operatorStatus.textContent=t('restricted');return;}
+      operatorStatus.textContent=t('loading');
       try{
         const payload=await request(endpoint,s.member,{...s.route,operator_search:query},true,signal);
         if(!active()||seq!==serial)return;
@@ -652,8 +651,8 @@
       if(!active()||s.writing||input.readOnly)return;
       clearResults();s.status.textContent='';
       const query=input.value.trim();
-      s.editing=input.value!==companyName(s.binding);
-      suggestions.hidden=!query||composing||!s.editing;
+      s.editing=true;
+      suggestions.hidden=[...query].length<2||composing||!s.editing;
       s.sync();
       if(!suggestions.hidden){
         const seq=serial;
