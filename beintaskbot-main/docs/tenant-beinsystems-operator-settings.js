@@ -118,6 +118,12 @@
         if(!valid())return;
         if(result.integration)state=result.integration;
         if(state?.pending_auth_received!==true)throw Error('Сервер не подтвердил вход в Operator.');
+        if(isConnected()&&verifiedLogin){
+          const refreshed=await request(endpoint,{action:'renew_connection',candidate_received_at:state.pending_auth_received_at});
+          if(!valid())return;
+          state=refreshed.integration;
+          showAuth('Авторизация Operator обновлена.');
+        }
         renderStatus();
       });
     });

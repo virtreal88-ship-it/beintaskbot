@@ -311,4 +311,10 @@ def lookup_profile(profile, **query):
                                               requests_account_info=True, **transport)
         return _company_profile_fields(response, account)
 
-    return _read_bound_route(profile, endpoint='account_info', lookup=profile_fields, **query)
+    result = _read_bound_route(profile, endpoint='account_info', lookup=profile_fields, **query)
+    if result['state'] == 'available':
+        from tenant_dialog_company_actions import capabilities
+        with dialogue._connect() as db, db.cursor() as cur:
+            result['actions'] = capabilities(operator._current_profile(cur, operator._tenant(profile),
+                                                                      int(profile['telegram_id'])))
+    return result
