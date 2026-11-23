@@ -1191,6 +1191,38 @@ def _pending_timestamp_is_current(cur, tenant, actor, received_at):
     return bool(row and row.get("received_at") == received_at)
 
 
+def renew_connected_token(profile, candidate_received_at):
+    """Refresh the owner's verified credential without changing its account scope."""
+    tenant = _tenant(profile)
+    actor = int(profile["telegram_id"])
+    candidate = _pending_auth_candidate(profile)
+    if candidate["received_at"].isoformat() != candidate_received_at:
+        raise OperatorError("Вход изменился. Повторите проверку.", 409)
+    _record_operator_read(profile, "me", {})
+    identity = operator_me_payload(_request_operator(
+        "me", {}, token=candidate["token"], base_url=candidate["base_url"], requests_me=True))
+    with _connect() as db, db.cursor() as cur:
+        _lock_accounts_capability_scope(cur, tenant)
+        if _current_profile(cur, tenant, actor).get("role") != "owner":
+            raise OperatorError("Требуются права владельца.", 403)
+        row = _operator_row(cur, tenant, lock=True)
+        if not (_pending_timestamp_is_current(cur, tenant, actor, candidate["received_at"])
+                and identity.get("identifier") and
+                _connected_login(row, tenant) == identity["identifier"]):
+            raise OperatorError("Учётная запись не совпадает с активным подключением.", 409)
+        cipher = _fernet()
+        secret = json.loads(cipher.decrypt(bytes(row["secrets"])))
+        secret["token"] = candidate["token"]
+        cur.execute("""UPDATE saas_tenant_integrations SET secrets=%s,updated_at=now()
+            WHERE tenant_id=%s AND provider=%s""",
+            (cipher.encrypt(_json(secret).encode()), tenant, PROVIDER))
+        cur.execute("""UPDATE saas_beinsystems_operator_pending_auth_v2 SET activated_at=now()
+            WHERE tenant_id=%s AND owner_telegram_id=%s AND received_at=%s""",
+            (tenant, actor, candidate["received_at"]))
+        db.commit()
+    return status(profile, include_connected_login=True)
+
+
 def _activate_candidate_if_unconfigured(cur, tenant, actor, token, *, verified_identifier=None):
     row = _operator_row(cur, tenant, lock=True)
     if row and row.get("status") in {"connected", "configured"} and row.get("secrets"):

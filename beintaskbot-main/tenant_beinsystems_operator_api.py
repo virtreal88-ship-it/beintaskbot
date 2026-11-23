@@ -93,6 +93,8 @@ def integration_handler(member: Callable, origin: str, logger):
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
+            elif action == "renew_connection" and set(data) == {"action","candidate_received_at"}:
+                value = await asyncio.to_thread(operator.renew_connected_token, profile, data["candidate_received_at"])
             elif action == "directory_search" and set(data) == {"action", "search"}:
                 directory = await asyncio.to_thread(
                     operator.search_authenticated_operator_account, profile, data["search"])
