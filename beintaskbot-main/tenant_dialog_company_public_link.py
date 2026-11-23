@@ -52,8 +52,7 @@ def _lookup_public_link(account, *, token, base_url, opener=None):
     except HTTPError as error:
         if error.code in (401, 403):
             raise operator.OperatorError('Operator не разрешил прочитать ссылку.', 424) from None
-        if error.code == 404:
-            return None
+        # Only a successful provider receipt with explicit null data proves absence.
         if 400 <= error.code < 500:
             raise operator.OperatorError('Operator отклонил запрос ссылки.', 424) from None
     except (URLError, TimeoutError, OSError, ValueError):

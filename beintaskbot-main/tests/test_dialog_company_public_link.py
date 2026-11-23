@@ -69,7 +69,9 @@ def test_only_get_encodes_account_and_never_retries(monkeypatch):
             link._lookup_public_link(ACCOUNT, token='synthetic', base_url=base, opener=opener)
         assert denied.value.status == status and opener.open.call_count == prior + 1
     opener.open.side_effect = HTTPError(base,404,'missing link',{},None)
-    assert link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base,opener=opener) is None
+    with pytest.raises(operator.OperatorError) as missing_route:
+        link._lookup_public_link(ACCOUNT,token='synthetic',base_url=base,opener=opener)
+    assert missing_route.value.status == 424
     assert opener.open.call_count == 5
     with pytest.raises(operator.OperatorError):
         link._lookup_public_link(ACCOUNT, token='synthetic', base_url='https://unknown.test', opener=opener)
