@@ -2,9 +2,8 @@
 import json
 import math
 import re
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener
+from requests import RequestException
 
 import tenant_beinsystems_operator as operator
 import tenant_dialog_company_binding as dialogue
@@ -34,30 +33,31 @@ def _public_link(response, account):
     raise operator.OperatorError('Operator вернул некорректную публичную ссылку.', 502)
 
 
-def _lookup_public_link(account, *, token, base_url, opener=None):
-    """Use only Operator's read endpoint, with no redirects or issuance fallback."""
+def _lookup_public_link(account, *, token, base_url):
+    """Pinned, read-only GET with the same direct TLS transport as account search."""
     if base_url != operator.OPERATOR_API_BASE_URL or base_url != operator.api_base_url():
         raise operator.OperatorError('Адрес Operator API не настроен.', 503)
-    query = urlencode({'account': account})
-    request = Request(f'{base_url}{_API_PATH}?{query}', method='GET', headers={
-        'Authorization': 'Bearer ' + token,
-        'Accept': 'application/json',
-    })
+    url = f"{base_url}{_API_PATH}?{urlencode({'account': account})}"
     try:
-        with (opener or build_opener(operator._NoRedirect())).open(
-                request, timeout=operator.REQUEST_TIMEOUT_SECONDS) as response:
-            raw = response.read(_MAX_RESULT_BYTES + 1)
-        if len(raw) <= _MAX_RESULT_BYTES:
-            return _public_link(json.loads(raw.decode('utf-8')), account)
-    except HTTPError as error:
-        if error.code in (401, 403):
-            raise operator.OperatorError('Operator не разрешил прочитать ссылку.', 424) from None
-        # Only a successful provider receipt with explicit null data proves absence.
-        if 400 <= error.code < 500:
-            raise operator.OperatorError('Operator отклонил запрос ссылки.', 424) from None
-    except (URLError, TimeoutError, OSError, ValueError):
+        with operator._NoRedirectRequestsSession() as session:
+            session.trust_env = False
+            with session.get(url,headers={'Authorization':'Bearer '+token,'Accept':'application/json'},
+                             timeout=operator.REQUEST_TIMEOUT_SECONDS,allow_redirects=False,stream=True) as reply:
+                if reply.status_code in (401,403):
+                    raise operator.OperatorError('Operator не разрешил прочитать ссылку.',424)
+                if 400 <= reply.status_code < 500:
+                    raise operator.OperatorError('Operator отклонил запрос ссылки.',424)
+                if reply.status_code == 200:
+                    raw = bytearray()
+                    for chunk in reply.iter_content(4096):
+                        if len(raw)+len(chunk)>_MAX_RESULT_BYTES:
+                            break
+                        raw.extend(chunk)
+                    else:
+                        return _public_link(json.loads(raw),account)
+    except (RequestException,ValueError):
         pass
-    raise operator.OperatorError('Чтение ссылки Operator не подтверждено.', 502)
+    raise operator.OperatorError('Чтение ссылки Operator не подтверждено.',502)
 
 
 def _linked_account(cur, tenant, company, generation, instance):

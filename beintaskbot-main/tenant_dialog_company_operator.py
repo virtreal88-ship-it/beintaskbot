@@ -47,7 +47,7 @@ def _authorized(cur,profile,route):
     if policy.profile.get('tenant_status')!='active' or not policy.allows_action('operator_data','view'):
         raise operator.OperatorError('Нет доступа к аккаунтам Operator.',403)
     access(cur,profile,'dialogs','update')
-    if not dialogue._operator_choice_allowed(cur,tenant,policy,route):
+    if not dialogue._operator_choice_allowed(cur,tenant,policy,route,enforce=True):
         raise operator.OperatorError('Нет доступа к выбору аккаунта в этом диалоге.',403)
     dialogue._prove(cur,tenant,policy,route)
     table,_,_=dialogue._pred(tenant,route)

@@ -168,7 +168,7 @@ def _manage(cur, tenant, actor, policy, route, *, write):
     return True
 
 
-def _operator_choice_allowed(cur, tenant, policy, route):
+def _operator_choice_allowed(cur, tenant, policy, route, *, enforce=False):
     from tenant_dialog_access import require_source
     from tenant_operator_access import assert_route
     if not (dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view')
@@ -179,6 +179,8 @@ def _operator_choice_allowed(cur, tenant, policy, route):
         require_source(cur,tenant,policy,provider,channel,'update')
         assert_route(cur,tenant,policy,provider,conversation,channel,lead,action='update')
     except TenantLinearError:
+        if enforce:
+            raise
         return False
     return True
 

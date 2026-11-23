@@ -251,6 +251,29 @@ def _activate_synthetic(db,instance):
     db.commit()
 
 
+def test_employee_reads_active_connection_for_owned_route_only(ready):
+    db,calls,instance=ready
+    _activate_synthetic(db,instance)
+    db.execute("""UPDATE saas_tenant_members SET permissions='["dialogs","support","operator_data"]'::jsonb
+        WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
+    db.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
+        VALUES(%s::uuid,'modules','{"operator_data":true}'::jsonb) ON CONFLICT(tenant_id,policy_key)
+        DO UPDATE SET value=EXCLUDED.value""",(A,))
+    db.commit()
+    command('transfer',1,target_employee_id=33)
+    assert service.chooser(STAFF,**ROUTE,term='l')=={'accounts':[{'account':'l'}]}
+    assert calls==[('accounts',{'search':'l','limit':5})]
+    with pytest.raises(provider.OperatorError):
+        service.chooser(STAFF,**{**ROUTE,'channel_id':CB},term='l')
+    assert len(calls)==1
+    db.execute("""UPDATE saas_tenant_members SET permissions='["dialogs","support"]'::jsonb
+        WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
+    db.commit()
+    with pytest.raises(provider.OperatorError):
+        service.chooser(STAFF,**ROUTE,term='l')
+    assert len(calls)==1
+
+
 @pytest.mark.parametrize('first',['manual','chooser','two-choosers'])
 def test_manual_identity_and_live_chooser_share_two_connection_winner_order(ready,monkeypatch,first):
     db,_,instance=ready
