@@ -105,7 +105,15 @@ const beta='@verified_account';
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
   assert(!await panel.isVisible());
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),[]);
-  await page.locator('#operatorCompanyPanelOpen').click();
+  const toggle=page.locator('#operatorCompanyPanelOpen');
+  await toggle.scrollIntoViewIfNeeded();
+  assert(await toggle.evaluate(el=>{
+    const a=el.getBoundingClientRect();
+    const avatar=document.querySelector('#operatorClientCardOpen').getBoundingClientRect();
+    const target=document.elementFromPoint(a.left+a.width/2,a.top+a.height/2);
+    return a.width>=34&&a.height>=34&&a.left>=avatar.right&&el.contains(target);
+  }),'company toggle keeps its own real hit target beside the avatar');
+  await toggle.click();
   await panel.locator('[data-company-profile]').getByText('+994501234567',{exact:true}).waitFor();
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
   assert(!await card.isVisible());

@@ -100,6 +100,8 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('administrator/approvals', ('GET','POST')),
     ('agents', ('GET','POST')), ('agents/options', ('GET',)),
     ('dialogs/preferences', ('GET','POST')),
+    ('dialogs/company-panel/preferences', ('GET','POST')),
+    ('dialogs/transfer-candidates', ('GET',)),
     ('dialogs/presence', ('GET','POST')),
     ('profile/availability', ('GET','POST')),
     ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/contact-phone', ('GET',)), ('dialogs/group-participants', ('GET',)), ('dialogs/transfer-details', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),

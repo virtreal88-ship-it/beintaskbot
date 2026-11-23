@@ -1451,7 +1451,11 @@
     #operatorDialogTitleText{font:inherit;text-align:start;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;margin:0}
     .operator-history-tools{display:flex;align-items:center;gap:4px;flex:none;padding-inline-end:12px}
     .operator-history-tools button[hidden]{display:none}
-    #operatorConversationHeader #operatorCompanyPanelOpen{display:grid;place-items:center;margin:0;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-conversation-head-copy{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;width:0}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-row{min-width:0;max-width:100%;overflow:hidden}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-main{min-width:0;max-width:100%}
+    #operatorConversationHeader:has(#operatorCompanyPanelOpen:not([hidden])) .operator-dialog-head-secondary{position:relative;inset:auto;display:flex;flex-wrap:nowrap;align-items:center;min-width:0;z-index:1}
+    #operatorConversationHeader #operatorCompanyPanelOpen{display:grid;flex:none;place-items:center;margin:0;width:34px;height:34px;min-height:34px;padding:0;color:var(--muted)}
     #operatorConversationHeader #operatorCompanyPanelOpen[hidden]{display:none!important}
     #operatorConversationHeader #operatorCompanyPanelOpen:hover,#operatorConversationHeader #operatorCompanyPanelOpen[aria-expanded="true"]{color:var(--brand);background:var(--paper)}
     :is(#operatorClientCard,#operatorCompanyPanel){box-sizing:border-box;min-height:0;padding:0;background:var(--card);color:var(--ink);overflow:hidden;text-align:start}

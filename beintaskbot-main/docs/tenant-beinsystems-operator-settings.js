@@ -80,6 +80,7 @@
       $(showPassword,'[data-eye-slash]').setAttribute('opacity',show?'1':'0');
     };
     showPassword.onclick=()=>{if(valid()&&!connectionBusy)revealPassword(passwordInput.type==='password');};
+    authForm.addEventListener('tenant-integration-secrets-cleared',()=>revealPassword(false));
     const save=$(connection,'[data-save]'), finish=$(connection,'[data-finish-connection]');
     const limited=$(connection,'[data-accounts-only]'), next=$(connection,'[data-connection-next]');
     const identityHost=$(connection,'[data-identity-confirmation]');
