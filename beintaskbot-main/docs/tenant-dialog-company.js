@@ -651,7 +651,6 @@
     #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
     #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
     #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:8px}
-    #operatorCompanyPanelTitle{max-width:32%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
     #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
     #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:5px;min-height:40px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
