@@ -1913,7 +1913,7 @@
       companyTrigger.onclick=()=>{
         if(!companyAllowed())return;
         const open=!companyPanel.open;
-        if(!isMobileCompanyPanelViewport())savePanelPreference(open);
+        savePanelPreference(open);
         if(open)openCompany();else closeCompany();
       };
       void loadPanelPreference()?.then(()=>{if(current()&&companyPanel.isConnected&&shouldRestoreCompanyPanel())openCompany(true);});
@@ -1927,7 +1927,7 @@
       if(event.key!=='Escape'||(!card.open&&!companyPanel?.open)||event.defaultPrevented||
          document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
       event.preventDefault();event.stopImmediatePropagation();
-      if(card.open)close();else if(companyAllowed()){if(!isMobileCompanyPanelViewport())savePanelPreference(false);closeCompany();}
+      if(card.open)close();else if(companyAllowed()){savePanelPreference(false);closeCompany();}
     },true);
     const destroy=()=>{clientCardDispose();card.remove();};
     listen('tenant-chat-close',destroy);
