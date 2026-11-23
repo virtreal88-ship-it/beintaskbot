@@ -14,8 +14,19 @@ def migrate_customer_links(cur):
       PRIMARY KEY(tenant_id,instance_id,generation,account))""")
 
 
+def migrate_company_actions(cur):
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_company_actions (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      request_id UUID NOT NULL, actor BIGINT NOT NULL, company_id UUID NOT NULL,
+      kind TEXT NOT NULL, fingerprint TEXT NOT NULL, state TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id, request_id))""")
+    cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS operator_action_pending
+      ON saas_operator_company_actions(tenant_id, fingerprint) WHERE state='unconfirmed'""")
+
+
 def migrate_operator_identity_links(cur) -> None:
     migrate_customer_links(cur)
+    migrate_company_actions(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
