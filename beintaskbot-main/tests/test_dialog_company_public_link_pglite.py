@@ -75,3 +75,26 @@ def test_owned_closed_has_exact_access_but_other_operator_and_pending_do_not(com
           AND entity_id='dialog_company_public_link' AND payload::text NOT LIKE '%%synthetic-account%%'""",(A,)) == [{'n':1}]
     assert database.execute("""SELECT state FROM saas_dialog_workflows
         WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'""",(A,CA)) == [{'state':'closed'}]
+
+    from cryptography.fernet import Fernet
+    cipher=Fernet(Fernet.generate_key())
+    monkeypatch.setattr(operator,'_fernet',lambda:cipher)
+    issued=[]
+    def issue(account, credentials):
+        issued.append(account)
+        return 'https://1000.az/aBc123'
+    monkeypatch.setattr(link,'_issue',issue)
+    for _ in range(2):
+        assert link.copy_link(PROFILE,**route)=={'state':'available','url':'https://1000.az/aBc123'}
+    assert issued==['synthetic-account']
+    with pytest.raises(operator.OperatorError):
+        link.copy_link({'tenant_id':A,'telegram_id':33},**route)
+    database.execute("DELETE FROM saas_operator_customer_links")
+    database.commit()
+    def offline(account,credentials):
+        issued.append(account)
+        raise link.RequestException()
+    monkeypatch.setattr(link,'_issue',offline)
+    for _ in range(2):
+        assert link.copy_link(PROFILE,**route)=={'state':'unconfirmed'}
+    assert issued==['synthetic-account','synthetic-account']
