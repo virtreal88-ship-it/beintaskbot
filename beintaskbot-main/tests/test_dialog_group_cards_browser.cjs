@@ -54,7 +54,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await page.locator('.operator-row').count(),4);
   for(const row of await page.locator('.operator-row').all()){
    const g=await row.evaluate(el=>{const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}};return {row:rect(el),copy:rect(el.querySelector('.operator-row-copy')),meta:rect(el.querySelector('.operator-row-meta')),unread:rect(el.querySelector('.operator-unread-count')),badge:el.querySelector('.operator-row-indicators .operator-lifecycle-badge')?rect(el.querySelector('.operator-row-indicators .operator-lifecycle-badge')):null,children:el.children.length};});
-   assert.equal(g.children,3,'avatar, copy and right-side metadata occupy one grid row');
+   assert.equal(g.children,2,'the avatar sits beside the card body');
    assert(g.meta.left>=g.copy.right-1&&g.meta.right<=g.row.right+1,'metadata stays right of the copy and within the row');
    assert(g.unread.left>=g.copy.right-1&&g.unread.bottom<=g.row.bottom+1,'counter must not wrap below the avatar');
    if(g.badge)assert(Math.abs(g.badge.top-g.unread.top)<12,'text status and unread counter share the indicator line');
@@ -64,6 +64,11 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await companyCard.count(),1);
   const companyLine=await companyCard.evaluate(row=>{
     const c=row.querySelector('.operator-row-company');
+    const source=row.querySelector('.operator-row-source'),meta=row.querySelector('.operator-row-meta');
+    const companyBox=c.getBoundingClientRect(),sourceBox=source.getBoundingClientRect();
+    const sameLine=Math.abs((companyBox.top+companyBox.bottom)-(sourceBox.top+sourceBox.bottom))<2;
+    const right=Math.abs(sourceBox.right-meta.getBoundingClientRect().right)<1&&sourceBox.left>=companyBox.right;
+    const sameInk=getComputedStyle(source).color===getComputedStyle(c).color;
     const fullHeight=row.offsetHeight,literal=c.textContent.includes('<b>stored</b>')&&!c.querySelector('b');
     const truncated=c.scrollWidth>c.clientWidth&&getComputedStyle(c).textOverflow==='ellipsis';
     const sample=document.createElement('span');
@@ -72,11 +77,11 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
     const former=getComputedStyle(sample),badge=getComputedStyle(c);
     const sameBadge=['backgroundColor','color','borderRadius','fontSize','fontWeight'].every(key=>former[key]===badge[key]);
     sample.remove();
-    c.textContent='Short company';return {literal,truncated,sameBadge,noGrowth:fullHeight===row.offsetHeight};
+    c.textContent='Short company';return {literal,truncated,sameBadge,sameLine,right,sameInk,noGrowth:fullHeight===row.offsetHeight};
   });
-  assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,noGrowth:true});
+  assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,sameLine:true,right:true,sameInk:true,noGrowth:true});
   assert.equal(await page.locator('#operatorRows .operator-row-status').count(),0);
-  assert(await companyCard.locator('.operator-row-company').evaluate(n=>n.nextElementSibling.matches('.operator-row-preview')),'company precedes the preview');
+  assert(await companyCard.locator('.operator-row-company').evaluate(n=>n.parentElement.nextElementSibling.matches('.operator-row-preview')),'company precedes the preview');
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));
