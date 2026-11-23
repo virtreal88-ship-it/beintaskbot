@@ -93,6 +93,8 @@ def integration_handler(member: Callable, origin: str, logger):
             if action == "login" and set(data) == {"action", "login", "password"}:
                 value = await asyncio.to_thread(
                     operator.connect_with_password, profile, data["login"], data["password"])
+            elif action == "renew_connection" and set(data) == {"action","candidate_received_at"}:
+                value = await asyncio.to_thread(operator.renew_connected_token, profile, data["candidate_received_at"])
             elif action == "directory_search" and set(data) == {"action", "search"}:
                 directory = await asyncio.to_thread(
                     operator.search_authenticated_operator_account, profile, data["search"])
@@ -288,6 +290,28 @@ def dialog_company_handler(member: Callable, origin: str, logger):
             return web.json_response({"success": False, "error": "Не удалось сохранить компанию диалога."},
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint
+
+def dialog_company_action_handler(member, origin, logger):
+    async def endpoint(request):
+        profile = _profile(member, request)
+        headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
+        try:
+            if not profile:
+                raise operator.OperatorError("Unavailable", 404)
+            from tenant_dialog_company_actions import perform
+            data = await _body(request, profile, origin)
+            if set(data) != {"provider","lead_id","channel_id","conversation_id","expected_company_id",
+                             "kind","request_id","fields"}:
+                raise operator.OperatorError("Invalid fields", 400)
+            state = await asyncio.to_thread(perform, profile, **data)
+            return _json_response({"state": state})
+        except (operator.OperatorError, TenantLinearError) as error:
+            return web.json_response({"success":False},status=error.status,headers=headers)
+        except Exception:
+            logger.error("Operator company action unavailable")
+            return web.json_response({"success":False},status=503,headers=headers)
+    return endpoint
+
 
 def dialog_company_public_link_handler(member: Callable, origin: str, logger):
     async def endpoint(request: web.Request):

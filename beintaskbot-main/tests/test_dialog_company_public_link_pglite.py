@@ -98,3 +98,21 @@ def test_owned_closed_has_exact_access_but_other_operator_and_pending_do_not(com
     for _ in range(2):
         assert link.copy_link(PROFILE,**route)=={'state':'unconfirmed'}
     assert issued==['synthetic-account','synthetic-account']
+
+    from tenant_dialog_company_actions import perform
+    sent = []
+    def send(kind, data, credentials):
+        sent.append((kind,data["account"]))
+        return "done" if kind == "task" else "unconfirmed"
+    monkeypatch.setattr("tenant_dialog_company_actions._send", send)
+    task = dict(kind="task",request_id=str(uuid.uuid4()),fields={
+        "title":"Example","description":"Test","project":"Umumi","priority":3})
+    assert perform(PROFILE,**route,**task) == "done"
+    assert perform(PROFILE,**route,**task) == "done"
+    credit = dict(kind="credit",request_id=str(uuid.uuid4()),fields={"amount":"1.05","info":"Test"})
+    assert perform(PROFILE,**route,**credit) == "unconfirmed"
+    credit["request_id"] = str(uuid.uuid4())
+    assert perform(PROFILE,**route,**credit) == "unconfirmed"
+    with pytest.raises((operator.OperatorError, link.TenantLinearError)):
+        perform({"tenant_id":A,"telegram_id":33},**route,**credit)
+    assert sent == [("task","synthetic-account"),("credit","synthetic-account")]

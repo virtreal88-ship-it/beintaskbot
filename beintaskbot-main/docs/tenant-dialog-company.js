@@ -170,6 +170,7 @@
   function clearProfile(s){
     for(const item of s.panels.slice(1)){item.read?.abort();item.read=null;item.panel.replaceChildren();}
     selectTab(s,'main');
+    s.actionHost?.replaceChildren();
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
@@ -190,12 +191,76 @@
             ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
           return;
         }
+        mountActions(s,company,profile.actions);
         s.registrationPhone.textContent=s.balance.textContent=profileText('empty');
         if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
         if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
           window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(profile.balance);
       },error=>{if(active())s.profileStatus.textContent=profileText([401,403].includes(error.status)?'denied':'error');})
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
+  }
+  const actionLabels={
+    ru:['Создать задачу','Начислить кредит','Название','Описание','Проект','Приоритет','Высокий','Обычный','Низкий','Сумма (AZN)','Причина','Подтвердить','Готово','Operator отклонил операцию','Результат не подтверждён. Проверьте историю в Operator перед повтором.'],
+    az:['Tapşırıq yarat','Kredit əlavə et','Başlıq','Təsvir','Layihə','Prioritet','Yüksək','Normal','Aşağı','Məbləğ (AZN)','Səbəb','Təsdiqlə','Tamamlandı','Operator əməliyyatı rədd etdi','Nəticə təsdiqlənməyib. Təkrarlamadan əvvəl Operator tarixçəsinə baxın.'],
+    en:['Create task','Add credit','Title','Description','Project','Priority','High','Normal','Low','Amount (AZN)','Reason','Confirm','Completed','Operator rejected the operation','Outcome unconfirmed. Check Operator history before retrying.']
+  };
+  function mountActions(s,company,permissions){
+    const host=s.actionHost;
+    host.replaceChildren();
+    const labels=actionLabels[window.tenantI18n?.language]||actionLabels.az;
+    for(const kind of ['task','credit']){
+      if(permissions?.[kind]!==true)continue;
+      const task=kind==='task', box=node('details'), title=node('summary',labels[task?0:1]);
+      const form=node('div'), controls={}, status=node('p');
+      status.setAttribute('role','status');
+      const field=(key,label,tag,options)=>{
+        const row=node('label',label),input=node(tag);
+        input.required=true;input.style.cssText='display:block;width:100%;box-sizing:border-box';
+        if(options)for(const [value,caption] of options){const o=node('option',caption);o.value=value;input.append(o);}
+        row.append(input);form.append(row);controls[key]=input;return input;
+      };
+      if(task){
+        field('title',labels[2],'input').maxLength=240;
+        field('description',labels[3],'textarea').maxLength=8000;
+        field('project',labels[4],'select',[['','—'],...['Akul Admin','Akul POS','Akul PWA','Akul Mobile','Akul Counting','Dine Admin','Dine POS','Dine PWA','Dine QR','Umumi'].map(x=>[x,x])]);
+        field('priority',labels[5],'select',[[2,labels[6]],[3,labels[7]],[4,labels[8]]]).value='3';
+      }else{
+        const amount=field('amount',labels[9],'input');amount.type='number';amount.min='0.01';amount.step='0.01';amount.max='999999999.99';
+        field('info',labels[10],'input').maxLength=500;
+      }
+      let requestId=null;
+      const submit=button(labels[11],async()=>{
+        if(submit.disabled||!linkCurrent(s,company))return;
+        for(const input of Object.values(controls))if(!input.reportValidity())return;
+        const fields=Object.fromEntries(Object.entries(controls).map(([k,v])=>[k,v.value.trim()]));
+        if(task)fields.priority=Number(fields.priority);
+        if(!task&&!window.confirm(labels[1]+' · '+companyName(s.binding)+' · '+fields.amount+' AZN?'))return;
+        requestId??=crypto.randomUUID();
+        for(const el of [...Object.values(controls),submit])el.disabled=true;
+        status.textContent=t('loading');
+        let result;
+        try{
+          result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
+            kind,fields,request_id:requestId},true)).state;
+        }catch(error){result=[400,403,404,409].includes(error.status)?'denied':'unconfirmed';}
+        if(!linkCurrent(s,company)||!host.contains(form))return;
+        status.textContent=labels[result==='done'?12:result==='denied'?13:14];
+        if(result==='unconfirmed')return;
+        for(const el of [...Object.values(controls),submit])el.disabled=false;
+        requestId=null;
+        if(result==='done'){
+          for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
+          // The Tasks/Payment History tabs fetch fresh lists whenever selected.
+          if(!task){
+            // Refresh balance without discarding the visible receipt.
+            void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
+              .then(({company_profile:p})=>{if(linkCurrent(s,company)&&host.contains(form)&&Number.isFinite(p.balance))
+                s.balance.textContent=new Intl.NumberFormat(window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
+          }
+        }
+      });
+      form.append(submit,status);box.append(title,form);host.append(box);
+    }
   }
   function mountProfile(s){
     s.profileBox=node('div');s.profileBox.dataset.companyProfile='';s.profileBox.hidden=true;
@@ -207,7 +272,8 @@
     const phone=field('phone'),balance=field('balance');
     s.registrationPhone=phone.value;s.balance=balance.value;
     s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
-    s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
+    s.actionHost=node('div');s.actionHost.dataset.companyActions='';
+    s.profileBox.append(s.profileStatus,s.actionHost);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -519,7 +585,7 @@
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
     [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:.75rem}
     [data-company-profile]>p{margin:0}
-    [data-company-profile][hidden],[data-company-profile]>p:empty{display:none!important}
+    [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
     [data-company-public-link]{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 8px;border-block-start:1px solid var(--line);padding-block-start:3px}
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}

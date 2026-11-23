@@ -16,9 +16,14 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
       const r=new w.FileReader();r.onload=()=>{copied.push(r.result);resolve();};r.onerror=reject;r.readAsText(blob);
     }));
   }}});
+  const submissions=[];
   w.fetch=(path,{signal,method,body,cache,headers})=>{
     assert.equal(method,'POST');assert.equal(cache,'no-store');assert.equal(headers['Content-Type'],'application/json');
     const data=JSON.parse(body);
+    if(path.endsWith('/action')){
+      submissions.push(data);
+      return Promise.resolve({ok:true,json:async()=>({success:true,state:'done'})});
+    }
     if(data.action==='company_profile'){
       assert.equal(path,'/api/platform/operator/dialog-company');
       return new Promise(resolve=>profiles.push(profile=>resolve({ok:true,json:async()=>({
@@ -48,8 +53,22 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   mount('second');assert(calls[0].signal.aborted);assert.equal(calls.length,1);
   profiles[0]({state:'available',registration_phone:'111111111',balance:123});await tick();
   assert(!host.querySelector('[data-company-profile]').textContent.includes('111111111'));
-  profiles[1]({state:'available',registration_phone:'222222222',balance:0});await tick();
+  profiles[1]({state:'available',registration_phone:'222222222',balance:0,actions:{task:true,credit:true}});await tick();
   assert(host.querySelector('[data-company-profile]').textContent.includes('222222222'));
+  const actionForm=caption=>Array.from(host.querySelectorAll('details')).find(el=>el.querySelector('summary').textContent===caption);
+  const task=actionForm('Tapşırıq yarat');
+  task.querySelector('input').value='Test';
+  task.querySelector('textarea').value='Details';
+  task.querySelector('select').value='Umumi';
+  task.querySelector('button').click();task.querySelector('button').click();await tick();
+  assert.equal(submissions.length,1);
+  assert.equal(submissions[0].fields.project,'Umumi');assert.equal(submissions[0].expected_company_id,'second');
+  const credit=actionForm('Kredit əlavə et');
+  credit.querySelector('input[type=number]').value='1.50';
+  credit.querySelector('input:not([type=number])').value='Example';
+  w.confirm=()=>false;credit.querySelector('button').click();assert.equal(submissions.length,1);
+  w.confirm=()=>true;credit.querySelector('button').click();await tick();
+  assert.equal(submissions[1].fields.amount,'1.50');assert(!('account' in submissions[1].fields));
   calls[0].finish({state:'available',url:'https://1000.az/Wrong1'});await tick();
   assert.equal(copied.length,0,'late first-company receipt cannot enter clipboard');
   press();clipboardFails=true;calls[1].finish({state:'available',url:URL});await tick();await tick();

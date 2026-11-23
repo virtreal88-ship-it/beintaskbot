@@ -78,6 +78,7 @@ from tenant_beinsystems_operator_api import (
     revoke_handler as tenant_operator_revoke_handler,
     dialog_context_handler as tenant_operator_dialog_context_handler,
     dialog_company_handler as tenant_operator_dialog_company_handler,
+    dialog_company_action_handler,
     dialog_company_public_link_handler as tenant_operator_dialog_company_public_link_handler,
     account_data_handler as tenant_operator_account_data_handler,
     ticket_draft_handler as tenant_operator_ticket_draft_handler,
@@ -18881,6 +18882,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         tenant_operator_employee_link_revoke_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_get("/api/platform/operator/dialog-context",
         tenant_operator_dialog_context_handler(_tenant_member_from_request, logger))
+    app_web.router.add_post("/api/platform/operator/dialog-company/action",
+        dialog_company_action_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_post("/api/platform/operator/dialog-company/public-link",
         tenant_operator_dialog_company_public_link_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     app_web.router.add_get("/api/platform/operator/dialog-company",
