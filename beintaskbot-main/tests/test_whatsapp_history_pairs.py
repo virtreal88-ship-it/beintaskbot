@@ -55,19 +55,29 @@ def split(active, monkeypatch):
     return database,channel
 
 
-def test_both_routes_required_and_original_history_pages_are_preserved(split):
+@pytest.mark.parametrize('outcome',['closed','dismissed'])
+def test_both_routes_required_and_original_history_pages_are_preserved(split,outcome):
     database,channel=split
+    database.execute("UPDATE saas_dialog_workflows SET state=%s WHERE tenant_id=%s AND conversation_id=%s",
+                     (outcome,A,PN))
+    database.commit()
     pairs.confirm(PROFILE,channel,41,50)
     pairs.confirm(PROFILE,channel,41,50)
     rows=dialogues.listing(EMPLOYEE,lifecycle='all',combine_history=True)['dialogs']
     assert [row['lead_id'] for row in rows]==[41]
-    assert rows[0]['lifecycle']['state']=='dismissed'
+    assert rows[0]['lifecycle']['state']==outcome
     assert len(dialogues.listing(EMPLOYEE,lifecycle='completed',combine_history=True)['dialogs'])==1
     assert dialogues.listing(EMPLOYEE,combine_history=True)['dialogs']==[]
     assert [row['lead_id'] for row in dialogues.listing(PROFILE,lifecycle='all',combine_history=True)['dialogs']]==[50]
-    with pytest.raises(TenantLinearError) as denied:
-        dialogues.history(PROFILE,'connect',41,channel,PN,combine_history=True)
-    assert denied.value.status==404
+    archive=dialogues.history(PROFILE,'connect',41,channel,PN,combine_history=True,redirect_paired_history=True)
+    assert archive['dialog']['archive_read_only'] and not archive['dialog']['can_send']
+    assert archive['dialog']['lifecycle']['state']==outcome
+    assert 'history_pair_id' not in archive['dialog'] and 'combined_dialog' not in archive
+    assert archive['read_through_message_id'] is None
+    assert [(m['source_lead_id'],m['source_channel_id'],m['source_conversation_id'])
+            for m in archive['messages']]==[(41,channel,PN)]
+    with pytest.raises(TenantLinearError):
+        dialogues.history(PROFILE,'connect',41,str(uuid.uuid4()),PN,combine_history=True)
     with pytest.raises(TenantLinearError):
         dialogues.history({'tenant_id':B,'telegram_id':22},'connect',41,channel,PN,combine_history=True)
     page=dialogues.history(EMPLOYEE,'connect',41,channel,PN,combine_history=True)
@@ -116,6 +126,35 @@ def test_proof_mismatch_or_different_source_cannot_register(split,monkeypatch):
     assert database.execute('SELECT * FROM saas_whatsapp_history_pairs')==[]
 
 
+def test_archive_attachment_requires_explicit_chat_scope_and_current_lifecycle(split,monkeypatch):
+    import tenant_chat_attachment_store as attachments
+    import tenant_connect_transport
+
+    database,channel=split
+    message='connect:'+str(uuid.uuid4())
+    database.execute("""INSERT INTO saas_crm_messages
+      (id,tenant_id,kommo_lead_id,external_id,channel,direction,message_type,body)
+      VALUES(gen_random_uuid(),%s,41,%s,%s,'incoming','document','Synthetic attachment')""",
+      (A,message,'connect:'+channel))
+    database.commit()
+    monkeypatch.setattr(attachments,'_connect',lambda:database)
+    monkeypatch.setattr(tenant_connect_transport,'connect_route',
+        lambda *args,**kwargs:{'channel_id':channel,'conversation_id':PN,'api_key':'synthetic'})
+    exact={'channel_id':channel,'conversation_id':PN}
+    with pytest.raises(TenantLinearError):
+        attachments.load(PROFILE,41,message,**exact)
+    for wrong in ({}, {**exact,'channel_id':str(uuid.uuid4())}, {**exact,'conversation_id':LID}):
+        with pytest.raises(TenantLinearError):
+            attachments.load(PROFILE,41,message,allow_closed_archive=True,**wrong)
+    item=attachments.load(PROFILE,41,message,allow_closed_archive=True,**exact)
+    assert item['row']['external_id']==message
+    database.execute("""UPDATE saas_dialog_workflows SET state='accepted'
+      WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s""",(A,channel,PN))
+    database.commit()
+    with pytest.raises(TenantLinearError):
+        attachments.load(PROFILE,41,message,allow_closed_archive=True,**exact)
+
+
 def test_connect_upgrade_installs_pair_table_in_an_existing_schema(split):
     from tenant_connect_transport import _schema
 
@@ -146,12 +185,18 @@ def test_lid_can_preserve_the_workflow_and_include_outgoing_phone_history(split)
     for needle in ('994100000102','0000102',LID):
         found=dialogues.listing(EMPLOYEE,search=needle,lifecycle='completed',combine_history=True)
         assert found['total_count']==1 and [c['lead_id'] for c in found['dialogs']]==[50]
-        assert not dialogues.listing(PROFILE,search=needle,lifecycle='completed',combine_history=True)['dialogs']
+        shared=dialogues.listing(PROFILE,search=needle,lifecycle='completed',combine_history=True)['dialogs']
+        if needle==LID:
+            assert [(c['lead_id'],c['archive_read_only'],c['lifecycle']['state']) for c in shared]==[(50,True,'dismissed')]
+        else:
+            assert not shared, 'a companion-only phone search must not select an archive card'
     assert not dialogues.listing(EMPLOYEE,search='0000102',lifecycle='active',combine_history=True)['dialogs']
     assert not dialogues.listing(EMPLOYEE,search='0000102',channel='connect:'+B,lifecycle='all',combine_history=True)['dialogs']
-    with pytest.raises(TenantLinearError) as denied:
-        dialogues.history(PROFILE,'connect',50,channel,LID,combine_history=True)
-    assert denied.value.status==404
+    archived=dialogues.history(PROFILE,'connect',50,channel,LID,combine_history=True)
+    assert archived['dialog']['archive_read_only'] and not archived['dialog']['can_send']
+    assert 'history_pair_id' not in archived['dialog'] and archived['read_through_message_id'] is None
+    assert [(m['direction'],m['source_lead_id'],m['source_conversation_id']) for m in archived['messages']]==[
+        ('incoming',50,LID)]
     page=dialogues.history(EMPLOYEE,'connect',50,channel,LID,combine_history=True)
     assert page['dialog']['history_pair_id']
     assert page['dialog']['can_send'] is False

@@ -142,28 +142,30 @@ def _row(cur, tenant, channel, conversation):
     return cur.fetchone()
 
 
-def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id'):
+def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
     from tenant_dialog_presence import is_online, work_status_routing_sources
     sources = work_status_routing_sources(tenant)
+    private_states = "('accepted')" if allow_closed_archive else "('accepted','closed','dismissed')"
     ownership = f"""NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
-        AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
+        AND dw.conversation_id={conversation_expr} AND dw.state IN {private_states}
         AND dw.operator_id<>{actor})"""
     if not sources or is_online(cur,tenant,actor):
         return f"({provider_expr}<>'connect' OR {ownership})"
     # The literals have been normalized to UUIDs in work_status_routing_sources.
     selected = ",".join(f"'{source}'" for source in sorted(sources))
+    archive = " OR dw.state IN ('closed','dismissed')" if allow_closed_archive else ''
     owned = f"""EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
-        AND dw.operator_id={actor})"""
+        AND (dw.operator_id={actor}{archive}))"""
     return f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
 
 
-def require_access(cur, tenant, actor, provider, channel, conversation, action='view'):
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False):
     if not enabled(cur, tenant) or provider != 'connect': return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
@@ -181,7 +183,9 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     if not cur.fetchone():
         raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
     row = _row(cur, tenant, channel, conversation)
-    if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor):
+    archive_read = (action == 'view' and allow_closed_archive and original_conversation == conversation
+                    and is_shared_archive(row, actor))
+    if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor) and not archive_read:
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
     if (not row or row['state'] == 'waiting') and action == 'view':
         from tenant_dialog_presence import is_online, work_status_routing_requested
@@ -190,6 +194,10 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     if action != 'view' and (not row or row['state'] != 'accepted'):
         raise TenantLinearError('Сначала примите диалог.', 409)
     return True  # Active protection; callers may revalidate their original route proof.
+
+
+def is_shared_archive(workflow, actor):
+    return bool(workflow and workflow.get('state') in {'closed','dismissed'} and workflow.get('operator_id') != int(actor))
 
 
 def ai_blocked(cur, tenant, provider, channel, conversation):
@@ -348,7 +356,7 @@ def _manual_start_exempt_from_operator_routing(tenant, channel, policy):
     return bool(role and role != 'operator' and work_status_routing_requested(tenant, channel))
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -357,6 +365,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     row=_row(cur,tenant,dialog['channel_id'],dialog['conversation_id']) if _workflow is _UNSET_WORKFLOW else _workflow
     state=(row or {}).get('state','waiting')
     own=bool(row and row.get('operator_id')==actor)
+    shared_archive=allow_closed_archive and is_shared_archive(row, actor)
     if _online is None:
         needs_presence=(state=='waiting' and bool(dialog.get('can_send'))) or state in {'closed','dismissed'}
         if needs_presence:
@@ -377,8 +386,9 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
         'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
-        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and own and _can_update is True
-            and (online or (dialog.get('channel_active') is True
+        'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and (own or shared_archive)
+            and _can_update is True and (own or dialog.get('can_send') is True)
+            and (online or (own and dialog.get('channel_active') is True
                 and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
@@ -387,6 +397,16 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
         'can_transfer':own and (state=='accepted' or (
             state in {'closed','dismissed'} and _can_update is True and dialog.get('channel_active') is True)),
         'can_submit_case':state=='closed' and own}
+    if shared_archive:
+        dialog.update(archive_read_only=True, can_use_copilot=False, can_edit_display_name=False,
+                      controls_allowed=False, available_actions=[], resume_allowed=False,
+                      unread_count=0, handoff_active=False)
+        for key in ('group_coordination','agent_assignment','group_assignment_preview','handoff_assignee_name',
+                    'handoff_reason','handoff_event_id','handoff_source','assignee_name','assigned_to',
+                    'agent_id','agent_name','agent_scopes','agent_schedule','latest_job_error','latest_job_state',
+                    'last_message_id','last_message_direction','last_message_type','last_message_text',
+                    'last_message_preview','last_message_at','read_through_message_id','avatar_status'):
+            dialog.pop(key,None)
     if details:
         if row and state in {'accepted', 'closed'}:
             # Transfer changes the owner, not the original acceptance actor.
@@ -418,6 +438,10 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
                     'status':'choice_available','required':False,
                     'can_choose':completion.can_choose(_policy),'can_skip':True,
                 }
+        if shared_archive:
+            dialog['can_send']=False
+            dialog['send_block_reason']='dialog_accept_required'
+            return dialog
         cur.execute("""SELECT id::text AS id,accepted_at,closed_at,case_id::text AS case_id
           FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
             AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL
@@ -480,7 +504,9 @@ def _mutate_once(profile, payload):
             target = None
             eligible = True
             transfer_source_active = False
+            owner_only_start = False
             if action == 'start' and _manual_start_exempt_from_operator_routing(tenant,channel,policy):
+                owner_only_start = not is_online(cur,tenant,actor,lock=True,source_channel=channel)
                 # Preserve the active exact-source requirement formerly implicit
                 # in is_online. Keep this shared lock through the transition.
                 cur.execute('''SELECT 1 FROM saas_connect_channels
@@ -502,6 +528,18 @@ def _mutate_once(profile, payload):
                 transfer_source_active = bool(cur.fetchone())
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
+            start_source_ready = False
+            if action == 'start':
+                # Match the existing send projection without locking the
+                # integration after the source: configuration takes those
+                # locks in the reverse order. Send revalidates live readiness.
+                cur.execute("""SELECT 1 FROM saas_connect_channels ch JOIN saas_tenants t
+                  ON t.id=ch.tenant_id AND t.status='active'
+                  JOIN saas_tenant_integrations i ON i.tenant_id=t.id
+                    AND i.provider='connect' AND i.status='connected'
+                  WHERE ch.tenant_id=%s::uuid AND ch.connect_channel_id=%s::uuid
+                    AND ch.active""",(tenant,channel))
+                start_source_ready = bool(cur.fetchone())
             lock_dialog(cur,tenant,'connect',channel,conversation)
             fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             if (str(fresh_route['connect_channel_id']),fresh_route['conversation_id'],int(fresh_route['lead_id'])) != (channel,conversation,int(route['lead_id'])):
@@ -546,12 +584,17 @@ def _mutate_once(profile, payload):
                   (tenant,channel,conversation,str(uuid.uuid4()),actor,last['id']))
             elif action in {'accept','start'}:
                 if action=='start':
-                    # Starting a closed cycle is available only to the employee
-                    # who owns the visible completed workflow. This preserves
-                    # the same visibility boundary as viewing a closed dialog.
-                    require_access(cur,tenant,actor,'connect',channel,conversation,'view')
-                    if not row or row['state'] not in {'closed','dismissed'} or int(row['operator_id'])!=actor:
+                    require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True)
+                    if not row or row['state'] not in {'closed','dismissed'}:
                         raise TenantLinearError('Диалог уже изменился или недоступен.',409)
+                    if is_shared_archive(row,actor):
+                        if (payload.get('conversation_id') != conversation or str(payload.get('channel_id')) != channel
+                                or int(payload['lead_id']) != int(route['lead_id'])):
+                            raise TenantLinearError('Диалог недоступен.',404)
+                        if owner_only_start:
+                            raise TenantLinearError('Установите статус «Онлайн», чтобы принять диалог.',403)
+                        if not start_source_ready:
+                            raise TenantLinearError('Источник недоступен.',403)
                 elif row and row['state']!='waiting':
                     raise TenantLinearError('Диалог уже принят или завершён.',409)
                 episode_id=str(uuid.uuid4())

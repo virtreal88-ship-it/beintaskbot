@@ -97,10 +97,17 @@ def test_completed_modes_preserve_source_privacy_and_search(projection):
     state=completed[0]['group_sources'][0]['lifecycle']
     assert state['state']=='closed' and not state['can_close'] and not state['can_dismiss']
     assert {r['channel_id'] for r in cards(44,lifecycle='active')[0]['group_sources']}=={CB}
-    # Neither owner privileges nor all/completed mode reveal another actor's route.
+    # Ownership is still enforced in the mixed queue. Completed allows a
+    # separate archive read only if the observer can view the exact source.
     assert {r['channel_id'] for r in cards(11,lifecycle='all')[0]['group_sources']}=={CB}
-    assert cards(11,lifecycle='completed')==[]
+    shared=cards(11,lifecycle='completed',search=G)
+    assert len(shared)==1
+    assert [(source['channel_id'],source['lead_id'],source['archive_read_only'])
+            for source in shared[0]['group_sources']]==[(CA,1001,True)]
+    assert not shared[0]['can_send'] and shared[0]['unread_count']==0
+    assert cards(11,lifecycle='completed',channel='connect:'+CB)==[]
     assert cards(33,lifecycle='completed')==[]
+    assert cards(33,lifecycle='completed',channel='connect:'+CA)==[]
     assert cards(44,lifecycle='completed',search=G)
     assert cards(44,lifecycle='completed',search='no-such-synthetic-contact')==[]
     assert cards(44,lifecycle='completed',channel='connect:'+CB)==[]

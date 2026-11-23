@@ -90,9 +90,14 @@ def test_shared_reminder_audience_and_first_open(episodes,monkeypatch):
         visible=team.execute(profile(actor))['reminders']
         assert [r['id'] for r in visible]==[payload['id']]
         assert 'dialog' not in visible[0] and 'note' not in visible[0]
-        with pytest.raises(TenantLinearError) as history_denied:
-            dialogs.history(profile(actor),'connect',41,CA,'client')
-        assert history_denied.value.status==404
+        archive=dialogs.history(profile(actor),'connect',41,CA,'client',
+            include_operator_events=True,include_shared_reminder_events=True)
+        assert archive['dialog']['archive_read_only']
+        assert not archive['dialog']['can_send']
+        assert 'shared_reminder' not in archive['dialog']
+        assert 'shared_reminder_events' not in archive and 'operator_events' not in archive
+        assert archive['read_through_message_id'] is None
+        assert [r['id'] for r in team.execute(profile(actor))['reminders']]==[payload['id']]
     for actor in (35,36):
         assert team.execute(profile(actor))['reminders']==[]
         rejected(actor,opened)

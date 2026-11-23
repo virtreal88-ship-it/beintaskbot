@@ -120,38 +120,65 @@ def test_native_same_request_id_retry_has_one_episode_and_one_receipt(episodes):
     episodes.commit()
 
 
-def test_native_simultaneous_start_has_one_new_episode_and_preserves_owner(episodes):
-    import tenant_dialog_lifecycle as lifecycle
-    lifecycle.mutate(PROFILE,payload())
-    lifecycle.mutate(PROFILE,payload('close',1))
-    start_a,start_b=payload('start',2),payload('start',2)
-    values=race(episodes,[(11,start_a,'mutate'),(33,start_b,'mutate')])
-    assert len([value for value in values if value[0]=='ok'])==1
-    assert len([value for value in values if value[0]=='denied'])==1
-    row=episodes.execute('SELECT state,operator_id,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
-    assert row=={'state':'accepted','operator_id':11,'revision':3}
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==2
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid',(A,))[0]['n']==3
+def make_archive_source_sendable(episodes):
+    episodes.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status)
+      VALUES(%s::uuid,'connect','connected') ON CONFLICT(tenant_id,provider)
+      DO UPDATE SET status='connected'""", (A,))
     episodes.commit()
 
 
-def test_native_start_racing_fresh_inbound_never_loses_the_inbound(episodes):
+@pytest.mark.parametrize('outcome', ['closed','dismissed'])
+def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archive(episodes,outcome):
     import tenant_dialog_lifecycle as lifecycle
+    make_archive_source_sendable(episodes)
+    if outcome=='closed':
+        lifecycle.mutate(PROFILE,payload())
+        archived=lifecycle.mutate(PROFILE,payload('close',1))['lifecycle']
+    else:
+        inbound=episodes.execute("""SELECT id::text AS id FROM saas_crm_messages
+            WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND direction='incoming'""",(A,))[0]['id']
+        episodes.commit()
+        archived=lifecycle.mutate(PROFILE,payload('dismiss',0,message_id=inbound))['lifecycle']
+    old=episodes.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))
+    episodes.commit()
+    revision=archived['revision']
+    start_a,start_b=payload('start',revision),payload('start',revision)
+    values=race(episodes,[(11,start_a,'mutate'),(33,start_b,'mutate')])
+    winners=[value[1]['lifecycle'] for value in values if value[0]=='ok']
+    assert len(winners)==1 and ('denied',409) in values
+    winner=winners[0]['operator_id']
+    assert winner in {11,33}
+    row=episodes.execute('SELECT id::text,state,operator_id,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
+    assert row=={'id':winners[0]['id'],'state':'accepted','operator_id':winner,'revision':revision+1}
+    pair=episodes.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid ORDER BY accepted_at,id',(A,))
+    assert pair[:-1]==old and len(pair)==(2 if outcome=='closed' else 1)
+    assert not old or old[0]['closed_at'] is not None
+    assert pair[-1]['accepted_by']==pair[-1]['operator_id']==winner and pair[-1]['closed_at'] is None
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid',(A,))[0]['n']==revision+1
+    assert episodes.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_start'",(A,))[0]['n']==1
+    episodes.commit()
+    loser=11 if winner==33 else 33
+    assert race(episodes,[(loser,payload(),'guarded_send')])==[('denied',404)]
+
+
+def test_native_archive_nonowner_start_racing_fresh_inbound_never_loses_it(episodes):
+    import tenant_dialog_lifecycle as lifecycle
+    make_archive_source_sendable(episodes)
     lifecycle.mutate(PROFILE,payload())
     lifecycle.mutate(PROFILE,payload('close',1))
     start=payload('start',2)
-    values=race(episodes,[(11,start,'mutate'),(11,start,'incoming')])
+    values=race(episodes,[(33,start,'mutate'),(11,start,'incoming')])
     incoming=next(value[1]['incoming_id'] for value in values if value[0]=='ok' and 'incoming_id' in value[1])
-    row=episodes.execute('SELECT state,revision,last_inbound_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
+    row=episodes.execute('SELECT state,operator_id,revision,last_inbound_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
     assert row['state'] in {'waiting','accepted'},values
     assert row['last_inbound_id']==incoming
     if row['state']=='accepted':
         assert any(value[0]=='ok' and value[1].get('lifecycle',{}).get('state')=='accepted' for value in values)
-        assert row['revision']==4
+        assert row['revision']==4 and row['operator_id']==33
         assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==2
     else:
         assert ('denied',409) in values
-        assert row['revision']==3
+        assert row['revision']==3 and row['operator_id'] is None
         assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))[0]['n']==1
     assert episodes.execute('SELECT direction FROM saas_crm_messages WHERE id=%s::uuid',(incoming,))[0]['direction']=='incoming'
     episodes.commit()

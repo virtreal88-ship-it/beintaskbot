@@ -14,7 +14,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(hold)await new Promise(r=>release=r);
    if(failed)throw Error('Network interrupted');
    if(body.action==='accept'){route={...route,can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,accepted_by_name:'Operator & <b>Example</b>',revision:2,can_close:true,can_transfer:true,transfer_targets:[{employee_id:44,name:'Hüseyn'}]}};}
-   if(body.action==='start'){route={...route,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
+   if(body.action==='start'){route={...route,archive_read_only:false,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
    result={lifecycle:route.lifecycle,...(body.action==='case'?caseResult:{})};
   }else if(url.includes('/dialogs/history')){if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null};}
@@ -54,7 +54,17 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',can_dismiss:true,last_inbound_id:'latest-inbound'}};await w.tenantOperator.openDialog(route);d.querySelector('[data-operator-lifecycle=dismiss]').click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');assert(!d.querySelector('#chatRows'),'dismiss removes the active conversation without a case');assert.equal(calls.filter(c=>c.body?.action==='case').length,3);
  assert.equal(calls.find(c=>c.body?.action==='dismiss').body.individual_no_reply,true);
  route={...route,lifecycle:{state:'waiting',revision:5,can_accept:true,last_inbound_id:null}};await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-lifecycle=accept]'),'no incoming message means no accept action');
- route={...route,can_send:false,lifecycle:{state:'closed',revision:7,operator_id:33,can_start:true}};await w.tenantOperator.openDialog(route);const start=d.querySelector('[data-operator-lifecycle=start]');assert(start,'closed dialog has a start action');assert.equal(start.textContent,'Dialoqa başla','start action is localized');assert.equal(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),true);start.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='start').body.expected_revision,7);assert(!d.querySelector('[data-operator-lifecycle=start]'));assert(!d.querySelector('#sendChat').disabled);assert(!calls.some(c=>c.url.includes('/send')),'starting a dialog sends no customer message');
+ route={...route,archive_read_only:true,can_send:false,lifecycle:{state:'closed',revision:7,operator_id:22,can_start:true}};
+ let archiveAcknowledged=0;w.tenantSharedReminders={markRows(){},mountCard(){},dialogOpened(){archiveAcknowledged++;}};
+ const beforeArchive=calls.filter(c=>c.url.includes('/dialogs/read')).length;
+ await w.tenantOperator.openDialog(route,false,'',{userOpened:true});
+ assert(d.querySelector('#chatRows').textContent.includes('Private customer message'));
+ assert(!d.querySelector('#operatorConversationNameInput'),'archive readers cannot edit the display name');
+ assert(!d.querySelector('[data-operator-lifecycle=transfer]'));
+ assert(d.querySelector('#sendChat').disabled);
+ assert.equal(archiveAcknowledged,0,'opening read-only history must not acknowledge another operator’s reminder');
+ assert.equal(calls.filter(c=>c.url.includes('/dialogs/read')).length,beforeArchive);
+ const start=d.querySelector('[data-operator-lifecycle=start]');assert(start,'closed dialog has a start action');assert.equal(start.textContent,'Dialoqa başla','start action is localized');assert.equal(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),true);start.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='start').body.expected_revision,7);assert(!d.querySelector('[data-operator-lifecycle=start]'));assert(!d.querySelector('#sendChat').disabled);assert(!calls.some(c=>c.url.includes('/send')),'starting a dialog sends no customer message');
  await w.tenantOperator.openDialog(route);denyHistory=true;await w.tenantOperator.openDialog(route);assert(!d.querySelector('#chatRows'),'access rejection clears rendered history');assert(!d.querySelector('#chatText'));assert(!d.querySelector('[data-operator-lifecycle]'));
  dom.window.close();console.log('dialog lifecycle UI passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
