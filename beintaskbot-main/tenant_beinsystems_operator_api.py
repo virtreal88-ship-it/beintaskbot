@@ -243,6 +243,11 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                     raise operator.OperatorError("Поля привязки компании некорректны.")
                 return _json_response({"binding": found})
             data = await _body(request, profile, origin)
+            if set(data) == exact | {"action","expected_company_id"} and data["action"] in ("company_tasks","company_modules","company_history"):
+                from tenant_dialog_company_public_link import lookup_section
+                result=await asyncio.to_thread(lookup_section,profile,section=data["action"],
+                                               **{key:data[key] for key in exact | {"expected_company_id"}})
+                return _json_response({"company_section":result})
             if set(data) == exact | {"action", "expected_company_id"} and data["action"] == "company_profile":
                 from tenant_dialog_company_public_link import lookup_profile
                 try:

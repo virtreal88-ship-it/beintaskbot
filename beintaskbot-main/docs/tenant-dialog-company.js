@@ -19,9 +19,9 @@
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.'}
   };
   const profileLabels={
-    ru:{phone:'Телефон регистрации',balance:'Баланс компании',unavailable:'Данные Operator недоступны'},
-    az:{phone:'Qeydiyyat nömrəsi',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil'},
-    en:{phone:'Registration phone',balance:'Company balance',unavailable:'Operator details are unavailable'}
+    ru:{phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
+    az:{phone:'Telefon',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil',empty:'Məlumat yoxdur',denied:'Şirkət məlumatlarına giriş icazəsi yoxdur',error:'Operator sorğusu uğursuz oldu'},
+    en:{phone:'Phone',balance:'Company balance',unavailable:'Operator details are unavailable',empty:'No data',denied:'Access to company details denied',error:'Operator request failed'}
   };
   const profileText=key=>(profileLabels[window.tenantI18n?.language]||profileLabels.az)[key];
   const linkProblems={
@@ -74,7 +74,40 @@
     if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
     if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
   }
+  const sectionNames={
+    ru:['Задачи','Модули','История платежей'],az:['Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
+    en:['Tasks','Modules','Payment history']
+  };
+  function mountOperatorLists(s){
+    s.lists=['company_tasks','company_modules','company_history'].map((action,index)=>{
+      const box=node('details'),title=node('summary'),body=node('div');
+      title.textContent=(sectionNames[window.tenantI18n?.language]||sectionNames.az)[index];
+      box.append(title,body);s.profileBox.append(box);
+      const list={box,body,read:null};
+      box.ontoggle=async()=>{
+        list.read?.abort();list.read=null;body.replaceChildren();
+        const company=s.binding?.company_id;
+        if(!box.open||!company||!linkCurrent(s,company))return;
+        const read=new AbortController();list.read=read;
+        const active=()=>list.read===read&&box.open&&linkCurrent(s,company);
+        body.textContent=t('loading');
+        try{
+          const {company_section:section}=await request(endpoint,s.member,
+            {...s.route,action,expected_company_id:company},true,read.signal);
+          if(!active())return;
+          if(section?.state!=='available'){
+            body.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
+          }
+          if(!Array.isArray(section.rows))throw Error();
+          body.replaceChildren(...section.rows.map(row=>node('p',row.join(' · '))));
+          if(!section.rows.length)body.textContent=profileText('empty');
+        }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
+      };
+      return list;
+    });
+  }
   function clearProfile(s){
+    for(const list of s.lists||[]){list.read?.abort();list.read=null;list.box.open=false;list.body.replaceChildren();}
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
@@ -90,11 +123,16 @@
     void request(endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
       .then(({company_profile:profile})=>{
         if(!active())return;
-        if(profile?.state!=='available'){s.profileStatus.textContent=profileText('unavailable');return;}
+        if(profile?.state!=='available'){
+          s.profileStatus.textContent=['not_connected','not_linked'].includes(profile?.state)
+            ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
+          return;
+        }
+        s.registrationPhone.textContent=s.balance.textContent=profileText('empty');
         if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
         if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
           window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(profile.balance);
-      },()=>{if(active())s.profileStatus.textContent=profileText('unavailable');})
+      },error=>{if(active())s.profileStatus.textContent=profileText([401,403].includes(error.status)?'denied':'error');})
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
   }
   function mountProfile(s){
@@ -107,7 +145,7 @@
     const phone=field('phone'),balance=field('balance');
     s.registrationPhone=phone.value;s.balance=balance.value;
     s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
-    s.profileBox.append(s.profileStatus);s.section.append(s.profileBox);
+    s.profileBox.append(s.profileStatus);mountOperatorLists(s);s.section.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -277,7 +315,7 @@
       if(!active()||seq!==serial||s.writing)return;
       const query=term.slice(0,120);
       search=new AbortController();const {signal}=search;
-      const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=4;
+      const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=2;
       localStatus.textContent=t('loading');operatorStatus.textContent=operatorSearch?t('loading'):'';
       void request(endpoint,s.member,{...s.route,company_search:query},true,signal)
         .then(payload=>{
@@ -293,11 +331,12 @@
       try{
         const payload=await request(endpoint,s.member,{...s.route,operator_search:query},true,signal);
         if(!active()||seq!==serial)return;
-        const accounts=[...new Set((Array.isArray(payload.accounts)?payload.accounts:[])
+        if(!Array.isArray(payload.accounts))throw Error('invalid account list');
+        const accounts=[...new Set(payload.accounts
           .map(row=>row?.account).filter(value=>typeof value==='string'&&value.trim()&&value.length<=120))].slice(0,5);
         render(operatorRows,accounts.map(account=>[account.startsWith('@')?account:'@'+account,{operator_account:account}]));
         operatorStatus.textContent=accounts.length?'':copy('empty');
-      }catch{if(active()&&seq===serial)operatorStatus.textContent=copy('error');}
+      }catch(error){if(active()&&seq===serial)operatorStatus.textContent=[401,403,424].includes(error.status)?profileText('denied'):copy('error');}
     }
     function schedule(){
       if(!active()||s.writing||input.readOnly)return;
