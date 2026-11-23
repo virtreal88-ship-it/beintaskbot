@@ -1001,8 +1001,8 @@
   const verifiedDialogPhone=row=>{const phone=String(row?.phone||'').trim(),digits=phone.replace(/\D/g,'');return /^\+?[0-9 ()-]+$/.test(phone)&&digits.length>=7&&digits.length<=15?phone:'';};
   // Device contact details are presentation only and never change the route.
   const contactPhoneLookups=new Map();
-  const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}`;
-  const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
+  const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
+  const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
   const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
   const isDialogGroup=route=>route.customer_kind==='group'||route.conversation_kind==='group';
   const hasContactName=route=>{
@@ -1010,75 +1010,115 @@
     return Boolean(usableDialogName(route.manual_display_name,route)||(name&&!['whatsapp contact','контакт whatsapp','whatsapp kontaktı'].includes(name.toLowerCase())&&!/^[+0-9(). -]+$/.test(name)));
   };
   const canLookupContact=route=>route?.provider==='connect'&&!isDialogGroup(route)
-    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment
+    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment&&!route.contact_identity_conflict
     &&!(verifiedDialogPhone(route)&&hasContactName(route))
     &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
+  const canLookupRowContact=route=>canLookupContact(route)&&/^[a-f0-9]{64}$/.test(route.contact_source_revision||'');
   const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');
   function lookupContactDetails(route,fromList=false){
     let entry=contactDetails(route);
-    if(entry)return entry.flight;
+    if(entry){if(!fromList)entry.fromList=false;return entry.flight;}
     const key=contactPhoneKey(route),owner=identity(member);
-    entry={retryAt:0,done:false,phone:'',name:''};
+    entry={retryAt:0,done:false,phone:'',name:'',fromList,controller:new AbortController()};
     contactPhoneLookups.delete(key);
     if(contactPhoneLookups.size>=64){
       for(const [old,cached] of contactPhoneLookups)if(cached.done){contactPhoneLookups.delete(old);break;}
     }
     contactPhoneLookups.set(key,entry);
-    entry.flight=rawApi(endpoint+'dialogs/contact-phone?'+historyQuery(route),{}, {optionalScopedRead:true}).then(({result})=>{
-      if(key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||result.status!=='available'||result.provider!=='connect'||!sameDialog(result,route))return;
+    const query=historyQuery(route);
+    if(route.contact_source_revision)query.set('contact_source_revision',route.contact_source_revision);
+    entry.flight=rawApi(endpoint+'dialogs/contact-phone?'+query,{signal:entry.controller.signal}, {optionalScopedRead:true}).then(({result})=>{
+      if(entry.controller.signal.aborted||key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||result.status!=='available'||result.provider!=='connect'||!sameDialog(result,route))return;
+      if(route.contact_source_revision&&result.contact_source_revision!==route.contact_source_revision)return;
       if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
       entry.name=usableDialogName(result.display_name,route);
     }).catch(()=>{}).finally(()=>{
-      entry.retryAt=Date.now()+(fromList?(entry.phone||entry.name?300000:120000):30000);
+      entry.retryAt=Date.now()+(fromList&&!entry.phone&&!entry.name?120000:30000);
       entry.done=true;
     });
     return entry.flight;
   }
+  function abortContactLookup(key,entry){
+    if(entry?.done||!entry)return;
+    if(contactPhoneLookups.get(key)===entry)contactPhoneLookups.delete(key);
+    entry.controller.abort();
+  }
+  function clearContactLookups(){
+    stopRowContacts();
+    for(const [key,entry] of contactPhoneLookups)abortContactLookup(key,entry);
+    contactPhoneLookups.clear();
+  }
   function updateRowContact(route){
     if(!inDialogsView())return;
-    const index=rows.findIndex(row=>sameDialog(row,route)&&canLookupContact(row));
+    const index=rows.findIndex(row=>sameDialog(row,route)&&canLookupContact(row)&&contactPhoneKey(row)===contactPhoneKey(route));
     if(index<0)return;
     const card=$('operatorRows')?.querySelector(`[data-open-operator="${index}"]`);
     const title=card?.querySelector('.operator-row-title'),subtitle=card?.querySelector('.operator-row-sub');
     if(title)title.textContent=dialogTitle(rows[index]);
     if(subtitle)subtitle.textContent=dialogRowSubtitle(rows[index]);
   }
-  let contactRowObserver,contactRowActive=0;
-  const contactRowQueue=new Map();
-  function pumpRowContacts(){
-    while(contactRowActive<2&&contactRowQueue.size){
-      const [button,route]=contactRowQueue.entries().next().value;
-      contactRowQueue.delete(button);
-      if(!button.isConnected||document.hidden||!inDialogsView()||!sameDialog(rows[Number(button.dataset.openOperator)],route))continue;
-      const key=contactPhoneKey(route);
-      contactRowActive++;
-      lookupContactDetails(route,true).then(()=>{
-        if(key===contactPhoneKey(route))updateRowContact(route);
-      }).finally(()=>{contactRowActive--;pumpRowContacts();});
-    }
+  let contactRowObserver;
+  const contactRowQueue=new Map(),contactRowActive=new Map(),contactRowStarts=[];
+  const rowContactView=()=>!document.hidden&&inDialogsView()
+    &&!(window.matchMedia?.('(max-width:900px)')?.matches&&$('operatorDialogs')?.dataset.conversationOpen==='true');
+  const rowContactVisible=button=>{
+    if(!button.isConnected||!rowContactView()||!button.getClientRects().length)return false;
+    const rect=button.getBoundingClientRect();
+    if(!(rect.bottom>0&&rect.right>0&&rect.top<window.innerHeight&&rect.left<window.innerWidth))return false;
+    // The desktop list scrolls internally; the mobile wrapper can use display:contents.
+    // Fall back to the rows container when the wrapper has no own box.
+    const scroller=operatorListScroller(),clip=(scroller?.getClientRects().length?scroller:$('operatorRows'))?.getBoundingClientRect();
+    return !clip||rect.bottom>clip.top&&rect.right>clip.left&&rect.top<clip.bottom&&rect.left<clip.right;
+  };
+  function cancelRowContact(button){
+    const active=contactRowActive.get(button);
+    if(active?.entry?.fromList)abortContactLookup(active.key,active.entry);
   }
-  function hydrateRowContacts(){
+  function stopRowContacts(){
     contactRowObserver?.disconnect();
     contactRowObserver=null;
     contactRowQueue.clear();
-    if(document.hidden||!inDialogsView())return;
-    const enqueue=button=>{
-      const row=rows[Number(button.dataset.openOperator)];
-      if(button.isConnected&&row&&canLookupContact(row)&&!contactDetails(row))contactRowQueue.set(button,row);
-    };
-    const buttons=[...$('operatorRows').querySelectorAll('[data-open-operator]')]
-      .filter(button=>canLookupContact(rows[Number(button.dataset.openOperator)])&&!contactDetails(rows[Number(button.dataset.openOperator)]));
-    if(!('IntersectionObserver' in window)){buttons.slice(0,8).forEach(enqueue);pumpRowContacts();return;}
+    for(const button of contactRowActive.keys())cancelRowContact(button);
+  }
+  function pumpRowContacts(){
+    const now=Date.now();
+    while(contactRowStarts.length&&now-contactRowStarts[0]>=15000)contactRowStarts.shift();
+    while(contactRowActive.size<2&&contactRowQueue.size&&contactRowStarts.length<8){
+      const [button,route]=contactRowQueue.entries().next().value;
+      contactRowQueue.delete(button);
+      if(!rowContactVisible(button)||!sameDialog(rows[Number(button.dataset.openOperator)],route)||contactPhoneKey(rows[Number(button.dataset.openOperator)])!==contactPhoneKey(route)||contactDetails(route))continue;
+      const key=contactPhoneKey(route);
+      contactRowStarts.push(now);
+      const flight=lookupContactDetails(route,true),entry=contactDetails(route);
+      contactRowActive.set(button,{key,entry});
+      flight.then(()=>{
+        if(!entry.controller.signal.aborted&&key===contactPhoneKey(route)&&rowContactVisible(button))updateRowContact(route);
+      }).finally(()=>{
+        contactRowActive.delete(button);
+        pumpRowContacts();
+      });
+    }
+  }
+  function hydrateRowContacts(){
+    // Preserve an already-started exact-route lookup when opening that conversation.
+    const selected=currentDialog&&contactDetails(currentDialog);
+    if(selected&&!selected.done)selected.fromList=false;
+    stopRowContacts();
+    if(!rowContactView()||!('IntersectionObserver' in window))return;
     const observer=new IntersectionObserver(entries=>{
       if(contactRowObserver!==observer)return;
       for(const entry of entries){
-        const button=entry.target;
-        if(entry.isIntersecting){observer.unobserve(button);enqueue(button);}
+        const button=entry.target,row=rows[Number(button.dataset.openOperator)];
+        if(entry.isIntersecting&&rowContactVisible(button)&&canLookupRowContact(row)&&!contactDetails(row))contactRowQueue.set(button,row);
+        else if(!entry.isIntersecting){contactRowQueue.delete(button);cancelRowContact(button);}
       }
       pumpRowContacts();
     });
     contactRowObserver=observer;
-    buttons.forEach(button=>observer.observe(button));
+    for(const button of $('operatorRows').querySelectorAll('[data-open-operator]')){
+      const row=rows[Number(button.dataset.openOperator)];
+      if(canLookupRowContact(row)&&!contactDetails(row))observer.observe(button);
+    }
   }
   function hydrateContactDetails(route,head){
     if(!canLookupContact(route))return;
@@ -2513,15 +2553,16 @@
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
-if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();contactPhoneLookups.clear();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
+if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();clearContactLookups();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
+  document.addEventListener('tenant-auth-pending',stopRowContacts);
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{stopRowContacts();if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{
     // A list issued before the fresh profile may still be in flight.
     listFlight=null;

@@ -240,3 +240,27 @@ def test_first_list_shows_exact_verified_phone_and_inbound_name_without_opening(
           (A,CA,jid,JID))
     scoped.commit()
     assert _listed(EMPLOYEE)['phone']=='+441100000333'
+
+    scoped.execute("""INSERT INTO saas_connect_direct_identities
+      (tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES (%s,%s,%s,%s)""",
+      (A,CA,'441100000444@s.whatsapp.net',JID))
+    scoped.commit()
+    assert not _listed(EMPLOYEE).get('phone'), 'distinct aliases are ambiguous'
+    scoped.execute("""UPDATE saas_connect_conversations SET phone='441100000555'
+        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s""",(A,CA,JID))
+    scoped.commit()
+    assert _listed(EMPLOYEE)['phone']=='441100000555', 'a stored phone is not overwritten'
+    scoped.execute("""INSERT INTO saas_connect_identity_conflicts
+      (tenant_id,connect_channel_id,conversation_id,event_id,evidence) VALUES (%s,%s,%s,'fixture','{}')""",
+      (A,CA,JID))
+    try:
+        scoped.commit()
+        listed=_listed(EMPLOYEE)
+        assert listed['contact_identity_conflict'] and not listed['phone']
+        assert listed['customer_name']==name
+        assert _open(EMPLOYEE)['phone']=='441100000555', 'history projection remains unchanged'
+    finally:
+        scoped.rollback()
+        scoped.execute("""DELETE FROM saas_connect_identity_conflicts
+          WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s""",(A,CA,JID))
+        scoped.commit()

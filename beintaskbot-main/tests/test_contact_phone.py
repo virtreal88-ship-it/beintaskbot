@@ -67,6 +67,12 @@ def test_two_histories_get_display_proof_without_writing_any_identity(active,mon
     async def fetch(route):seen.append(route);return {'phone':'+'+PN.split('@')[0],'display_name':'Verified name'}
     monkeypatch.setattr(phone,'fetch_contact',fetch)
     result=asyncio.run(phone.get_phone(PROFILE,params))
+    current=seen[0]['native']
+    revision=phone.contact_source_revision(current['gateway_id'],current['scope']['account'],current['scope']['generation'])
+    assert result.pop('contact_source_revision')==revision
+    with pytest.raises(TenantLinearError) as wrong_revision:
+        asyncio.run(phone.get_phone(PROFILE,{**params,'contact_source_revision':'previous device'}))
+    assert wrong_revision.value.status==409
     assert result=={**params,'status':'available','display_only':True,'phone':'+994100000002','display_name':'Verified name'}
     assert {t:db.execute('SELECT * FROM '+t) for t in tables}==before;db.commit()
     for wrong in ({**params,'channel_id':CB},{**params,'lead_id':98765},{**params,'conversation_id':'123456@g.us'}):
@@ -100,3 +106,15 @@ def test_replaced_generation_does_not_return_old_proof(active,monkeypatch):
     monkeypatch.setattr(phone,'fetch_contact',fetch)
     with pytest.raises(TenantLinearError) as error:asyncio.run(phone.get_phone(PROFILE,params))
     assert error.value.status==409
+
+
+
+def test_list_lookup_generation_is_exact_and_not_advertised_on_archive_or_conflict(active,monkeypatch):
+    db,source,params=prepare(active,monkeypatch)
+    current=phone.authorized_route(PROFILE,params)['native']
+    revision=phone.contact_source_revision(current['gateway_id'],current['scope']['account'],current['scope']['generation'])
+    rows=[dict(params),{**params,'archive_read_only':True},{**params,'contact_identity_conflict':True},
+          {**params,'channel_id':CB},{**params,'conversation_id':'123456@g.us','customer_kind':'group'}]
+    with db.cursor() as cur:phone.attach_list_source_revisions(cur,A,rows)
+    assert rows[0]['contact_source_revision']==revision
+    assert all('contact_source_revision' not in row for row in rows[1:])
