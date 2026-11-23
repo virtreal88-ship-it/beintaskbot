@@ -393,7 +393,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             conversation_id=query["conversation_id"])
         provider.assert_not_called()
 
-    def test_company_search_posts_exact_route_and_returns_local_choices(self):
+    def test_dialog_picker_rejects_local_company_search_and_id(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "operator", "active": True}
         origin = "https://crm.example"
         handler = operator_api.dialog_company_handler(lambda _request: profile, origin, MagicMock())
@@ -416,11 +416,11 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             self.assertEqual(post(dict(body, company_id="ignored")).status, 400)
             self.assertEqual(post(dict(body, company_search=None)).status, 400)
             lookup.assert_not_called()
-            response = post(body)
-            self.assertEqual(response.status, 200)
-            self.assertEqual(response.headers["Cache-Control"], "no-store")
-            self.assertEqual(json.loads(response.text)["companies"], [{"id": "company", "name": "Demo"}])
-            lookup.assert_called_once_with(profile, **fields)
+            self.assertEqual(post(body).status, 400)
+            selection = dict(body)
+            del selection["company_search"]
+            self.assertEqual(post(dict(selection, company_id="local", expected_company_id=None)).status, 400)
+            lookup.assert_not_called()
             upstream.assert_not_called()
 
     def test_unverified_manual_token_action_is_rejected(self):

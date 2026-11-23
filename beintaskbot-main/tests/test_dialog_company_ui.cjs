@@ -15,7 +15,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   const operatorCandidate={...kommoWithoutJob,lead_id:45};
   const freshCandidate={...kommoWithoutJob,lead_id:46};
   const all=[a,b,kommo,kommoWithoutJob,operatorCandidate,freshCandidate];
-  const named=(name,manage=false)=>({company_id:name,company_name:name,can_manage:manage});
+  const named=(name,manage=false)=>({company_id:name,company_name:name,can_manage:manage,can_search_operator:manage});
   const bindings=new Map([[41,named('Company A',true)],[42,named('Company B')],[43,named('Company K',true)],[44,named('Company without job',true)],[45,{company_id:null,can_manage:true}],[46,{company_id:null,can_manage:true}]]);
   const calls=[];let savedPanelOpen=false,releaseTab,delayTab=false,delayRead=false,delaySearch=false,releaseRead,releaseSearch,holdOperator=false,releaseOperator,failedOperator=false,confirmations=0,confirmUnlink=true,inlineSnapshot=false;
   w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};w.confirm=()=>{confirmations++;return confirmUnlink;};
@@ -39,15 +39,8 @@ const read=p=>fs.readFileSync(p,'utf8');
         return{ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[{company_tasks:['BUG-1',q.action+' for '+q.expected_company_id,'In progress'],company_modules:[q.action+' for '+q.expected_company_id],company_history:['2026-11-03','0.00 AZN',q.action+' for '+q.expected_company_id]}[q.action]]}})};
       }
       if(q.action==='company_profile')return{ok:true,json:async()=>({success:true,company_profile:{state:'not_linked'}})};
-      if(body&&'company_search' in q){
-        assert.equal('company_id' in q,false);
-        assert.equal('operator_account' in q,false);
-        if(delaySearch)await new Promise(resolve=>{releaseSearch=resolve;});
-        return{ok:true,json:async()=>({success:true,companies:[{id:'existing-company',name:'Can bind'}]})};
-      }
       if(body&&'operator_search' in q){
-        assert.equal('operator_account' in q,false);
-        assert.equal('company_id' in q,false);
+        if(delaySearch)await new Promise(resolve=>{releaseSearch=resolve;});
         if(holdOperator)await new Promise(resolve=>{releaseOperator=resolve;});
         return{ok:true,json:async()=>({success:true,accounts:[{account:'acct_001',name:'Not contracted',phone:'Not contracted phone'},{account:'@acct_002'}]})};
       }
@@ -56,7 +49,7 @@ const read=p=>fs.readFileSync(p,'utf8');
         assert.equal(q.operator_account,'acct_001');
         if(failedOperator)return{ok:false,status:409,json:async()=>({success:false})};
         bindings.set(route.lead_id,{...named('Bound Operator company',true),can_search_operator:true});
-      }else if(body){bindings.set(route.lead_id,q.company_id?named('<b>New company</b>',true):{company_id:null,can_manage:true,can_search_operator:bindings.get(route.lead_id)?.can_search_operator});}
+      }else if(body){bindings.set(route.lead_id,q.company_id?named('Bound Operator company',true):{company_id:null,can_manage:true,can_search_operator:bindings.get(route.lead_id)?.can_search_operator});}
       if(delayRead&&route===a)await new Promise(resolve=>{releaseRead=resolve;});
       return{ok:true,json:async()=>({success:true,binding:bindings.get(route.lead_id)})};
     }
@@ -148,14 +141,14 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(localReads().length,0,'focus on empty input makes no lookup');
   type('bind');
   let panel=$('#operatorDialogueCompanyPicker');assert.equal(panel.closest('dialog').id,'operatorCompanyPanel');
-  const pickLocal=()=>[...panel.querySelectorAll('[data-local-company-results] button')];
+  const pickAccount=()=>[...panel.querySelectorAll('[data-operator-account-results] button')];
   await debounce();
-  assert.deepEqual(pickLocal().map(b=>b.textContent),['Can bind']);
+  assert.deepEqual(pickAccount().map(b=>b.textContent),['@acct_001','@acct_002']);
   assert.equal(panel.querySelectorAll('select,button.primary,form').length,0);
   assert.equal(section().querySelectorAll(':scope > button').length,0,'company search is directly visible');
   assert.equal(localWrites().length,0,'search is read-only');
-  pickLocal()[0].click();await tick();await tick();
-  assert.equal(value(),'<b>New company</b>');assert.equal(section().querySelector('b'),null);assert.equal(search().value,'<b>New company</b>');assert.equal(confirmations,1,'selecting a replacement does not ask for unlink confirmation');assert.equal(localWrites()[0].body.expected_company_id,'Company K');
+  pickAccount()[0].click();await tick();await tick();
+  assert.equal(value(),'Bound Operator company');assert.equal(section().querySelector('b'),null);assert.equal(search().value,'Bound Operator company');assert.equal(confirmations,1,'selecting a replacement does not ask for unlink confirmation');assert.equal(calls.find(c=>c.body?.operator_account).body.expected_company_id,'Company K');
   await w.tenantOperator.openDialog(kommoWithoutJob);await tick();
   assert.equal(value(),'Company without job','exact empty Kommo fields still mount');
   const emptyRead=calls.filter(c=>c.path.endsWith('/dialog-company')&&!c.body).at(-1);
@@ -189,10 +182,11 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(value(),'No company selected');
   assert(!section().outerHTML.includes('Forbidden company name'),'masked company name is absent from text, title and data attributes');
   assert(search().readOnly);
-  assert.equal(localWrites().length,1);
+  assert.equal(localWrites().length,0);
   await w.tenantOperator.openDialog(operatorCandidate);await tick();
-  const searchCalls=()=>calls.filter(c=>c.body?.operator_search);
-  const writes=()=>calls.filter(c=>c.body?.operator_account);
+  const previous=calls.length;
+  const searchCalls=()=>calls.slice(previous).filter(c=>c.body?.operator_search);
+  const writes=()=>calls.slice(previous).filter(c=>c.body?.operator_account);
   openSearch();
   const pop=()=>$('#operatorDialogueCompanySuggestions:not([hidden])');
   const remote=()=>pop()?.querySelector('[data-operator-account-results] button');
@@ -216,7 +210,7 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(searchCalls().length,2);assert.equal(searchCalls()[1].body.operator_search,'acct_');
   assert.equal(searchCalls()[0].body.conversation_id,'');assert.equal(searchCalls()[0].body.channel_id,'');
   assert.deepEqual([...pop().querySelectorAll('[data-operator-account-results] strong')].map(n=>n.textContent),['@acct_001','@acct_002']);
-  assert.equal(pop().querySelector('[data-local-company-results] button').textContent,'Can bind','local results share the search');
+  assert.equal(localReads().length,0,'picker searches only Operator');
   assert(!pop().textContent.includes('Not contracted'));
   search().dispatchEvent(new w.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
   assert.equal(writes().length,0,'typing, incoming results and Enter without a choice never bind');

@@ -1934,8 +1934,8 @@ def confirm_account_link(profile, *, local_entity_type, local_entity_id,
                 from tenant_crm_native_access import (
                     current_access, locked_resource, require_local_relation,
                 )
-                access_profile = current_access(cur, tenant, actor, "customers", "update")
-                local = locked_resource(cur, access_profile, "customers", "update",
+                access_profile = current_access(cur, tenant, actor, "companies", "update")
+                local = locked_resource(cur, access_profile, "companies", "update",
                     "saas_crm_native_companies", tenant, local_id)
                 if not local:
                     raise OperatorError("CRM-компания недоступна по вашим правам.")
