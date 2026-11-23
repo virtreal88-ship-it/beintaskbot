@@ -409,8 +409,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
         'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
         'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and (own or shared_archive)
             and _can_update is True and (own or dialog.get('can_send') is True)
-            and (online or (own and dialog.get('channel_active') is True
-                and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
+            and dialog.get('channel_active') is True
+            and (online or (own and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
