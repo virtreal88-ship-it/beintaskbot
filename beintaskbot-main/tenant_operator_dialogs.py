@@ -464,7 +464,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False, search_overview=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -478,7 +478,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
     from tenant_dialog_access import sql_filter
     from tenant_dialog_lifecycle import visibility_sql
     dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(cur, policy,'routes.provider','routes.channel_id','routes.conversation_id',
-        allow_closed_archive=allow_closed_archive,owner_overview=owner_overview)
+        allow_closed_archive=allow_closed_archive,owner_overview=owner_overview,search_overview=search_overview)
     from tenant_support_access import sql_filter as support_filter
     ticket_filter=support_filter(policy,'st')
     handoff_filter=support_filter(policy,'ht')
@@ -637,6 +637,19 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
           "          AND m.direction IN ('incoming','outgoing')\n"
           "        ORDER BY m.created_at DESC,m.id DESC LIMIT 1) lrc ON TRUE\n      LEFT JOIN LATERAL(SELECT j0.*")
     return sql,params
+
+
+def search_overview_matches(cur,tenant,policy,channel,conversation,lead_id,search):
+    """Prove a cross-owner read request against an exact route and user search."""
+    query=str(search or '').strip()[:200].casefold()
+    if not query:return False
+    sql,scopes=projection(cur,policy,allow_closed_archive=True,search_overview=True)
+    cur.execute(sql+'''SELECT customer_name,phone,conversation_id FROM visible
+      WHERE provider='connect' AND channel_id=%s AND conversation_id=%s AND lead_id=%s''',
+      (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),str(channel),str(conversation),int(lead_id)))
+    row=cur.fetchone()
+    return bool(row and any(query in str(row.get(key) or '').casefold()
+                             for key in ('customer_name','phone','conversation_id')))
 
 
 def _agent_scope_available(item):
@@ -1029,7 +1042,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False,
-            owner_overview=False):
+            owner_overview=False,search_overview=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1043,10 +1056,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
             interactive=not (all_rows or completion_preview or include_read_cursors)
-            owner_overview=bool(owner_overview and interactive and lifecycle=='all' and policy.profile.get('role')=='owner')
-            allow_closed_archive=interactive and (lifecycle=='completed' or owner_overview)
+            search_overview=bool(search_overview and str(search or '').strip() and interactive)
+            owner_search_overview=bool(str(search or '').strip() and interactive and policy.profile.get('role')=='owner')
+            owner_overview=bool(((owner_overview and lifecycle=='all') or owner_search_overview)
+                                and interactive and policy.profile.get('role')=='owner')
+            allow_closed_archive=interactive and (lifecycle=='completed' or owner_overview or search_overview)
             sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,
-                allow_closed_archive=allow_closed_archive,owner_overview=owner_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+                allow_closed_archive=allow_closed_archive,owner_overview=owner_overview,
+                search_overview=search_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1125,7 +1142,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     workflow=workflows.get((str(r['channel_id']),r['conversation_id']))
                     online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources)
                     observer=owner_overview and r['provider']=='connect' and is_owner_observer(cur,tenant,actor,r['channel_id'],workflow,online=online)
+                    search_observer=(search_overview and not observer and r['provider']=='connect' and workflow
+                        and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
                     lifecycle_decorate(cur,tenant,actor,r,details=False,allow_closed_archive=allow_closed_archive,owner_observer=observer,
+                        search_observer=search_observer,
                         _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflow,
                         _online=online,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
@@ -1141,7 +1161,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         row_lifecycle['bulk_company_gate']=bulk_gate
             # Mode is a read-only view over already-authorized physical routes.
             # Recheck lifecycle ownership from the later snapshot as well.
-            rows=[r for r in rows if r.get('archive_read_only') or not (r.get('lifecycle') or {}).get('operator_id')
+            rows=[r for r in rows if r.get('archive_read_only') or r.get('search_overview_read_only')
+                  or not (r.get('lifecycle') or {}).get('operator_id')
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
             if allow_closed_archive:
                 # Only exclude options introduced exclusively by the new
@@ -1243,7 +1264,11 @@ def mark_read(profile,payload):
         _schema(conn)
         with conn.cursor() as cur:
             tenant,_,policy=access(cur,profile,'dialogs')
-            route=assert_route(cur,tenant,policy,provider,conversation,channel,lead_id,allow_merged=True)
+            search_overview=payload.get('search_overview') is True
+            if search_overview and (provider!='connect' or not search_overview_matches(cur,tenant,policy,channel,conversation,lead_id,payload.get('search'))):
+                raise TenantLinearError('Диалог недоступен.',404)
+            route=assert_route(cur,tenant,policy,provider,conversation,channel,lead_id,allow_merged=True,
+                search_overview=search_overview)
             members={conversation:lead_id}
             if provider=='connect':
                 channel=str(route['connect_channel_id']);conversation=route['conversation_id']
@@ -1322,7 +1347,7 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
             *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
             include_shared_reminder_events=False,combine_history=False,redirect_paired_history=False,
-            owner_overview=False):
+            owner_overview=False,search_overview=False,search=''):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
         # selected source explicitly, including when a group spans numbers.
@@ -1340,6 +1365,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
             owner_overview=bool(owner_overview and not support_case_only and policy.profile.get('role')=='owner')
+            search_overview=bool(search_overview and not support_case_only and provider=='connect')
+            if search_overview and not search_overview_matches(cur,tenant,policy,channel,conversation,lead_id,search):
+                raise TenantLinearError('Диалог недоступен.',404)
             transfer_targets=[]
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets, _row, is_shared_archive, is_owner_observer
             if not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant):
@@ -1347,14 +1375,17 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 candidate=_resolve_connect_route(cur,tenant,conversation,str(channel),lead_id,allow_merged=True)
                 transfer_targets=_targets(cur,tenant,policy,str(candidate['connect_channel_id']),int(profile['telegram_id']))
             selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True,
-                allow_closed_archive=not support_case_only,owner_overview=owner_overview)
+                allow_closed_archive=not support_case_only,owner_overview=owner_overview,
+                search_overview=search_overview)
             if provider=='connect':
                 channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead_id=int(selected['lead_id'])
             workflow=_row(cur,tenant,channel,conversation) if provider=='connect' and lifecycle_enabled(cur,tenant) else None
             owner_observer=(owner_overview and provider=='connect' and lifecycle_enabled(cur,tenant)
                             and is_owner_observer(cur,tenant,actor,channel,workflow))
+            search_observer=(search_overview and not owner_observer and provider=='connect' and workflow
+                and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
             closed_archive=is_shared_archive(workflow,actor)
-            shared_archive=closed_archive or owner_observer
+            shared_archive=closed_archive or owner_observer or search_observer
             if shared_archive and requested_route != {'provider':provider,'channel_id':channel,'conversation_id':conversation,'lead_id':lead_id}:
                 raise TenantLinearError('Диалог недоступен.',404)
             history_members={conversation:lead_id}
@@ -1376,7 +1407,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if paired_history:
                 message_leads.append(paired_history['alternate_lead'])
             sql,scopes=projection(cur, policy,include_contact_names=not support_case_only,
-                allow_closed_archive=closed_archive,owner_overview=owner_observer)
+                allow_closed_archive=closed_archive,owner_overview=owner_observer,
+                search_overview=search_observer)
             columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
             cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
@@ -1539,6 +1571,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             apply_capabilities(cur,tenant,policy,dialog,_action_capabilities=action_capabilities)
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
             lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
+                search_observer=search_observer,
                 _can_update=action_capabilities.get('update',False),_policy=policy)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
@@ -1577,7 +1610,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
               and m.get('created_at') and str(m.get('channel') or '')==str(row['history_channel'])
               and int(m.get('source_lead_id') or 0) in history_leads]
     eligible.extend(captured_group)
-    read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible and not shared_archive else None
+    read_through=max(eligible,key=lambda m:(m['created_at'],m['id'])) if eligible and not (closed_archive or owner_observer) else None
     anchor_target=next((str(m['id']) for m in messages[:50] if anchor_row and (str(m['id'])==str(anchor_row['id']) or any(s.get('external_id')==anchor_row['external_id'] for s in m.get('sources',[])))),None)
     from tenant_call_recordings import offer_import
     dialog['test_recording_import_allowed']=not shared_archive and offer_import({**profile,'role':policy.profile.get('role')},dialog)

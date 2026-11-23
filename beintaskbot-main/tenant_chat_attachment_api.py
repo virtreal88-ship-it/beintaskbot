@@ -158,6 +158,9 @@ def handler(member_from_request, request_provider, logger):
                 scope['allow_closed_archive']=True
                 if request.query.get('owner_overview')=='1' and request.query.get('auto_preview')!='1':
                     scope['owner_overview']=True
+                if request.query.get('search_overview')=='1':
+                    scope['search_overview']=True
+                    scope['search']=request.query.get('search','')
             item = await asyncio.to_thread(load, session, lead, message, **scope)
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             automatic_photo = request.query.get('auto_preview') == '1'

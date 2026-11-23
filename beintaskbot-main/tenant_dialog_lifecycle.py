@@ -142,7 +142,7 @@ def _row(cur, tenant, channel, conversation):
     return cur.fetchone()
 
 
-def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False):
+def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False, search_overview=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     # The caller's independent tenant/source policy still gates every row.
     if owner_overview and policy.profile.get('role')=='owner': return 'TRUE'
@@ -155,11 +155,15 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state IN {private_states}
         AND dw.operator_id<>{actor})"""
+    search_visible = f"""EXISTS(SELECT 1 FROM saas_dialog_workflows sov
+      WHERE sov.tenant_id='{tenant}'::uuid AND sov.channel_id::text={channel_expr}
+        AND sov.conversation_id={conversation_expr} AND sov.state='accepted' AND sov.operator_id<>{actor})"""
     # Owner availability is informational. It must not hide the shared queue;
     # the normal ownership predicate still keeps another operator's active
     # dialogue out of the owner's personal view.
     if policy.profile.get('role') == 'owner' or not sources or is_online(cur,tenant,actor):
-        return f"({provider_expr}<>'connect' OR {ownership})"
+        visible=f"({provider_expr}<>'connect' OR {ownership})"
+        return f"({visible} OR {search_visible})" if search_overview else visible
     # The literals have been normalized to UUIDs in work_status_routing_sources.
     selected = ",".join(f"'{source}'" for source in sorted(sources))
     archive = " OR dw.state IN ('closed','dismissed')" if allow_closed_archive else ''
@@ -167,10 +171,11 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
         AND (dw.operator_id={actor}{archive}))"""
-    return f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
+    visible=f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
+    return f"({visible} OR {search_visible})" if search_overview else visible
 
 
-def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False, owner=False):
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False, search_overview=False, owner=False):
     if not enabled(cur, tenant) or provider != 'connect': return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
@@ -189,10 +194,12 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
         raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
     row = _row(cur, tenant, channel, conversation)
     overview_read=(action=='view' and owner_overview and original_conversation==conversation)
+    search_read=(action=='view' and search_overview and original_conversation==conversation
+                 and row and row.get('state')=='accepted' and row.get('operator_id')!=int(actor))
     archive_read = (action == 'view' and allow_closed_archive and original_conversation == conversation
                     and is_shared_archive(row, actor))
     if (row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor)
-            and not (archive_read or overview_read)):
+            and not (archive_read or overview_read or search_read)):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
     if ((not row or row['state'] == 'waiting') and action == 'view' and not overview_read and not owner):
         from tenant_dialog_presence import is_online, work_status_routing_requested
@@ -409,7 +416,7 @@ def _manual_start_exempt_from_operator_routing(tenant, channel, policy):
     return bool(role and role != 'operator' and work_status_routing_requested(tenant, channel))
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, owner_observer=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, owner_observer=False, search_observer=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -458,6 +465,12 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
         dialog['owner_overview_read_only']=True
         for key in ('can_accept','can_start','can_dismiss','can_close','can_transfer','can_submit_case'):
             dialog['lifecycle'][key]=False
+    if search_observer:
+        dialog['search_overview_read_only']=True
+        for key in ('can_accept','can_start','can_dismiss','can_close','can_transfer','can_submit_case'):
+            dialog['lifecycle'][key]=False
+        dialog.update(can_use_copilot=False,can_edit_display_name=False,controls_allowed=False,
+                      available_actions=[],resume_allowed=False,handoff_active=False)
     if shared_archive or owner_observer:
         dialog.update(archive_read_only=True, can_use_copilot=False, can_edit_display_name=False,
                       controls_allowed=False, available_actions=[], resume_allowed=False,
@@ -499,7 +512,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
                     'status':'choice_available','required':False,
                     'can_choose':completion.can_choose(_policy),'can_skip':True,
                 }
-        if shared_archive or owner_observer:
+        if shared_archive or owner_observer or search_observer:
             dialog['can_send']=False
             dialog['send_block_reason']='dialog_accept_required'
             return dialog

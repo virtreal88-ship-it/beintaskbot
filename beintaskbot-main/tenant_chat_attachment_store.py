@@ -6,7 +6,7 @@ from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError
 
 
-def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False, owner_overview=False) -> dict:
+def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False, owner_overview=False, search_overview=False, search='') -> dict:
     tenant = str(uuid.UUID(str(session['tenant_id'])))
     actor, lead = int(session['telegram_id']), int(str(lead_id))
     if not 0 < lead < 2**63 or not isinstance(message_id, str) or not 0 < len(message_id) <= 500:
@@ -61,12 +61,18 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                     raise TenantLinearError('Fayl bu dialoqda və kanalda mövcud deyil.', 404)
                 from tenant_dialog_access import require_source
                 require_source(cur,tenant,policy,'connect',route['channel_id'],'view')
+                if search_overview:
+                    from tenant_operator_dialogs import search_overview_matches
+                    if not (channel_id and conversation_id and search_overview_matches(
+                            cur,tenant,policy,route['channel_id'],route['conversation_id'],lead,search)):
+                        raise TenantLinearError('Fayl bu dialoqda mövcud deyil.',404)
                 from tenant_dialog_lifecycle import require_access
                 # Preserve raw route identity so the locked check can detect a
                 # concurrent merge/rollback instead of checking only its old target.
                 require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'],
                                allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id),
                                owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'),
+                               search_overview=bool(search_overview and channel_id and conversation_id),
                                owner=member.get('role')=='owner')
                 row=dict(row)
                 row['message_type']=kind

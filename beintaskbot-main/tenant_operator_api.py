@@ -71,6 +71,9 @@ def handler(member_from_request,origin,logger,resource):
                     options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     if query.get('completion_preview')=='1': options['completion_preview']=True
                     if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
+                    if query.get('search_overview')=='1' and query.get('search','').strip():
+                        _expected(query,profile)
+                        options['search_overview']=True
                     if query.get('owner_overview')=='1':
                         _expected(query,profile)
                         options['owner_overview']=True
@@ -94,6 +97,9 @@ def handler(member_from_request,origin,logger,resource):
                     if not case_only and query.get('owner_overview')=='1':
                         _expected(query,profile)
                         options['owner_overview']=True
+                    if not case_only and query.get('search_overview')=='1' and query.get('search','').strip():
+                        _expected(query,profile)
+                        options.update(search_overview=True,search=query.get('search',''))
                     read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))

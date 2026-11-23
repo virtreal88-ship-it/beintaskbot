@@ -18,6 +18,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
+    if(url.includes('/operator/dialog-company/public-link'))
+     return{ok:true,json:async()=>({success:true,public_link:{state:'not_found'}})};
     if(url.includes('/operator/dialog-company')){
      const q=new URL(url,'https://example.test').searchParams;
      if(opt.method==='POST'){
