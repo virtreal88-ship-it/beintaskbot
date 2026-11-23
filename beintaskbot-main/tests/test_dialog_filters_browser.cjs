@@ -3,8 +3,8 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const root=path.join(__dirname,'..'),tenant='00000000-0000-0000-0000-000000000101';
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
 for(const width of [320,390,1280])for(const theme of ['light','dark']){
-const page=await browser.newPage({viewport:{width,height:800}}),errors=[],requests=[],saved=new Map();let user=33,failSave=false,hangPreferences=false;
-const profile=()=>({success:true,member:{tenant_id:tenant,telegram_id:user,active:true,role:'worker',permissions:['dialogs']},capabilities:{modules:{dialogs:true}}});
+const page=await browser.newPage({viewport:{width,height:800}}),errors=[],requests=[],saved=new Map();let user=33,role='worker',failSave=false,hangPreferences=false;
+const profile=()=>({success:true,member:{tenant_id:tenant,telegram_id:user,active:true,role,permissions:['dialogs']},capabilities:{modules:{dialogs:true}}});
 saved.set(33,{channel:'connect:c1',agent:'a1',state:'manual',lifecycle:'active'});
 page.on('pageerror',e=>errors.push(e.message));
 await page.route('**/*',async route=>{const req=route.request(),url=new URL(req.url()),name=url.pathname;requests.push({name,method:req.method(),query:url.search,body:req.postData()});
@@ -28,6 +28,18 @@ await toggle.click();failSave=true;await page.locator('#operatorState').selectOp
 user=44;await page.evaluate(profile=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:profile})),profile());await page.waitForFunction(()=>document.querySelector('#operatorLifecycle')?.value==='all'&&!document.querySelector('#operatorChannel').disabled);assert.equal(await page.locator('#operatorChannel').inputValue(),'');assert.equal(await page.locator('#operatorAgent').inputValue(),'');assert.equal(await page.locator('#operatorState').inputValue(),'');assert.equal(await page.locator('#operatorAdvanced').isVisible(),false);
 if(width===320&&theme==='light'){hangPreferences=true;user=55;const before=requests.filter(r=>r.name.endsWith('/dialogs')).length;const nextList=page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/dialogs'),{timeout:12000});await page.evaluate(profile=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:profile})),profile());await page.waitForFunction(()=>!document.querySelector('#operatorChannel').disabled,{},{timeout:12000});const listResponse=await nextList;await listResponse.finished();const listRequest=listResponse.request();const fallbackQuery=new URL(listRequest.url()).searchParams;assert(requests.filter(r=>r.name.endsWith('/dialogs')).length>before,'preference timeout does not block list');assert.equal(fallbackQuery.get('lifecycle'),'all','list uses local fallback after preference timeout');assert.equal(fallbackQuery.get('channel'),'','list does not use another employee channel after preference timeout');await page.waitForTimeout(1500);assert.equal(await page.locator('#operatorLifecycle').inputValue(),'all','late preferences do not overwrite fallback');}
 assert.deepEqual(errors,[]);assert(requests.filter(r=>r.method==='POST').every(r=>r.name.endsWith('/dialogs/preferences')),'only personal preference mutation');
+if(width===390&&theme==='light'){
+  role='owner';
+  const ownerRequest=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/dialogs')&&new URL(request.url()).searchParams.get('owner_overview')==='1');
+  await page.evaluate(profile=>document.dispatchEvent(new CustomEvent('tenant-profile',{detail:profile})),profile());
+  const query=new URL((await ownerRequest).url()).searchParams;
+  assert.equal(query.get('lifecycle'),'all');assert.equal(query.get('expected_user_id'),String(user));assert(!query.has('lifecycle_state'));
+  await toggle.click();assert.equal(await page.locator('#operatorAdvanced select').count(),4,'owner All uses exactly the existing four filters');
+  assert.deepEqual(await page.locator('#operatorLifecycle option').evaluateAll(items=>items.map(item=>item.value)),['all','active','completed']);
+  const personal=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/dialogs')&&new URL(request.url()).searchParams.get('lifecycle')==='active');
+  await page.locator('#operatorLifecycle').selectOption('active');
+  assert(!new URL((await personal).url()).searchParams.has('owner_overview'));
+}
 await page.close();
 }console.log('PASS filter popover: four selects, desktop/mobile, themes, server restore, ordered saves, failed save, user isolation');
 }finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

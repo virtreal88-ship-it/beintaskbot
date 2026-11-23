@@ -153,6 +153,15 @@ def test_archive_attachment_requires_explicit_chat_scope_and_current_lifecycle(s
     database.commit()
     with pytest.raises(TenantLinearError):
         attachments.load(PROFILE,41,message,allow_closed_archive=True,**exact)
+    assert attachments.load(PROFILE,41,message,owner_overview=True,**exact)['row']['external_id']==message
+    for wrong in ({}, {**exact,'channel_id':str(uuid.uuid4())}, {**exact,'conversation_id':LID}):
+        with pytest.raises(TenantLinearError):
+            attachments.load(PROFILE,41,message,owner_overview=True,**wrong)
+    database.execute("""UPDATE saas_tenant_members SET role='operator',permissions='["dialogs"]'::jsonb
+      WHERE tenant_id=%s AND telegram_id=11""",(A,))
+    database.commit()
+    with pytest.raises(TenantLinearError):
+        attachments.load(PROFILE,41,message,owner_overview=True,**exact)
 
 
 def test_connect_upgrade_installs_pair_table_in_an_existing_schema(split):

@@ -51,7 +51,8 @@ for(const width of [320,360,390,430,1023,1440])for(const theme of ['light','dark
   // Dialog overlays get the whole viewport; menu is absent, restored on dismissal.
   await page.evaluate(()=>{const d=document.createElement('div');d.id='testModal';d.className='modal show';d.setAttribute('role','dialog');d.innerHTML='<div class="modal-card"><input type="date" id="date"><button id="cancel">Close</button></div>';document.body.append(d)});
   await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),false);await page.locator('#date').focus();assert.equal(await sidebar.isVisible(),false);
-  await page.evaluate(()=>document.getElementById('testModal').remove());await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);
+  await page.evaluate(()=>document.getElementById('testModal').remove());
+  await sidebar.waitFor({state:'visible',timeout:3000});assert.equal(await sidebar.isVisible(),true,'closing a modal restores navigation');
   // Input focus outside a dialog must preserve the menu.
   await page.evaluate(()=>{document.querySelector('main').innerHTML='<textarea id="keyboard"></textarea>';window.scrollTo(0,0)});await page.locator('#keyboard').focus();await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);
   await page.setViewportSize({width,height:450});await page.locator('#keyboard').fill('draft');await page.locator('#keyboard').blur();await page.waitForTimeout(50);assert.equal(await sidebar.isVisible(),true);await page.setViewportSize({width,height:900});

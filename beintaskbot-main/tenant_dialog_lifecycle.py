@@ -142,8 +142,10 @@ def _row(cur, tenant, channel, conversation):
     return cur.fetchone()
 
 
-def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False):
+def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
+    # The caller's independent tenant/source policy still gates every row.
+    if owner_overview and policy.profile.get('role')=='owner': return 'TRUE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
     from tenant_dialog_presence import is_online, work_status_routing_sources
@@ -165,7 +167,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     return f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
 
 
-def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False):
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False):
     if not enabled(cur, tenant) or provider != 'connect': return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
@@ -183,11 +185,13 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     if not cur.fetchone():
         raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
     row = _row(cur, tenant, channel, conversation)
+    overview_read=(action=='view' and owner_overview and original_conversation==conversation)
     archive_read = (action == 'view' and allow_closed_archive and original_conversation == conversation
                     and is_shared_archive(row, actor))
-    if row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor) and not archive_read:
+    if (row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor)
+            and not (archive_read or overview_read)):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
-    if (not row or row['state'] == 'waiting') and action == 'view':
+    if (not row or row['state'] == 'waiting') and action == 'view' and not overview_read:
         from tenant_dialog_presence import is_online, work_status_routing_requested
         if work_status_routing_requested(tenant,channel) and not is_online(cur,tenant,actor,source_channel=channel):
             raise TenantLinearError('Новые диалоги доступны операторам в статусе «В сети».', 404)
@@ -198,6 +202,18 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
 
 def is_shared_archive(workflow, actor):
     return bool(workflow and workflow.get('state') in {'closed','dismissed'} and workflow.get('operator_id') != int(actor))
+
+
+def is_owner_observer(cur, tenant, actor, channel, workflow, *, online=None):
+    """The overview only overrides view; do not grant new action authority."""
+    state=(workflow or {}).get('state','waiting')
+    if state=='accepted':
+        return workflow.get('operator_id') != int(actor)
+    if state=='waiting':
+        from tenant_dialog_presence import is_online, work_status_routing_requested
+        return bool(work_status_routing_requested(tenant,channel)
+                    and not (is_online(cur,tenant,actor,source_channel=channel) if online is None else online))
+    return False
 
 
 def ai_blocked(cur, tenant, provider, channel, conversation):
@@ -356,7 +372,7 @@ def _manual_start_exempt_from_operator_routing(tenant, channel, policy):
     return bool(role and role != 'operator' and work_status_routing_requested(tenant, channel))
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, owner_observer=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -397,7 +413,11 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
         'can_transfer':own and (state=='accepted' or (
             state in {'closed','dismissed'} and _can_update is True and dialog.get('channel_active') is True)),
         'can_submit_case':state=='closed' and own}
-    if shared_archive:
+    if owner_observer:
+        dialog['owner_overview_read_only']=True
+        for key in ('can_accept','can_start','can_dismiss','can_close','can_transfer','can_submit_case'):
+            dialog['lifecycle'][key]=False
+    if shared_archive or owner_observer:
         dialog.update(archive_read_only=True, can_use_copilot=False, can_edit_display_name=False,
                       controls_allowed=False, available_actions=[], resume_allowed=False,
                       unread_count=0, handoff_active=False)
@@ -438,7 +458,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
                     'status':'choice_available','required':False,
                     'can_choose':completion.can_choose(_policy),'can_skip':True,
                 }
-        if shared_archive:
+        if shared_archive or owner_observer:
             dialog['can_send']=False
             dialog['send_block_reason']='dialog_accept_required'
             return dialog

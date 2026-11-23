@@ -39,6 +39,72 @@ def test_claim_hides_list_detail_legacy_read_from_owner_but_not_operator(readers
     readers.commit()
 
 
+def test_owner_all_observes_other_accepted_exactly_without_operative_access(readers):
+    accepted=command(actor=33)['lifecycle']
+    rows=dialogs.listing(PROFILE,lifecycle='all',owner_overview=True)['dialogs']
+    assert [(r['lead_id'],r['owner_overview_read_only'],r['can_send']) for r in rows]==[(41,True,False)]
+    assert not dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+OTHER,owner_overview=True)['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='all',agent='unassigned',owner_overview=True)['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='active',owner_overview=True)['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='completed',owner_overview=True)['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='all',owner_overview=True,include_read_cursors=True)['dialogs']
+    assert not dialogs.listing(PROFILE,lifecycle='all')['dialogs']
+
+    page=dialogs.history(PROFILE,'connect',41,CA,'client',owner_overview=True,
+                         include_operator_events=True,include_shared_reminder_events=True,combine_history=True)
+    route=page['dialog']
+    assert route['owner_overview_read_only'] and route['archive_read_only'] and not route['can_send']
+    assert [r['body'] for r in page['messages']]==['Internet is down']
+    assert page['read_through_message_id'] is None
+    assert all(k not in page for k in ('operator_events','shared_reminder_events','combined_dialog'))
+    assert all(k not in route for k in ('support_case','shared_reminder','company_binding','history_pair_id'))
+    assert not route['can_use_copilot'] and not route['controls_allowed']
+    assert not any(route['lifecycle'][k] for k in ('can_accept','can_start','can_dismiss','can_close','can_transfer','can_submit_case'))
+    for params in (
+        {'owner_overview':False},
+        {'owner_overview':True,'support_case_only':True},
+    ):
+        with pytest.raises(TenantLinearError):
+            dialogs.history(PROFILE,'connect',41,CA,'client',**params)
+    with pytest.raises(TenantLinearError):
+        dialogs.history(PROFILE,'connect',41,OTHER,'client',owner_overview=True)
+    with pytest.raises(TenantLinearError):
+        dialogs.history(PROFILE,'connect',41,'','client',owner_overview=True)
+    with pytest.raises(TenantLinearError):
+        dialogs.mark_read(PROFILE,{**payload(),'message_id':page['messages'][0]['id']})
+    for action,extra in (('close',{}),('start',{}),('transfer',{'target_employee_id':33})):
+        with pytest.raises(TenantLinearError):
+            command(action,accepted['revision'],**extra)
+    current=dialogs.history({'tenant_id':A,'telegram_id':33},'connect',41,CA,'client',owner_overview=True)['dialog']
+    assert current['lifecycle']['can_close'] and 'owner_overview_read_only' not in current
+
+    # Even a staff request with the owner query flag does not gain observer
+    # privileges after the dialogue moves to the authorized owner.
+    command('transfer',accepted['revision'],actor=33,target_employee_id=11)
+    staff={'tenant_id':A,'telegram_id':33}
+    assert not dialogs.listing(staff,lifecycle='all',owner_overview=True)['dialogs']
+    with pytest.raises(TenantLinearError):
+        dialogs.history(staff,'connect',41,CA,'client',owner_overview=True)
+    assert dialogs.history(PROFILE,'connect',41,CA,'client',owner_overview=True)['dialog']['lifecycle']['can_close']
+
+
+def test_owner_all_source_filter_has_exact_count_over_multiple_pages(readers):
+    readers.execute("""INSERT INTO saas_connect_conversations
+      (tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at)
+      SELECT %s::uuid,%s::uuid,'synthetic-'||i,1000+i,'Synthetic',now() FROM generate_series(1,55) i""",(A,CA))
+    readers.execute("""INSERT INTO saas_dialog_workflows
+      (tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
+      SELECT %s::uuid,%s::uuid,'synthetic-'||i,gen_random_uuid(),'accepted',33,1 FROM generate_series(1,55) i""",(A,CA))
+    readers.commit()
+    filters={'lifecycle':'all','owner_overview':True,'channel':'connect:'+CA,'search':'synthetic'}
+    first=dialogs.listing(PROFILE,**filters)
+    second=dialogs.listing(PROFILE,offset=first['next_offset'],**filters)
+    assert first['total_count']==second['total_count']==55
+    assert len(first['dialogs'])==50 and len(second['dialogs'])==5 and second['next_offset'] is None
+    rows=first['dialogs']+second['dialogs']
+    assert len({r['lead_id'] for r in rows})==55 and all(r['owner_overview_read_only'] for r in rows)
+
+
 def test_close_removes_queue_and_keeps_readonly_case_detail(readers):
     command()
     command('close',1)

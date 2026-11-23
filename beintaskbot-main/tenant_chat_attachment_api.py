@@ -156,6 +156,8 @@ def handler(member_from_request, request_provider, logger):
                    'conversation_id':request.query.get('conversation_id') or None}
             if all(scope.values()) and not {'case_id','case_message_id'} & request.query.keys():
                 scope['allow_closed_archive']=True
+                if request.query.get('owner_overview')=='1' and request.query.get('auto_preview')!='1':
+                    scope['owner_overview']=True
             item = await asyncio.to_thread(load, session, lead, message, **scope)
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             automatic_photo = request.query.get('auto_preview') == '1'
