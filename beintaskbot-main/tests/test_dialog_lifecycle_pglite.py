@@ -785,3 +785,21 @@ def test_sidebar_transfer_rechecks_source_active_under_lock(episodes, monkeypatc
         command('transfer',1,target_employee_id=33,online_only=True)
     assert error.value.status==403 and 'Источник' in str(error.value)
     assert state(episodes)['operator_id']==11 and state(episodes)['revision']==1
+
+
+def test_owner_explicit_takeover_keeps_episode_and_replays_receipt(episodes):
+    initial = command(actor=33)['lifecycle']
+    with pytest.raises(TenantLinearError) as denied:
+        command('takeover', 1, actor=33)
+    assert denied.value.status == 403
+    with pytest.raises(TenantLinearError) as stale:
+        command('takeover', 0, actor=11)
+    assert stale.value.status == 409
+    assert state(episodes)['operator_id'] == 33
+    request = payload('takeover', 1)
+    profile = {'tenant_id': A, 'telegram_id': 11}
+    result = lifecycle.mutate(profile, request)
+    assert lifecycle.mutate(profile, request) == result
+    assert result['lifecycle'] == dict(initial, operator_id=11, revision=2)
+    rows = episodes.execute('SELECT accepted_by,operator_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid', (A, initial['id']))
+    assert (rows[0]['accepted_by'], rows[0]['operator_id']) == (33, 11)

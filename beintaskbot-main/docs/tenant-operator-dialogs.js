@@ -515,11 +515,11 @@
       const result=await api('dialogs_lifecycle','POST',payload);
       lifecycleRequests.delete(key);
       if(owner!==identity(member))return;
-      if(action==='accept'||action==='start'||action==='close'||action==='dismiss')updateLifecycleList(route,result.lifecycle||result.dialog?.lifecycle);
+      if(['accept','takeover','start','close','dismiss'].includes(action))updateLifecycleList(route,result.lifecycle||result.dialog?.lifecycle);
       if(!sameDialog(route,currentDialog))return;
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       // A successful receipt is authoritative even while history is refreshing.
-      if(action==='accept'||action==='start'||action==='close')button.remove();
+      if(['accept','takeover','start','close'].includes(action))button.remove();
       if(action==='accept'||action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'||action==='dismiss'){
         if(action==='transfer'||queueMode()==='active')removeLifecycleDialog(route);
@@ -698,9 +698,9 @@
       reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
-    for(const [action,allowed] of [['accept',state.state==='waiting'&&state.can_accept&&state.last_inbound_id],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
-      if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start'].includes(action)?'primary':'outline';button.textContent=lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
+    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner')],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss],['close',state.can_close&&(!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+      if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start','takeover'].includes(action)?'primary':'outline';button.textContent=action==='takeover'?({ru:'Забрать себе',az:'Üzərimə götür',en:'Take over'}[i18n.language]||'Take over'):lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
+      button.onclick=()=>action==='close'&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close')$('operatorAIReply').before(button);else host.append(button);
     }
   }
   function openCompletion(route){
