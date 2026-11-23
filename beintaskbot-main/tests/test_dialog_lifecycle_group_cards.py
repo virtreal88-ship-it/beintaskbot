@@ -37,6 +37,21 @@ def test_claim_close_do_not_leak_or_hide_other_source(projection):
     assert projection.execute('SELECT count(*) AS n FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND conversation_id=%s',(A,G))[0]['n']==2
 
 
+def test_owner_overview_group_prefers_working_source_and_filters_before_folding(projection):
+    activate(projection)
+    change(44)
+    fixture=cards(11,lifecycle='all',owner_overview=True)
+    assert len(fixture)==1 and fixture[0]['channel_id']==CB
+    members={r['channel_id']:r for r in fixture[0]['group_sources']}
+    assert set(members)=={CA,CB}
+    assert members[CA]['owner_overview_read_only'] and not members[CA]['unread_count']
+    assert 'owner_overview_read_only' not in members[CB]
+    filtered=cards(11,lifecycle='all',owner_overview=True,channel='connect:'+CA)
+    assert len(filtered)==1 and [r['channel_id'] for r in filtered[0]['group_sources']]==[CA]
+    assert [r['channel_id'] for r in cards(11,lifecycle='all',owner_overview=True,channel='connect:'+CB)[0]['group_sources']]==[CB]
+    assert {r['channel_id'] for r in cards(33,lifecycle='all',owner_overview=True)[0]['group_sources']}=={CB}
+
+
 def test_fold_uses_only_group_jid_and_retains_each_source():
     def row(channel,jid=G,name='Same name'):
         return dict(provider='connect',channel_id=channel,channel_name=channel,conversation_id=jid,lead_id=1,customer_name=name,unread_count=1)

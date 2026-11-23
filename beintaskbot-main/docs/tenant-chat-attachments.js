@@ -57,6 +57,7 @@
     const scope=String(member?.tenant_id||'');photoCooldown.set(scope,Math.max(photoCooldown.get(scope)||0,Date.now()+retryDelay(response)*1000));
   }
   function enqueuePhoto(host){
+    if(host.closest?.('[data-owner-overview-read-only]'))return;
     photoQueue=photoQueue.filter(item=>photoVisible(item.host));
     if(!photoVisible(host)||photoProbed.has(host)||photoPending.has(host)||photoQueue.some(item=>item.host===host)||photoQueue.length>=24||host.querySelector('[data-media-preview]'))return;
     if(['retryable','rate_limited','unavailable','forbidden','too_large','invalid','terminal'].includes(host.dataset.mediaPreviewState))return;
@@ -202,10 +203,12 @@
       updateMediaMenu(host);
       if(host.querySelector('[data-media-preview]'))return;
       if(host.querySelector('.operator-native-audio')&&!status.textContent)status.textContent=({ru:'Аудио не загружено',az:'Səs yüklənməyib',en:'Audio not loaded'}[window.tenantI18n?.language]||'Audio is not loaded in this tab');
-      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||viewLead(host),message_id:host.dataset.chatAttachment,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{}),...(/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')?{expected_media_version:host.dataset.mediaVersion}:{})});
+      const mediaQuery=()=>new URLSearchParams({lead_id:host.dataset.attachmentLeadId||viewLead(host),message_id:host.dataset.chatAttachment,...(host.closest?.('[data-owner-overview-read-only]')?{owner_overview:'1'}:{}),expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id,...(host.dataset.channelId&&host.dataset.conversationId?{channel_id:host.dataset.channelId,conversation_id:host.dataset.conversationId}:{}),...(/^[a-f0-9]{64}$/.test(host.dataset.mediaVersion||'')?{expected_media_version:host.dataset.mediaVersion}:{})});
       const previewKey=()=>mediaQuery().toString()+'|'+String(host.dataset.mediaVersion||'');
       const load=async(cachedOnly=false,automatic=false,intentBinding=null,serverCacheOnly=false,photoAuto=false)=>{
         if(button.disabled||!member||!(viewLead(host)||host.dataset.attachmentLeadId))return;
+        const passive=!!host.closest?.('[data-owner-overview-read-only]');
+        if(passive&&(automatic||photoAuto||serverCacheOnly||cachedOnly))return;
         const requestKey=previewKey();if(pendingKeys.has(requestKey)){status.textContent=busyText();return;}
         const retry=retryAt(host,button,host.dataset.chatAttachment||'');
         if(retry>Date.now()){
@@ -225,7 +228,7 @@
         const timer=setTimeout(()=>controller.abort(),70000);
         let blobUrl,restoreRetained=false;
         try{
-          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');if(photoAuto)query.set('auto_preview','1');let blob=mediaCache.get(cacheKey),servedFilename=host.dataset.mediaFilename||'';
+          const query=mediaQuery(),cacheKey=previewKey();if(serverCacheOnly)query.set('cache_only','1');if(photoAuto)query.set('auto_preview','1');let blob=passive?null:mediaCache.get(cacheKey),servedFilename=host.dataset.mediaFilename||'';
           if(cachedOnly&&!blob)return;
           if(blob){mediaCache.delete(cacheKey);mediaCache.set(cacheKey,blob);}
           else{
@@ -248,7 +251,7 @@
             blob=new Blob(chunks,{type:contentType});if(!valid()&&!canRetain())return;
             // Large previews remain one-shot Blob URLs. They are never retained
             // in the 32 MiB in-tab cache after playback or preview is closed.
-            if(blob.size<=MAX_CACHE_BYTES){while(cacheBytes+blob.size>MAX_CACHE_BYTES&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=MAX_CACHE_BYTES){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
+            if(!passive&&blob.size<=MAX_CACHE_BYTES){while(cacheBytes+blob.size>MAX_CACHE_BYTES&&mediaCache.size){const [oldKey,oldBlob]=mediaCache.entries().next().value;mediaCache.delete(oldKey);cacheBytes-=oldBlob.size;}if(cacheBytes+blob.size<=MAX_CACHE_BYTES){mediaCache.set(cacheKey,blob);cacheBytes+=blob.size;}}
           }
           if(!valid()){if(canRetain()&&mediaCache.has(cacheKey)){loadedKeys.add(cacheKey);while(loadedKeys.size>3)loadedKeys.delete(loadedKeys.values().next().value);restoreRetained=true;}return;}
           if(!blob.size||blob.size>MAX_PREVIEW_BYTES){host.dataset.mediaPreviewState='too_large';updateMediaMenu(host);throw Error('Fayl ölçüsü düzgün deyil.');}

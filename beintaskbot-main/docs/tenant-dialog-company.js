@@ -321,11 +321,25 @@
     const panel=node('div'),label=node('label',t('label')),field=node('span'),input=node('input'),results=node('div');
     panel.id='operatorDialogueCompanyPicker';
     label.htmlFor=input.id='operatorDialogueCompanySearch';field.className='operator-company-link-row';
-    input.type='search';input.maxLength=180;input.autocomplete='off';
-    input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.type='search';input.maxLength=180;input.autocomplete='off';input.readOnly=true;
+    input.setAttribute('data-search-input','');input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
+    input.setAttribute('data-bwignore','true');input.setAttribute('data-form-type','other');
+    input.setAttribute('autocapitalize','none');input.setAttribute('autocorrect','off');input.spellcheck=false;
+    let editingValue='';
+    const restoreTypedValue=()=>{if(input.value!==editingValue)input.value=editingValue;};
+    const primeInput=()=>{
+      if(!active()||!s.section.closest('dialog')?.open||s.writing||s.binding?.can_manage!==true)return;
+      restoreTypedValue();input.readOnly=false;
+    };
+    // Like other app searches, remain read-only while idle. This control owns
+    // readOnly because it must additionally enforce exact-route write access.
+    input.addEventListener('pointerdown',primeInput);
+    input.addEventListener('focus',primeInput);
+    input.addEventListener('blur',()=>{input.readOnly=true;restoreTypedValue();});
+    input.addEventListener('animationstart',event=>{if(event.animationName==='operatorCompanyAutofill')restoreTypedValue();});
     const unlink=button('×',()=>{
       if(!active()||s.writing||s.binding?.can_manage!==true)return;
-      input.value='';schedule();input.focus({preventScroll:true});
+      input.focus({preventScroll:true});primeInput();editingValue=input.value='';schedule();
     });
     unlink.className='operator-company-unlink';unlink.title=t('remove');unlink.setAttribute('aria-label',t('remove'));
     unlink.onpointerdown=event=>event.preventDefault();
@@ -353,11 +367,11 @@
     };
     s.reset=()=>{
       clearResults();suggestions.hidden=true;
-      s.editing=false;input.value=companyName(s.binding);
+      s.editing=false;editingValue=input.value=companyName(s.binding);
     };
     s.sync=()=>{
       const allowed=s.binding?.can_manage===true;
-      input.readOnly=!allowed||s.writing;
+      input.readOnly=!allowed||s.writing||document.activeElement!==input;
       const hint=allowed?'search':s.binding===undefined?'loading':s.binding?'restricted':'unavailable';
       input.placeholder=t(hint);
       input.title=allowed?'':input.placeholder;
@@ -412,9 +426,18 @@
         timer=setTimeout(()=>void find(query,seq),300);
       }
     }
-    input.oninput=schedule;
-    input.oncompositionstart=()=>{composing=true;schedule();};
-    input.oncompositionend=()=>{composing=false;schedule();};
+    input.oninput=event=>{
+      // Autofill/replacement events are not company searches. Keep the last
+      // manually edited value; do not send injected text to either endpoint.
+      const typed=event.inputType||'';
+      if(input.readOnly||document.activeElement!==input||
+         !(/^(?:insert(?:Text|CompositionText|FromPaste|FromDrop)|delete[A-Za-z]+|history(?:Undo|Redo))$/.test(typed))){
+        restoreTypedValue();return;
+      }
+      editingValue=input.value;schedule();
+    };
+    input.oncompositionstart=()=>{if(!input.readOnly){composing=true;schedule();}};
+    input.oncompositionend=()=>{if(!input.readOnly&&composing){composing=false;editingValue=input.value;schedule();}};
     input.onkeydown=event=>{
       if(event.key==='ArrowDown'&&results.querySelector('button')){
         event.preventDefault();results.querySelector('button').focus();
@@ -487,6 +510,9 @@
     [data-operator-dialog-company] [data-company-value]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
     #operatorCompanyPanel #operatorDialogueCompanySearch{padding-inline-end:32px}
     #operatorCompanyPanel #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
+    @keyframes operatorCompanyAutofill{from{opacity:1}to{opacity:1}}
+    #operatorDialogueCompanySearch:autofill{animation:operatorCompanyAutofill .01s}
+    #operatorDialogueCompanySearch:-webkit-autofill{animation:operatorCompanyAutofill .01s}
     #operatorCompanyPanel .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
     #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}

@@ -51,6 +51,11 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(dialog_sources,profile)
                 elif resource=='group_participants':
                     result=await get_participants(profile,dict(query))
+                elif resource=='transfer_candidates':
+                    if not scope_verified:
+                        _expected(query,profile)
+                    from tenant_dialog_lifecycle import transfer_candidates
+                    result=await asyncio.to_thread(transfer_candidates,profile,dict(query))
                 elif resource=='transfer_details':
                     from tenant_dialog_lifecycle import transfer_details
                     result=await asyncio.to_thread(transfer_details,profile,dict(query))
@@ -66,6 +71,9 @@ def handler(member_from_request,origin,logger,resource):
                     options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     if query.get('completion_preview')=='1': options['completion_preview']=True
                     if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
+                    if query.get('owner_overview')=='1':
+                        _expected(query,profile)
+                        options['owner_overview']=True
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
@@ -83,6 +91,9 @@ def handler(member_from_request,origin,logger,resource):
                             options.update(include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
                         if query.get('shared_reminder_events')=='1':
                             options['include_shared_reminder_events']=True
+                    if not case_only and query.get('owner_overview')=='1':
+                        _expected(query,profile)
+                        options['owner_overview']=True
                     read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))

@@ -6,7 +6,7 @@ from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError
 
 
-def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False) -> dict:
+def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False, owner_overview=False) -> dict:
     tenant = str(uuid.UUID(str(session['tenant_id'])))
     actor, lead = int(session['telegram_id']), int(str(lead_id))
     if not 0 < lead < 2**63 or not isinstance(message_id, str) or not 0 < len(message_id) <= 500:
@@ -65,7 +65,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                 # Preserve raw route identity so the locked check can detect a
                 # concurrent merge/rollback instead of checking only its old target.
                 require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'],
-                               allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id))
+                               allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id),
+                               owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'))
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

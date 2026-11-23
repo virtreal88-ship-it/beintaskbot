@@ -735,3 +735,29 @@ def test_no_eligible_employee_leaves_inbound_waiting(episodes):
     assert waiting['state']=='waiting' and waiting['operator_id'] is None
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==1
     episodes.commit()
+
+
+def test_sidebar_transfer_only_current_online_operator_same_source(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+    # Manual picker checks real current status even when automatic routing is off.
+    monkeypatch.delenv('TENANT_DIALOG_PRESENCE_ROUTING_ENABLED', raising=False)
+    command()
+    route = dict(provider='connect', channel_id=CA, conversation_id='client', lead_id='41', expected_revision='1')
+    employee = {'tenant_id':A,'telegram_id':33}
+    assert lifecycle.transfer_candidates(PROFILE, route) == {'targets':[{'employee_id':33,'name':'Employee'}]}
+    for profile, changed in [(employee,route), (PROFILE,{**route,'channel_id':CB}),
+                             (PROFILE,{**route,'expected_revision':'2'})]:
+        with pytest.raises(TenantLinearError):
+            lifecycle.transfer_candidates(profile,changed)
+    presence.set_status(employee,{'status':'away'})
+    assert lifecycle.transfer_candidates(PROFILE,route)=={'targets':[]}
+    with pytest.raises(TenantLinearError) as error:
+        command('transfer',1,target_employee_id=33,online_only=True)
+    assert error.value.status==403
+    assert state(episodes)['operator_id']==11 and state(episodes)['revision']==1
+    # No saved status follows existing picker semantics (default Online).
+    episodes.execute('DELETE FROM saas_dialog_employee_presence WHERE tenant_id=%s::uuid AND employee_id=33',(A,))
+    episodes.commit()
+    assert lifecycle.transfer_candidates(PROFILE,route)['targets'][0]['employee_id']==33
+    assert command('transfer',1,target_employee_id=33,online_only=True)['lifecycle']['operator_id']==33
+    assert lifecycle.transfer_candidates(employee,{**route,'expected_revision':'2'})=={'targets':[]}
