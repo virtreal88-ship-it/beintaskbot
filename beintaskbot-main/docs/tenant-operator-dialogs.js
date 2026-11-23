@@ -1295,9 +1295,9 @@
     finally{if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial)$('operatorConversationContent')?.setAttribute('aria-busy','false');}
   }
   const clientCardText=key=>({
-    ru:{company:'Компания',title:'Данные клиента',group:'Группа',dialog:'Диалог',source:'Источник',transfer:'Передача',delegated:'Передано сотруднику',staff:'Сотрудник',saved:'Имя сохранено',close:'Закрыть'},
-    az:{company:'Şirkət',title:'Müştəri məlumatları',group:'Qrup',dialog:'Dialoq',source:'Mənbə',transfer:'Ötürülmə',delegated:'Əməkdaşa ötürülüb',staff:'Əməkdaş',saved:'Ad yadda saxlanıldı',close:'Bağla'},
-    en:{company:'Company',title:'Customer details',group:'Group',dialog:'Conversation',source:'Source',transfer:'Transfer',delegated:'Handed off to staff',staff:'Employee',saved:'Name saved',close:'Close'}
+    ru:{company:'Компания',title:'Данные клиента',group:'Группа',dialog:'Диалог',acceptedBy:'Диалог принял',source:'Источник',transfer:'Передача',delegated:'Передано сотруднику',staff:'Сотрудник',saved:'Имя сохранено',close:'Закрыть'},
+    az:{company:'Şirkət',title:'Müştəri məlumatları',group:'Qrup',dialog:'Dialoq',acceptedBy:'Dialoqu qəbul edən',source:'Mənbə',transfer:'Ötürülmə',delegated:'Əməkdaşa ötürülüb',staff:'Əməkdaş',saved:'Ad yadda saxlanıldı',close:'Bağla'},
+    en:{company:'Company',title:'Customer details',group:'Group',dialog:'Conversation',acceptedBy:'Accepted by',source:'Source',transfer:'Transfer',delegated:'Handed off to staff',staff:'Employee',saved:'Name saved',close:'Close'}
   }[i18n.language]||{})[key]||'';
   let clientCardDispose=()=>{},refreshClientSupportCase=()=>{};
   const pendingClientNames=new Set();
@@ -1485,6 +1485,7 @@
     const nameForm=editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<span class="operator-display-name-field"><input id="operatorConversationNameInput" maxlength="180" autocomplete="off"><span data-client-name-saved role="status" aria-label="${esc(clientCardText('saved'))}" title="${esc(clientCardText('saved'))}" hidden>✓</span></span></label><p data-client-card-error role="alert"></p></form>`:'';
     const handoff=route.handoff_active?[route.handoff_source==='ai_handoff'?'AI':'',route.handoff_assignee_name||''].filter(Boolean).join(' → '):'';
     const conversation=block(clientCardText('dialog'),`<div class="operator-client-panel-row"${channel?'':' hidden'}><small>${esc(clientCardText('source'))}</small><span data-user-content>${esc(channel)}</span></div>
+      <div class="operator-client-panel-row" data-client-accepted-by hidden><small>${esc(clientCardText('acceptedBy'))}</small><span data-user-content></span></div>
       <div class="operator-client-panel-row" data-client-transfer ${route.handoff_active?'':'hidden'}><small>${esc(clientCardText('transfer'))}</small><span data-client-transfer-value>${esc(handoff||clientCardText('delegated'))}</span></div>
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span>${capabilities.dialog_company_binding===true?`<span class="operator-state operator-dialog-agent-status" data-panel-agent-status data-state="${esc(route.agent_status||route.display_state)}">${esc(agentModeLabel(route))}</span>`:''}<div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`);
     const companyBinding=capabilities.dialog_company_binding===true?'<div class="operator-client-panel-row" id="operatorClientCompanyHost"></div>':'';
@@ -1494,6 +1495,7 @@
     const company=nameForm||companyBinding||reminder?block(clientCardText('company'),nameForm+companyBinding+reminder):'';
     card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content">${company}${conversation}${roster}<div data-client-support-case hidden></div></div>`;
     layout.append(card);
+    updateDialogueAcceptor(route,card);
     hydrateContactDetails(route,head);
     const reason=$('operatorActionReason'),reasonText=compactExplanation(route,dialogReason(route));if(reasonText)reason.textContent=reasonText;
     mountDialogCompany(route);
@@ -1828,7 +1830,19 @@
   }
   // Keep the mounted editor/media subtree for a refreshed snapshot of the
   // same route and permissions. Mutate the page object captured by handlers.
-  const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!(key==='customer_name'&&isDirectConnectDialog(route))&&!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).sort(([a],[b])=>a.localeCompare(b))]);
+  const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!(key==='customer_name'&&isDirectConnectDialog(route))&&!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).map(([key,value])=>{
+    if(key!=='lifecycle'||!value)return [key,value];
+    const {accepted_by_name,...lifecycle}=value;
+    return [key,lifecycle];
+  }).sort(([a],[b])=>a.localeCompare(b))]);
+  function updateDialogueAcceptor(route,card=$('operatorClientCard')){
+    if(card?.dataset.scope!==contextKey('client-card',route))return;
+    const row=card.querySelector('[data-client-accepted-by]');
+    if(!row)return;
+    const name=route.lifecycle?.accepted_by_name||'';
+    row.querySelector('span').textContent=name;
+    row.hidden=!name;
+  }
   function updateLatestIncomingShortcut(chat,page){
     const button=$('operatorLatestIncoming');
     if(!button)return;
@@ -1865,14 +1879,14 @@
     retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission'].includes(key))old[key]=value;
     updateLatestIncomingShortcut(chat,old);
-    currentDialog=old.dialog;displayedPage=old;mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
+    currentDialog=old.dialog;displayedPage=old;updateDialogueAcceptor(currentDialog);mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
     setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
   }
   function renderDialog(page,{suppressRead=false}={}){
     const route=page.dialog,host=$('operatorConversationContent');if(!host)return;const existingShell=host.querySelector('[data-operator-dialog]');
-    if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingShell.dataset.copilotBusy==='true'&&(!route.lifecycle_enabled||displayedRouteScope===dialogRenderScope(route))){copilotDeferredPage=page;return;}
+    if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingShell.dataset.copilotBusy==='true'&&(!route.lifecycle_enabled||displayedRouteScope===dialogRenderScope(route))){updateDialogueAcceptor(route);copilotDeferredPage=page;return;}
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&patchDialogPage(page,{suppressRead})){copilotDeferredPage=null;return;}
     const existingVoice=host.querySelector('[data-copilot-voice]');
     if(existingShell?.dataset.dialogKey===dialogKey(route)&&existingVoice?.isVoiceActive?.()&&(!route.lifecycle_enabled||displayedRouteScope===dialogRenderScope(route))){copilotDeferredPage=page;return;}

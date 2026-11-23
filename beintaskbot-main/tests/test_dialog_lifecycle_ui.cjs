@@ -13,7 +13,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(body.action==='case'&&denyCase)return{ok:false,status:404,json:async()=>({success:false,error:'Ownership changed'})};
    if(hold)await new Promise(r=>release=r);
    if(failed)throw Error('Network interrupted');
-   if(body.action==='accept'){route={...route,can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,revision:2,can_close:true,can_transfer:true,transfer_targets:[{employee_id:44,name:'Hüseyn'}]}};}
+   if(body.action==='accept'){route={...route,can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,accepted_by_name:'Operator & <b>Example</b>',revision:2,can_close:true,can_transfer:true,transfer_targets:[{employee_id:44,name:'Hüseyn'}]}};}
    if(body.action==='start'){route={...route,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
    result={lifecycle:route.lifecycle,...(body.action==='case'?caseResult:{})};
@@ -28,8 +28,21 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  await w.tenantOperator.openDialog(route);await tick();
  assert.equal(d.querySelector('#operatorSendReason').textContent,'','the accept action stays visible without an extra instruction above the composer');
  assert(d.querySelector('#operatorAcceptAction [data-operator-lifecycle=accept]'));assert(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),'accept action is directly above composer, outside scrolling history');assert(!d.querySelector('.operator-chat-scrollarea #operatorAcceptAction'));assert(!d.querySelector('[data-operator-complete]'));assert(!d.querySelector('[data-operator-create-ticket]'));assert(!d.querySelector('[data-operator-action=resume]'));assert(d.querySelector('#sendChat').disabled);assert(d.querySelector('#operatorTraining').hidden);
+ assert(d.querySelector('[data-client-accepted-by]').hidden,'waiting routes do not display an inferred name');
  failed=true;d.querySelector('[data-operator-lifecycle=accept]').click();await tick();const first=calls.find(c=>c.body?.action==='accept').body;assert.equal(first.expected_revision,1);assert.equal(first.expected_tenant_id,'tenant');assert.equal(first.expected_user_id,33);
  failed=false;hold=true;d.querySelector('[data-operator-lifecycle=accept]').click();d.querySelector('[data-operator-lifecycle=accept]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='accept').length,2);assert.equal(calls.filter(c=>c.body?.action==='accept')[1].body.request_id,first.request_id,'retry retains exact receipt');hold=false;release();await tick();await tick();assert(!d.querySelector('[data-operator-lifecycle=accept]'));assert.equal(d.querySelector('[data-operator-lifecycle=close]').nextElementSibling.id,'operatorAIReply');assert(!d.querySelector('#sendChat').disabled);
+ const acceptedBy=d.querySelector('#operatorClientCard [data-client-accepted-by]');
+ assert.equal(acceptedBy.querySelector('small').textContent,'Dialoqu qəbul edən');
+ assert.equal(acceptedBy.querySelector('span').textContent,'Operator & <b>Example</b>');
+ assert(!acceptedBy.querySelector('b'),'names are rendered as text');
+ assert(!d.querySelector('#operatorConversationHeader').textContent.includes('Operator &'));
+ const composerBeforeNameChange=d.querySelector('#chatText');
+ const {accepted_by_name, ...previousLife}=route.lifecycle;
+ route={...route,lifecycle:previousLife};
+ await w.tenantOperator.openDialog(route);
+ assert.equal(d.querySelector('#chatText'),composerBeforeNameChange,'name-only refresh keeps the editor intact');
+ assert(d.querySelector('[data-client-accepted-by]').hidden,'clearing the name hides the same row');
+ assert.equal(acceptedBy.querySelector('span').textContent,'','clearing the name removes old text');
  d.querySelector('[data-operator-lifecycle=transfer]').click();assert.equal(d.querySelector('#operatorLifecycleModal select option:last-child').textContent,'Hüseyn');d.querySelector('#operatorLifecycleModal [data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));assert.equal(calls.filter(c=>c.body?.action==='transfer').length,0);
  d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();assert(d.querySelector('[data-operator-lifecycle=case]'));assert(!d.querySelector('[data-operator-lifecycle=accept]'));assert(!d.querySelector('[data-operator-lifecycle=close]'));assert(d.querySelector('#sendChat').disabled);assert.equal(calls.filter(c=>c.body?.action==='case').length,0,'close never creates a case');assert(!calls.some(c=>c.url.includes('support-tickets/complete')||c.url.includes('knowledge-candidates')));
  d.querySelector('[data-operator-lifecycle=case]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='case').length,1);

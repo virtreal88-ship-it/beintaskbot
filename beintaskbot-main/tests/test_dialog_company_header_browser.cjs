@@ -61,7 +61,7 @@ const beta='@verified_account';
       if(window.holdCaseRead)await new Promise(release=>window.caseWaiters.push(release));
       return ok({dialog:{provider,lead_id,channel_id,conversation_id,support_case}});
      }
-     return ok({dialog:source,messages:[],next_before:null});
+     return ok({dialog:{...source,...(channel==='a'?{lifecycle:{state:'accepted',accepted_by_name:'Actual & <b>accepting</b> employee'}}:{})},messages:[],next_before:null});
     }
     if(api.endsWith('/dialogs'))return ok({dialogs:[{...sources[0],group_sources:sources}],channels:[],agents:[],next_offset:null});
     if(api.endsWith('/dialogs/group-participants'))return ok({status:'available',phones:[],total:0});
@@ -110,6 +110,12 @@ const beta='@verified_account';
   assert.equal(await caseField('responsible').locator('span').textContent(),'Actual & <em>case</em> worker');
   assert.equal(await caseField('responsible').locator('em').count(),0);
   assert.equal(await caseField('status').evaluate(n=>n.closest('details').querySelector('summary').textContent),'Support case');
+  const acceptedBy=card.locator('[data-client-accepted-by]');
+  assert.equal(await acceptedBy.locator('small').textContent(),'Accepted by');
+  assert.equal(await acceptedBy.locator('span').textContent(),'Actual & <b>accepting</b> employee');
+  assert.equal(await acceptedBy.locator('b').count(),0);
+  assert.equal(await acceptedBy.evaluate(n=>n.closest('details').querySelector('summary').textContent),'Conversation');
+  assert(!(await head.textContent()).includes('accepting'));
   assert.equal(await card.locator('[data-client-transfer-value]').textContent(),'Transfer history person');
   assert(!((await head.textContent())+(await card.textContent())).includes('Chat-only person'));
   await page.evaluate(()=>{
@@ -157,6 +163,8 @@ const beta='@verified_account';
   await name.waitFor();
   assert.equal(await name.textContent(),beta,'visible company does not require edit permission');
   await page.locator('#operatorClientCardOpen').click();
+  assert(!await acceptedBy.isVisible(),'a source without a verified acceptance must not borrow another source’s name');
+  assert.equal(await acceptedBy.locator('span').textContent(),'');
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
   await page.locator('#operatorCancelConversationName').click();

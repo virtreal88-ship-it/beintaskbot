@@ -388,6 +388,18 @@ def decorate(cur, tenant, actor, dialog, *, details=True, _rollout=None, _workfl
             state in {'closed','dismissed'} and _can_update is True and dialog.get('channel_active') is True)),
         'can_submit_case':state=='closed' and own}
     if details:
+        if row and state in {'accepted', 'closed'}:
+            # Transfer changes the owner, not the original acceptance actor.
+            cur.execute("""SELECT NULLIF(BTRIM(member.display_name), '') AS accepted_by_name
+              FROM saas_dialog_episodes episode
+              JOIN saas_tenant_members member ON member.tenant_id=episode.tenant_id
+                AND member.telegram_id=episode.accepted_by
+              WHERE episode.tenant_id=%s::uuid AND episode.channel_id=%s::uuid
+                AND episode.conversation_id=%s AND episode.id=%s::uuid""",
+                (tenant, dialog['channel_id'], dialog['conversation_id'], str(row['id'])))
+            accepted_by = (cur.fetchone() or {}).get('accepted_by_name')
+            if accepted_by:
+                dialog['lifecycle']['accepted_by_name'] = accepted_by
         if state=='accepted' and own:
             import tenant_dialog_company_completion as completion
             required=completion.enabled(tenant)
