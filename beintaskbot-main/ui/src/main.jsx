@@ -1396,6 +1396,7 @@ function IntegrationMarketplace() {
   const [profile, setProfile] = useState(null);
   const demand = window.tenantViewDemand;
   const [selection, setSelection] = useState(() => demand.integrationCard());
+  const [providerAuthGeneration, setProviderAuthGeneration] = useState(0);
   const [active, setActive] = useState(() => document.getElementById("view-integrations")?.classList.contains("active"));
   const tab = selection?.tab || "connection";
   const clearSecrets = () => {
@@ -1417,11 +1418,14 @@ function IntegrationMarketplace() {
       if (!inView) clearSecrets();
       setActive(inView);
     };
+    const reauthorized = () => setProviderAuthGeneration(generation => generation + 1);
     document.addEventListener("tenant-view", viewChanged);
     document.addEventListener("tenant-auth-pending", clearSecrets);
+    document.addEventListener("tenant-integration-reauthorized", reauthorized);
     return () => {
       document.removeEventListener("tenant-view", viewChanged);
       document.removeEventListener("tenant-auth-pending", clearSecrets);
+      document.removeEventListener("tenant-integration-reauthorized", reauthorized);
     };
   }, []);
   const [query, setQuery] = useState("");
@@ -1909,7 +1913,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
-                    {selected.id === "whatsapp" ? <WhatsAppIntegration profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{!["connect","beinsystems_operator"].includes(selected.id) && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{selected.id !== "beinsystems_operator" && !Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                    {selected.id === "whatsapp" ? <WhatsAppIntegration key={providerAuthGeneration} profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{!["connect","beinsystems_operator"].includes(selected.id) && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{selected.id !== "beinsystems_operator" && !Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box

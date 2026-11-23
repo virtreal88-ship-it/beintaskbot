@@ -4,7 +4,12 @@
   let profile = window.tenantProfileSnapshot || null, generation = 0, bootstrap;
   let integration = '', paused = false, integrationCard = null;
   // The card address survives same-scope React remounts, never form values or a new session.
-  const clearIntegrationSecrets = () => document.querySelectorAll('#integrationMarketplaceDialog input[type=password], #integrationSettingsRepository input[type=password]').forEach(input => { input.value = ''; });
+  const clearIntegrationSecrets = () => {
+    for (const root of document.querySelectorAll('#integrationMarketplaceDialog, #integrationSettingsRepository')) {
+      root.querySelectorAll('input[type=password], input[data-operator-password], input[data-operator-login]').forEach(input => { input.value = ''; });
+      root.querySelectorAll('[data-operator-auth-form]').forEach(form => form.dispatchEvent(new Event('tenant-integration-secrets-cleared')));
+    }
+  };
   const binding = data => (Array.isArray(data?.integrations) ? data.integrations : []).find(row => row?.provider === 'linear')
     ?.metadata?.settings?.members?.[String(data?.member?.telegram_id)];
   // Display names, timestamps and integration status are freshness, not identity.
@@ -99,6 +104,7 @@
       if (changed || (!dirty(item) && ((reauthorized && !employees(item)) || item.freshness !== freshness(item, data)))) reset(item, data);
     }
     conceal(false);
+    if (reauthorized) document.dispatchEvent(new Event('tenant-integration-reauthorized'));
     for (const item of subscriptions) {
       // The employee controller lifts its auth curtain later in this same
       // profile event. Do not mistake that temporary hidden host for leaving
