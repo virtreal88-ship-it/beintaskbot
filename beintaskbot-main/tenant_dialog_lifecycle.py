@@ -440,8 +440,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
-        'can_accept':state=='waiting' and rollout.admission_enabled and online and (bool(dialog.get('can_send'))
-            or bool(_policy and _policy.profile.get('role')=='owner' and _can_update and dialog.get('channel_active'))),
+        'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
         'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and (own or shared_archive)
             and _can_update is True and (own or dialog.get('can_send') is True)
             and dialog.get('channel_active') is True
