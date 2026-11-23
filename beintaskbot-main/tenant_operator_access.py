@@ -73,7 +73,8 @@ def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=N
         from tenant_dialog_lifecycle import require_access
         exact=(channel==str(route['connect_channel_id']) and conversation==route['conversation_id'] and lead_id==route['lead_id'])
         protected = require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',str(route['connect_channel_id']),route['conversation_id'],action,
-            allow_closed_archive=allow_closed_archive,owner_overview=bool(owner_overview and exact and policy.profile.get('role')=='owner'))
+            allow_closed_archive=allow_closed_archive,owner_overview=bool(owner_overview and exact and policy.profile.get('role')=='owner'),
+            owner=policy.profile.get('role')=='owner')
         if protected:
             # Retain the caller's raw proof: rollback may detach it while the
             # canonical route remains valid. Never authorize that stale proof.

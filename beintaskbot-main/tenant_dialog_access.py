@@ -97,7 +97,8 @@ def allowed_channels(cur,tenant,policy,action='view',*,conversation=None):
     for channel in channels:
         require_source(cur,tenant,policy,'connect',channel,action)
         if lifecycle_enabled(cur, tenant) and conversation:
-            require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action)
+            require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action,
+                           owner=policy.profile.get('role')=='owner')
     return channels
 
 
@@ -232,7 +233,8 @@ def require_lead(cur,tenant,policy,lead,action='view'):
         from tenant_connect_dialog_equivalence import canonical
         channel=str(row['connect_channel_id'])
         conversation=canonical(cur,tenant,channel,row['conversation_id'])
-        require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action)
+        require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',channel,conversation,action,
+                       owner=policy.profile.get('role')=='owner')
 
 
 def independent_ai_allowed(policy,*,management=False):

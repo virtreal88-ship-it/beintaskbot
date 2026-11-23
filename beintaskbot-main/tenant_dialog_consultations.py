@@ -137,7 +137,8 @@ def _case_access(cur,profile,case_id,channel,conversation,*,sending=False):
         raise TenantLinearError('Нужны права на обращение и исходный диалог.',403)
     require_source(cur,tenant,policy,'connect',channel,'view')
     from tenant_dialog_lifecycle import require_access
-    require_access(cur,tenant,actor,'connect',channel,conversation,'update' if sending else 'view')
+    require_access(cur,tenant,actor,'connect',channel,conversation,'update' if sending else 'view',
+                   owner=policy.profile.get('role')=='owner')
     from tenant_support_case_context import load_scope
     case=load_scope(cur,tenant,identifier(case_id),channel,conversation)
     if sending and case['status']=='resolved':raise TenantLinearError('Обращение уже закрыто.',409)

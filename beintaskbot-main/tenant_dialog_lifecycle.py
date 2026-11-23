@@ -155,7 +155,10 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state IN {private_states}
         AND dw.operator_id<>{actor})"""
-    if not sources or is_online(cur,tenant,actor):
+    # Owner availability is informational. It must not hide the shared queue;
+    # the normal ownership predicate still keeps another operator's active
+    # dialogue out of the owner's personal view.
+    if policy.profile.get('role') == 'owner' or not sources or is_online(cur,tenant,actor):
         return f"({provider_expr}<>'connect' OR {ownership})"
     # The literals have been normalized to UUIDs in work_status_routing_sources.
     selected = ",".join(f"'{source}'" for source in sorted(sources))
@@ -167,7 +170,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     return f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
 
 
-def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False):
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False, owner=False):
     if not enabled(cur, tenant) or provider != 'connect': return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
@@ -191,7 +194,7 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     if (row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor)
             and not (archive_read or overview_read)):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
-    if (not row or row['state'] == 'waiting') and action == 'view' and not overview_read:
+    if ((not row or row['state'] == 'waiting') and action == 'view' and not overview_read and not owner):
         from tenant_dialog_presence import is_online, work_status_routing_requested
         if work_status_routing_requested(tenant,channel) and not is_online(cur,tenant,actor,source_channel=channel):
             raise TenantLinearError('Новые диалоги доступны операторам в статусе «В сети».', 404)
@@ -205,14 +208,14 @@ def is_shared_archive(workflow, actor):
 
 
 def is_owner_observer(cur, tenant, actor, channel, workflow, *, online=None):
-    """The overview only overrides view; do not grant new action authority."""
+    """Owner overview preserves operator ownership, but ignores owner status."""
     state=(workflow or {}).get('state','waiting')
     if state=='accepted':
         return workflow.get('operator_id') != int(actor)
     if state=='waiting':
-        from tenant_dialog_presence import is_online, work_status_routing_requested
-        return bool(work_status_routing_requested(tenant,channel)
-                    and not (is_online(cur,tenant,actor,source_channel=channel) if online is None else online))
+        # A waiting dialogue has no operator owner to protect. Owner status is
+        # informational and does not turn the shared queue into read-only view.
+        return False
     return False
 
 
@@ -382,7 +385,9 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
     state=(row or {}).get('state','waiting')
     own=bool(row and row.get('operator_id')==actor)
     shared_archive=allow_closed_archive and is_shared_archive(row, actor)
-    if _online is None:
+    if _policy and _policy.profile.get('role') == 'owner':
+        online=True
+    elif _online is None:
         needs_presence=(state=='waiting' and bool(dialog.get('can_send'))) or state in {'closed','dismissed'}
         if needs_presence:
             from tenant_dialog_presence import is_online
@@ -404,8 +409,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
         'can_accept':state=='waiting' and rollout.admission_enabled and online and bool(dialog.get('can_send')),
         'can_start':state in {'closed','dismissed'} and rollout.admission_enabled and (own or shared_archive)
             and _can_update is True and (own or dialog.get('can_send') is True)
-            and (online or (own and dialog.get('channel_active') is True
-                and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
+            and dialog.get('channel_active') is True
+            and (online or (own and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
         'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
@@ -526,7 +531,8 @@ def _mutate_once(profile, payload):
             transfer_source_active = False
             owner_only_start = False
             if action == 'start' and _manual_start_exempt_from_operator_routing(tenant,channel,policy):
-                owner_only_start = not is_online(cur,tenant,actor,lock=True,source_channel=channel)
+                owner_only_start = (policy.profile.get('role') != 'owner'
+                                    and not is_online(cur,tenant,actor,lock=True,source_channel=channel))
                 # Preserve the active exact-source requirement formerly implicit
                 # in is_online. Keep this shared lock through the transition.
                 cur.execute('''SELECT 1 FROM saas_connect_channels
@@ -534,7 +540,9 @@ def _mutate_once(profile, payload):
                     AND active FOR SHARE''',(tenant,channel))
                 if not cur.fetchone():
                     raise TenantLinearError('Источник недоступен.',403)
-            elif action in {'accept','start'} or (action == 'dismiss' and work_status_routing_requested(tenant,channel)):
+            elif (policy.profile.get('role') != 'owner'
+                  and (action in {'accept','start'}
+                       or (action == 'dismiss' and work_status_routing_requested(tenant,channel)))):
                 eligible = is_online(cur,tenant,actor,lock=True,source_channel=channel)
             if action == 'transfer':
                 target=payload.get('target_employee_id')
@@ -568,7 +576,7 @@ def _mutate_once(profile, payload):
             receipt=cur.fetchone()
             if receipt:
                 if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
-                require_access(cur,tenant,actor,'connect',channel,conversation,'view')
+                require_access(cur,tenant,actor,'connect',channel,conversation,'view',owner=policy.profile.get('role')=='owner')
                 return receipt['result']
             # Keep membership/presence locks acquired BEFORE the route lock,
             # but only new mutations require Online. A retry still needs the
@@ -604,7 +612,8 @@ def _mutate_once(profile, payload):
                   (tenant,channel,conversation,str(uuid.uuid4()),actor,last['id']))
             elif action in {'accept','start'}:
                 if action=='start':
-                    require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True)
+                    require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True,
+                                   owner=policy.profile.get('role')=='owner')
                     if not row or row['state'] not in {'closed','dismissed'}:
                         raise TenantLinearError('Диалог уже изменился или недоступен.',409)
                     if is_shared_archive(row,actor):
