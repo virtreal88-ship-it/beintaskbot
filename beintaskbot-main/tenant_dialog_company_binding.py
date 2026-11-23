@@ -362,11 +362,15 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
                 can_unlink = company_search is None and _manage(cur,tenant,actor,policy,route,write=unlink)
                 if unlink and not can_unlink:
                     raise OperatorError('Недостаточно прав для снятия привязки в этом диалоге.',403)
-                owner_read = not write and company_search is None and policy.profile.get("role")=="owner" and not can_unlink
-                if owner_read:
+                try:
+                    _prove(cur,tenant,policy,route)
+                except (TenantLinearError,OperatorError):
+                    if write or company_search is not None or policy.profile.get('role')!='owner':
+                        raise
                     _prove(cur,tenant,policy,route,owner_overview=True)
-                    return _read(cur,tenant,actor,route,False) if _ready(cur,_pred(tenant,route)[0]) else None
-                _prove(cur,tenant,policy,route)
+                    if not _ready(cur,_pred(tenant,route)[0]):
+                        raise OperatorError('Привязка компании для этого источника недоступна.',503)
+                    return _read(cur,tenant,actor,route,False)
                 table, pred, keys = _pred(tenant,route)
                 if not _ready(cur,table):
                     raise OperatorError('Привязка компании для этого источника недоступна.',503)
