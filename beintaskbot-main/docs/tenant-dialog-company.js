@@ -315,7 +315,7 @@
       if(!active()||seq!==serial||s.writing)return;
       const query=term.slice(0,120);
       search=new AbortController();const {signal}=search;
-      const operatorSearch=s.binding?.can_search_operator===true&&query.length>0;
+      const operatorSearch=s.binding?.can_search_operator===true&&[...query].length>=2;
       localStatus.textContent=t('loading');operatorStatus.textContent=operatorSearch?t('loading'):'';
       void request(endpoint,s.member,{...s.route,company_search:query},true,signal)
         .then(payload=>{

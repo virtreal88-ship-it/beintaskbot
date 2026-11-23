@@ -261,16 +261,16 @@ def test_employee_reads_active_connection_for_owned_route_only(ready):
         DO UPDATE SET value=EXCLUDED.value""",(A,))
     db.commit()
     command('transfer',1,target_employee_id=33)
-    assert service.chooser(STAFF,**ROUTE,term='l')=={'accounts':[{'account':'l'}]}
-    assert calls==[('accounts',{'search':'l','limit':5})]
+    assert service.chooser(STAFF,**ROUTE,term='lo')=={'accounts':[{'account':'lo'}]}
+    assert calls==[('accounts',{'search':'lo','limit':5})]
     with pytest.raises(provider.OperatorError):
-        service.chooser(STAFF,**{**ROUTE,'channel_id':CB},term='l')
+        service.chooser(STAFF,**{**ROUTE,'channel_id':CB},term='lo')
     assert len(calls)==1
     db.execute("""UPDATE saas_tenant_members SET permissions='["dialogs","support"]'::jsonb
         WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
     db.commit()
     with pytest.raises(provider.OperatorError):
-        service.chooser(STAFF,**ROUTE,term='l')
+        service.chooser(STAFF,**ROUTE,term='lo')
     assert len(calls)==1
 
 

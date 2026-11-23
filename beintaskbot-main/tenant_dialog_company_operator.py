@@ -20,8 +20,8 @@ def _term(value, *, exact=False):
     if not isinstance(value,str) or any(ord(ch)<32 or ord(ch)==127 for ch in value):
         raise operator.OperatorError('Некорректный запрос Operator.')
     term=value.strip()
-    if not 1<=len(term)<=120 or (exact and term!=value):
-        raise operator.OperatorError('Укажите от 1 до 120 символов аккаунта Operator.')
+    if not 2<=len(term)<=120 or (exact and term!=value):
+        raise operator.OperatorError('Укажите от 2 до 120 символов аккаунта Operator.')
     return term
 
 
@@ -35,7 +35,7 @@ def _enumerate(response, limit):
         if (not isinstance(value,str) or not value or value.strip()!=value or len(value)>240
                 or any(ord(ch)<32 or ord(ch)==127 for ch in value)):
             raise operator.OperatorError('Operator вернул некорректный идентификатор аккаунта.',502)
-        if 1<=len(value)<=120 and value not in accounts:
+        if 2<=len(value)<=120 and value not in accounts:
             accounts.append(value)
     return accounts
 

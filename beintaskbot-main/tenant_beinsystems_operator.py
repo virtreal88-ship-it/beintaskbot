@@ -777,6 +777,8 @@ def _request_operator(endpoint, payload, *, token, base_url=None, opener=None,
         if not isinstance(search_value, str):
             raise OperatorError("Поисковый запрос Operator некорректен.")
         search = search_value.strip()
+        if search and len(search) < 2:
+            raise OperatorError("Для поиска Operator введите хотя бы два символа.")
         if len(search) > 120:
             raise OperatorError("Слишком длинный поисковый запрос.")
         limit = payload.get("limit", ACCOUNTS_REQUEST_LIMIT)
