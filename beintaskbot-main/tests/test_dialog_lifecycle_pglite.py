@@ -126,8 +126,8 @@ def test_manual_restart_remains_for_own_closed_history_after_operator_routing(ep
     monkeypatch.setenv(ROUTING_SOURCES_ENV, CA)
     set_status(PROFILE, {'status': 'away'})
 
-    # Full ordinary history, using the same capability consumed by Android
-    # and desktop. The owner is not an eligible new queue operator.
+    # The owner's work status is informational. The ordinary history and
+    # action capabilities remain available even while away.
     page=history(PROFILE,'connect',41,CA,'client')
     assert page['dialog']['lifecycle']['can_start']
     rows=listing(PROFILE,lifecycle='completed')['dialogs']
@@ -330,29 +330,28 @@ def test_stale_transfer_candidate_is_rejected_and_assignment_is_preserved(episod
     episodes.commit()
 
 
-def test_away_owner_keeps_existing_assignment_but_cannot_claim_new_dialog(episodes):
+def test_away_owner_can_claim_waiting_dialog_and_assignment_stays_protected(episodes):
     import tenant_dialog_presence as presence
     presence.set_status({'tenant_id':A,'telegram_id':11},{'status':'away'})
     with episodes.cursor() as cur:
         preview=lifecycle.decorate(cur,A,11,{'provider':'connect','channel_id':CA,
             'conversation_id':'client','lead_id':41,'can_send':True},details=False,
-            _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True)
-        assert preview['lifecycle']['can_accept'] is False
+            _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True,
+            _policy=SimpleNamespace(profile={'role':'owner'}))
+        assert preview['lifecycle']['can_accept'] is True
     episodes.commit()
-    with pytest.raises(TenantLinearError) as denied:
-        command(actor=11)
-    assert denied.value.status==403
-    assert state(episodes) is None
-    command(actor=33)
-    presence.set_status({'tenant_id':A,'telegram_id':33},{'status':'away'})
+    command(actor=11)
+    assert state(episodes)['operator_id']==11
+    # Once the owner explicitly accepts an unassigned conversation, normal
+    # compare-and-set ownership still prevents an operator from taking it.
+    with pytest.raises(TenantLinearError) as lost:
+        command(actor=33)
+    assert lost.value.status in {404,409}
     with episodes.cursor() as cur:
-        lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
-        projected=lifecycle.decorate(cur,A,33,{'provider':'connect','channel_id':CA,
-            'conversation_id':'client','lead_id':41,'can_send':True},details=False,
-            _rollout=SimpleNamespace(enforced=True,admission_enabled=True),_can_update=True)
-        assert projected['can_send'] is True
+        with pytest.raises(TenantLinearError):
+            lifecycle.require_access(cur,A,33,'connect',CA,'client','update')
     episodes.commit()
-    assert state(episodes)['operator_id']==33
+    assert state(episodes)['operator_id']==11
 
 
 def test_ai_and_visibility_stay_exact_source_and_tenant(episodes):
@@ -716,7 +715,7 @@ def test_enrollment_is_ready_while_routing_off(episodes, monkeypatch):
     assert blocked.value.status==403
 
 
-def test_no_eligible_employee_leaves_inbound_waiting(episodes):
+def test_offline_operator_cannot_claim_but_owner_can_manually_accept(episodes):
     import tenant_dialog_presence as presence
 
     # First close a previous episode, then a genuinely new inbound reopens it.
@@ -727,11 +726,16 @@ def test_no_eligible_employee_leaves_inbound_waiting(episodes):
     with episodes.cursor() as cur:
         lifecycle.note_inbound(cur,A,CA,'client',str(uuid.uuid4()),'2099-01-01T00:00:00Z')
     episodes.commit()
-    for actor in (11,33):
-        with pytest.raises(TenantLinearError) as blocked:
-            command(revision=3,actor=actor)
-        assert blocked.value.status==403
+    with pytest.raises(TenantLinearError) as blocked:
+        command(revision=3,actor=33)
+    assert blocked.value.status==403
     waiting=state(episodes)
     assert waiting['state']=='waiting' and waiting['operator_id'] is None
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==1
+    episodes.commit()
+    # Owner can act while away; this explicit action does not change automatic
+    # routing eligibility for operators.
+    accepted=command(revision=3,actor=11)['lifecycle']
+    assert accepted['state']=='accepted' and accepted['operator_id']==11
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==2
     episodes.commit()
