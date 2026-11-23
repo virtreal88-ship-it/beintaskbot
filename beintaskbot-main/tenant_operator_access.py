@@ -64,14 +64,16 @@ def _resolve_connect_route(cur,tenant,conversation='',channel='',lead_id=None,*,
     return dict(rows[0])
 
 
-def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False,action='view',allow_closed_archive=False):
+def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False,action='view',allow_closed_archive=False,owner_overview=False):
     if policy is None: raise TenantLinearError('Нет доступа.',403)
     if provider=='connect':
         route=_resolve_connect_route(cur,tenant,conversation,channel,lead_id,allow_merged=allow_merged)
         from tenant_dialog_access import require_source
         require_source(cur,tenant,policy,'connect',str(route['connect_channel_id']),action)
         from tenant_dialog_lifecycle import require_access
-        protected = require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',str(route['connect_channel_id']),route['conversation_id'],action,allow_closed_archive=allow_closed_archive)
+        exact=(channel==str(route['connect_channel_id']) and conversation==route['conversation_id'] and lead_id==route['lead_id'])
+        protected = require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',str(route['connect_channel_id']),route['conversation_id'],action,
+            allow_closed_archive=allow_closed_archive,owner_overview=bool(owner_overview and exact and policy.profile.get('role')=='owner'))
         if protected:
             # Retain the caller's raw proof: rollback may detach it while the
             # canonical route remains valid. Never authorize that stale proof.

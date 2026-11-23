@@ -2,7 +2,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
 const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0));
 (async()=>{
- await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();
+ await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();await verifyOwnerOverview();
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'client',agent_id:'agent',agent_name:'Agent',state:'human',can_send:false,send_block_reason:'dialog_accept_required',controls_allowed:true,available_actions:['resume'],lifecycle_enabled:true,lifecycle:{id:'episode',state:'waiting',revision:1,can_accept:true,last_inbound_id:'latest-inbound'}};
@@ -68,6 +68,54 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  await w.tenantOperator.openDialog(route);denyHistory=true;await w.tenantOperator.openDialog(route);assert(!d.querySelector('#chatRows'),'access rejection clears rendered history');assert(!d.querySelector('#chatText'));assert(!d.querySelector('[data-operator-lifecycle]'));
  dom.window.close();console.log('dialog lifecycle UI passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+async function verifyOwnerOverview(){
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
+ const observer={provider:'connect',lead_id:77,channel_id:'a',conversation_id:'other',customer_name:'Other',customer_kind:'contact',
+  lifecycle_enabled:true,archive_read_only:true,owner_overview_read_only:true,can_send:false,can_use_copilot:false,
+  lifecycle:{state:'accepted',revision:1,operator_id:22}};
+ const calls=[];let acks=0;
+ w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+ w.tenantSharedReminders={markRows(){},dialogOpened(){acks++;}};
+ w.fetch=async(value,opt={})=>{
+   const url=new URL(String(value),w.location.origin);calls.push({url,method:opt.method||'GET'});
+   const success=result=>({ok:true,status:200,json:async()=>({success:true,result})});
+   if(url.pathname.endsWith('/dialogs/preferences'))return success({lifecycle:'all'});
+   if(url.pathname.endsWith('/dialogs')){
+     const isOverview=url.searchParams.get('owner_overview')==='1';
+     return success({dialogs:isOverview?[observer]:[],agents:[],channels:[{id:'connect:a',name:'A'}],next_offset:null});
+   }
+   if(url.pathname.endsWith('/dialogs/history')){
+     assert.equal(url.searchParams.get('owner_overview'),'1');assert.equal(url.searchParams.get('expected_user_id'),'33');
+     return success({dialog:observer,messages:[{id:'message',direction:'incoming',body:'Visible to owner only'}],next_before:null});
+   }
+   if(url.pathname.endsWith('/me'))return {ok:true,json:async()=>profile};
+   throw Error('Unexpected request '+url);
+ };
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));
+ await w.tenantOperator.refresh();
+ const lifecycle=d.querySelector('#operatorLifecycle'),state=d.querySelector('#operatorOwnerLifecycleState');
+ assert(!state.parentElement.hidden);
+ state.value='accepted';state.dispatchEvent(new w.Event('change'));await tick();
+ const channel=d.querySelector('#operatorChannel');channel.value='connect:a';channel.dispatchEvent(new w.Event('change'));await tick();
+ const list=calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams;
+ assert.equal(list.get('lifecycle_state'),'accepted');assert.equal(list.get('channel'),'connect:a');
+ d.querySelector('[data-open-operator]').click();await tick();await tick();
+ assert(d.querySelector('#chatRows').textContent.includes('Visible to owner only'));
+ assert(d.querySelector('#sendChat').disabled);
+ assert(!d.querySelector('[data-operator-lifecycle]')&&!d.querySelector('#operatorConversationNameInput'));
+ assert.equal(acks,0);assert(!calls.some(c=>c.url.pathname.endsWith('/dialogs/read')));
+ lifecycle.value='active';lifecycle.dispatchEvent(new w.Event('change'));await tick();
+ assert(state.parentElement.hidden&&!d.querySelector('#chatRows'),'leaving All hides the observational chat');
+ assert(!calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams.has('owner_overview'));
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,role:'operator'}}}));
+ await tick();
+ assert(state.parentElement.hidden);
+ assert(!calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams.has('owner_overview'));
+ dom.window.close();
+}
 
 async function verifyImmediateListState(grouped){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;

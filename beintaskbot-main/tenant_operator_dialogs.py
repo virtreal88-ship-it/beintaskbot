@@ -463,7 +463,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -476,7 +476,8 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         kommo_scope='TRUE';params=[]
     from tenant_dialog_access import sql_filter
     from tenant_dialog_lifecycle import visibility_sql
-    dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(cur, policy,'routes.provider','routes.channel_id','routes.conversation_id',allow_closed_archive=allow_closed_archive)
+    dialog_filter='('+sql_filter(policy)+') AND '+visibility_sql(cur, policy,'routes.provider','routes.channel_id','routes.conversation_id',
+        allow_closed_archive=allow_closed_archive,owner_overview=owner_overview)
     from tenant_support_access import sql_filter as support_filter
     ticket_filter=support_filter(policy,'st')
     handoff_filter=support_filter(policy,'ht')
@@ -936,7 +937,7 @@ def _hide_shared_ai(dialog):
                   agent_status='restricted', agent_status_reason='ai_management_restricted')
     return dialog
 
-def _fold_group_routes(rows):
+def _fold_group_routes(rows, *, prefer_actionable=False):
     """Fold authorized exact group routes after filtering, before pagination.
 
     Each selectable source keeps its own lifecycle and sending route. Never
@@ -958,6 +959,10 @@ def _fold_group_routes(rows):
         else:
             representative = groups[key]
             representative['group_sources'].append(dict(row))
+            if prefer_actionable and representative.get('archive_read_only') and not row.get('archive_read_only'):
+                sources=representative['group_sources']
+                representative.clear()
+                representative.update(row,group_sources=sources)
             representative['unread_count'] = max(
                 int(representative.get('unread_count') or 0), int(row.get('unread_count') or 0))
     for row in groups.values():
@@ -987,7 +992,8 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
 
-def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False):
+def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False,
+            owner_overview=False,lifecycle_state=''):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1000,8 +1006,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
-            allow_closed_archive=lifecycle=='completed' and not (all_rows or completion_preview or include_read_cursors)
-            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,allow_closed_archive=allow_closed_archive);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+            interactive=not (all_rows or completion_preview or include_read_cursors)
+            owner_overview=bool(owner_overview and interactive and lifecycle=='all' and policy.profile.get('role')=='owner')
+            if lifecycle_state and (not owner_overview or lifecycle_state not in {'waiting','accepted','closed','dismissed'}):
+                raise TenantLinearError('Некорректный статус диалога.',400)
+            allow_closed_archive=interactive and (lifecycle=='completed' or owner_overview)
+            sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,
+                allow_closed_archive=allow_closed_archive,owner_overview=owner_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1050,7 +1061,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     r['agent_status_reason']=('assignment_required' if len(r['agent_assignment'].get('agents') or [])==1 else
                       'agent_selection_required' if len(r['agent_assignment'].get('agents') or [])>1 else r['agent_assignment'].get('reason') or '')
             from tenant_dialog_access import apply_capabilities
-            from tenant_dialog_lifecycle import decorate as lifecycle_decorate
+            from tenant_dialog_lifecycle import decorate as lifecycle_decorate, is_owner_observer
             from tenant_operator_list_access import ListAccess
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
             inbound=_completion_inbound_snapshot(cur,tenant,rows,presence_only=not completion_preview) if rollout.enforced else {}
@@ -1077,9 +1088,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 if rollout.enforced or policy.has_scoped_access('dialogs'):
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
-                    lifecycle_decorate(cur,tenant,int(profile['telegram_id']),r,details=False,allow_closed_archive=allow_closed_archive,
-                        _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflows.get((str(r['channel_id']),r['conversation_id'])),
-                        _online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources),
+                    workflow=workflows.get((str(r['channel_id']),r['conversation_id']))
+                    online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources)
+                    observer=owner_overview and r['provider']=='connect' and is_owner_observer(cur,tenant,actor,r['channel_id'],workflow,online=online)
+                    lifecycle_decorate(cur,tenant,actor,r,details=False,allow_closed_archive=allow_closed_archive,owner_observer=observer,
+                        _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflow,
+                        _online=online,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
                     if company_prelinked_for_bulk is not None and r.get('lifecycle_enabled'):
@@ -1143,6 +1157,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     and (companion:=history_companions.get((r['channel_id'],r['conversation_id'],int(r['lead_id']))))
                     and matches(companion))]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
+            if lifecycle_state:
+                rows=[r for r in rows if (r.get('lifecycle') or {}).get('state')==lifecycle_state]
+            if owner_overview and (agent or state):
+                # Agent metadata is intentionally redacted on passive rows.
+                # Do not misclassify those dialogs as unassigned or infer
+                # their private AI state from a filter match.
+                rows=[r for r in rows if not r.get('archive_read_only')]
             for r in rows:
                 if not r.get('archive_read_only') and r.get('agent_id') and r.get('agent_name') and not any(str(a.get('id'))==str(r['agent_id']) for a in agents):
                     agents.append({'id':str(r['agent_id']),'name':r['agent_name']})
@@ -1152,7 +1173,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=[r for r in rows if str(r.get('agent_id') or '')==selected_agent]
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
-            rows=_fold_group_routes(rows)
+            if owner_overview:
+                # A currently actionable route should remain the group card's
+                # primary route; all eligible sibling sources remain selectable.
+                rows=_fold_group_routes(rows,prefer_actionable=True)
+            else:
+                rows=_fold_group_routes(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
             if not all_rows and not completion_preview:
@@ -1257,7 +1283,8 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
             *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
-            include_shared_reminder_events=False,combine_history=False,redirect_paired_history=False):
+            include_shared_reminder_events=False,combine_history=False,redirect_paired_history=False,
+            owner_overview=False):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
         # selected source explicitly, including when a group spans numbers.
@@ -1274,18 +1301,22 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
         ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant,actor,policy=access(cur,profile,'dialogs')
+            owner_overview=bool(owner_overview and not support_case_only and policy.profile.get('role')=='owner')
             transfer_targets=[]
-            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets, _row, is_shared_archive
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets, _row, is_shared_archive, is_owner_observer
             if not support_case_only and provider=='connect' and lifecycle_enabled(cur,tenant):
                 from tenant_operator_access import _resolve_connect_route
                 candidate=_resolve_connect_route(cur,tenant,conversation,str(channel),lead_id,allow_merged=True)
                 transfer_targets=_targets(cur,tenant,policy,str(candidate['connect_channel_id']),int(profile['telegram_id']))
             selected=assert_route(cur,tenant,policy,provider,conversation,str(channel),lead_id,allow_merged=True,
-                allow_closed_archive=not support_case_only)
+                allow_closed_archive=not support_case_only,owner_overview=owner_overview)
             if provider=='connect':
                 channel=str(selected['connect_channel_id']);conversation=selected['conversation_id'];lead_id=int(selected['lead_id'])
             workflow=_row(cur,tenant,channel,conversation) if provider=='connect' and lifecycle_enabled(cur,tenant) else None
-            shared_archive=is_shared_archive(workflow,actor)
+            owner_observer=(owner_overview and provider=='connect' and lifecycle_enabled(cur,tenant)
+                            and is_owner_observer(cur,tenant,actor,channel,workflow))
+            closed_archive=is_shared_archive(workflow,actor)
+            shared_archive=closed_archive or owner_observer
             if shared_archive and requested_route != {'provider':provider,'channel_id':channel,'conversation_id':conversation,'lead_id':lead_id}:
                 raise TenantLinearError('Диалог недоступен.',404)
             history_members={conversation:lead_id}
@@ -1306,7 +1337,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             message_leads=history_leads.copy()
             if paired_history:
                 message_leads.append(paired_history['alternate_lead'])
-            sql,scopes=projection(cur, policy,include_contact_names=not support_case_only,allow_closed_archive=shared_archive)
+            sql,scopes=projection(cur, policy,include_contact_names=not support_case_only,
+                allow_closed_archive=closed_archive,owner_overview=owner_observer)
             columns='provider,lead_id,channel_id,conversation_id' if support_case_only else '*'
             cur.execute(sql+'SELECT '+columns+' FROM visible WHERE provider=%s AND lead_id=%s AND channel_id=%s AND conversation_id=%s',
                 (tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'),provider,lead_id,str(channel),str(conversation)))
@@ -1468,7 +1500,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             action_capabilities={}
             apply_capabilities(cur,tenant,policy,dialog,_action_capabilities=action_capabilities)
             from tenant_dialog_lifecycle import decorate as lifecycle_decorate, _targets
-            lifecycle_decorate(cur,tenant,int(profile['telegram_id']),dialog,_workflow=workflow,allow_closed_archive=shared_archive,
+            lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
                 _can_update=action_capabilities.get('update',False),_policy=policy)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
