@@ -158,7 +158,7 @@ def _bind_once(cur,route,table,pred,key,company,actor):
         raise operator.OperatorError('Компания диалога изменилась. Обновите диалог.',409)
 
 
-def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_confirm=False,confirm=False):
+def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_confirm=False,confirm=False,accepted_policy=None):
     table,pred,key=dialogue._pred(tenant,route)
     bound=_current_binding(cur,table,pred,key)
     dialogue.assert_expected_company(bound,expected)
@@ -169,7 +169,7 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_con
         raise operator.OperatorError(_CONFLICT,409)
     if not company and can_confirm and bound and expected == bound:
         # Offer only the selected, writable CRM record. A matching label alone never writes a mapping.
-        grant=current_access(cur,tenant,actor,'companies','update')
+        grant=None if accepted_policy else current_access(cur,tenant,actor,'companies','update')
         local=locked_resource(cur,grant,'companies','update',dialogue.COMPANIES,tenant,bound)
         if local and local['name'].casefold()==account.casefold():
             if not confirm:
@@ -181,8 +181,9 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_con
             raise operator.OperatorError(_CONFLICT,409)
     created=False
     if not company:
-        create=current_access(cur,tenant,actor,'companies','create')
-        authorize_create(cur,create,'companies',tenant,actor)
+        if accepted_policy is None:
+            create=current_access(cur,tenant,actor,'companies','create')
+            authorize_create(cur,create,'companies',tenant,actor)
         # Matching names (including archived) are only reason to stop, never
         # identity evidence. All ordinary name writers share the same lock.
         cur.execute("""SELECT 1 FROM saas_crm_native_companies WHERE tenant_id=%s::uuid
@@ -196,7 +197,7 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_con
         if not cur.fetchone() or not imports._put_mapping(cur,tenant,account,company,actor,credentials):
             raise operator.OperatorError('Связь аккаунта с CRM-компанией изменилась. Операция отменена.',409)
         created=True
-    grant=current_access(cur,tenant,actor,'companies','view')
+    grant=None if accepted_policy else current_access(cur,tenant,actor,'companies','view')
     if not locked_resource(cur,grant,'companies','view',dialogue.COMPANIES,tenant,company):
         raise CRMAccessError()
     if not created and source=='active':
@@ -222,6 +223,8 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_con
           VALUES(%s,%s::uuid,%s,'operator_dialog_company_selected','operator_endpoint',%s,%s::jsonb)""",
           (str(uuid.uuid4()),tenant,actor,account_hash,
            operator._json({'account_hash':account_hash,'result':'created' if created else 'reused','source':source})))
+    if accepted_policy:
+        return dialogue._binding_snapshot(cur,tenant,accepted_policy,route,True)
     return {**dialogue._read(cur,tenant,actor,route,True),'can_search_operator':True}
 
 
@@ -246,8 +249,10 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
                         raise operator.OperatorError('Обновите диалог перед выбором компании.',409)
                     can_confirm=(source=='active' and policy.profile.get('role')=='owner'
                                  and policy.allows_action('operator_data','link'))
+                    accepted=dialogue.accepted_api_operator(cur,tenant,actor,policy,route)
                     bound=_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id,
-                                  can_confirm=can_confirm,confirm=confirm_existing)
+                                  can_confirm=can_confirm or (accepted and source=="active"),confirm=confirm_existing,
+                                  accepted_policy=policy if accepted else None)
                     if bound.get('confirm_existing_company'):
                         return bound
                     bound['can_unlink']=dialogue._manage(cur,tenant,actor,policy,route,write=False)
