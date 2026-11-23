@@ -993,7 +993,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False,
-            owner_overview=False,lifecycle_state=''):
+            owner_overview=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1008,8 +1008,6 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
             interactive=not (all_rows or completion_preview or include_read_cursors)
             owner_overview=bool(owner_overview and interactive and lifecycle=='all' and policy.profile.get('role')=='owner')
-            if lifecycle_state and (not owner_overview or lifecycle_state not in {'waiting','accepted','closed','dismissed'}):
-                raise TenantLinearError('Некорректный статус диалога.',400)
             allow_closed_archive=interactive and (lifecycle=='completed' or owner_overview)
             sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,
                 allow_closed_archive=allow_closed_archive,owner_overview=owner_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
@@ -1157,8 +1155,6 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     and (companion:=history_companions.get((r['channel_id'],r['conversation_id'],int(r['lead_id']))))
                     and matches(companion))]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
-            if lifecycle_state:
-                rows=[r for r in rows if (r.get('lifecycle') or {}).get('state')==lifecycle_state]
             if owner_overview and (agent or state):
                 # Agent metadata is intentionally redacted on passive rows.
                 # Do not misclassify those dialogs as unassigned or infer

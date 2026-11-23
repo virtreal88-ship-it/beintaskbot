@@ -46,9 +46,9 @@ def test_owner_overview_group_prefers_working_source_and_filters_before_folding(
     assert set(members)=={CA,CB}
     assert members[CA]['owner_overview_read_only'] and not members[CA]['unread_count']
     assert 'owner_overview_read_only' not in members[CB]
-    filtered=cards(11,lifecycle='all',owner_overview=True,lifecycle_state='accepted')
+    filtered=cards(11,lifecycle='all',owner_overview=True,channel='connect:'+CA)
     assert len(filtered)==1 and [r['channel_id'] for r in filtered[0]['group_sources']]==[CA]
-    assert cards(11,lifecycle='all',owner_overview=True,lifecycle_state='accepted',channel='connect:'+CB)==[]
+    assert [r['channel_id'] for r in cards(11,lifecycle='all',owner_overview=True,channel='connect:'+CB)[0]['group_sources']]==[CB]
     assert {r['channel_id'] for r in cards(33,lifecycle='all',owner_overview=True)[0]['group_sources']}=={CB}
 
 

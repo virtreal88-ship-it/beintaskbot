@@ -64,7 +64,7 @@ def handler(member_from_request,origin,logger,resource):
                     if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
                     if query.get('owner_overview')=='1':
                         _expected(query,profile)
-                        options.update(owner_overview=True,lifecycle_state=query.get('lifecycle_state',''))
+                        options['owner_overview']=True
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':

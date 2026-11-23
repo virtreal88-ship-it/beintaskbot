@@ -41,9 +41,8 @@ def test_claim_hides_list_detail_legacy_read_from_owner_but_not_operator(readers
 
 def test_owner_all_observes_other_accepted_exactly_without_operative_access(readers):
     accepted=command(actor=33)['lifecycle']
-    rows=dialogs.listing(PROFILE,lifecycle='all',owner_overview=True,lifecycle_state='accepted')['dialogs']
+    rows=dialogs.listing(PROFILE,lifecycle='all',owner_overview=True)['dialogs']
     assert [(r['lead_id'],r['owner_overview_read_only'],r['can_send']) for r in rows]==[(41,True,False)]
-    assert not dialogs.listing(PROFILE,lifecycle='all',owner_overview=True,lifecycle_state='closed')['dialogs']
     assert not dialogs.listing(PROFILE,lifecycle='all',channel='connect:'+OTHER,owner_overview=True)['dialogs']
     assert not dialogs.listing(PROFILE,lifecycle='all',agent='unassigned',owner_overview=True)['dialogs']
     assert not dialogs.listing(PROFILE,lifecycle='active',owner_overview=True)['dialogs']
@@ -89,7 +88,7 @@ def test_owner_all_observes_other_accepted_exactly_without_operative_access(read
     assert dialogs.history(PROFILE,'connect',41,CA,'client',owner_overview=True)['dialog']['lifecycle']['can_close']
 
 
-def test_owner_all_state_filter_has_exact_count_over_multiple_pages(readers):
+def test_owner_all_source_filter_has_exact_count_over_multiple_pages(readers):
     readers.execute("""INSERT INTO saas_connect_conversations
       (tenant_id,connect_channel_id,conversation_id,lead_id,contact_name,last_message_at)
       SELECT %s::uuid,%s::uuid,'synthetic-'||i,1000+i,'Synthetic',now() FROM generate_series(1,55) i""",(A,CA))
@@ -97,7 +96,7 @@ def test_owner_all_state_filter_has_exact_count_over_multiple_pages(readers):
       (tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
       SELECT %s::uuid,%s::uuid,'synthetic-'||i,gen_random_uuid(),'accepted',33,1 FROM generate_series(1,55) i""",(A,CA))
     readers.commit()
-    filters={'lifecycle':'all','owner_overview':True,'lifecycle_state':'accepted','channel':'connect:'+CA}
+    filters={'lifecycle':'all','owner_overview':True,'channel':'connect:'+CA,'search':'synthetic'}
     first=dialogs.listing(PROFILE,**filters)
     second=dialogs.listing(PROFILE,offset=first['next_offset'],**filters)
     assert first['total_count']==second['total_count']==55
