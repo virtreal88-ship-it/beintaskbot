@@ -759,5 +759,25 @@ def test_sidebar_transfer_only_current_online_operator_same_source(episodes, mon
     episodes.execute('DELETE FROM saas_dialog_employee_presence WHERE tenant_id=%s::uuid AND employee_id=33',(A,))
     episodes.commit()
     assert lifecycle.transfer_candidates(PROFILE,route)['targets'][0]['employee_id']==33
+    with pytest.raises(TenantLinearError) as bad_episode:
+        command('transfer',1,target_employee_id=33,online_only=True,episode_id=str(uuid.uuid4()))
+    assert bad_episode.value.status==400
+    accepted_id=str(state(episodes)['id'])
     assert command('transfer',1,target_employee_id=33,online_only=True)['lifecycle']['operator_id']==33
+    events=episodes.execute("SELECT entity_id FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_transfer'",(A,))
+    assert events[-1]['entity_id']==accepted_id
+    assert episodes.execute('SELECT accepted_by FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,accepted_id))[0]['accepted_by']==11
     assert lifecycle.transfer_candidates(employee,{**route,'expected_revision':'2'})=={'targets':[]}
+
+
+def test_sidebar_transfer_rechecks_source_active_under_lock(episodes, monkeypatch):
+    import tenant_dialog_presence as presence
+    command()
+    # Simulate deactivation after the presence helper observed an active source.
+    episodes.execute('UPDATE saas_connect_channels SET active=FALSE WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid',(A,CA))
+    episodes.commit()
+    monkeypatch.setattr(presence,'is_sidebar_transfer_online',lambda *args,**kwargs:True)
+    with pytest.raises(TenantLinearError) as error:
+        command('transfer',1,target_employee_id=33,online_only=True)
+    assert error.value.status==403 and 'Источник' in str(error.value)
+    assert state(episodes)['operator_id']==11 and state(episodes)['revision']==1

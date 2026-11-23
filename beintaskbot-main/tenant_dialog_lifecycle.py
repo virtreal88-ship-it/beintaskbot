@@ -542,6 +542,8 @@ def _mutate_once(profile, payload):
     online_only=payload.get('online_only',False)
     if 'online_only' in payload and (action!='transfer' or type(online_only) is not bool):
         raise TenantLinearError('Некорректный запрос.',400)
+    if online_only and 'episode_id' in payload:
+        raise TenantLinearError('Эпизод передачи определяется диалогом.',400)
     request_id=str(uuid.UUID(str(payload.get('request_id'))))
     revision=payload.get('expected_revision')
     if type(revision) is not int or revision<0: raise TenantLinearError('Обновите диалог.',409)
@@ -676,7 +678,7 @@ def _mutate_once(profile, payload):
                 if action=='transfer':
                     if row['state'] not in {'accepted','closed','dismissed'}:
                         raise TenantLinearError('Диалог недоступен для передачи.',409)
-                    if row['state']!='accepted' and not transfer_source_active:
+                    if (online_only or row['state']!='accepted') and not transfer_source_active:
                         raise TenantLinearError('Источник недоступен.',403)
                     cur.execute('UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(target,tenant,channel,conversation))
                     # A handed-off completed dialogue keeps its original episode
@@ -695,7 +697,7 @@ def _mutate_once(profile, payload):
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(current['id'] if online_only else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
         conn.commit()
     return result
 

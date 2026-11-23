@@ -103,3 +103,19 @@ def test_four_state_routing_requires_exact_workspace_and_valid_source_ids(monkey
     monkeypatch.delenv(presence.STATUS_ENABLED_ENV)
     assert not presence.routing_enabled(None,A,CA)
     assert not presence.routing_enabled(None,A,unknown)
+
+
+def test_sidebar_transfer_records_real_accepted_episode_on_unrouted_source(episodes, monkeypatch):
+    monkeypatch.delenv(presence.ROUTING_ENV,raising=False)
+    accepted=command()['lifecycle']
+    with pytest.raises(TenantLinearError) as override:
+        command('transfer',accepted['revision'],target_employee_id=33,online_only=True,episode_id=str(uuid.uuid4()))
+    assert override.value.status==400
+    result=command('transfer',accepted['revision'],target_employee_id=33,online_only=True)['lifecycle']
+    assert result['operator_id']==33 and result['id']==accepted['id']
+    episode=episodes.execute('SELECT accepted_by,operator_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',
+                            (A,accepted['id']))[0]
+    assert episode=={'accepted_by':11,'operator_id':33}
+    audit=episodes.execute("SELECT entity_id FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_transfer' AND entity_id=%s",
+                           (A,accepted['id']))
+    assert len(audit)==1
