@@ -159,19 +159,19 @@
     ?new Set(Intl.supportedValuesOf('currency')):null;
   function paymentAmount(raw,currency,locale){
     const match=/^([+-]?)(\d{1,15})(?:\.(\d{1,8}))?(?:\s+([A-Z]{3}))?$/.exec(raw.trim());
-    const literal=currency&&currency!==match?.[4]?raw+' '+currency:raw;
-    if(!match)return {text:literal,positive:false};
+    // Do not add a displayed unit to an opaque or conflicting amount.
+    if(!match)return {text:raw,positive:false};
     const [,sign,integer,fraction='',attached]=match;
     if((currency&&attached&&currency!==attached)||(integer.replace(/^0+/,'').length+fraction.length>15))
-      return {text:literal,positive:false};
+      return {text:raw,positive:false};
     const code=currency||attached;
     if(code&&(!/^[A-Z]{3}$/.test(code)||(supportedCurrencies&&!supportedCurrencies.has(code))))
-      return {text:literal,positive:false};
+      return {text:raw,positive:false};
     const number=Number(sign+integer+(fraction?'.'+fraction:''));
     const options={minimumFractionDigits:fraction.length,maximumFractionDigits:fraction.length,
       ...(sign==='+'?{signDisplay:'always'}:{}),...(code?{style:'currency',currency:code,currencyDisplay:'code'}:{})};
     try{return {text:new Intl.NumberFormat(locale,options).format(number),positive:number>0};}
-    catch{return {text:literal,positive:false};}
+    catch{return {text:raw,positive:false};}
   }
   function paymentDate(raw,locale){
     const shape=/^(\d{4}-\d{2}-\d{2})(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/.exec(raw);

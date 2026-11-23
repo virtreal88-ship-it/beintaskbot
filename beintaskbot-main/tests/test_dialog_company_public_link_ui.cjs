@@ -37,7 +37,9 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
         ['2026-11-04','-2.00','Daily Expense'],
         ['not-a-date','amount unknown','<b>Custom payment</b>'],
         ['2026-02-30','12.50','credit','EUR'],
-        ...Array.from({length:37},(_,i)=>['day-'+(i+4),'0.00 AZN','payment-'+(i+4)])
+        ['2026-11-06','1,200 AZN','credit','AZN'],
+        ['2026-11-07','10 EUR','credit','AZN'],
+        ...Array.from({length:35},(_,i)=>['day-'+(i+6),'0.00 AZN','payment-'+(i+6)])
       ]:[];
       return Promise.resolve({ok:true,json:async()=>({success:true,company_section:{state:'available',rows}})});
     }
@@ -111,6 +113,9 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
     assert.equal(shown()[2].lastElementChild.textContent,'amount unknown');
     assert.equal(shown()[3].querySelector('small').textContent,'2026-02-30','invalid date stays literal');
     assert.equal(shown()[3].lastElementChild.textContent,format(12.5,{style:'currency',currency:'EUR',currencyDisplay:'code'}));
+    assert.equal(shown()[4].lastElementChild.textContent,'1,200 AZN','opaque value keeps only the original unit');
+    assert.equal(shown()[5].lastElementChild.textContent,'10 EUR','conflicting units preserve the original literal');
+    assert(!shown()[4].lastElementChild.hasAttribute('data-positive-credit')&&!shown()[5].lastElementChild.hasAttribute('data-positive-credit'));
   }
   const pageButtons=()=>[...pay.querySelectorAll('.operator-company-pagination button')];
   assert(pageButtons()[0].disabled);
