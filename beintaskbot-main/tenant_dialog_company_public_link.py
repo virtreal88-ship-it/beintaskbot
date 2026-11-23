@@ -301,7 +301,13 @@ def _section_rows(response, section, account):
             values[0]=item.get('id')
         if any(type(value) not in (str,int,float) or not str(value).strip() for value in values):
             raise operator.OperatorError('В ответе Operator отсутствуют поля списка.',502)
-        rows.append([str(value)[:320] for value in values])
+        row = [str(value)[:320] for value in values]
+        # Optional currency is only projected when explicitly supplied by
+        # Operator; amounts lacking currency are never assumed to be AZN.
+        currency = item.get('currency')
+        if section == 'company_history' and isinstance(currency,str) and re.fullmatch(r'[A-Z]{3}',currency):
+            row.append(currency)
+        rows.append(row)
     return {'rows':rows}
 
 

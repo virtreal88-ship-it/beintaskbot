@@ -32,7 +32,13 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
     }
     if(data.action==='company_tasks'||data.action==='company_history'){
       sectionReads.push(data);
-      const rows=data.action==='company_history'?Array.from({length:41},(_,i)=>['day-'+i,'0.00 AZN','payment-'+i]):[];
+      const rows=data.action==='company_history'?[
+        ['2026-11-03T23:59:00-12:00','+1234.50 USD','credit'],
+        ['2026-11-04','-2.00','Daily Expense'],
+        ['not-a-date','amount unknown','<b>Custom payment</b>'],
+        ['2026-02-30','12.50','credit','EUR'],
+        ...Array.from({length:37},(_,i)=>['day-'+(i+4),'0.00 AZN','payment-'+(i+4)])
+      ]:[];
       return Promise.resolve({ok:true,json:async()=>({success:true,company_section:{state:'available',rows}})});
     }
     assert.equal(path,'/api/platform/operator/dialog-company/public-link');
@@ -82,11 +88,36 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(d.activeElement,taskTrigger,'closing returns focus to the opening control');
   tab('history').click();await tick();
   const pay=area('history'),historyReadCount=()=>sectionReads.filter(r=>r.action==='company_history').length;
-  const readBeforePaging=historyReadCount(),shown=()=>[...pay.querySelectorAll('li')];
-  assert.equal(shown().length,20);assert.match(shown()[0].textContent,/payment-0/);
+  const readBeforePaging=historyReadCount(),shown=()=>[...pay.querySelectorAll('tbody tr')];
+  assert.equal(shown().length,20);
+  for(const [lang,locale,labels] of [
+    ['ru','ru-RU',['История операций','Тип','Сумма','Кредит','Ежедневный расход']],
+    ['en','en-US',['Transaction history','Type','Amount','Credit','Daily expense']],
+    ['az','az-AZ',['Əməliyyat tarixçəsi','Növ','Məbləğ','Kredit','Gündəlik xərc']]
+  ]){
+    w.tenantI18n.language=lang;d.dispatchEvent(new w.Event('tenant-language'));
+    assert.equal(pay.querySelector('h3').textContent,labels[0]);
+    assert.deepEqual([...pay.querySelectorAll('th')].map(x=>x.textContent),labels.slice(1,3));
+    assert.equal(shown()[0].querySelector('[data-kind=credit]').textContent,labels[3]);
+    assert.equal(shown()[1].querySelector('[data-kind=expense]').textContent,labels[4]);
+    const format=(n,options)=>new Intl.NumberFormat(locale,{minimumFractionDigits:2,maximumFractionDigits:2,...options}).format(n);
+    assert.equal(shown()[0].lastElementChild.textContent,format(1234.5,{style:'currency',currency:'USD',currencyDisplay:'code',signDisplay:'always'}));
+    assert(shown()[0].lastElementChild.hasAttribute('data-positive-credit'));
+    assert.equal(shown()[1].lastElementChild.textContent,format(-2));
+    assert(!shown()[1].lastElementChild.hasAttribute('data-positive-credit'));
+    assert.equal(shown()[0].querySelector('time').dateTime,'2026-11-03','date does not shift across midnight');
+    assert.equal(shown()[2].querySelector('[data-kind=unknown]').textContent,'<b>Custom payment</b>');
+    assert(!shown()[2].querySelector('b'));
+    assert.equal(shown()[2].lastElementChild.textContent,'amount unknown');
+    assert.equal(shown()[3].querySelector('small').textContent,'2026-02-30','invalid date stays literal');
+    assert.equal(shown()[3].lastElementChild.textContent,format(12.5,{style:'currency',currency:'EUR',currencyDisplay:'code'}));
+  }
   const pageButtons=()=>[...pay.querySelectorAll('.operator-company-pagination button')];
   assert(pageButtons()[0].disabled);
   pageButtons()[1].click();assert.equal(shown().length,20);assert.match(shown()[0].textContent,/payment-20/);
+  w.tenantI18n.language='ru';d.dispatchEvent(new w.Event('tenant-language'));
+  assert.match(shown()[0].textContent,/payment-20/,'locale update keeps current page');
+  w.tenantI18n.language='az';d.dispatchEvent(new w.Event('tenant-language'));
   pageButtons()[1].click();assert.equal(shown().length,1);assert.match(shown()[0].textContent,/payment-40/);
   assert(pageButtons()[1].disabled);assert.equal(historyReadCount(),readBeforePaging,'page buttons only slice the verified returned snapshot');
   const creditTrigger=pay.querySelector('[data-company-action=credit]');creditTrigger.click();

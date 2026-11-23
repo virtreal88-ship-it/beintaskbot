@@ -103,7 +103,10 @@
     s.labelTabs=()=>{
       const lang=window.tenantI18n?.language||'az',names=sectionNames[lang]||sectionNames.az;
       s.tabs.setAttribute('aria-label',t('label'));
-      s.panels.forEach(({tab},i)=>tab.textContent=names[i]);
+      s.panels.forEach((item,i)=>{
+        item.tab.textContent=names[i];
+        if(s.activeTab===item.id)item.refreshLocale?.();
+      });
       for(const trigger of s.section.querySelectorAll('[data-company-action]')){
         trigger.textContent=(actionLabels[lang]||actionLabels.az)[trigger.dataset.companyAction==='task'?0:1];
       }
@@ -143,51 +146,112 @@
     en:['Payment history pages','Previous page','Next page','Page']
   };
   const PAYMENT_PAGE_SIZE=20;
-  function renderSection(item,rows){
-    const fields=item.id==='modules'?1:3;
-    if(rows.some(row=>!Array.isArray(row)||row.length!==fields||row.some(field=>typeof field!=='string')))throw Error();
-    const list=node('ul');list.className='operator-company-section-list';
-    function renderRows(shown){
-      list.replaceChildren();
-      for(const row of shown){
-        const card=node('li');card.className='operator-company-section-'+item.id;
-        if(item.id==='tasks'){
-          const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
-          const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
-          card.append(info,badge);
-        }else if(item.id==='modules'){
-          const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
-        }else{
-          const info=node('div');info.append(node('strong',row[2]),node('small',row[0]));
-          const amount=node('span',row[1]);amount.className='operator-company-section-amount';
-          card.append(info,amount);
-        }
-        list.append(card);
+  const paymentLabels={
+    ru:{title:'История операций',hint:'Операции по балансу компании',type:'Тип',amount:'Сумма',credit:'Кредит',expense:'Ежедневный расход'},
+    az:{title:'Əməliyyat tarixçəsi',hint:'Şirkət balansı üzrə əməliyyatlar',type:'Növ',amount:'Məbləğ',credit:'Kredit',expense:'Gündəlik xərc'},
+    en:{title:'Transaction history',hint:'Company balance transactions',type:'Type',amount:'Amount',credit:'Credit',expense:'Daily expense'}
+  };
+  const localeFor=lang=>({ru:'ru-RU',az:'az-AZ',en:'en-US'}[lang]||'az-AZ');
+  const paymentKinds=new Map([['credit','credit'],['kredit','credit'],['кредит','credit'],
+    ['daily expense','expense'],['gündəlik xərc','expense'],['ежедневный расход','expense']]);
+  const paymentKind=value=>paymentKinds.get(value.trim().toLowerCase().replace(/[\s_-]+/g,' '))||'';
+  const supportedCurrencies=typeof Intl.supportedValuesOf==='function'
+    ?new Set(Intl.supportedValuesOf('currency')):null;
+  function paymentAmount(raw,currency,locale){
+    const match=/^([+-]?)(\d{1,15})(?:\.(\d{1,8}))?(?:\s+([A-Z]{3}))?$/.exec(raw.trim());
+    const literal=currency&&currency!==match?.[4]?raw+' '+currency:raw;
+    if(!match)return {text:literal,positive:false};
+    const [,sign,integer,fraction='',attached]=match;
+    if((currency&&attached&&currency!==attached)||(integer.replace(/^0+/,'').length+fraction.length>15))
+      return {text:literal,positive:false};
+    const code=currency||attached;
+    if(code&&(!/^[A-Z]{3}$/.test(code)||(supportedCurrencies&&!supportedCurrencies.has(code))))
+      return {text:literal,positive:false};
+    const number=Number(sign+integer+(fraction?'.'+fraction:''));
+    const options={minimumFractionDigits:fraction.length,maximumFractionDigits:fraction.length,
+      ...(sign==='+'?{signDisplay:'always'}:{}),...(code?{style:'currency',currency:code,currencyDisplay:'code'}:{})};
+    try{return {text:new Intl.NumberFormat(locale,options).format(number),positive:number>0};}
+    catch{return {text:literal,positive:false};}
+  }
+  function paymentDate(raw,locale){
+    const shape=/^(\d{4}-\d{2}-\d{2})(?:[T ](?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d{1,9})?)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)?)?$/.exec(raw);
+    const date=shape&&new Date(shape[1]+'T00:00:00Z');
+    if(!date||Number.isNaN(date.getTime())||date.toISOString().slice(0,10)!==shape[1])return node('small',raw);
+    // Use the provider's calendar date; never guess or shift its time zone.
+    const time=node('time',new Intl.DateTimeFormat(locale,{dateStyle:'medium',timeZone:'UTC'}).format(date));
+    time.dateTime=shape[1];time.title=raw;
+    return time;
+  }
+  function paymentIcon(kind){
+    const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    icon.setAttribute('viewBox','0 0 16 16');icon.setAttribute('aria-hidden','true');
+    const path=document.createElementNS(icon.namespaceURI,'path');
+    path.setAttribute('d',kind==='credit'?'M8 13V3m-4 4 4-4 4 4':'M8 3v10m-4-4 4 4 4-4');
+    path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','1.5');
+    path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');
+    icon.append(path);return icon;
+  }
+  function renderPaymentHistory(item,rows,initialPage=0){
+    const lang=window.tenantI18n?.language,copy=paymentLabels[lang]||paymentLabels.az,labels=pageLabels[lang]||pageLabels.az;
+    const locale=localeFor(lang),history=node('section'),header=node('div'),title=node('h3',copy.title),hint=node('p',copy.hint);
+    history.className='operator-company-payment-history';header.className='operator-company-payment-intro';header.append(title,hint);
+    const table=node('table'),thead=node('thead'),row=node('tr'),tbody=node('tbody');
+    table.setAttribute('aria-label',copy.title);
+    for(const name of [copy.type,copy.amount]){const field=node('th',name);field.scope='col';row.append(field);}
+    thead.append(row);table.append(thead,tbody);history.append(header,table);item.body.replaceChildren(history);
+    const pages=Math.ceil(rows.length/PAYMENT_PAGE_SIZE);
+    let page=Math.min(initialPage,pages-1);
+    item.refreshLocale=()=>{if(window.tenantI18n?.language!==lang)renderPaymentHistory(item,rows,page);};
+    function drawRows(){
+      tbody.replaceChildren();
+      for(const [date,raw,type,currency] of rows.slice(page*PAYMENT_PAGE_SIZE,(page+1)*PAYMENT_PAGE_SIZE)){
+        const row=node('tr'),details=node('td'),kind=paymentKind(type),label=node('span');
+        label.className='operator-company-payment-kind';label.dataset.kind=kind||'unknown';
+        if(kind)label.append(paymentIcon(kind));
+        label.append(node('span',kind?copy[kind]:type));
+        details.append(label,paymentDate(date,locale));
+        const value=paymentAmount(raw,currency,locale),amount=node('td',value.text);
+        amount.className='operator-company-section-amount';
+        if(kind==='credit'&&value.positive)amount.dataset.positiveCredit='';
+        row.append(details,amount);tbody.append(row);
       }
     }
-    item.body.replaceChildren(list);
-    if(item.id!=='history'||rows.length<=PAYMENT_PAGE_SIZE){renderRows(rows);return;}
-    // The verified Operator contract supplies rows for the account with no
-    // cursor or page fields. Only paginate the returned snapshot locally.
-    const labels=pageLabels[window.tenantI18n?.language]||pageLabels.az;
-    const pages=Math.ceil(rows.length/PAYMENT_PAGE_SIZE),nav=node('nav'),indicator=node('span');
-    let page=0;
-    nav.className='operator-company-pagination';nav.setAttribute('aria-label',labels[0]);
-    indicator.setAttribute('role','status');
+    if(pages<=1){drawRows();return;}
+    // Operator gives a verified snapshot, not a cursor. Pages only slice those rows.
+    const nav=node('nav'),indicator=node('span');
+    nav.className='operator-company-pagination';nav.setAttribute('aria-label',labels[0]);indicator.setAttribute('role','status');
     const prev=button('‹',()=>draw(page-1,prev)),next=button('›',()=>draw(page+1,next));
     prev.setAttribute('aria-label',labels[1]);next.setAttribute('aria-label',labels[2]);
     function draw(index,trigger){
       if(index<0||index>=pages||!nav.isConnected)return;
-      page=index;
-      renderRows(rows.slice(index*PAYMENT_PAGE_SIZE,(index+1)*PAYMENT_PAGE_SIZE));
+      page=index;drawRows();
       indicator.textContent=labels[3]+' '+(index+1)+' / '+pages;
       prev.disabled=index===0;next.disabled=index===pages-1;
       if(trigger?.disabled)(trigger===prev?next:prev).focus({preventScroll:true});
     }
-    nav.append(prev,indicator,next);item.body.append(nav);draw(0);
+    nav.append(prev,indicator,next);history.append(nav);draw(page);
+  }
+  function renderSection(item,rows){
+    const fields=item.id==='modules'?1:3;
+    if(rows.some(row=>!Array.isArray(row)||(row.length!==fields&&(item.id!=='history'||row.length!==4))||
+         row.some(field=>typeof field!=='string')))throw Error();
+    if(item.id==='history'){renderPaymentHistory(item,rows);return;}
+    const list=node('ul');list.className='operator-company-section-list';
+    for(const row of rows){
+      const card=node('li');card.className='operator-company-section-'+item.id;
+      if(item.id==='tasks'){
+        const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
+        const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
+        card.append(info,badge);
+      }else{
+        const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
+      }
+      list.append(card);
+    }
+    item.body.replaceChildren(list);
   }
   async function loadTab(s,item){
-    item.read?.abort();item.read=null;
+    item.read?.abort();item.read=null;item.refreshLocale=null;
     const company=s.binding?.company_id,body=item.body;
     if(!company||!linkCurrent(s,company)){body.textContent=t(company?'unavailable':'unknown');return;}
     const read=new AbortController();item.read=read;
@@ -209,7 +273,7 @@
     s.closeAction?.(false);
     s.actionPermissions=null;s.actionBinding=null;
     for(const item of s.panels.slice(1)){
-      item.read?.abort();item.read=null;item.body.replaceChildren();
+      item.read?.abort();item.read=null;item.refreshLocale=null;item.body.replaceChildren();
       item.body.removeAttribute('aria-busy');item.toolbar?.replaceChildren();
     }
     selectTab(s,'main');
@@ -667,7 +731,7 @@
     #operatorCompanyPanel [data-company-actions]{display:flex;justify-content:flex-start;margin-block-end:8px}
     #operatorCompanyPanel .operator-company-pagination{display:flex;align-items:center;justify-content:center;gap:8px;padding-block-start:10px}
     #operatorCompanyPanel .operator-company-pagination button{min-width:40px}
-    .operator-company-action-modal{box-sizing:border-box;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);width:min(700px,100%);padding:0;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 56px #0005;overflow:auto;overscroll-behavior:contain}
+    .operator-company-action-modal{position:fixed;inset:0;margin:auto;height:fit-content;box-sizing:border-box;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);width:min(700px,100%);padding:0;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 56px #0005;overflow:auto;overscroll-behavior:contain}
     .operator-company-action-modal[data-company-action-modal=credit]{width:min(400px,100%)}
     .operator-company-action-modal::backdrop{background:#071d1688}
     .operator-company-action-modal header,.operator-company-action-modal footer{display:flex;align-items:center;gap:10px}
@@ -678,14 +742,49 @@
     .operator-company-action-modal button{min-height:40px}
     .operator-company-action-modal .operator-company-action-back{min-width:40px}
     .operator-company-action-modal label{display:grid;gap:4px;font-size:.86rem;min-width:0}
-    .operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{box-sizing:border-box;width:100%;min-width:0;min-height:40px;margin:0}
+    .operator-company-action-modal :is(input,select,textarea){box-sizing:border-box;width:100%;min-width:0;min-height:40px;margin:0;padding:10px 12px;border:1px solid var(--line);border-color:color-mix(in srgb,var(--line) 55%,var(--muted) 45%);border-radius:9px;background:var(--card);color:var(--ink);font:inherit;line-height:1.4}
+    .operator-company-action-modal :is(input,select,textarea):focus{border-color:var(--brand);outline:1px solid transparent;outline-offset:2px;box-shadow:none}
+    @media(forced-colors:active){.operator-company-action-modal :is(input,select,textarea):focus{outline-color:Highlight}}
     .operator-company-action-modal textarea{min-height:150px;resize:vertical}
     .operator-company-action-modal input[readonly]{background:var(--paper);color:var(--muted)}
     .operator-company-action-modal .operator-company-action-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,.7fr) minmax(0,1fr);gap:10px}
     .operator-company-action-modal p{margin:0;overflow-wrap:anywhere}
     .operator-company-action-modal [role=status]:empty{display:none}
+    /* Match the native CRM Tasks card while keeping the credit dialog unchanged. */
+    dialog.operator-company-action-modal[data-company-action-modal=task]{width:min(600px,calc(100vw - 24px));border-radius:18px;box-shadow:0 24px 80px #00170d55}
+    .operator-company-action-modal[data-company-action-modal=task] h2{font-size:20px}
+    .operator-company-action-modal[data-company-action-modal=task] form{gap:16px;padding:18px 22px 22px}
+    .operator-company-action-modal[data-company-action-modal=task] label{gap:7px;font-size:14px}
+    .operator-company-action-modal[data-company-action-modal=task] :is(input,select,textarea){min-height:44px;padding:11px 12px}
+    .operator-company-action-modal[data-company-action-modal=task] input[readonly]{background:var(--paper);color:var(--muted)}
+    .operator-company-action-modal[data-company-action-modal=task] textarea{min-height:150px}
+    .operator-company-action-modal[data-company-action-modal=task] footer{gap:9px;margin-top:2px;padding-top:14px;border-top:1px solid var(--line)}
+    .operator-company-action-modal[data-company-action-modal=task] footer button{min-height:44px}
+    @media(max-width:639px){
+      .operator-company-action-modal[data-company-action-modal=task] form{padding:16px}
+      .operator-company-action-modal[data-company-action-modal=task] :is(input,select,textarea){font-size:16px}
+      .operator-company-action-modal[data-company-action-modal=task] footer{display:grid;grid-template-columns:minmax(0,1fr);justify-content:stretch}
+      .operator-company-action-modal[data-company-action-modal=task] footer button{width:100%}
+    }
     @media(max-width:600px){.operator-company-action-modal .operator-company-action-grid{grid-template-columns:minmax(0,1fr)}.operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{font-size:16px}}
-    #operatorCompanyPanel .operator-company-section-amount{justify-self:end;text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
+    #operatorCompanyPanel .operator-company-payment-history{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--card);font-size:.8rem;--payment-credit:#14543b;--payment-credit-bg:#e3f6ec;--payment-expense:#7c2932;--payment-expense-bg:#fcebed}
+    html[data-app-theme=dark] #operatorCompanyPanel .operator-company-payment-history{--payment-credit:#87d9af;--payment-credit-bg:#203d31;--payment-expense:#ffadb5;--payment-expense-bg:#4b282f}
+    #operatorCompanyPanel .operator-company-payment-intro{padding:9px 10px}
+    #operatorCompanyPanel .operator-company-payment-intro h3{margin:0;font-size:.91rem;line-height:1.3}
+    #operatorCompanyPanel .operator-company-payment-intro p{margin:3px 0 0;color:var(--muted);font-size:.72rem}
+    #operatorCompanyPanel .operator-company-payment-history table{box-sizing:border-box;width:100%;table-layout:fixed;border-collapse:collapse;margin:0}
+    #operatorCompanyPanel .operator-company-payment-history :is(th,td){padding:7px 8px;text-align:start;border-block-start:1px solid var(--line);background:transparent;overflow-wrap:anywhere;vertical-align:middle;line-height:1.35}
+    #operatorCompanyPanel .operator-company-payment-history th{color:var(--muted);font-weight:600;background:var(--paper)}
+    #operatorCompanyPanel .operator-company-payment-history :is(th,td):last-child{text-align:end;width:43%}
+    #operatorCompanyPanel .operator-company-payment-kind{box-sizing:border-box;display:inline-flex;align-items:center;gap:3px;max-width:100%;padding:2px 5px;border-radius:999px;background:var(--paper);color:var(--ink);font-size:.7rem;font-weight:600}
+    #operatorCompanyPanel .operator-company-payment-kind>span{min-width:0;overflow-wrap:anywhere}
+    #operatorCompanyPanel .operator-company-payment-kind svg{width:12px;height:12px;flex:none}
+    #operatorCompanyPanel .operator-company-payment-kind[data-kind=credit]{color:var(--payment-credit);background:var(--payment-credit-bg)}
+    #operatorCompanyPanel .operator-company-payment-kind[data-kind=expense]{color:var(--payment-expense);background:var(--payment-expense-bg)}
+    #operatorCompanyPanel .operator-company-payment-history :is(time,small){display:block;margin-block-start:3px;color:var(--muted);font-size:.68rem}
+    #operatorCompanyPanel .operator-company-section-amount{text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
+    #operatorCompanyPanel .operator-company-section-amount[data-positive-credit]{color:var(--payment-credit)}
+    #operatorCompanyPanel .operator-company-payment-history .operator-company-pagination{padding:8px;border-block-start:1px solid var(--line)}
     #operatorCompanyPanel [role=tabpanel]>p{overflow-wrap:anywhere}
     #operatorDialogueCompanyPicker [hidden]{display:none!important}
     #operatorDialogueCompanyPicker{display:grid;gap:5px;min-width:0}
