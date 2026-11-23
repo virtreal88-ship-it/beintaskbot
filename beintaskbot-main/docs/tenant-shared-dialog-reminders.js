@@ -221,7 +221,7 @@
   style.textContent=`
     #operatorClientSharedReminderHost[hidden],#operatorSharedReminderCreate[hidden]{display:none!important}
     #operatorClientSharedReminderHost{margin-top:4px}
-    #operatorClientCard #operatorSharedReminderCreate{width:100%;min-height:36px;text-align:start}
+    #operatorCompanyPanel #operatorSharedReminderCreate{width:100%;min-height:36px;text-align:start}
     .operator-shared-reminder-badge{border-radius:9px;padding-inline:5px;background:var(--paper);color:var(--app-warning-ink,#9b5f08);font-weight:700}
     #sharedDialogReminderModal{box-sizing:border-box;width:min(440px,calc(100% - 24px));max-height:calc(100dvh - 24px);padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);overflow:auto}
     #sharedDialogReminderModal::backdrop{background:#071d1688}

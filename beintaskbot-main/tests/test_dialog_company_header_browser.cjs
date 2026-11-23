@@ -14,10 +14,10 @@ const beta='@verified_account';
   await page.evaluate(({alpha,beta})=>{
    document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-dialogs'));
    const member={tenant_id:'synthetic',telegram_id:11,role:'owner',active:true};
-   const profile={member,capabilities:{modules:{dialogs:true,support:true},dialog_company_binding:true}};
+   const profile={member,capabilities:{modules:{dialogs:true,support:true},dialog_company_binding:true,shared_dialog_reminders:true}};
    window.tenantProfileSnapshot=profile;
    const group=(channel_id,lead_id)=>({provider:'connect',channel_id,lead_id,channel_name:'Source '+channel_id,
-    conversation_id:'same-synthetic@g.us',customer_name:'Customer Alpha',customer_kind:'group',can_send:false});
+    conversation_id:'same-synthetic@g.us',customer_name:'Customer Alpha',customer_kind:'group',can_send:false,shared_reminder:{can_schedule:true}});
    const sources=[
     {...group('a',41),assignee_name:'Chat-only person',
      handoff_active:true,handoff_assignee_name:'Transfer history person'},
@@ -27,11 +27,15 @@ const beta='@verified_account';
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
-   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.savedOpen=false;
+   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.reminderWrites=0;window.savedOpen=false;
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
     if(api==='/api/platform/me')return {ok:true,json:async()=>profile};
+    if(api.endsWith('/dialogs/shared-reminders')){
+      if(opt.method==='POST')window.reminderWrites++;
+      return ok({reminders:[]});
+    }
     if(api.endsWith('/dialogs/company-panel/preferences')){
       if(opt.method==='POST')window.savedOpen=JSON.parse(opt.body).open;
       return ok({open:window.savedOpen});
@@ -79,7 +83,7 @@ const beta='@verified_account';
     return ok({});
    };
   },{alpha,beta});
-  for(const file of ['tenant-operator-i18n.js','tenant-dialog-company.js','tenant-operator-dialogs.js'])
+  for(const file of ['tenant-operator-i18n.js','tenant-dialog-company.js','tenant-operator-dialogs.js','tenant-shared-dialog-reminders.js'])
     await page.addScriptTag({path:path.join(docs,file)});
   await page.evaluate(()=>{window.tenantI18n.setLanguage('en');return window.tenantOperator.refresh();});
   await page.locator('.operator-row').first().click();
@@ -153,7 +157,16 @@ const beta='@verified_account';
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
   assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
+  const reminder=panel.getByRole('button',{name:'Create reminder',exact:true});
+  await reminder.waitFor();
+  assert(await reminder.evaluate(button=>button.parentElement===document.querySelector('#operatorCompanyView-main').lastElementChild),
+    'rendered Company Main ends with the existing reminder control');
+  await reminder.click();
+  const schedule=page.getByRole('dialog',{name:'Create reminder',exact:true});
+  await schedule.getByRole('button',{name:'Close',exact:true}).click();
+  assert.equal(await page.evaluate(()=>window.reminderWrites),0,'opening the reminder form does not schedule');
   await companyHeader.getByRole('tab',{name:'Tasks',exact:true}).click();
+  assert(!await panel.locator('#operatorSharedReminderCreate').isVisible());
   await panel.getByRole('button',{name:'Create task',exact:true}).click();
   const taskModal=page.getByRole('dialog',{name:'New task',exact:true});
   await taskModal.waitFor();
@@ -232,6 +245,7 @@ const beta='@verified_account';
   assert.deepEqual(await pane.evaluate(corners),originalPaneCorners,'closing restores the pane corners');
   assert(!await page.locator('#chatRows').evaluate(el=>el.inert),'closing makes history interactive again');
   await page.locator('#operatorClientCardOpen').click();
+  assert.equal(await card.locator('#operatorSharedReminderCreate').count(),0,'the avatar modal has no reminder action');
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
   await caseField('status').waitFor();
   assert.equal(await caseField('status').count(),1);

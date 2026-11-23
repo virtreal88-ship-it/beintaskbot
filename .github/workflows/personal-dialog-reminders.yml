@@ -16,6 +16,7 @@ on:
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-personal-dialog-reminders.js'
       - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/docs/tenant-dialog-company.js'
       - 'beintaskbot-main/docs/tenant-dialog-composer.js'
       - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
       - 'beintaskbot-main/tests/test_personal_dialog_reminders*'

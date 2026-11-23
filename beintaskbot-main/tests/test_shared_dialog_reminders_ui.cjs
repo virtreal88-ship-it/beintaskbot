@@ -6,7 +6,7 @@ const {JSDOM}=require('jsdom');
   const dom=new JSDOM(`<body><button data-app-language>Language</button><div id="view-dialogs">
       <div id="operatorWorkspace"><div class="operator-list-pane"><div class="operator-filters"></div></div></div>
       <div id="operatorRows"><button data-open-operator="0"><span class="operator-row-indicators"></span></button></div>
-      <dialog id="operatorClientCard"><details id="companyPanel" open><summary>Company</summary><div id="operatorClientCompanyHost"></div><div id="operatorClientSharedReminderHost" hidden></div></details></dialog>
+      <dialog id="operatorCompanyPanel" open><div id="operatorClientSharedReminderHost" hidden></div></dialog>
       <details id="operatorMoreActions"><div class="operator-action-menu"></div></details>
     </div></body>`,{runScripts:'outside-only',pretendToBeVisual:true,url:'https://crm.test/app'});
   const w=dom.window,d=w.document,$=x=>d.querySelector(x);
@@ -82,7 +82,6 @@ const {JSDOM}=require('jsdom');
     const create=$('#operatorSharedReminderCreate');
     assert.equal(create.hidden,false);
     assert.equal(create.textContent,'Create reminder');
-    assert.equal($('#companyPanel').lastElementChild,create.parentElement,'creation is the last company row');
     assert.equal($('#operatorMoreActions #operatorSharedReminderCreate'),null,'creation is not in the ellipsis');
     create.click();assert($('#sharedDialogReminderModal form'),'company control opens the existing schedule form');
     $('#sharedDialogReminderModal header button').click();
@@ -127,6 +126,106 @@ const {JSDOM}=require('jsdom');
     bell.click();assert.equal(entry(),null,'the globally visible bell does not expose shared reminders after auth reset');
     await tick();
     assert.equal($('#sharedDialogReminderModal'),null);
-    console.log('PASS shared reminders in the global bell, company creation, restricted closed card, and auth reset');
+    await checkRealCompanyPlacement(390);await checkRealCompanyPlacement(1440);
+    console.log('PASS shared reminder bell, actual Company panel layout, restricted closed card, and auth reset');
   }finally{w.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+
+async function checkRealCompanyPlacement(width){
+  const read=path=>fs.readFileSync(path,'utf8');
+  const dom=new JSDOM(read('docs/tenant-app.html'),{runScripts:'outside-only',pretendToBeVisual:true,
+    url:'https://crm.test/app?view=dialogs'});
+  const w=dom.window,d=w.document,$=selector=>d.querySelector(selector),tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+  try{
+    w.HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+    w.HTMLDialogElement.prototype.close=function(){this.open=false;};
+    w.matchMedia=query=>({matches:query.includes('900px')&&width<=900,addListener(){},removeListener(){}});
+    w.alert=()=>{};
+    const member={tenant_id:'synthetic',telegram_id:33,role:'operator',active:true};
+    const profile={member,capabilities:{modules:{dialogs:true},dialog_company_binding:true,shared_dialog_reminders:true}};
+    const base={provider:'connect',lead_id:41,channel_id:'eligible-a',conversation_id:'same-client',can_send:false,
+      lifecycle_enabled:true,lifecycle:{state:'waiting',revision:1},shared_reminder:{can_schedule:true}};
+    const bound={...base,company_binding:{company_id:'company-a',company_name:'Linked company',can_manage:false}};
+    const unbound={...base,lead_id:42,channel_id:'eligible-b',company_binding:{company_id:null,can_manage:false}};
+    const denied={...base,lead_id:43,channel_id:'denied',shared_reminder:{can_schedule:false}};
+    const routes=[bound,unbound,denied],reminderPosts=[],companyCalls=[];
+    const selector='#operatorSharedReminderCreate';
+    w.tenantProfileSnapshot=profile;
+    let savedOpen=false;
+    w.fetch=async(url,opt={})=>{
+      const u=new URL(url,w.location),path=u.pathname,body=opt.body&&JSON.parse(opt.body);
+      const ok=(result)=>({ok:true,status:200,json:async()=>({success:true,result})});
+      if(path.endsWith('/dialogs/history')){
+        const route=routes.find(r=>r.channel_id===u.searchParams.get('channel_id'));
+        assert(route);assert.equal(u.searchParams.get('conversation_id'),route.conversation_id);
+        if(u.searchParams.has('support_case_only'))return ok({dialog:{...route,support_case:null}});
+        return ok({dialog:route,messages:[]});
+      }
+      if(path.endsWith('/dialogs/company-panel/preferences')){
+        if(body)savedOpen=body.open;
+        return ok({open:savedOpen});
+      }
+      if(path.endsWith('/dialogs/shared-reminders')){
+        if(body)reminderPosts.push(body);
+        return ok({reminders:[]});
+      }
+      if(path.endsWith('/operator/dialog-company')){
+        companyCalls.push(body||u.searchParams.toString());
+        if(body?.action==='company_tasks')
+          return {ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[]}})};
+        if(body?.action==='company_profile')
+          return {ok:true,json:async()=>({success:true,company_profile:{state:'available'}})};
+        const route=routes.find(r=>r.channel_id===u.searchParams.get('channel_id'));
+        return {ok:true,json:async()=>({success:true,binding:route?.company_binding??null})};
+      }
+      if(path.endsWith('/dialogs'))return ok({dialogs:[],channels:[],agents:[]});
+      return ok({});
+    };
+    for(const name of ['tenant-operator-i18n','tenant-operator-dialogs','tenant-dialog-company','tenant-shared-dialog-reminders']){
+      w.eval(read('docs/'+name+'.js'));
+    }
+    w.tenantI18n.setLanguage('en');
+    $('#view-dialogs').classList.add('active');
+    d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));
+    await w.tenantOperator.refresh();
+    for(const route of [bound,unbound]){
+      assert(await w.tenantOperator.openDialog(route));await tick();
+      $('#operatorClientCardOpen').click();
+      assert($('#operatorClientCard').open);
+      assert(!$('#operatorClientCard '+selector),'avatar modal has no scheduling control');
+      $('#operatorCancelConversationName').click();
+      const sidebar=$('#operatorCompanyPanel'),toggle=$('#operatorCompanyPanelOpen');
+      if(!sidebar.open)toggle.click();
+      assert(sidebar.open);assert(!toggle.closest('[inert]'));
+      const main=$('#operatorCompanyView-main'),create=$(selector);
+      assert(create&&!create.hidden&&!create.closest('[hidden]'));
+      assert.equal(d.querySelectorAll(selector).length,1);
+      assert.equal(main.lastElementChild,create.parentElement,'last row of the actual Company Main tab');
+      for(const tab of ['tasks','modules','history']){
+        $('#operatorCompanyTab-'+tab).click();
+        assert.equal(create.closest('[hidden]'),main,'no scheduling action in '+tab);
+      }
+      $('#operatorCompanyTab-main').click();assert(!create.closest('[hidden]'));
+      create.click();assert($('#sharedDialogReminderModal form'));assert.equal(reminderPosts.length,0);
+      if(route===bound)$('#sharedDialogReminderModal header button').click();
+    }
+    const staleForm=$('#sharedDialogReminderModal form');
+    assert(await w.tenantOperator.openDialog(denied));await tick();
+    assert(!$(selector),'server-scoped noneligible source has no reminder control');
+    assert(!$('#sharedDialogReminderModal'),'switching away closes the exact-route scheduling modal');
+    staleForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+    assert.equal(reminderPosts.length,0,'stale form and panel navigation cannot schedule');
+    const reminderOnly={member,capabilities:{modules:{dialogs:true},shared_dialog_reminders:true}};
+    w.tenantProfileSnapshot=reminderOnly;
+    d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:reminderOnly}));
+    const priorCalls=companyCalls.length;
+    assert(await w.tenantOperator.openDialog(unbound));await tick();
+    if(!$('#operatorCompanyPanel').open)$('#operatorCompanyPanelOpen').click();
+    assert($('#operatorCompanyPanel [data-company-reminder-fallback] '+selector),'eligible route without Company permission keeps scheduling');
+    assert(!$('#operatorCompanyTab-main'),'no Company privilege added for reminder-only users');
+    assert.equal(companyCalls.length,priorCalls,'no Company request added without permission');
+    d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));
+    assert(!$(selector)||$(selector).closest('[hidden]'),'auth invalidation hides the control immediately');
+  }finally{w.close();}
+}

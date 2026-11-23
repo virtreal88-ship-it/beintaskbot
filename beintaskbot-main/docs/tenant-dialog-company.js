@@ -46,10 +46,22 @@
     el.textContent=name;el.hidden=!name;
     if(name)el.title=name;else el.removeAttribute('title');
   }
+  // Keep the route-owned scheduling control available if Company data is absent.
+  function releaseReminder(s){
+    const reminder=s.reminder;
+    if(reminder?.home?.isConnected&&s.main.contains(reminder.host))reminder.home.append(reminder.host);
+    s.reminder=null;
+  }
+  function placeReminder(s,host){
+    if(s.reminder?.host===host)return;
+    releaseReminder(s);
+    const home=host?.closest('[data-company-reminder-fallback]');
+    if(home){s.reminder={host,home};s.main.append(host);}
+  }
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    releaseReminder(old);paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -703,7 +715,7 @@
     };
     s.sync();
   }
-  function mount({host,nameHost,route,member,isCurrent,onChanged}){
+  function mount({host,nameHost,reminderHost,route,member,isCurrent,onChanged}){
     if(!host?.isConnected||!route?.provider||!route?.lead_id
         ||typeof route.conversation_id!=='string'||typeof route.channel_id!=='string'
         ||(route.provider==='connect'&&(!route.channel_id||!route.conversation_id))
@@ -717,7 +729,7 @@
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
       headerHosts.set(s.section,nameHost);
-      attachTabs(s);labelPublicLink(s);s.labelProfile();s.labelTabs();
+      placeReminder(s,reminderHost);attachTabs(s);labelPublicLink(s);s.labelProfile();s.labelTabs();
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
       }else{paintHeader(s);s.sync();}
@@ -731,13 +743,14 @@
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
     const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
-    host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
+    host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);placeReminder(s,reminderHost);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
   style.textContent=`
     [data-operator-dialog-company]{min-width:0;color:var(--ink)}
     #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
+    #operatorCompanyPanel [data-company-reminder-fallback]:empty{display:none}
     #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
     dialog#operatorCompanyPanel > .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
     #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
