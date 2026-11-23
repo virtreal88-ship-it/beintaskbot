@@ -49,7 +49,7 @@
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    paintHeader(old);clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -75,39 +75,101 @@
     if(company&&linkCurrent(s,company)){s.linkCompany=company;s.linkBox.hidden=false;}
   }
   const sectionNames={
-    ru:['Задачи','Модули','История платежей'],az:['Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
-    en:['Tasks','Modules','Payment history']
+    ru:['Главная','Задачи','Модули','История платежей'],
+    az:['Əsas','Tapşırıqlar','Modullar','Ödəniş tarixçəsi'],
+    en:['Main','Tasks','Modules','Payment history']
   };
-  function mountOperatorLists(s){
-    s.lists=['company_tasks','company_modules','company_history'].map((action,index)=>{
-      const box=node('details'),title=node('summary'),body=node('div');
-      title.textContent=(sectionNames[window.tenantI18n?.language]||sectionNames.az)[index];
-      box.append(title,body);s.profileBox.append(box);
-      const list={box,body,read:null};
-      box.ontoggle=async()=>{
-        list.read?.abort();list.read=null;body.replaceChildren();
-        const company=s.binding?.company_id;
-        if(!box.open||!company||!linkCurrent(s,company))return;
-        const read=new AbortController();list.read=read;
-        const active=()=>list.read===read&&box.open&&linkCurrent(s,company);
-        body.textContent=t('loading');
-        try{
-          const {company_section:section}=await request(endpoint,s.member,
-            {...s.route,action,expected_company_id:company},true,read.signal);
-          if(!active())return;
-          if(section?.state!=='available'){
-            body.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
-          }
-          if(!Array.isArray(section.rows))throw Error();
-          body.replaceChildren(...section.rows.map(row=>node('p',row.join(' · '))));
-          if(!section.rows.length)body.textContent=profileText('empty');
-        }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
-      };
-      return list;
+  const tabs=[['main',null],['tasks','company_tasks'],['modules','company_modules'],['history','company_history']];
+  function attachTabs(s){
+    const header=s.section.closest('dialog')?.querySelector('.operator-client-panel-header');
+    if(header&&s.tabs.parentElement!==header)header.append(s.tabs);
+  }
+  function mountOperatorTabs(s){
+    s.tabs=node('div');s.tabs.className='operator-company-tabs';s.tabs.setAttribute('role','tablist');
+    s.panels=tabs.map(([id,action])=>{
+      const panel=node('div');panel.id='operatorCompanyView-'+id;panel.setAttribute('role','tabpanel');
+      const tab=button('',()=>selectTab(s,id));tab.id='operatorCompanyTab-'+id;tab.setAttribute('role','tab');
+      tab.setAttribute('aria-controls',panel.id);panel.setAttribute('aria-labelledby',tab.id);
+      if(action){panel.tabIndex=0;panel.setAttribute('aria-live','polite');}
+      s.tabs.append(tab);s.section.append(panel);
+      return {id,action,panel,tab,read:null};
     });
+    s.main=s.panels[0].panel;
+    s.labelTabs=()=>{
+      const lang=window.tenantI18n?.language||'az',names=sectionNames[lang]||sectionNames.az;
+      s.tabs.setAttribute('aria-label',t('label'));
+      s.panels.forEach(({tab},i)=>tab.textContent=names[i]);
+    };
+    s.tabs.onkeydown=event=>{
+      const index=s.panels.findIndex(item=>item.tab===event.target);
+      if(index<0||!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+      event.preventDefault();
+      const next=event.key==='Home'?0:event.key==='End'?tabs.length-1:(index+(event.key==='ArrowRight'?1:-1)+tabs.length)%tabs.length;
+      selectTab(s,s.panels[next].id);s.panels[next].tab.focus();
+    };
+    attachTabs(s);s.labelTabs();selectTab(s,'main');
+  }
+  function selectTab(s,id){
+    const changed=s.activeTab!==id;
+    s.activeTab=id;
+    for(const item of s.panels){
+      const selected=item.id===id;
+      item.tab.setAttribute('aria-selected',String(selected));item.tab.tabIndex=selected?0:-1;
+      item.panel.hidden=!selected;
+      if(!selected&&item.read){item.read.abort();item.read=null;}
+    }
+    if(changed&&id!=='main')void loadTab(s,s.panels.find(item=>item.id===id));
+  }
+  function statusTone(status){
+    const key=status.trim().toLowerCase().replace(/[-_]+/g,' ');
+    if(['done','completed','resolved','closed','approved','готово','решено','завершено','bağlanıb','tamamlanıb','həll olunub'].includes(key))return 'success';
+    if(['in progress','in work','testing','in review','в работе','тестирование','проверка','icrada','işdə','testdə'].includes(key))return 'progress';
+    if(['blocked','failed','canceled','cancelled','rejected','заблокировано','отменено','отклонено','ləğv edilib','bloklanıb','rədd edilib'].includes(key))return 'danger';
+    if(['new','open','todo','to do','pending','новая','новый','открыта','ожидает','yeni','açıq','gözləyir'].includes(key))return 'pending';
+    return 'neutral';
+  }
+  function renderSection(item,rows){
+    const fields=item.id==='modules'?1:3;
+    if(rows.some(row=>!Array.isArray(row)||row.length!==fields||row.some(field=>typeof field!=='string')))throw Error();
+    const list=node('ul');list.className='operator-company-section-list';
+    for(const row of rows){
+      const card=node('li');card.className='operator-company-section-'+item.id;
+      if(item.id==='tasks'){
+        const info=node('div');info.append(node('strong',row[1]),node('small',row[0]));
+        const badge=node('span',row[2]);badge.className='operator-company-badge';badge.dataset.tone=statusTone(row[2]);
+        card.append(info,badge);
+      }else if(item.id==='modules'){
+        const badge=node('span',row[0]);badge.className='operator-company-badge';badge.dataset.tone='neutral';card.append(badge);
+      }else{
+        const info=node('div');info.append(node('strong',row[2]),node('small',row[0]));
+        const amount=node('span',row[1]);amount.className='operator-company-section-amount';
+        card.append(info,amount);
+      }
+      list.append(card);
+    }
+    item.panel.replaceChildren(list);
+  }
+  async function loadTab(s,item){
+    const company=s.binding?.company_id;
+    if(!company||!linkCurrent(s,company)){item.panel.textContent=t(company?'unavailable':'unknown');return;}
+    const read=new AbortController();item.read=read;
+    const active=()=>item.read===read&&s.activeTab===item.id&&linkCurrent(s,company);
+    item.panel.textContent=t('loading');
+    try{
+      const {company_section:section}=await request(endpoint,s.member,
+        {...s.route,action:item.action,expected_company_id:company},true,read.signal);
+      if(!active())return;
+      if(section?.state!=='available'){
+        item.panel.textContent=['not_connected','not_linked'].includes(section?.state)?linkProblem(section.state):profileText('error');return;
+      }
+      if(!Array.isArray(section.rows))throw Error();
+      if(section.rows.length)renderSection(item,section.rows);else item.panel.textContent=profileText('empty');
+    }catch(error){if(active())item.panel.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
+    finally{if(item.read===read)item.read=null;}
   }
   function clearProfile(s){
-    for(const list of s.lists||[]){list.read?.abort();list.read=null;list.box.open=false;list.body.replaceChildren();}
+    for(const item of s.panels.slice(1)){item.read?.abort();item.read=null;item.panel.replaceChildren();}
+    selectTab(s,'main');
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
@@ -145,7 +207,7 @@
     const phone=field('phone'),balance=field('balance');
     s.registrationPhone=phone.value;s.balance=balance.value;
     s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
-    s.profileBox.append(s.profileStatus);mountOperatorLists(s);s.section.append(s.profileBox);
+    s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
     if(typeof window.ClipboardItem!=='function'||typeof navigator.clipboard?.write!=='function')return null;
@@ -206,7 +268,7 @@
     for(const [key,value] of Object.entries({x:8,y:8,width:12,height:12,rx:2}))rect.setAttribute(key,value);
     path.setAttribute('d','M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2');
     svg.append(rect,path);s.linkCopy.append(s.linkLabel,svg);labelPublicLink(s);
-    s.linkBox.append(s.linkCopy,s.linkStatus);s.section.append(s.linkBox);
+    s.linkBox.append(s.linkCopy,s.linkStatus);s.main.append(s.linkBox);
   }
   function labelPublicLink(s){
     s.linkLabel.textContent=linkText('label');s.linkCopy.title=linkText('copy');
@@ -281,7 +343,7 @@
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
     });
-    s.section.append(panel);
+    s.main.append(panel);
     let serial=0,timer=null,search=null,composing=false;
     const active=()=>current(s)&&panel.isConnected;
     s.cancelSearch=()=>{serial++;clearTimeout(timer);timer=null;search?.abort();search=null;};
@@ -374,7 +436,7 @@
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
       headerHosts.set(s.section,nameHost);
-      labelPublicLink(s);s.labelProfile();
+      attachTabs(s);labelPublicLink(s);s.labelProfile();s.labelTabs();
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
       }else{paintHeader(s);s.sync();}
@@ -388,12 +450,31 @@
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
     const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
-    section.append(value,status);host.append(section);state=s;mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
+    host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
   const style=node('style');
   style.textContent=`
-    [data-operator-dialog-company]{display:grid;gap:7px;min-width:0;color:var(--ink)}
+    [data-operator-dialog-company]{min-width:0;color:var(--ink)}
+    #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
+    #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
+    #operatorCompanyPanel .operator-client-panel-header{min-width:0;gap:6px;padding-block:8px}
+    #operatorCompanyPanelTitle{max-width:32%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
+    #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
+    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:5px;min-height:40px;padding:0 5px;background:transparent;font-size:.72rem;white-space:nowrap;overflow-wrap:normal}
+    #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
+    #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
+    #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:.8rem;overflow-wrap:anywhere}
+    #operatorCompanyPanel .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
+    #operatorCompanyPanel .operator-company-section-list small{color:var(--muted);font-size:.72rem}
+    #operatorCompanyPanel .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:.72rem;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+    #operatorCompanyPanel .operator-company-badge[data-tone=success]{color:#114d30;background:#dcf5e6;border-color:#a5d7ba}
+    #operatorCompanyPanel .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
+    #operatorCompanyPanel .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
+    #operatorCompanyPanel .operator-company-badge[data-tone=pending]{color:#644713;background:#fff0d0;border-color:#e8cca0}
+    #operatorCompanyPanel .operator-company-section-amount{justify-self:end;text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
+    #operatorCompanyPanel [role=tabpanel]>p{overflow-wrap:anywhere}
     #operatorDialogueCompanyPicker [hidden]{display:none!important}
     #operatorDialogueCompanyPicker{display:grid;gap:5px;min-width:0}
     #operatorDialogueCompanyPicker .operator-company-suggestions{display:grid;gap:6px;min-width:0;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
@@ -428,6 +509,7 @@
         String(next.tenant_id)!==String(state.member.tenant_id)||String(next.telegram_id)!==String(state.member.telegram_id))clear();
   });
   document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
+  document.addEventListener('tenant-language',()=>{if(state){state.labelTabs();state.labelProfile();labelPublicLink(state);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
   window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
     refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},

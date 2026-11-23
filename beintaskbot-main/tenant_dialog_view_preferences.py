@@ -1,4 +1,4 @@
-"""Personal dialog filters, not authorization or customer data."""
+"""Personal dialogue presentation preferences, not authorization or customer data."""
 import re
 from tenant_platform_core import _connect, _json
 from tenant_operator_access import access
@@ -67,16 +67,35 @@ def preferences(profile, value=None):
                     value = dict(DEFAULTS)
                 return _available(cur, tenant, policy, value)
             value = _available(cur, tenant, policy, value)
-            actor_key = str(actor)
-            encoded = _json(value)
-            # Atomic update to this member's single presentation subkey only.
-            cur.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by)
-                VALUES(%s::uuid,'members',jsonb_build_object(%s::text,jsonb_build_object('dialog_view',%s::jsonb)),%s)
-                ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=jsonb_set(
-                    jsonb_set(saas_tenant_workflow_policies.value,ARRAY[%s::text]::text[],
-                        COALESCE(saas_tenant_workflow_policies.value->(%s::text),'{}'::jsonb),TRUE),
-                    ARRAY[%s::text,'dialog_view']::text[],%s::jsonb,TRUE),
-                    updated_by=%s,updated_at=now()''',
-                (tenant, actor_key, encoded, actor, actor_key, actor_key, actor_key, encoded, actor))
+            _save_member_preference(cur, tenant, actor, 'dialog_view', value)
+        conn.commit()
+    return value
+
+
+def _save_member_preference(cur, tenant, actor, key, value):
+    actor_key = str(actor)
+    encoded = _json(value)
+    # Atomic update to this member's single presentation subkey only.
+    cur.execute('''INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value,updated_by)
+        VALUES(%s::uuid,'members',jsonb_build_object(%s::text,jsonb_build_object(%s::text,%s::jsonb)),%s)
+        ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=jsonb_set(
+            jsonb_set(saas_tenant_workflow_policies.value,ARRAY[%s::text]::text[],
+                COALESCE(saas_tenant_workflow_policies.value->(%s::text),'{}'::jsonb),TRUE),
+            ARRAY[%s::text,%s::text]::text[],%s::jsonb,TRUE),
+            updated_by=%s,updated_at=now()''',
+        (tenant, actor_key, key, encoded, actor, actor_key, actor_key, actor_key, key, encoded, actor))
+
+
+def company_panel_preferences(profile, value=None):
+    if value is not None and (not isinstance(value, dict) or set(value) != {'open'}
+                              or type(value['open']) is not bool):
+        raise TenantLinearError('Некорректное состояние панели компании.', 400)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor, policy = access(cur, profile, 'dialogs')
+            if value is None:
+                return {'open': policy.member_settings.get('dialog_company_panel_open') is True}
+            _save_member_preference(cur, tenant, actor, 'dialog_company_panel_open', value['open'])
         conn.commit()
     return value

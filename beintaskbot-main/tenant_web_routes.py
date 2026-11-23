@@ -169,6 +169,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
+        ('dialogs/company-panel/preferences', operator_handler(member, origin, logger, 'company_panel_preferences'), ('GET','POST')),
         ('dialogs/preferences', operator_handler(member, origin, logger, 'view_preferences'), ('GET','POST')),
         ('dialogs/presence', operator_handler(member, origin, logger, 'presence'), ('GET','POST')),
         ('profile/availability', employee_work_status_handler(member, origin, logger), ('GET','POST')),

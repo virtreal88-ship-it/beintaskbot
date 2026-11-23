@@ -89,7 +89,8 @@ function gate(){
     // App navigation retains the chat body but must restore controls removed by view exit.
     await page.evaluate(()=>window.tenantAppNavigate('tasks',false));
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
-    await companyPanel.click();await company.waitFor();await templates.waitFor();
+    await company.waitFor();await templates.waitFor();
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','saved open panel reappears on return');
     assert.equal(await input.inputValue(),'Unsaved reply');
     historyGate.release();historyGate=null;
     await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');

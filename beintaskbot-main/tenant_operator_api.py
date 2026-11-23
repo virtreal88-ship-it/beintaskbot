@@ -17,7 +17,7 @@ from tenant_read_timing import ReadTiming
 from tenant_dialog_access import sources as dialog_sources
 from tenant_dialog_lifecycle import mutate as dialog_lifecycle
 from tenant_dialog_presence import get_status as presence_status, set_status as presence_set_status
-from tenant_dialog_view_preferences import preferences as dialog_view_preferences
+from tenant_dialog_view_preferences import company_panel_preferences, preferences as dialog_view_preferences
 
 
 def handler(member_from_request,origin,logger,resource):
@@ -41,6 +41,10 @@ def handler(member_from_request,origin,logger,resource):
                 elif resource=='presence':
                     _expected(query,profile)
                     result=await asyncio.to_thread(presence_status,profile)
+                elif resource=='company_panel_preferences':
+                    if not scope_verified:
+                        _expected(query,profile)
+                    result=await asyncio.to_thread(company_panel_preferences,profile)
                 elif resource=='view_preferences':
                     result=await asyncio.to_thread(dialog_view_preferences,profile)
                 elif resource=='sources':
@@ -99,7 +103,7 @@ def handler(member_from_request,origin,logger,resource):
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'presence','view_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -109,7 +113,7 @@ def handler(member_from_request,origin,logger,resource):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 payload={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
-                result=await asyncio.to_thread(presence_set_status if resource=='presence' else dialog_view_preferences if resource=='view_preferences' else dialog_lifecycle if resource=='dialogs_lifecycle' else dialog_sources if resource=='sources' else mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
+                result=await asyncio.to_thread(presence_set_status if resource=='presence' else dialog_view_preferences if resource=='view_preferences' else company_panel_preferences if resource=='company_panel_preferences' else dialog_lifecycle if resource=='dialogs_lifecycle' else dialog_sources if resource=='sources' else mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error),

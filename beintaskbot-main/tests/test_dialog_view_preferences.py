@@ -115,3 +115,48 @@ def test_real_projection_resets_foreign_sources_and_revoked_member(operator_db, 
     operator_db.commit()
     with pytest.raises(TenantLinearError) as error: store.preferences(person)
     assert error.value.status==403
+
+
+def test_company_panel_member_tenant_preference_and_independent_filter(operator_db, monkeypatch):
+    from test_tenant_support_inbox import PROFILE as owner
+    from test_tenant_operator_workspace import employee
+    monkeypatch.setattr(store,'_connect',lambda:operator_db)
+    person=employee(operator_db,['dialogs'])
+    assert store.company_panel_preferences(person)=={'open':False}
+    for bad in ({}, {'open':1}, {'open':'true'}, {'open':True,'channel':'foreign'}):
+        with pytest.raises(TenantLinearError) as error:
+            store.company_panel_preferences(person,bad)
+        assert error.value.status==400
+    filters={**store.DEFAULTS,'lifecycle':'completed'}
+    store.preferences(person,filters)
+    assert store.company_panel_preferences(person,{'open':True})=={'open':True}
+    assert store.company_panel_preferences(person)=={'open':True}
+    assert store.preferences(person)==filters
+    assert store.company_panel_preferences(owner)=={'open':False}
+    assert store.company_panel_preferences(person,{'open':False})=={'open':False}
+    assert store.company_panel_preferences(person)=={'open':False}
+    operator_db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=%s',
+                        (person['tenant_id'],person['telegram_id']))
+    operator_db.commit()
+    for value in (None,{'open':True}):
+        with pytest.raises(TenantLinearError) as error:
+            store.company_panel_preferences(person,value)
+        assert error.value.status==403
+
+
+def test_company_panel_preference_endpoint_fences_expected_identity_and_csrf(monkeypatch):
+    import tenant_operator_api as api
+    service=Mock(return_value={'open':True})
+    monkeypatch.setattr(api,'company_panel_preferences',service)
+    handle=api.handler(Mock(return_value=PROFILE),'https://crm.test',Mock(),'company_panel_preferences')
+    identity={'expected_tenant_id':A,'expected_user_id':'17'}
+    assert asyncio.run(handle(Request('POST',{'open':True,**identity},'https://foreign.test'))).status==403
+    assert asyncio.run(handle(Request('POST',{'open':True,**identity,'expected_tenant_id':B}))).status==409
+    assert asyncio.run(handle(Request(headers={'X-Tenant-Id':B,'X-User-Id':'17'}))).status==409
+    service.assert_not_called()
+    for request in (Request(headers={'X-Tenant-Id':A,'X-User-Id':'17'}),Request('POST',{'open':True,**identity})):
+        response=asyncio.run(handle(request))
+        assert response.status==200
+        assert response.headers['Cache-Control']=='no-store'
+        assert json.loads(response.body)['result']=={'open':True}
+    service.assert_called_with(PROFILE,{'open':True})

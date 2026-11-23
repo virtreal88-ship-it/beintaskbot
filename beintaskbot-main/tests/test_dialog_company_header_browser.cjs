@@ -27,11 +27,15 @@ const beta='@verified_account';
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
-   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];
+   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.savedOpen=false;
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
     if(api==='/api/platform/me')return {ok:true,json:async()=>profile};
+    if(api.endsWith('/dialogs/company-panel/preferences')){
+      if(opt.method==='POST')window.savedOpen=JSON.parse(opt.body).open;
+      return ok({open:window.savedOpen});
+    }
     if(api==='/api/platform/operator/dialog-company'){
      if(opt.method==='POST'){
       const data=JSON.parse(opt.body);
@@ -104,6 +108,15 @@ const beta='@verified_account';
   await panel.locator('[data-company-profile]').getByText('+994501234567',{exact:true}).waitFor();
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
   assert(!await card.isVisible());
+  const companyHeader=panel.locator('.operator-client-panel-header');
+  assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payment history']);
+  assert.equal(await panel.locator('#operatorCompanyPanelClose').count(),0);
+  assert(await companyHeader.evaluate(el=>{
+    const h=el.getBoundingClientRect(),title=el.querySelector('h2').getBoundingClientRect(),tabs=el.querySelector('[role=tablist]').getBoundingClientRect();
+    return h.height<=60&&title.top>=h.top&&title.bottom<=h.bottom&&tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right;
+  }),'four tabs fit the same existing header strip');
+  assert(await page.locator('#operatorCompanyPanelOpen').evaluate(el=>!el.closest('[inert]')),'header toggle can close the mobile panel');
+  await page.waitForFunction(()=>window.savedOpen===true);
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
   const search=panel.locator('#operatorDialogueCompanySearch');
@@ -115,7 +128,9 @@ const beta='@verified_account';
   await panel.getByRole('button',{name:'Test company',exact:true}).waitFor();
   await panel.locator('h2').click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
-  await page.locator('#operatorCompanyPanelClose').click();
+  await page.locator('#operatorCompanyPanelOpen').click();
+  await page.waitForFunction(()=>window.savedOpen===false);
+  await panel.waitFor({state:'hidden'});
   await page.locator('#operatorClientCardOpen').click();
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
   await caseField('status').waitFor();
@@ -183,7 +198,7 @@ const beta='@verified_account';
   await page.locator('#operatorCompanyPanelOpen').click();
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
-  await page.locator('#operatorCompanyPanelClose').click();
+  await page.locator('#operatorCompanyPanelOpen').click();
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'tasks'}})));
   assert(!await name.isVisible()&&!(await name.textContent()),'leaving Dialogs clears company name');
   await page.evaluate(()=>{window.mode.b='denied';document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'dialogs'}}));});
