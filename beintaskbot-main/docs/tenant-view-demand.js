@@ -2,7 +2,9 @@
 (() => {
   const subscriptions = new Set(), inertNodes = new Map();
   let profile = window.tenantProfileSnapshot || null, generation = 0, bootstrap;
-  let integration = '', paused = false;
+  let integration = '', paused = false, integrationCard = null;
+  // The card address survives same-scope React remounts, never form values or a new session.
+  const clearIntegrationSecrets = () => document.querySelectorAll('#integrationMarketplaceDialog input[type=password], #integrationSettingsRepository input[type=password]').forEach(input => { input.value = ''; });
   const binding = data => (Array.isArray(data?.integrations) ? data.integrations : []).find(row => row?.provider === 'linear')
     ?.metadata?.settings?.members?.[String(data?.member?.telegram_id)];
   // Display names, timestamps and integration status are freshness, not identity.
@@ -85,6 +87,10 @@
   function apply(data) {
     if (!data?.member) return;
     const reauthorized = paused;
+    if (integrationCard && (data.member.active !== true || integrationCard.scope !== fingerprint(data))) {
+      clearIntegrationSecrets();
+      integrationCard = null;
+    }
     profile = data;
     // Keep the curtain in place until old-context roots and callbacks have been reset.
     for (const item of subscriptions) {
@@ -102,12 +108,13 @@
     }
   }
   function invalidate() {
-    generation++; profile = null; integration = '';
+    clearIntegrationSecrets();
+    generation++; profile = null; integration = ''; integrationCard = null;
     for (const item of subscriptions) { item.identity = undefined; item.visible = false; reset(item); }
     conceal(false);
   }
   document.addEventListener('tenant-profile', event => apply(event.detail));
-  document.addEventListener('tenant-auth-pending', () => { generation++; conceal(true); });
+  document.addEventListener('tenant-auth-pending', () => { generation++; conceal(true); clearIntegrationSecrets(); });
   document.addEventListener('tenant-auth-invalid', invalidate);
   document.addEventListener('tenant-view', () => { for (const item of subscriptions) refresh(item); });
   document.addEventListener('tenant-integration-panel', event => {
@@ -131,7 +138,14 @@
         .finally(() => { bootstrap = null; });
     }
   }
-  window.tenantViewDemand = {watch, newsAvailable, newsReviewAvailable, clean: selector => {
+  window.tenantViewDemand = {watch, newsAvailable, newsReviewAvailable, clearIntegrationSecrets,
+    integrationCard: () => integrationCard && {provider: integrationCard.provider, tab: integrationCard.tab},
+    rememberIntegrationCard(provider, tab) {
+      if (!provider) { integrationCard = null; return; }
+      if (!paused && profile?.member?.active === true && ['connection','settings','sync'].includes(tab))
+        integrationCard = {provider, tab, scope: fingerprint(profile)};
+    },
+    clean: selector => {
     for (const item of subscriptions) if (item.editable === selector) item.dirty = false;
   }};
 })();

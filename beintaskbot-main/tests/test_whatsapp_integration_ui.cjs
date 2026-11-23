@@ -5,12 +5,12 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
  const browser=await chromium.launch({headless:true});
  try {for(const width of [1280,390]){
   const page=await browser.newPage({viewport:{width,height:850}});
-  const member={tenant_id:'synthetic-tenant',telegram_id:11,role:'owner'};
+  const member={tenant_id:'synthetic-tenant',telegram_id:11,role:'owner',active:true};
   const me={success:true,member,integrations:[{provider:'connect',status:'connected',management_actions:{view:true}}]};
   let mutations=0,reads=0,paired=false,denied=false,stopped=false;
   await page.route('https://app.invalid/**',async route=>{
    const url=new URL(route.request().url());let value={success:true};
-   if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div id="chakra-integrations-root"></div>'});
+   if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<section id="view-integrations" class="active"><div id="chakra-integrations-root"></div></section>'});
    if(url.pathname==='/api/platform/me')value=me;
    if(url.pathname==='/api/platform/integrations/whatsapp'){
     if(denied)return route.fulfill({status:403,json:{success:false,error:'Access revoked'}});
@@ -28,7 +28,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
    return route.fulfill({json:value});
   });
   await page.goto('https://app.invalid/');
-  await page.evaluate(member=>{window.tenantI18n={language:'ru'};window.tenantProfileSnapshot={member};window.tenantViewDemand={watch:entry=>{if(entry.view==='integrations')entry.activate();}};},member);
+  await page.evaluate(member=>{window.tenantI18n={language:'ru'};window.tenantProfileSnapshot={member};window.tenantViewDemand={watch:entry=>{if(entry.view==='integrations')entry.activate();},integrationCard:()=>null,rememberIntegrationCard(){},clearIntegrationSecrets(){}};},member);
   await page.addScriptTag({path:path.join(__dirname,'../docs/tenant-chakra-ui.js'),type:'module'});
   const card=page.locator('.chakra-card__root').filter({hasText:'Один QR для каждого номера'});
   await card.getByRole('button').click();

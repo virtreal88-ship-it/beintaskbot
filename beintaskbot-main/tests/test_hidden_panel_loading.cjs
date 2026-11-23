@@ -101,6 +101,50 @@ async function marketplaceModal(){
  }finally{b.close();}
  console.log('PASS real React marketplace modal: Settings mounts legacy panels, Close restores them without writes');
 }
+async function marketplaceRemembered(){
+ const b=fixture({view:'integrations',core:true,workspace:true});const d=b.w.document;try{
+  await until(()=>d.querySelector('#chakra-integrations-root button'),'catalog');
+  const title=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  let card=title;while(card&&!card.querySelector('button'))card=card.parentElement;
+  const dialog=()=>d.querySelector('#integrationMarketplaceDialog[data-state="open"]');
+  const settings=()=>[...(dialog()?.querySelectorAll('[role="tab"]')||[])].find(n=>n.textContent==='Settings');
+  const open=async()=>{card.querySelector('button').click();await until(settings,'OpenAI card');settings().click();await until(()=>dialog()?.querySelector('#tcAiKey'),'settings panel');};
+  const draft=()=>{const key=dialog().querySelector('#tcAiKey');key.value='synthetic-transient-key';return key;};
+  await open();
+  const tabKey=draft();
+  [...dialog().querySelectorAll('[role="tab"]')].find(n=>n.textContent==='Connection').click();await until(()=>!dialog()?.querySelector('#tcAiKey'),'detached Settings panel');
+  assert.equal(tabKey.value,'','switching card tabs does not retain a secret in the repository');
+  settings().click();await until(()=>dialog()?.querySelector('#tcAiKey'),'same Settings panel reopened');
+  const hiddenKey=draft();let hidden=false;Object.defineProperty(d,'hidden',{configurable:true,get:()=>hidden});
+  hidden=true;b.emit('visibilitychange');
+  assert.equal(hiddenKey.value,'','hidden browser tab scrubs the credential synchronously');
+  assert.ok(d.documentElement.hasAttribute('data-tenant-panels-pending'),'authorization curtain remains in place while away');
+  hidden=false;b.emit('visibilitychange');
+  await until(()=>!d.documentElement.hasAttribute('data-tenant-panels-pending')&&dialog()?.querySelector('#tcAiKey'),'same card restored after clean reauthorization');
+  assert.equal(dialog().querySelector('#tcAiKey').value,'');
+  assert.equal(settings().getAttribute('aria-selected'),'true');
+  const navKey=draft();b.show('dialogs');await until(()=>!dialog(),'modal closed outside Integrations');
+  assert.equal(navKey.value,'','app navigation scrubs the credential');
+  b.advance(30001);b.show('integrations');await until(()=>dialog()?.querySelector('#tcAiKey'),'return to same card after view TTL');
+  assert.equal(settings().getAttribute('aria-selected'),'true');
+  [...dialog().querySelectorAll('button')].find(n=>n.textContent==='Close').click();await until(()=>!dialog(),'explicit Close');
+  b.show('dialogs');b.show('integrations');await tick();assert.equal(dialog(),null,'explicit Close forgets selection');
+  const currentTitle=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  card=currentTitle;while(card&&!card.querySelector('button'))card=card.parentElement;
+  await open();const downgradeKey=draft();
+  b.profile({...owner,member:{...owner.member,role:'admin'}});
+  await until(()=>!dialog(),'role change forgets the selection');
+  assert.equal(downgradeKey.value,'');
+  b.profile(owner);await tick();assert.equal(dialog(),null,'a later role restoration does not reopen the old card');
+  const nextTitle=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  card=nextTitle;while(card&&!card.querySelector('button'))card=card.parentElement;
+  await open();const logoutKey=draft();
+  b.emit('tenant-auth-invalid');await until(()=>!dialog(),'logout closes card');
+  assert.equal(logoutKey.value,'');b.profile(owner);await tick();assert.equal(dialog(),null,'new authentication never restores the old card');
+  assert.ok(b.requests.every(r=>(r.options.method||'GET')==='GET'),'card restoration is read-only');
+ }finally{b.close();}
+ console.log('PASS marketplace card retention: browser tab, app navigation/TTL, credential clearing, explicit Close, role change, logout');
+}
 async function dirtyReauthorization(){
  let holdAuth=false;
  const b=fixture({view:'integrations',core:true,workspace:true,profile:{...owner,integrations:[{provider:'connect',updated_at:'old-status'}]},hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
@@ -117,11 +161,11 @@ async function dirtyReauthorization(){
   assert.ok(b.w.document.getElementById('integrationMarketplaceDialog').hasAttribute('inert'));
   const before=b.requests.length;b.w.document.getElementById('tcAiSave').click();await tick();assert.equal(b.requests.length,before,'auth-pending blocks even programmatic DOM click dispatch');
   b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply(fresh);await tick();await tick();
-  assert.equal(b.w.document.getElementById('tcAiKey'),key);assert.equal(key.value,'synthetic-unsaved-key');assert.ok(b.w.document.querySelector('#integrationSettingsHost #tnAiPanel'),'clean sibling returns to retained portal');assert.ok(!b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
+  assert.equal(b.w.document.getElementById('tcAiKey'),key);assert.equal(key.value,'','reauthorization clears credential but keeps the card');assert.ok(b.w.document.querySelector('#integrationSettingsHost #tnAiPanel'),'clean sibling returns to retained portal');assert.ok(!b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
   [...b.w.document.querySelectorAll('#integrationMarketplaceDialog button')].find(n=>n.textContent==='Close').click();await tick();
   b.advance(30001);card.querySelector('button').click();await tick();
   [...b.w.document.querySelectorAll('#integrationMarketplaceDialog [role="tab"]')].find(n=>n.textContent==='Settings').click();await tick();
-  assert.equal(b.w.document.getElementById('tcAiKey'),key,'TTL does not discard dirty modal');assert.equal(key.value,'synthetic-unsaved-key');
+  assert.equal(b.w.document.getElementById('tcAiKey'),key,'TTL does not discard dirty modal');assert.equal(key.value,'','explicit reopening never restores a credential');
   b.w.dispatchEvent(new b.w.Event('focus'));await tick();b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply({},401);await tick();
   assert.equal(b.w.document.getElementById('tcAiKey'),null,'failed reauthorization destroys dirty retained state');
  }finally{b.close();}
@@ -157,4 +201,4 @@ async function isolation(){
   const focus=fixture({view:'integrations',core:true,reactDelay:150});try{await until(()=>focus.nonProfile().length>=5&&focus.w.document.querySelector('#chakra-integrations-root input'),'integration form after asynchronous React commit');const before=focus.nonProfile().length;assert.ok(before>=5);for(const path of ['/api/platform/connect/access','/api/platform/integrations/connect','/api/platform/integrations/connect/diagnostics','/api/platform/linear/settings','/api/platform/chat/ai/settings'])assert.ok(focus.nonProfile().some(r=>r.url===path),'permitted Integrations view loads '+path);const search=focus.w.document.querySelector('#chakra-integrations-root input');focus.resumeReact();search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await until(()=>focus.nonProfile().length>=before+5,'same-scope integration refresh');assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, common news visibility with independent reviewer revocation, same-scope focus');
 }
-(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await marketplaceRemembered();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
