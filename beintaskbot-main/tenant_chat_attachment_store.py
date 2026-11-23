@@ -66,7 +66,8 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                 # concurrent merge/rollback instead of checking only its old target.
                 require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'],
                                allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id),
-                               owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'))
+                               owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'),
+                               owner=member.get('role')=='owner')
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

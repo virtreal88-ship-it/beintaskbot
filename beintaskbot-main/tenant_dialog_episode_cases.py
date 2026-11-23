@@ -29,7 +29,7 @@ def _closed(cur,profile,channel,conversation,selected):
     tenant,actor,policy=access(cur,profile,action='update')
     require_source(cur,tenant,policy,'connect',channel,'view')
     require_source(cur,tenant,policy,'connect',channel,'update')
-    require_access(cur,tenant,actor,'connect',channel,conversation)
+    require_access(cur,tenant,actor,'connect',channel,conversation,owner=policy.profile.get('role')=='owner')
     cur.execute('''SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid
       AND channel_id=%s::uuid AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL FOR UPDATE''',
       (tenant,selected,channel,conversation,actor))
@@ -97,12 +97,12 @@ def submit(profile,payload):
         with conn.cursor() as cur:
             if not enabled(cur, profile['tenant_id']):
                 raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
-            tenant,actor,_=access(cur,profile,action='update')
+            tenant,actor,policy=access(cur,profile,action='update')
             require_create(cur,profile)
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=True)
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
             from tenant_dialog_lifecycle import require_access
-            require_access(cur,tenant,actor,'connect',channel,conversation)
+            require_access(cur,tenant,actor,'connect',channel,conversation,owner=policy.profile.get('role')=='owner')
             current=_row(cur,tenant,channel,conversation)
             if (int(current['revision']) if current else 0)!=revision:raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             selected=str(uuid.UUID(str(payload.get('episode_id') or (current or {}).get('id'))))

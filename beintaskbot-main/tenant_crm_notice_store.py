@@ -194,7 +194,8 @@ def _dialog_notice_visible(cur,member,event,row):
     route=connect_dialog_route(row)
     if not route:return False
     try:
-        require_access(cur,str(member['tenant_id']),int(member['telegram_id']),'connect',route['channel_id'],route['conversation_id'])
+        require_access(cur,str(member['tenant_id']),int(member['telegram_id']),'connect',route['channel_id'],route['conversation_id'],
+                       owner=member.get('role')=='owner')
     except TenantLinearError:return False
     return True
 
