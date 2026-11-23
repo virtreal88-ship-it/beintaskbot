@@ -213,12 +213,7 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
     expected_acceptor='Owner' if state_before=='closed' else None
     assert before['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert {'employee_id':33,'name':'Employee'} in before['dialog']['lifecycle']['transfer_targets']
-    if state_before=='dismissed':
-        with pytest.raises(TenantLinearError) as unassigned:
-            read(recipient)
-        assert unassigned.value.status==404
-    else:
-        assert read(recipient)['dialog']['archive_read_only']
+    assert read(recipient)['dialog']['archive_read_only']
     set_status(recipient,{'status':'away'})
     with pytest.raises(TenantLinearError) as unavailable:
         command('transfer',workflow['revision'],target_employee_id=33)
@@ -237,12 +232,7 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
     assert after['dialog']['lifecycle'].get('accepted_by_name')==expected_acceptor
     assert after['dialog']['lifecycle']['can_submit_case'] is False
     assert after['dialog']['can_send'] is False
-    if state_before=='dismissed':
-        with pytest.raises(TenantLinearError) as former_owner:
-            read(PROFILE)
-        assert former_owner.value.status==404
-    else:
-        assert read(PROFILE)['dialog']['archive_read_only']
+    assert read(PROFILE)['dialog']['archive_read_only']
     assert lifecycle.transfer_details(recipient,payload())['transfer']['to_name']=='Employee'
     listed=tenant_operator_dialogs.listing(recipient,lifecycle='completed')['dialogs']
     assert any(item['lead_id']==41 for item in listed)

@@ -148,7 +148,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     actor = int(policy.profile['telegram_id'])
     from tenant_dialog_presence import is_online, work_status_routing_sources
     sources = work_status_routing_sources(tenant)
-    private_states = "('accepted','dismissed')" if allow_closed_archive else "('accepted','closed','dismissed')"
+    private_states = "('accepted')" if allow_closed_archive else "('accepted','closed','dismissed')"
     ownership = f"""NOT EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state IN {private_states}
@@ -157,7 +157,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
         return f"({provider_expr}<>'connect' OR {ownership})"
     # The literals have been normalized to UUIDs in work_status_routing_sources.
     selected = ",".join(f"'{source}'" for source in sorted(sources))
-    archive = " OR dw.state='closed'" if allow_closed_archive else ''
+    archive = " OR dw.state IN ('closed','dismissed')" if allow_closed_archive else ''
     owned = f"""EXISTS(SELECT 1 FROM saas_dialog_workflows dw
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
@@ -197,7 +197,7 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
 
 
 def is_shared_archive(workflow, actor):
-    return bool(workflow and workflow.get('state') == 'closed' and workflow.get('operator_id') != int(actor))
+    return bool(workflow and workflow.get('state') in {'closed','dismissed'} and workflow.get('operator_id') != int(actor))
 
 
 def ai_blocked(cur, tenant, provider, channel, conversation):

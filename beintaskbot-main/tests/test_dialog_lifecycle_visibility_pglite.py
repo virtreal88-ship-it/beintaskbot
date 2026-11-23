@@ -54,7 +54,8 @@ def test_close_removes_queue_and_keeps_readonly_case_detail(readers):
     readers.commit()
 
 
-def test_other_employee_can_read_exact_closed_archive_and_must_start_before_work(readers,monkeypatch):
+@pytest.mark.parametrize('outcome', ['closed','dismissed'])
+def test_other_employee_can_read_exact_archive_and_must_start_before_work(readers,monkeypatch,outcome):
     recipient={'tenant_id':A,'telegram_id':33}
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     readers.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
@@ -63,20 +64,29 @@ def test_other_employee_can_read_exact_closed_archive_and_must_start_before_work
     readers.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status)
                       VALUES(%s::uuid,'connect','connected')""",(A,))
     readers.commit()
-    old=command()['lifecycle']
-    closed=command('close',old['revision'])['lifecycle']
+    if outcome=='closed':
+        old=command()['lifecycle']
+        archived=command('close',old['revision'])['lifecycle']
+    else:
+        inbound=readers.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41",
+                                (A,))[0]['id']
+        readers.commit()
+        archived=command('dismiss',0,message_id=inbound)['lifecycle']
     with pytest.raises(TenantLinearError):
         dialogs.history(recipient,'connect',41,CA,'client')
     readers.execute("""INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by)
                       VALUES(%s::uuid,%s::uuid,33,11)""",(A,CA))
     readers.commit()
     assert not dialogs.listing(recipient)['dialogs']
-    assert len(dialogs.listing(recipient,lifecycle='completed')['dialogs'])==1
+    summary=dialogs.listing(recipient,lifecycle='completed')
+    assert [(r['lifecycle']['state'],r['archive_read_only']) for r in summary['dialogs']]==[(outcome,True)]
+    assert summary['unread_count']==0
     assert not dialogs.listing(recipient,lifecycle='all',include_read_cursors=True)['dialogs']
     page=dialogs.history(recipient,'connect',41,CA,'client',include_shared_reminder_events=True)
     assert [item['body'] for item in page['messages']]==['Internet is down']
     detail=page['dialog']
     assert detail['archive_read_only'] and not detail['can_send']
+    assert detail['lifecycle'].get('accepted_by_name')==('Owner' if outcome=='closed' else None)
     assert not detail['can_use_copilot'] and not detail['can_edit_display_name']
     assert detail['lifecycle']['can_start'] and not detail['lifecycle']['can_transfer']
     assert 'completed_episodes' not in detail['lifecycle']
@@ -85,19 +95,24 @@ def test_other_employee_can_read_exact_closed_archive_and_must_start_before_work
     for blocked in (
         lambda:dialogs.history(recipient,'connect',41,CA,'client',support_case_only=True),
         lambda:dialogs.mark_read(recipient,{**payload(),'message_id':page['messages'][0]['id']}),
-        lambda:command('transfer',closed['revision'],actor=33,target_employee_id=11),
-        lambda:command('close',closed['revision'],actor=33),
+        lambda:command('transfer',archived['revision'],actor=33,target_employee_id=11),
+        lambda:command('close',archived['revision'],actor=33),
+        lambda:command('dismiss',archived['revision'],actor=33,message_id=page['messages'][0]['id']),
     ):
         with pytest.raises(TenantLinearError):
             blocked()
-    started=command('start',closed['revision'],actor=33)['lifecycle']
-    assert started['id']!=old['id']
+    started=command('start',archived['revision'],actor=33)['lifecycle']
+    assert started['id']!=archived['id']
     assert dialogs.history(recipient,'connect',41,CA,'client')['dialog']['can_send']
     with pytest.raises(TenantLinearError) as prior:
         dialogs.history(PROFILE,'connect',41,CA,'client')
     assert prior.value.status==404
-    assert readers.execute("SELECT operator_id,closed_at FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid",
-                           (A,old['id']))[0]['operator_id']==11
+    previous=readers.execute("SELECT operator_id,closed_at FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid",
+                             (A,archived['id']))
+    if outcome=='closed':
+        assert previous[0]['operator_id']==11 and previous[0]['closed_at']
+    else:
+        assert not previous, 'No reply needed was never an accepted historical episode'
 
 
 def test_group_history_does_not_union_other_operators_channel(readers):
