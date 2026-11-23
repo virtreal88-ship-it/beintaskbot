@@ -15,10 +15,10 @@ function fixture({view='dialogs',profile=owner,ref,core=false,workspace=false,ho
  w.Headers=Headers;w.Response=Response;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});
  w.ResizeObserver=class{observe(){}unobserve(){}disconnect(){}};w.scrollTo=()=>{};w.HTMLElement.prototype.scrollIntoView=()=>{};w.Date.now=()=>clock;
  w.tenantI18n={language:'en',t:k=>k,source:t=>t};w.confirm=()=>false;w.alert=message=>errors.push(new Error(message));
- const result=url=>url==='/api/platform/me'?current:url.includes('/news?')?{tenant_id:current.member.tenant_id,user_id:current.member.telegram_id,news:[{id:'synthetic-news',title:'Synthetic '+current.member.tenant_id,status:'pending',summary:'Fixture',project_name:'Fixture'}]}:url.includes('beinsystems')?{integration:{}}:url.includes('linear/settings')?{members:[],settings:{},status:'not_connected'}:url.includes('/companies')?{companies:[]}:url.includes('/news/telegram')?{chat_id:'@synthetic',timezone:'Asia/Baku',start:'09:00',end:'18:00',interval_minutes:30}:{};
+ const result=url=>url==='/api/platform/me'?current:url.includes('/news?')?{tenant_id:current.member.tenant_id,user_id:current.member.telegram_id,news:[{id:'synthetic-news',title:'Synthetic '+current.member.tenant_id,status:'pending',summary:'Fixture',project_name:'Fixture'}]}:url.includes('/integrations/whatsapp?')?{result:{channels:[]}}:url.includes('beinsystems-operator')?{integration:{status:'connected',connected:true,connected_login:'verified@example.test'}}:url.includes('beinsystems')?{integration:{}}:url.includes('linear/settings')?{members:[],settings:{},status:'not_connected'}:url.includes('/companies')?{companies:[]}:url.includes('/news/telegram')?{chat_id:'@synthetic',timezone:'Asia/Baku',start:'09:00',end:'18:00',interval_minutes:30}:{};
  w.fetch=(url,options={})=>new Promise(resolve=>{const request={url:String(url),options,reply:(data=result(String(url)),status=200)=>resolve(new Response(JSON.stringify({success:status<400,...data}),{status,headers:{'Content-Type':'application/json'}}))};requests.push(request);if(!hold(request))request.reply();});
  const run=name=>w.eval(read('docs/'+name,ref));run('tenant-request-coordinator.js');if(!ref)run('tenant-view-demand.js');
- for(const name of ['tenant-linear-rules.js','tenant-shared-integration-settings.js','tenant-linear-settings.js','tenant-news.js','tenant-news-ai-settings.js','tenant-news-telegram-settings.js','tenant-chat-ai-settings.js'])run(name);
+ for(const name of ['tenant-linear-rules.js','tenant-shared-integration-settings.js','tenant-linear-settings.js','tenant-news.js','tenant-news-ai-settings.js','tenant-news-telegram-settings.js','tenant-chat-ai-settings.js','tenant-beinsystems-operator-settings.js'])run(name);
  if(workspace)run('tenant-workspace.js');
  if(core)w.eval([...w.document.scripts].find(s=>s.textContent.includes('const savedView=sessionStorage')).textContent);
  if(reactDelay){const nativeTimeout=w.setTimeout.bind(w);w.setTimeout=(callback,delay,...args)=>nativeTimeout(callback,delay===0?reactDelay:delay,...args);}
@@ -101,6 +101,126 @@ async function marketplaceModal(){
  }finally{b.close();}
  console.log('PASS real React marketplace modal: Settings mounts legacy panels, Close restores them without writes');
 }
+async function marketplaceRemembered(){
+ const b=fixture({view:'integrations',core:true,workspace:true});const d=b.w.document;try{
+  await until(()=>d.querySelector('#chakra-integrations-root button'),'catalog');
+  const title=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  let card=title;while(card&&!card.querySelector('button'))card=card.parentElement;
+  const dialog=()=>d.querySelector('#integrationMarketplaceDialog[data-state="open"]');
+  const settings=()=>[...(dialog()?.querySelectorAll('[role="tab"]')||[])].find(n=>n.textContent==='Settings');
+  const open=async()=>{card.querySelector('button').click();await until(settings,'OpenAI card');settings().click();await until(()=>dialog()?.querySelector('#tcAiKey'),'settings panel');};
+  const draft=()=>{const key=dialog().querySelector('#tcAiKey');key.value='synthetic-transient-key';return key;};
+  await open();
+  const tabKey=draft();
+  [...dialog().querySelectorAll('[role="tab"]')].find(n=>n.textContent==='Connection').click();await until(()=>!dialog()?.querySelector('#tcAiKey'),'detached Settings panel');
+  assert.equal(tabKey.value,'','switching card tabs does not retain a secret in the repository');
+  settings().click();await until(()=>dialog()?.querySelector('#tcAiKey'),'same Settings panel reopened');
+  const hiddenKey=draft();let hidden=false;Object.defineProperty(d,'hidden',{configurable:true,get:()=>hidden});
+  hidden=true;b.emit('visibilitychange');
+  assert.equal(hiddenKey.value,'','hidden browser tab scrubs the credential synchronously');
+  assert.ok(d.documentElement.hasAttribute('data-tenant-panels-pending'),'authorization curtain remains in place while away');
+  hidden=false;b.emit('visibilitychange');
+  await until(()=>!d.documentElement.hasAttribute('data-tenant-panels-pending')&&dialog()?.querySelector('#tcAiKey'),'same card restored after clean reauthorization');
+  assert.equal(dialog().querySelector('#tcAiKey').value,'');
+  assert.equal(settings().getAttribute('aria-selected'),'true');
+  const navKey=draft();b.show('dialogs');await until(()=>!dialog(),'modal closed outside Integrations');
+  assert.equal(navKey.value,'','app navigation scrubs the credential');
+  b.advance(30001);b.show('integrations');await until(()=>dialog()?.querySelector('#tcAiKey'),'return to same card after view TTL');
+  assert.equal(settings().getAttribute('aria-selected'),'true');
+  [...dialog().querySelectorAll('button')].find(n=>n.textContent==='Close').click();await until(()=>!dialog(),'explicit Close');
+  b.show('dialogs');b.show('integrations');await tick();assert.equal(dialog(),null,'explicit Close forgets selection');
+  const currentTitle=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  card=currentTitle;while(card&&!card.querySelector('button'))card=card.parentElement;
+  await open();const downgradeKey=draft();
+  b.profile({...owner,member:{...owner.member,role:'admin'}});
+  await until(()=>!dialog(),'role change forgets the selection');
+  assert.equal(downgradeKey.value,'');
+  b.profile(owner);await tick();assert.equal(dialog(),null,'a later role restoration does not reopen the old card');
+  const nextTitle=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='OpenAI');
+  card=nextTitle;while(card&&!card.querySelector('button'))card=card.parentElement;
+  await open();const logoutKey=draft();
+  b.emit('tenant-auth-invalid');await until(()=>!dialog(),'logout closes card');
+  assert.equal(logoutKey.value,'');b.profile(owner);await tick();assert.equal(dialog(),null,'new authentication never restores the old card');
+  assert.ok(b.requests.every(r=>(r.options.method||'GET')==='GET'),'card restoration is read-only');
+ }finally{b.close();}
+ console.log('PASS marketplace card retention: browser tab, app navigation/TTL, credential clearing, explicit Close, role change, logout');
+}
+async function operatorCredentialsNeverRetained(){
+ const profile={...owner,integrations:[{provider:'beinsystems_operator',status:'connected',updated_at:'old-status'}]};
+ let holdAuth=false;
+ const b=fixture({view:'integrations',profile,core:true,workspace:true,hold:r=>holdAuth&&r.url==='/api/platform/me'});const d=b.w.document;try{
+  await until(()=>d.querySelector('#chakra-integrations-root button'),'Operator catalog');
+  let card=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='BeinSystems Operator');
+  while(card&&!card.querySelector('button'))card=card.parentElement;
+  card.querySelector('button').click();
+  const dialog=()=>d.querySelector('#integrationMarketplaceDialog[data-state="open"]');
+  const form=()=>dialog()?.querySelector('[data-operator-auth-form]');
+  const draft=()=>{
+   const auth=form(),login=auth.querySelector('[data-operator-login]'),password=auth.querySelector('[data-operator-password]'),eye=auth.querySelector('[data-show-password]');
+   login.value='synthetic-draft@example.test';password.value='synthetic-draft-password';
+   password.dispatchEvent(new b.w.Event('input',{bubbles:true}));
+   eye.click();assert.equal(password.type,'text');assert.equal(eye.getAttribute('aria-pressed'),'true');
+   return {auth,login,password,eye};
+  };
+  const assertCleared=({login,password,eye})=>{
+   assert.equal(login.value,'');assert.equal(password.value,'');assert.equal(password.type,'password');
+   assert.equal(eye.getAttribute('aria-pressed'),'false');assert.equal(eye.getAttribute('aria-label'),'Показать пароль');
+   assert.equal(eye.querySelector('[data-eye-slash]').getAttribute('opacity'),'0');
+  };
+  await until(form,'actual Operator credential panel');
+  assert.equal(dialog().querySelector('[data-connected-login]').textContent,'verified@example.test');
+  const profileReadCount=()=>b.requests.filter(r=>r.url==='/api/platform/me').length;
+  const browserDraft=draft(),before=profileReadCount();holdAuth=true;b.w.dispatchEvent(new b.w.Event('focus'));
+  assertCleared(browserDraft);assert.ok(d.documentElement.hasAttribute('data-tenant-panels-pending'));
+  await until(()=>profileReadCount()>before,'fresh authentication');
+  const refreshed={...profile,integrations:[{...profile.integrations[0],updated_at:'changed-status'}]};
+  holdAuth=false;b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply(refreshed);
+  await until(()=>!d.documentElement.hasAttribute('data-tenant-panels-pending')&&form(),'same authorization returned');
+  assert.equal(form(),browserDraft.auth,'dirty retained Operator form is not reset just to scrub credentials');
+  assertCleared(browserDraft);
+  assert.equal(dialog().querySelector('[data-connected-login]').textContent,'verified@example.test','saved identity label unaffected');
+  const appDraft=draft();b.show('dialogs');assertCleared(appDraft);
+  await until(()=>!dialog(),'left Integrations');
+  b.show('integrations');await until(form,'Operator card restored automatically');
+  assertCleared({login:form().querySelector('[data-operator-login]'),password:form().querySelector('[data-operator-password]'),eye:form().querySelector('[data-show-password]')});
+  const closedDraft=draft();[...dialog().querySelectorAll('button')].find(n=>n.textContent==='Close').click();assertCleared(closedDraft);
+  await until(()=>!dialog(),'Operator card explicitly closed');
+  assert.deepEqual(b.requests.filter(r=>r.options.method&&r.options.method!=='GET'&&r.url!=='/api/platform/operator/employee-users').map(r=>[r.options.method,r.url]),[],'return does not submit the Operator login; employee directory lookup is read-only');
+ }finally{b.close();}
+ console.log('PASS revealed Operator login/password scrub on dirty reauthorization, app return and explicit close');
+}
+async function nativeWhatsAppReturn(){
+ let holdAuth=false;
+ const b=fixture({view:'integrations',core:true,workspace:true,hold:r=>holdAuth&&r.url==='/api/platform/me'});const d=b.w.document;try{
+  await until(()=>d.querySelector('#chakra-integrations-root button'),'WhatsApp catalog');
+  let card=[...d.querySelectorAll('#chakra-integrations-root *')].find(n=>n.childElementCount===0&&n.textContent==='Ватсапп');
+  while(card&&!card.querySelector('button'))card=card.parentElement;
+  card.querySelector('button').click();
+  const dialog=()=>d.querySelector('#integrationMarketplaceDialog[data-state="open"]');
+  const openPair=()=>[...(dialog()?.querySelectorAll('button')||[])].find(n=>n.textContent==='Подключить номер');
+  await until(openPair,'native WhatsApp controls');
+  const oldPanel=dialog().querySelector('[data-whatsapp-integration]');openPair().click();
+  const phone=()=>dialog()?.querySelector('input[aria-label="Номер WhatsApp"]');
+  const name=()=>dialog()?.querySelector('input[aria-label="Название источника"]');
+  await until(phone,'native pairing form');
+  const fill=(input,value)=>{Object.getOwnPropertyDescriptor(b.w.HTMLInputElement.prototype,'value').set.call(input,value);input.dispatchEvent(new b.w.Event('input',{bubbles:true}));};
+  fill(phone(),'+19990000001');fill(name(),'Synthetic unsaved source');
+  await until(()=>[...dialog().querySelectorAll('button')].some(n=>n.textContent==='Сгенерировать QR'&&!n.disabled),'dirty native pairing form');
+  const profileReadCount=()=>b.requests.filter(r=>r.url==='/api/platform/me').length,before=profileReadCount();
+  holdAuth=true;b.w.dispatchEvent(new b.w.Event('focus'));
+  assert.ok(d.documentElement.hasAttribute('data-tenant-panels-pending'));
+  await until(()=>!phone(),'pending reauthorization hides native pairing draft');
+  await until(()=>profileReadCount()>before,'native authorization verification');
+  holdAuth=false;b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply(owner);
+  await until(()=>!d.documentElement.hasAttribute('data-tenant-panels-pending')&&openPair(),'same card returns with usable clean controls');
+  assert.notEqual(dialog().querySelector('[data-whatsapp-integration]'),oldPanel,'the native provider restarts in the verified scope');
+  openPair().click();await until(phone,'new pairing form opened');
+  assert.equal(phone().value,'');assert.equal(name().value,'');
+  assert.equal(dialog().querySelector('img[alt="QR подключения WhatsApp"]'),null);
+  assert.ok(b.requests.every(r=>(r.options.method||'GET')==='GET'),'return never generates or starts pairing');
+ }finally{b.close();}
+ console.log('PASS native WhatsApp reauthorization restores same card without pairing draft or writes');
+}
 async function dirtyReauthorization(){
  let holdAuth=false;
  const b=fixture({view:'integrations',core:true,workspace:true,profile:{...owner,integrations:[{provider:'connect',updated_at:'old-status'}]},hold:r=>holdAuth&&r.url==='/api/platform/me'});try{
@@ -117,11 +237,11 @@ async function dirtyReauthorization(){
   assert.ok(b.w.document.getElementById('integrationMarketplaceDialog').hasAttribute('inert'));
   const before=b.requests.length;b.w.document.getElementById('tcAiSave').click();await tick();assert.equal(b.requests.length,before,'auth-pending blocks even programmatic DOM click dispatch');
   b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply(fresh);await tick();await tick();
-  assert.equal(b.w.document.getElementById('tcAiKey'),key);assert.equal(key.value,'synthetic-unsaved-key');assert.ok(b.w.document.querySelector('#integrationSettingsHost #tnAiPanel'),'clean sibling returns to retained portal');assert.ok(!b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
+  assert.equal(b.w.document.getElementById('tcAiKey'),key);assert.equal(key.value,'','reauthorization clears credential but keeps the card');assert.ok(b.w.document.querySelector('#integrationSettingsHost #tnAiPanel'),'clean sibling returns to retained portal');assert.ok(!b.w.document.documentElement.hasAttribute('data-tenant-panels-pending'));
   [...b.w.document.querySelectorAll('#integrationMarketplaceDialog button')].find(n=>n.textContent==='Close').click();await tick();
   b.advance(30001);card.querySelector('button').click();await tick();
   [...b.w.document.querySelectorAll('#integrationMarketplaceDialog [role="tab"]')].find(n=>n.textContent==='Settings').click();await tick();
-  assert.equal(b.w.document.getElementById('tcAiKey'),key,'TTL does not discard dirty modal');assert.equal(key.value,'synthetic-unsaved-key');
+  assert.equal(b.w.document.getElementById('tcAiKey'),key,'TTL does not discard dirty modal');assert.equal(key.value,'','explicit reopening never restores a credential');
   b.w.dispatchEvent(new b.w.Event('focus'));await tick();b.requests.filter(r=>r.url==='/api/platform/me').at(-1).reply({},401);await tick();
   assert.equal(b.w.document.getElementById('tcAiKey'),null,'failed reauthorization destroys dirty retained state');
  }finally{b.close();}
@@ -157,4 +277,4 @@ async function isolation(){
   const focus=fixture({view:'integrations',core:true,reactDelay:150});try{await until(()=>focus.nonProfile().length>=5&&focus.w.document.querySelector('#chakra-integrations-root input'),'integration form after asynchronous React commit');const before=focus.nonProfile().length;assert.ok(before>=5);for(const path of ['/api/platform/connect/access','/api/platform/integrations/connect','/api/platform/integrations/connect/diagnostics','/api/platform/linear/settings','/api/platform/chat/ai/settings'])assert.ok(focus.nonProfile().some(r=>r.url===path),'permitted Integrations view loads '+path);const search=focus.w.document.querySelector('#chakra-integrations-root input');focus.resumeReact();search.value='OpenAI';search.dispatchEvent(new focus.w.Event('input',{bubbles:true}));focus.w.dispatchEvent(new focus.w.Event('focus'));await until(()=>focus.nonProfile().length>=before+5,'same-scope integration refresh');assert.equal(focus.nonProfile().length,before+5,'same-scope reauthorization reloads visible integration status');focus.profile({...owner,member:{...owner.member,tenant_id:'tenant-b'},account:{first_name:'Synthetic B'}});await tick();assert.ok(!focus.w.document.body.textContent.includes('Synthetic A'));}finally{focus.close();}
  console.log('PASS tenant/user switch, delayed responses, logout, common news visibility with independent reviewer revocation, same-scope focus');
 }
-(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});
+(async()=>{const index=process.argv.indexOf('--baseline-ref');if(index>=0)return measurement(process.argv[index+1]);await measurement();await profileShape();await delayedBootstrap();await navigation();await integrations();await marketplaceModal();await marketplaceRemembered();await operatorCredentialsNeverRetained();await nativeWhatsAppReturn();await dirtyReauthorization();await isolation();})().catch(e=>{console.error(e);process.exitCode=1;});

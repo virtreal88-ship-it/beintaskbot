@@ -1394,8 +1394,40 @@ function LegacyIntegrationMarketplace() {
 function IntegrationMarketplace() {
   const [language, setLanguage] = useState(window.tenantI18n?.language || "az");
   const [profile, setProfile] = useState(null);
-  const [selected, setSelected] = useState(null);
-  const [tab, setTab] = useState("connection");
+  const demand = window.tenantViewDemand;
+  const [selection, setSelection] = useState(() => demand.integrationCard());
+  const [providerAuthGeneration, setProviderAuthGeneration] = useState(0);
+  const [active, setActive] = useState(() => document.getElementById("view-integrations")?.classList.contains("active"));
+  const tab = selection?.tab || "connection";
+  const clearSecrets = () => {
+    demand.clearIntegrationSecrets();
+    setBeinForm(form => form.token ? {...form, token: ""} : form);
+  };
+  const close = () => {
+    clearSecrets();
+    demand.rememberIntegrationCard(null);
+    setSelection(null);
+  };
+  const select = (provider, nextTab) => {
+    demand.rememberIntegrationCard(provider, nextTab);
+    setSelection({provider, tab: nextTab});
+  };
+  useEffect(() => {
+    const viewChanged = () => {
+      const inView = document.getElementById("view-integrations")?.classList.contains("active");
+      if (!inView) clearSecrets();
+      setActive(inView);
+    };
+    const reauthorized = () => setProviderAuthGeneration(generation => generation + 1);
+    document.addEventListener("tenant-view", viewChanged);
+    document.addEventListener("tenant-auth-pending", clearSecrets);
+    document.addEventListener("tenant-integration-reauthorized", reauthorized);
+    return () => {
+      document.removeEventListener("tenant-view", viewChanged);
+      document.removeEventListener("tenant-auth-pending", clearSecrets);
+      document.removeEventListener("tenant-integration-reauthorized", reauthorized);
+    };
+  }, []);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("Hamısı");
   const [details, setDetails] = useState({});
@@ -1492,34 +1524,6 @@ function IntegrationMarketplace() {
   useEffect(() => {
     load();
   }, []);
-  const managementTab = tab === "sync" ? "settings" : tab;
-  useEffect(() => {
-    if (
-      !selected || selected.id === "whatsapp" ||
-      (managementTab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
-      (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
-    )
-      return;
-    const detail = {
-      provider: selected.id,
-      hostId: "integrationSettingsHost",
-      open: true,
-    };
-    const frame = requestAnimationFrame(() =>
-      document.dispatchEvent(
-        new CustomEvent("tenant-integration-panel", { detail }),
-      ),
-    );
-    return () => {
-      cancelAnimationFrame(frame);
-      document.dispatchEvent(
-        new CustomEvent("tenant-integration-panel", {
-          detail: { ...detail, open: false },
-        }),
-      );
-    };
-  }, [selected?.id, managementTab, owner]);
-
   const localeCopy = {
     ru: {
       all: "Все",
@@ -1583,6 +1587,37 @@ function IntegrationMarketplace() {
       ...item,
       ...(item.copy?.[language] || item.copy?.en),
     }));
+  const selected = active && profile?.member?.active === true && window.tenantPageAllowed?.("integrations") !== false
+    ? items.find(item => item.id === selection?.provider) || null : null;
+  const setTab = nextTab => { if (selected && tab !== nextTab) { clearSecrets(); select(selected.id, nextTab); } };
+  const managementTab = tab === "sync" ? "settings" : tab;
+  useEffect(() => {
+    if (
+      !selected || selected.id === "whatsapp" ||
+      (managementTab !== "settings" && !window.tenantSharedIntegrations?.scoped(profile, selected.id)) ||
+      (selected.id === "connect" && !owner && !window.tenantSharedIntegrations?.scoped(profile, selected.id))
+    )
+      return;
+    const detail = {
+      provider: selected.id,
+      hostId: "integrationSettingsHost",
+      open: true,
+    };
+    const frame = requestAnimationFrame(() =>
+      document.dispatchEvent(
+        new CustomEvent("tenant-integration-panel", { detail }),
+      ),
+    );
+    return () => {
+      cancelAnimationFrame(frame);
+      document.dispatchEvent(
+        new CustomEvent("tenant-integration-panel", {
+          detail: { ...detail, open: false },
+        }),
+      );
+    };
+  }, [selected?.id, managementTab, owner]);
+
   const categories = [
     tx("all"),
     ...new Set(items.map((item) => item.category)),
@@ -1596,8 +1631,8 @@ function IntegrationMarketplace() {
         .includes(query.toLocaleLowerCase()),
   );
   const choose = (item) => {
-    setSelected(item);
-    setTab(item.id === "connect" || (item.id === "beinsystems_operator" && profile?.member?.role === "owner")
+    clearSecrets();
+    select(item.id, item.id === "connect" || (item.id === "beinsystems_operator" && profile?.member?.role === "owner")
       ? "settings" : "connection");
     setError("");
     setNotice("");
@@ -1808,7 +1843,7 @@ function IntegrationMarketplace() {
       {!rows.length && <Empty>{tx("empty")}</Empty>}
       <Dialog.Root
         open={!!selected}
-        onOpenChange={(event) => !event.open && setSelected(null)}
+        onOpenChange={(event) => !event.open && active && close()}
         closeOnInteractOutside={false}
         size={{ mdDown: "full", md: "xl" }}
         placement="center"
@@ -1878,7 +1913,7 @@ function IntegrationMarketplace() {
                     </Box>
                   )}
                   <Dialog.Body data-kommo-pane={selected.id === "kommo" ? tab : undefined} p={{ base: "5", md: "6" }} overflowY="auto">
-                    {selected.id === "whatsapp" ? <WhatsAppIntegration profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{!["connect","beinsystems_operator"].includes(selected.id) && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{selected.id !== "beinsystems_operator" && !Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
+                    {selected.id === "whatsapp" ? <WhatsAppIntegration key={providerAuthGeneration} profile={profile} onStatus={connected=>setDetails(d=>({...d,whatsapp:{connected}}))}/> : window.tenantSharedIntegrations?.scoped(profile, selected.id) ? (<Box>{!["connect","beinsystems_operator"].includes(selected.id) && <Text>Şirkətin ortaq bağlantısı · {state.label || "not_connected"}</Text>}{selected.id !== "beinsystems_operator" && !Object.values(window.tenantSharedIntegrations.row(profile, selected.id).management_actions).some(Boolean) && <Text>Yalnız bağlantı statusu görünür.</Text>}<Box id="integrationSettingsHost" className="integration-settings-host" /></Box>) : tab === "connection" && (
                       <Stack gap="4">
                         {!owner && (
                           <Box
@@ -2177,7 +2212,7 @@ function IntegrationMarketplace() {
                     )}
                   </Dialog.Body>
                   <Dialog.Footer borderTopWidth="1px">
-                    <Button variant="outline" onClick={() => setSelected(null)}>
+                    <Button variant="outline" onClick={close}>
                       {tx("close")}
                     </Button>
                   </Dialog.Footer>
@@ -2788,7 +2823,10 @@ for (const [view, host, component] of [
     view, host, editable: host === "chakra-notification-settings-root" ? "#chakra-notification-settings-root" : host === "chakra-settings-root" ? "#chakra-settings-root" : "#integrationMarketplaceDialog",
     excludeEditable: ".integration-modal-panel", preserveProviderDrafts: view === "integrations",
     activate: () => mount(host, component),
-    reset: () => { roots.get(host)?.unmount(); roots.delete(host); },
+    reset: () => {
+      if (view === "integrations") window.tenantViewDemand.clearIntegrationSecrets();
+      roots.get(host)?.unmount(); roots.delete(host);
+    },
   });
 }
 document.documentElement.dataset.chakraUi = "ready";

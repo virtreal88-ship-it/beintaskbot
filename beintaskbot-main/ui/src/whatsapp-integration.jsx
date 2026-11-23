@@ -36,7 +36,7 @@ export function WhatsAppIntegration({profile, onStatus}) {
   };
   useEffect(()=>{
     alive.current=true;setInvalid(false);
-    const invalidate=()=>{alive.current=false;generation.current++;setPair(null);setChannels([]);setInvalid(true);for(const c of controllers.current)c.abort();};
+    const invalidate=()=>{alive.current=false;generation.current++;setPair(null);setForm(false);setPhone('');setName('');setConfirm(null);setBusy(false);setChannels([]);setInvalid(true);for(const c of controllers.current)c.abort();};
     const profileChanged=()=>{const fresh=window.tenantProfileSnapshot?.member;if(fresh && (String(fresh.tenant_id)!==String(tenant)||String(fresh.telegram_id)!==String(actor)||fresh.role!=='owner'))invalidate();};
     document.addEventListener('tenant-auth-invalid',invalidate);document.addEventListener('tenant-auth-pending',invalidate);document.addEventListener('tenant-profile',profileChanged);
     if(owner)load().catch(e=>{if(alive.current)setError(e.message);});
