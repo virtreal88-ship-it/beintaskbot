@@ -281,6 +281,21 @@ def accept_quoted_lookup(item,message_id):
         conn.commit()
 
 
+def read_send_status(session, lead_id, request_id):
+    """Read an exact, owned send receipt, without reserving or dispatching."""
+    lead_id = int(lead_id)
+    if not 0 < lead_id < 2**63:
+        raise ValueError('Invalid lead')
+    request_id = str(uuid.UUID(str(request_id)))
+    with _connect() as conn, conn.cursor() as cur:
+        profile, _, _ = authority(cur, session, lead_id)
+        cur.execute("""SELECT state FROM saas_chat_send_receipts
+          WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s AND request_id=%s::uuid""",
+          (profile['tenant_id'], profile['telegram_id'], lead_id, request_id))
+        row = cur.fetchone()
+    return {'state': row['state'] if row else 'unavailable'}
+
+
 def read_quoted_receipt(session,lead_id,request_id=None):
     """Read an existing own receipt only. No reservation or send transition."""
     from tenant_connect_transport import quoted_once_scope

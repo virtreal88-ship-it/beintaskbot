@@ -53,4 +53,33 @@ class Api(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['data']['keep_request'])
 
 
+    async def test_status_checks_own_request_without_invoking_send(self):
+        saved = Mock(return_value={'state': 'accepted'})
+        with unittest.mock.patch('tenant_chat_send_store.read_send_status', saved):
+            status = self.module.send_status_handler(lambda request: SESSION, Mock())
+            query = {'expected_tenant_id': TENANT, 'expected_user_id': '20',
+                     'lead_id': '7', 'request_id': INPUT['request_id']}
+            result = await status(SimpleNamespace(query=query))
+            self.assertEqual(result['data'], {'success': True, 'state': 'accepted'})
+            self.assertEqual(result['headers']['Cache-Control'], 'no-store')
+            saved.assert_called_once_with(SESSION, '7', INPUT['request_id'])
+            forbidden = await status(SimpleNamespace(query={**query, 'expected_user_id': '21'}))
+            self.assertEqual(forbidden['status'], 409)
+            saved.assert_called_once()
+        self.run.assert_not_awaited()
+
+    async def test_unconfirmed_provider_status_does_not_accept_quote_receipt(self):
+        item = {'key': (TENANT, 20, INPUT['request_id']), 'credentials': {}, 'message_id': None,
+                'quote': 'PROVIDER_QUOTE', 'receipt_state': 'unknown', 'connection': ['connect', 'source']}
+        with (unittest.mock.patch('tenant_chat_send_store.read_quoted_receipt', return_value=item),
+              unittest.mock.patch('tenant_chat_send_store.accept_quoted_lookup') as accept,
+              unittest.mock.patch('tenant_connect_transport.quoted_delivery_status', return_value={
+                  'message_id': 'reserved-at-provider', 'provider_accepted': False, 'delivery_state': 'unknown'})):
+            receipt = self.module.receipt_handler(lambda request: SESSION, Mock())
+            result = await receipt(SimpleNamespace(query={'expected_tenant_id': TENANT, 'expected_user_id': '20',
+                                                           'lead_id': '7', 'request_id': INPUT['request_id']}))
+        self.assertEqual(result['data']['state'], 'unknown')
+        accept.assert_not_called()
+
+
 if __name__ == '__main__': unittest.main()

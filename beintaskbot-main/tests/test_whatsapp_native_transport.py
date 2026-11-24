@@ -52,6 +52,20 @@ def test_app_text_dispatch_uses_exact_native_source(configured,monkeypatch):
     legacy.assert_not_called()
 
 
+@pytest.mark.parametrize('reason,code', [
+    ('native_quote_scope_denied', 'quoted_source_scope_conflict'),
+    ('native_quote_evidence_missing', 'quoted_message_unavailable'),
+])
+def test_quote_preflight_is_refused_before_dispatch(configured, monkeypatch, reason, code):
+    _, route = configured
+    call = accepted(monkeypatch)
+    monkeypatch.setattr(native, 'resolve_quote', Mock(side_effect=TenantPlatformError(reason)))
+    with pytest.raises(transport.ConnectPreflightError) as failure:
+        native.submit(route, str(uuid.uuid4()), text='synthetic', quoted_message_id='ORIGINAL')
+    assert failure.value.code == code
+    call.assert_not_called()
+
+
 def test_disable_native_does_not_fall_back(configured,monkeypatch):
     db,route=configured;call=accepted(monkeypatch)
     monkeypatch.delenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND')

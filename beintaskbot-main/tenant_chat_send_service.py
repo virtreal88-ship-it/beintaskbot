@@ -59,6 +59,12 @@ async def run(session, data, request, wait_slot, logger):
             error = TenantLinearError('Mesaj göndərilmədi. WhatsApp dialoqunun nömrə və LID tarixçələri arasında ziddiyyət var. Administrator dialoq bağlantısını yoxlamalıdır.', 409)
             error.keep_request = False
             raise error from None
+        if (is_connect and item.get('quote') and isinstance(failure, ConnectPreflightError)
+                and failure.code in {'quoted_source_scope_conflict', 'quoted_message_unavailable'}):
+            await asyncio.to_thread(finish, item, 'blocked')
+            return {'state': 'blocked', 'quote_protocol': True, 'delivery_state': 'failed',
+                    'delivery_phase': 'not_sent', 'provider_accepted': False, 'retry_safe': True,
+                    'error_code': failure.code}
         try:
             await asyncio.to_thread(finish, item, 'unknown' if external_started else 'blocked')
         except Exception:

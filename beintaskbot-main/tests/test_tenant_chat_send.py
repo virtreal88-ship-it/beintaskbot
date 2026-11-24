@@ -130,6 +130,18 @@ class Service(unittest.IsolatedAsyncioTestCase):
         self.assertIn('WhatsApp', str(raised.exception))
         self.assertNotIn('Kommo', str(raised.exception))
 
+    async def test_native_quote_refusal_finishes_without_locking_conversation(self):
+        from tenant_connect_transport import ConnectPreflightError
+        self.item.update(connection=['connect', 'channel'], quote='ORIGINAL_PROVIDER_ID', native=True)
+        sender = Mock(side_effect=ConnectPreflightError('quoted_source_scope_conflict'))
+        with patch.dict(self.module.run.__globals__, {'send_connect': sender}):
+            result = await self.run_send()
+        self.finish.assert_called_once_with(self.item, 'blocked')
+        sender.assert_called_once()
+        self.assertEqual(result['delivery_phase'], 'not_sent')
+        self.assertTrue(result['retry_safe'])
+        self.assertFalse(result['provider_accepted'])
+
     async def test_other_connect_failures_still_unknown_without_resend(self):
         from tenant_connect_transport import ConnectPreflightError
         for failure in (RuntimeError('timeout'), ConnectPreflightError('unrecognized_code')):

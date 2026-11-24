@@ -37,6 +37,15 @@ class Store(unittest.TestCase):
         self.cur.fetchone.side_effect = [*self.authority_rows, existing, busy]
         return self.module.reserve(SESSION, INPUT)
 
+    def test_read_saved_send_status_uses_only_authorized_exact_receipt(self):
+        self.cur.fetchone.side_effect = [*self.authority_rows, {'state': 'accepted'}]
+        status = self.module.read_send_status(SESSION, 7, INPUT['request_id'])
+        self.assertEqual(status, {'state': 'accepted'})
+        self.assertEqual(self.cur.execute.call_args.args[1], (TENANT, 20, 7, INPUT['request_id']))
+        self.schema.assert_not_called()
+        self.assertFalse(any('INSERT ' in call.args[0] or 'UPDATE ' in call.args[0]
+                             for call in self.cur.execute.call_args_list))
+
     def test_reserve_before_post_is_tenant_and_actor_bound(self):
         item = self.reserve()
         self.assertEqual(item['key'], (TENANT, 20, INPUT['request_id']))
