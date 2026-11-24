@@ -1206,7 +1206,13 @@
     hydrateAvatars();
     hydrateRowContacts();
     window.tenantSharedReminders?.markRows(rows.map(row=>row.group_sources?.length?activeGroupSources(row):[row]));
-    renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;$('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{const row=rows[Number(button.dataset.openOperator)];const sources=activeGroupSources(row);openDialog(sources.find(source=>sameDialog(source,currentDialog))||((ownerOverviewMode()||row.search_overview_read_only)&&sources.find(source=>sameDialog(source,row)))||sources[0]||row,false,'',{userOpened:true});} );
+    renderComposerSourcePicker();$('operatorMore').hidden=nextOffset===null;$('operatorMore').textContent=t('more');operatorListScroller().scrollTop=listScrollTop;
+    $('operatorRows').querySelectorAll('[data-open-operator]').forEach(button=>button.onclick=()=>{
+      const row=rows[Number(button.dataset.openOperator)],sources=activeGroupSources(row);
+      const preferCard=ownerOverviewMode()||row.search_overview_read_only||sources.some(source=>source.archive_read_only);
+      openDialog(sources.find(source=>sameDialog(source,currentDialog))
+        ||(preferCard&&sources.find(source=>sameDialog(source,row)))||sources[0]||row,false,'',{userOpened:true});
+    });
   }
   const historyQuery=route=>new URLSearchParams({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...(route.source_message_id?{anchor:route.source_message_id}:{})});
   function dialogueHistoryQuery(route){
