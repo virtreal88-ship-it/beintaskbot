@@ -107,6 +107,90 @@ def test_missed_call_before_unrelated_system_event_reads_without_404_and_keeps_n
     assert reloaded['dialog']['lifecycle']['state']=='dismissed'
 
 
+
+@pytest.fixture
+def missed_attention_receipts(active):
+    requests=[]
+    yield requests
+    # Receipts intentionally have no tenant FK and outlive the shared
+    # PGlite fixture's tenant reset. Delete only this case's synthetic IDs.
+    active.execute("DELETE FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid AND request_id::text=ANY(%s::text[])",(A,requests))
+    active.commit()
+
+
+def test_missed_call_attention_is_independent_of_reading_and_follows_exact_accepted_episode(active, missed_attention_receipts):
+    remote=str(uuid.UUID(int=331))
+    conversation='missed-call-only'
+    from test_tenant_operator_workspace import employee
+    profile=employee(active,['dialogs'],role='operator',actor=33)
+    active.execute("INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by) VALUES(%s::uuid,33,'online',11)",(A,))
+    active.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
+      VALUES(%s::uuid,'members','{"33":{"access_scopes":{"dialogs":{"view":"all","update":"all"}}}}'::jsonb)""",(A,))
+    active.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES(%s::uuid,%s::uuid,'Other source')",(A,remote))
+    for source,lead in [(CA,43),(remote,44)]:
+        active.execute("""INSERT INTO saas_connect_conversations
+          (tenant_id,connect_channel_id,conversation_id,lead_id,contact_name)
+          VALUES(%s::uuid,%s::uuid,%s,%s,'Synthetic client')""",(A,source,conversation,lead))
+    active.commit()
+    calls={source:message(active,n,channel=source,lead=lead,direction='system',message_type='call_missed')
+           for n,source,lead in [(520,CA,43),(521,remote,44)]}
+    for call in calls.values():
+        active.execute("UPDATE saas_crm_messages SET happened_at=clock_timestamp()-interval '1 minute' WHERE id=%s",(call,))
+    active.commit()
+
+    route=dict(provider='connect',channel_id=CA,conversation_id=conversation,lead_id=43)
+
+    def cards():
+        return {r['channel_id']:r for r in dialogs.listing(profile,lifecycle='all')['dialogs'] if r['conversation_id']==conversation}
+
+    def mutate(action, revision):
+        request=str(uuid.uuid4())
+        missed_attention_receipts.append(request)
+        return lifecycle.mutate(profile,dict(route,action=action,expected_revision=revision,request_id=request))['lifecycle']
+
+    first=cards()
+    assert first[CA]['missed_call_pending'] and first[remote]['missed_call_pending']
+    assert first[CA]['unread_count']==1 and first[remote]['unread_count']==1
+    page=dialogs.history(profile,'connect',43,CA,conversation)
+    assert page['read_through_message_id']==calls[CA]
+    assert page['dialog']['last_message_type']=='call_missed' and page['dialog']['last_message_direction']=='system'
+    assert page['dialog']['lifecycle']['can_accept'] is True
+    dialogs.mark_read(profile,dict(route,message_id=page['read_through_message_id']))
+    read=cards()
+    assert read[CA]['unread_count']==0 and read[CA]['missed_call_pending']
+    assert read[remote]['unread_count']==1 and read[remote]['missed_call_pending']
+    assert read[CA]['lifecycle']['state']=='waiting'
+    assert read[CA]['lifecycle']['can_dismiss'] is False, 'do not treat a call as inbound text for No reply'
+
+    with pytest.raises(TenantLinearError):
+        mutate('accept',3)
+    assert cards()[CA]['missed_call_pending'], 'rejected acceptance must not clear attention'
+
+    accepted=mutate('accept',0)
+    assert accepted['state']=='accepted'
+    assert not cards()[CA]['missed_call_pending'] and cards()[remote]['missed_call_pending']
+    observer=next(r for r in dialogs.listing(PROFILE,lifecycle='all',owner_overview=True)['dialogs'] if r['lead_id']==43)
+    assert observer['owner_overview_read_only'] and 'missed_call_pending' not in observer
+    assert 'last_message_type' not in observer
+    assert sum(r['unread_count'] for r in cards().values())==1, 'acceptance is not bulk or ordinary mark-read'
+
+    closed=mutate('close',1)
+    assert closed['state']=='closed'
+    assert not cards()[CA]['missed_call_pending'], 'completing a handled call must not restore the red preview'
+
+    fresh=message(active,522,lead=43,direction='system',message_type='call_missed')
+    active.execute("UPDATE saas_crm_messages SET happened_at=clock_timestamp()+interval '1 second' WHERE id=%s",(fresh,))
+    active.commit()
+    fresh_row=cards()[CA]
+    assert fresh_row['missed_call_pending'], 'a fresh missed call after a completed episode needs attention again'
+    assert fresh_row['lifecycle']['state']=='closed', 'the projection does not reopen or assign the dialogue'
+    assert fresh_row['unread_count']==1
+    restarted=mutate('start',2)
+    assert restarted['state']=='accepted' and not cards()[CA]['missed_call_pending']
+    assert cards()[CA]['unread_count']==1, 'starting does not read the missed call'
+    assert fresh in {m['id'] for m in dialogs.history(profile,'connect',43,CA,conversation)['messages']}
+
+
 def test_preview_exact_inbound_token_and_no_read_or_lifecycle_writes(active, monkeypatch):
     older=message(active,1)
     latest=message(active,2)

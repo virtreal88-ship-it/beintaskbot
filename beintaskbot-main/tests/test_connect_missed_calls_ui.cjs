@@ -108,3 +108,85 @@ const settle=async()=>{for(let i=0;i<30;i++)await new Promise(resolve=>setImmedi
  });
  dom.window.close();console.log('PASS opening a chat automatically marks the missed-call timeline item read');
 })().catch(error=>{console.error(error);process.exitCode=1;});
+
+(async()=>{
+ const dom=new JSDOM(readFile('docs/tenant-app.html'),{url:'https://crm.test/app?view=dialogs',runScripts:'outside-only',pretendToBeVisual:true});
+ const w=dom.window,d=w.document,member={tenant_id:'tenant',telegram_id:17,role:'operator',active:true};
+ try{
+  w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+  w.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true}}};
+  const stamp='2026-11-18T10:00:00Z';
+  const waiting={state:'waiting',revision:0,can_accept:true,has_inbound:false,last_inbound_id:null};
+  const accepted={state:'accepted',revision:1,id:'episode',operator_id:17,can_close:true};
+  const base={provider:'connect',channel_id:'channel',conversation_id:'call-only',lead_id:41,
+   customer_name:'Call-only',display_state:'manual',can_send:false,available_actions:[],lifecycle_enabled:true,
+   lifecycle:waiting,last_message_id:'missed',last_message_at:stamp,last_message_type:'call_missed',last_message_direction:'system',missed_call_pending:true};
+  const sibling={...base,channel_id:'sibling-source',lead_id:42,customer_name:'Other source',last_message_id:'other-missed'};
+  const ordinary={...base,channel_id:'ordinary-source',lead_id:43,customer_name:'Ordinary line',last_message_id:'text',last_message_type:'text',last_message_direction:'incoming',last_message_text:'Ordinary message',missed_call_pending:undefined};
+  let read=false,authority=waiting,acceptFailure=true,releaseAccept,staleList=true,corrected=false,listCount=0;
+  const success=result=>({ok:true,status:200,json:async()=>({success:true,result})});
+  const row=name=>[...d.querySelectorAll('.operator-row')].find(el=>el.querySelector('.operator-row-title')?.textContent===name);
+  const red=name=>!!row(name)?.querySelector('.operator-row-preview-missed-pending');
+  const unread=name=>row(name)?.querySelector('.operator-unread-count')?.textContent||null;
+  w.fetch=async(url,opt={})=>{
+   const parsed=new URL(url,w.location),path=parsed.pathname;
+   if(path.endsWith('/platform/me'))return success(w.tenantProfileSnapshot);
+   if(path.endsWith('/dialogs_lifecycle')){
+    const payload=JSON.parse(opt.body);
+    assert.equal(payload.action,'accept');assert.equal(payload.channel_id,'channel');assert.equal(payload.conversation_id,'call-only');
+    if(acceptFailure)return {ok:false,status:500,json:async()=>({success:false,error:'Simulated refusal'})};
+    await new Promise(resolve=>{releaseAccept=resolve;});authority=accepted;
+    return success({lifecycle:accepted});
+   }
+   if(path.endsWith('/dialogs/history')){
+    const selected=[base,sibling,ordinary].find(r=>r.channel_id===parsed.searchParams.get('channel_id'));
+    assert(selected);
+    return success({dialog:{...selected,lifecycle:selected===base?authority:waiting},
+     messages:[{id:selected.last_message_id,external_id:selected.last_message_id,source:'connect',source_channel_id:selected.channel_id,source_lead_id:selected.lead_id,
+       channel:'connect:'+selected.channel_id,direction:selected.last_message_direction,message_type:selected.last_message_type,
+       body:'',happened_at:stamp}],read_through_message_id:selected.last_message_id,next_before:null});
+   }
+   if(path.endsWith('/dialogs/read')){
+    const payload=JSON.parse(opt.body);
+    if(payload.channel_id==='channel'){assert.equal(payload.message_id,'missed');read=true;}
+    return success({updated:true});
+   }
+   if(path.endsWith('/dialogs')){
+    listCount++;
+    return success({dialogs:[{...base,lifecycle:staleList?waiting:authority,
+      missed_call_pending:staleList||authority===waiting,unread_count:read?0:1},
+      {...sibling,unread_count:1,...(corrected?{last_message_type:'call_rejected',missed_call_pending:undefined}:{})},
+      {...ordinary,unread_count:1}],channels:[],agents:[],attention_count:0,unread_count:3,total_count:3,next_offset:null});
+   }
+   return success({});
+  };
+  w.eval(readFile('docs/tenant-operator-i18n.js'));w.eval(readFile('docs/tenant-operator-dialogs.js'));
+  await settle();d.getElementById('view-dialogs')?.classList.add('active');await w.tenantOperator.refresh();await settle();
+  assert(red('Call-only')&&red('Other source'));assert.equal(unread('Call-only'),'1');
+  assert.equal(red('Ordinary line'),false);assert.equal(unread('Ordinary line'),'1');
+  row('Call-only').click();await settle();
+  assert.equal(read,true);assert.equal(unread('Call-only'),null);assert(red('Call-only'),'opening and automatic read do not clear red');
+  assert(d.querySelector('[data-missed-call]'),'normal call history remains visible');
+  assert(!d.querySelector('[data-operator-lifecycle="dismiss"]'),'call-only does not grant No reply');
+  const action=()=>d.querySelector('[data-operator-lifecycle="accept"]');
+  assert(action(),'authorized non-owner can accept a visible call-only route');
+  action().click();await settle();assert(red('Call-only'),'a failed accept keeps the red preview');assert(action());
+  acceptFailure=false;
+  action().click();await settle();assert.equal(typeof releaseAccept,'function');
+  assert(red('Call-only'),'submitting accept is not a confirmed acceptance');
+  row('Other source').click();await settle();
+  assert(red('Call-only'),'switching dialogues while accept is in flight retains attention');
+  releaseAccept();await settle();
+  assert.equal(red('Call-only'),false,'the exact accepted route loses red even after switching');
+  assert(red('Other source'),'another route is untouched');
+  const before=listCount;
+  await w.tenantOperator.refresh();await settle();
+  assert(listCount>before);assert.equal(red('Call-only'),false,'a stale waiting snapshot cannot reapply red after the accepted receipt');
+  staleList=false;corrected=true;
+  await w.tenantOperator.refresh();await settle();
+  assert.equal(red('Other source'),false,'provider correction is not presented as a missed call');
+  assert.equal(unread('Other source'),'1','a corrected preview does not change its existing unread badge');
+  assert.equal(unread('Ordinary line'),'1');
+  console.log('PASS managed missed-call highlight: still red after opening or failed claim; clears upon exact accepted receipt, including stale list');
+ }finally{dom.window.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

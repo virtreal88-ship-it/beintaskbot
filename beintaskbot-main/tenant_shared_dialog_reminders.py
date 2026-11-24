@@ -26,15 +26,20 @@ def enabled(tenant):
     return configured() and bool(work_status_routing_sources(tenant))
 
 
-def capability(policy):
+def creation_capability(policy):
+    """A shared reminder is a separate action on an already visible dialogue."""
     # The private reminder flag is independent of shared reminders.
     from tenant_scoped_access import ACTIVE_TENANT_STATUSES
     profile = policy.profile
     scope = policy.action_scope('dialogs', 'view')
     return (enabled(profile.get('tenant_id')) and profile.get('active') is True
-            and profile.get('role') == 'operator'
             and profile.get('tenant_status', 'active') in ACTIVE_TENANT_STATUSES
             and (scope != 'none' if scope is not None else policy.legacy_allows('dialogs')))
+
+
+def capability(policy):
+    # Receiving and clearing team reminders stays operator-only.
+    return policy.profile.get('role') == 'operator' and creation_capability(policy)
 
 
 def schema_ready(cur):
@@ -105,25 +110,32 @@ def _targets(cur, tenant, actor, policy):
 
 
 def _may_schedule(policy, route):
-    return capability(policy) and route.get('provider')=='connect' and str(route.get('channel_id')) in work_status_routing_sources(policy.profile['tenant_id'])
+    return creation_capability(policy) and route.get('provider')=='connect' and str(route.get('channel_id')) in work_status_routing_sources(policy.profile['tenant_id'])
 
 
-def dialogue_marker(cur, tenant, actor, policy, route):
-    """Called after an ordinary history authorization. Never acknowledges on GET."""
+def dialogue_marker(cur, tenant, actor, policy, route, *, workflow, source_active,
+                    exact_history, view='', include_delivery=False):
+    """Project creation after a verified history read; never acknowledge a reminder."""
+    if not _may_schedule(policy,route):
+        return None
+    states=('accepted','closed','dismissed')
     state=route.get('lifecycle') or {}
-    if not _may_schedule(policy,route) or state.get('state') not in ('accepted','closed','dismissed'):
+    can_create=bool(exact_history and source_active and workflow and workflow.get('state') in states)
+    can_mark=(include_delivery and capability(policy) and state.get('state') in states
+              and state.get('operator_id')==actor)
+    if not (can_create or can_mark) or not schema_ready(cur):
         return None
-    if state.get('operator_id')!=actor or not schema_ready(cur):
-        return None
+    result={'can_schedule':can_create}
+    if can_create and view:
+        result['schedule_view']=view
+    if not can_mark or (state['state']!='accepted' and not is_effectively_online(cur,tenant,actor)):
+        return result
     channel,conversation,lead=str(route['channel_id']),route['conversation_id'],route['lead_id']
-    can_create=policy.allows_action('dialogs','update')
-    if state['state']!='accepted' and not is_effectively_online(cur,tenant,actor):
-        return {'can_schedule':can_create}
     cur.execute(f"""SELECT id::text FROM {TABLE} WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
         AND conversation_id=%s AND lead_id=%s AND opened_at IS NULL AND due_at<=CURRENT_TIMESTAMP""",
         (tenant,channel,conversation,lead))
     row=cur.fetchone()
-    return {'can_schedule':can_create,**({'id':row['id']} if row else {})}
+    return {**result,**({'id':row['id']} if row else {})}
 
 
 def timeline_page(conn, cur, tenant, channel, conversation, lead, **message_window):
@@ -169,7 +181,20 @@ def _missing():
 
 
 def _schedule(cur, tenant, actor, policy, ident, data):
-    if set(data)!={'action','id','note','due_at','provider','channel_id','conversation_id','lead_id'}:
+    fields={'action','id','note','due_at','provider','channel_id','conversation_id','lead_id'}
+    view=data.get('history_view','')
+    if view=='owner':
+        fields.add('history_view')
+        if policy.profile.get('role')!='owner':
+            raise _missing()
+    elif view=='search':
+        fields.update(('history_view','search'))
+        search=data.get('search')
+        if not isinstance(search,str) or not 0<len(search.strip())<=200:
+            raise ValueError('invalid search context')
+    elif view!='':
+        raise ValueError('invalid history context')
+    if set(data)!=fields:
         raise ValueError('invalid schedule')
     provider,channel,conversation,lead=_route(data)
     if not _may_schedule(policy,_public_route(channel,conversation,lead)):
@@ -178,20 +203,26 @@ def _schedule(cur, tenant, actor, policy, ident, data):
     if not isinstance(note,str) or len(note.strip())>280 or any(ord(ch)<32 and ch not in '\t\n\r' for ch in note):
         raise ValueError('invalid note')
     due=_time(data['due_at'])
-    if not policy.allows_action('dialogs','update'):
+    # Same exact-route visibility as history, never an update/send grant.
+    # Preserve the view-source then conversation lock order used by history.
+    require_source(cur,tenant,policy,provider,channel,'view')
+    cur.execute("""SELECT 1 FROM saas_connect_channels
+        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active FOR SHARE""",(tenant,channel))
+    if not cur.fetchone():
         raise _missing()
-    require_source(cur,tenant,policy,provider,channel,'update')
-    assert_route(cur,tenant,policy,provider,conversation,channel,lead)
+    assert_route(cur,tenant,policy,provider,conversation,channel,lead,allow_closed_archive=True,
+                 owner_overview=view=='owner',search_overview=view=='search')
     from tenant_connect_dialog_equivalence import canonical
     if canonical(cur,tenant,channel,conversation)!=conversation:
         raise _missing()
-    cur.execute("""SELECT 1 FROM saas_connect_channels
-        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND active""",(tenant,channel))
-    if not cur.fetchone():
-        raise _missing()
+    if view=='search':
+        # Do not accept a caller's unchecked cross-owner marker. Revalidate the
+        # same exact current search match used by the normal history endpoint.
+        from tenant_operator_dialogs import search_overview_matches
+        if not search_overview_matches(cur,tenant,policy,channel,conversation,lead,search):
+            raise _missing()
     row=_row(cur,tenant,channel,conversation)
-    if (not row or row['operator_id']!=actor
-            or row['state'] not in ('accepted','closed','dismissed')):
+    if not row or row['state'] not in ('accepted','closed','dismissed'):
         raise _missing()
     cur.execute(f"""SELECT channel_id::text,conversation_id,lead_id,created_by,note,due_at
         FROM {TABLE} WHERE tenant_id=%s::uuid AND id=%s::uuid""",(tenant,ident))
@@ -262,7 +293,8 @@ def execute(profile,data=None):
             if error.status==403:
                 raise SessionUnavailable(str(error),403) from error
             raise
-        if not capability(policy) or not lifecycle_enabled(cur,tenant):
+        allowed=creation_capability if data is not None and data.get('action')=='schedule' else capability
+        if not allowed(policy) or not lifecycle_enabled(cur,tenant):
             raise _missing()
         if not schema_ready(cur):
             raise TenantLinearError('Общие напоминания временно недоступны.',503)

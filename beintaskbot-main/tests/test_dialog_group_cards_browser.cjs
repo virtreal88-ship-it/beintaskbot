@@ -178,11 +178,13 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const scroll=panel.locator('.operator-client-panel-content');
   const h=(await page.viewportSize()).height;
   await page.setViewportSize({width,height:300});
+  await scroll.evaluate(el=>{const spacer=document.createElement('div');spacer.style.height='360px';spacer.dataset.testOverflow='true';el.append(spacer);});
   await page.waitForFunction(()=>{const n=document.querySelector('#operatorCompanyPanel .operator-client-panel-content');return n.scrollHeight>n.clientHeight;});
   const headerTop=await panel.locator('header').evaluate(n=>n.getBoundingClientRect().top);
   await scroll.evaluate(n=>{n.scrollTop=n.scrollHeight;});
   assert((await scroll.evaluate(n=>n.scrollTop))>0,'the panel content scrolls at a short viewport');
   assert.equal(await panel.locator('header').evaluate(n=>n.getBoundingClientRect().top),headerTop);
+  await scroll.locator('[data-test-overflow]').evaluate(el=>el.remove());
   await page.setViewportSize({width,height:h});
   const result=drop.locator('[data-operator-account-results] button').first();
   await result.waitFor();
@@ -193,7 +195,12 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await input.inputValue(),'Selected Operator account');
   const calls=await page.evaluate(()=>window.accountCalls.map(({operator_search,operator_account,channel_id,lead_id})=>[operator_search??null,operator_account??null,channel_id,lead_id]));
   assert.deepEqual(calls,[['synthetic',null,'b','42'],[null,'synthetic_a','b','42']]);
-  if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}
+  if(width<900){
+   await panel.locator('#operatorCompanyPanelClose').click();
+   await panel.waitFor({state:'hidden'});
+   await page.locator('[data-operator-back]').click();
+   await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');
+  }
   await page.close();
  }
  console.log('PASS Chromium group routes, Operator dropdown geometry and explicit account binding at 360/1440px');

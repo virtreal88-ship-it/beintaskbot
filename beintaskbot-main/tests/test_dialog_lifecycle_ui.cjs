@@ -277,7 +277,14 @@ async function verifySidebarTransfer(){
  await w.tenantOperator.openDialog(own);
  d.querySelector('#operatorCompanyPanelOpen').click();
  assert(d.querySelector('#operatorCompanyPanel').open);
- assert(!d.querySelector('#operatorCompanyPanelOpen').closest('[inert]'),'mobile toggle stays usable');
+ const mobilePanel=d.querySelector('#operatorCompanyPanel'),workspace=d.querySelector('#operatorWorkspace');
+ assert.equal(mobilePanel.parentElement.id,'operatorDialogs','sheet is not clipped by the animated chat');
+ assert(!mobilePanel.inert&&workspace.inert,'the panel stays interactive while the workspace is inert');
+ assert.equal(d.activeElement.id,'operatorCompanyPanelClose','mobile close receives focus when opened');
+ d.querySelector('#operatorCompanyPanelClose').click();
+ assert(!mobilePanel.open&&!workspace.inert,'closing the sheet re-enables the conversation');
+ assert.equal(d.activeElement.id,'operatorCompanyPanelOpen','focus returns to the original trigger');
+ d.querySelector('#operatorCompanyPanelOpen').click();
  const menu=d.querySelector('#operatorSidebarTransfer details');menu.open=true;
  await tick();await tick();
  assert.match(menu.textContent,/No eligible operators online/);
@@ -294,6 +301,8 @@ async function verifySidebarTransfer(){
  mode='online';release();await tick();
  assert(!d.querySelector('#operatorSidebarTransfer'),'archive route cannot use a late candidate response');
  await w.tenantOperator.openDialog(own);await tick();await tick();
+ assert(!d.querySelector('#operatorCompanyPanel').open,'mobile still opens with the sidebar closed on another chat');
+ d.querySelector('#operatorCompanyPanelOpen').click();
  const next=d.querySelector('#operatorSidebarTransfer details');next.open=true;await tick();await tick();
  failed=false;const target=next.querySelector('[data-transfer-targets] button');target.click();target.click();await tick();await tick();
  assert.equal(requests.length,2,'one POST per confirmed choice, even with rapid repeated click');

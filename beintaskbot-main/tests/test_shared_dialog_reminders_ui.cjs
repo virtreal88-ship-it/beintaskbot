@@ -82,6 +82,8 @@ const {JSDOM}=require('jsdom');
     const create=$('#operatorSharedReminderCreate');
     assert.equal(create.hidden,false);
     assert.equal(create.textContent,'Create reminder');
+    assert.equal(create.firstElementChild?.matches('svg[aria-hidden="true"][focusable="false"]'),true);
+    assert.equal(create.lastElementChild?.textContent,'Create reminder','the decorative plus precedes the localized action label');
     assert.equal($('#operatorMoreActions #operatorSharedReminderCreate'),null,'creation is not in the ellipsis');
     create.click();assert($('#sharedDialogReminderModal form'),'company control opens the existing schedule form');
     $('#sharedDialogReminderModal header button').click();
@@ -127,12 +129,13 @@ const {JSDOM}=require('jsdom');
     await tick();
     assert.equal($('#sharedDialogReminderModal'),null);
     await checkRealCompanyPlacement(390);await checkRealCompanyPlacement(1440);
+    await checkRealCompanyPlacement(390,'owner');await checkRealCompanyPlacement(1440,'owner');
     console.log('PASS shared reminder bell, actual Company panel layout, restricted closed card, and auth reset');
   }finally{w.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
 
 
-async function checkRealCompanyPlacement(width){
+async function checkRealCompanyPlacement(width,role='operator'){
   const read=path=>fs.readFileSync(path,'utf8');
   const dom=new JSDOM(read('docs/tenant-app.html'),{runScripts:'outside-only',pretendToBeVisual:true,
     url:'https://crm.test/app?view=dialogs'});
@@ -142,14 +145,16 @@ async function checkRealCompanyPlacement(width){
     w.HTMLDialogElement.prototype.close=function(){this.open=false;};
     w.matchMedia=query=>({matches:query.includes('900px')&&width<=900,addListener(){},removeListener(){}});
     w.alert=()=>{};
-    const member={tenant_id:'synthetic',telegram_id:33,role:'operator',active:true};
-    const profile={member,capabilities:{modules:{dialogs:true},dialog_company_binding:true,shared_dialog_reminders:true}};
+    const member={tenant_id:'synthetic',telegram_id:33,role,active:true};
+    const reminders={shared_dialog_reminder_creation:true,...(role==='operator'?{shared_dialog_reminders:true}:{})};
+    const profile={member,capabilities:{modules:{dialogs:true},dialog_company_binding:true,...reminders}};
     const base={provider:'connect',lead_id:41,channel_id:'eligible-a',conversation_id:'same-client',can_send:false,
-      lifecycle_enabled:true,lifecycle:{state:'waiting',revision:1},shared_reminder:{can_schedule:true}};
+      lifecycle_enabled:true,lifecycle:{state:'closed',revision:1},archive_read_only:role==='owner',shared_reminder:{can_schedule:true}};
     const bound={...base,company_binding:{company_id:'company-a',company_name:'Linked company',can_manage:false}};
     const unbound={...base,lead_id:42,channel_id:'eligible-b',company_binding:{company_id:null,can_manage:false}};
     const denied={...base,lead_id:43,channel_id:'denied',shared_reminder:{can_schedule:false}};
     const routes=[bound,unbound,denied],reminderPosts=[],companyCalls=[];
+    let feedReads=0;
     const selector='#operatorSharedReminderCreate';
     w.tenantProfileSnapshot=profile;
     let savedOpen=false;
@@ -167,7 +172,7 @@ async function checkRealCompanyPlacement(width){
         return ok({open:savedOpen});
       }
       if(path.endsWith('/dialogs/shared-reminders')){
-        if(body)reminderPosts.push(body);
+        if(body)reminderPosts.push(body);else feedReads++;
         return ok({reminders:[]});
       }
       if(path.endsWith('/operator/dialog-company')){
@@ -200,6 +205,9 @@ async function checkRealCompanyPlacement(width){
       assert(sidebar.open);assert(!toggle.closest('[inert]'));
       const main=$('#operatorCompanyView-main'),create=$(selector);
       assert(create&&!create.hidden&&!create.closest('[hidden]'));
+      if(role==='owner'&&width<900){
+        for(let node=create;node;node=node.parentElement)assert(!node.inert,'mobile reminder button must not inherit an inert ancestor');
+      }
       assert.equal(d.querySelectorAll(selector).length,1);
       assert.equal(main.lastElementChild,create.parentElement,'last row of the actual Company Main tab');
       for(const tab of ['tasks','modules','history']){
@@ -216,7 +224,7 @@ async function checkRealCompanyPlacement(width){
     assert(!$('#sharedDialogReminderModal'),'switching away closes the exact-route scheduling modal');
     staleForm.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
     assert.equal(reminderPosts.length,0,'stale form and panel navigation cannot schedule');
-    const reminderOnly={member,capabilities:{modules:{dialogs:true},shared_dialog_reminders:true}};
+    const reminderOnly={member,capabilities:{modules:{dialogs:true},...reminders}};
     w.tenantProfileSnapshot=reminderOnly;
     d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:reminderOnly}));
     const priorCalls=companyCalls.length;
@@ -225,6 +233,21 @@ async function checkRealCompanyPlacement(width){
     assert($('#operatorCompanyPanel [data-company-reminder-fallback] '+selector),'eligible route without Company permission keeps scheduling');
     assert(!$('#operatorCompanyTab-main'),'no Company privilege added for reminder-only users');
     assert.equal(companyCalls.length,priorCalls,'no Company request added without permission');
+    if(role==='owner'){
+      $(selector).click();
+      const modal=$('#sharedDialogReminderModal');
+      modal.querySelector('input').value='2099-11-24T12:00';
+      modal.querySelector('textarea').value='Synthetic note';
+      assert.equal(reminderPosts.length,0,'opening a reminder does not submit');
+      modal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+      await tick();
+      assert.equal(reminderPosts.length,1);
+      const {action,expected_tenant_id,expected_user_id,lead_id,channel_id,conversation_id,note}=reminderPosts[0];
+      assert.deepEqual({action,expected_tenant_id,expected_user_id,lead_id,channel_id,conversation_id,note},
+        {action:'schedule',expected_tenant_id:'synthetic',expected_user_id:'33',lead_id:42,channel_id:'eligible-b',
+          conversation_id:'same-client',note:'Synthetic note'});
+      assert.equal(feedReads,0,'creation-only role cannot fetch reminders even after scheduling');
+    }
     d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));
     assert(!$(selector)||$(selector).closest('[hidden]'),'auth invalidation hides the control immediately');
   }finally{w.close();}
