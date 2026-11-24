@@ -33,9 +33,11 @@ def evaluate_pair_evidence(rows, *, scan_limit=MAX_EVIDENCE_ROWS):
 def check_pair_evidence(cur, tenant, channel, primary_id, alternate_id, verified_at, *, scan_limit=MAX_EVIDENCE_ROWS):
     """Check only two exact ledger routes, using at most scan_limit+1 rows.
 
-    Mirrors available_pairs: matching pair rows are harmless. A self-only row
-    is harmless only if strictly bracketed by matching same-route receipts,
-    all predating verified_at. Missing/contradictory/one-sided evidence blocks.
+    Matching pair rows are harmless. A self-only row is harmless only if
+    strictly bracketed by matching same-route receipts, all predating
+    verified_at. An exact mirror under the same number's other phone address
+    is evaluated through its original row. Missing, contradictory or
+    one-sided evidence blocks.
     No provider calls, message-body reads, channel discovery or mutations.
     """
     if (direct_identity(primary_id) != primary_id or not phone_jid(primary_id)
@@ -45,6 +47,7 @@ def check_pair_evidence(cur, tenant, channel, primary_id, alternate_id, verified
     if not isinstance(scan_limit, int) or isinstance(scan_limit, bool) or not 1 <= scan_limit <= MAX_EVIDENCE_ROWS:
         return {'safe': False, 'reason': 'invalid_scan_limit', 'scanned': 0}
     aliases = [phone_jid(primary_id), phone_jid(primary_id).replace('@s.whatsapp.net', '@c.us')]
+    mirror_id = next(alias for alias in aliases if alias != primary_id)
     routes = [primary_id, alternate_id]
     keys=list(set(routes+aliases))
     # The summary is first-write-only. Reject legacy summaries without an
@@ -75,9 +78,15 @@ def check_pair_evidence(cur, tenant, channel, primary_id, alternate_id, verified
           AND evidence->>'originalConversationId'=conversation_id
           AND evidence->>'canonicalConversationId'=conversation_id
           AND created_at<%s::timestamptz) IS TRUE AS historical_self_only
-      FROM saas_connect_identity_conflict_events
+      FROM saas_connect_identity_conflict_events f
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
-        AND conversation_id=ANY(%s::text[]) LIMIT %s''',
+        AND conversation_id=ANY(%s::text[])
+        AND NOT (f.conversation_id=%s AND EXISTS (
+          SELECT 1 FROM saas_connect_identity_conflict_events original
+          WHERE original.tenant_id=f.tenant_id AND original.connect_channel_id=f.connect_channel_id
+            AND original.conversation_id=%s AND original.event_id=f.event_id
+            AND original.created_at=f.created_at AND original.evidence=f.evidence))
+      LIMIT %s''',
       (alternate_id, aliases, alternate_id, aliases, routes, routes, verified_at,
-       routes, verified_at, tenant, channel, keys, scan_limit + 1))
+       routes, verified_at, tenant, channel, keys, mirror_id, primary_id, scan_limit + 1))
     return evaluate_pair_evidence(cur.fetchall(), scan_limit=scan_limit)

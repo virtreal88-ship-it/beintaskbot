@@ -5,6 +5,7 @@ from test_tenant_support_inbox import database, db, A, B, CA, CB
 from tenant_whatsapp_pair_evidence import check_pair_evidence, evaluate_pair_evidence
 
 PN='994100000102@s.whatsapp.net'
+LEGACY_PN=PN.replace('@s.whatsapp.net','@c.us')
 LID='111111111111111@lid'
 VERIFIED='2026-11-20T00:00:00Z'
 
@@ -64,6 +65,27 @@ def test_alias_empty_ledger_and_exact_scope(db):
     assert check(db)=={'safe':True,'reason':'historical_evidence_clear','scanned':3}
     insert(db,'bad',5,{})
     assert not check(db)['safe']
+
+
+@pytest.mark.parametrize('primary,mirror',[(PN,LEGACY_PN),(LEGACY_PN,PN)])
+@pytest.mark.parametrize('problem',[None,'event','timestamp','evidence','source','tenant','unbracketed','contradiction'])
+def test_phone_alias_mirror_requires_the_same_accepted_receipt(db,primary,mirror,problem):
+    original={**self_only(),'originalConversationId':primary,'canonicalConversationId':primary}
+    if problem=='contradiction':
+        original=confirmed(directIdentity={'jid':PN,'lid':'222222222222222@lid'})
+    proof=confirmed(originalConversationId=primary)
+    insert(db,'before',1,proof,route=primary)
+    if problem!='unbracketed':
+        insert(db,'after',3,proof,route=primary)
+    insert(db,'self',2,original,route=primary,tenant=B if problem=='tenant' else A,
+           channel=CB if problem=='source' else CA)
+    copy={**original,'extra':'changed'} if problem=='evidence' else original
+    insert(db,'other' if problem=='event' else 'self',4 if problem=='timestamp' else 2,copy,route=mirror)
+    with db.cursor() as cur:
+        result=check_pair_evidence(cur,A,CA,primary,LID,VERIFIED)
+    assert result['safe'] is (problem is None)
+    if problem is None:
+        assert result['scanned']==3
 
 
 def test_scan_overflow_fails_closed_even_if_prefix_safe(db):
