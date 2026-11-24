@@ -297,13 +297,13 @@ from tenant_account_store import (
 from legacy_runtime_config import (
     _required_env, TELEGRAM_TOKEN, KOMMO_TOKEN, KOMMO_DOMAIN,
     KOMMO_BASE_URL, BAKU_TZ, LLM_MODEL, WEBHOOK_PORT,
-    CANONICAL_WEB_ORIGIN, WEB_APP_URL, LEGACY_RAILWAY_HOST, _telegram_bot_username,
+    CANONICAL_WEB_ORIGIN, APP_URL, LEGACY_RAILWAY_HOST, _telegram_bot_username,
     VAPID_PRIVATE_KEY, VAPID_PUBLIC_KEY, VAPID_CLAIMS, LINEAR_API_KEY,
     LINEAR_TEAM_ID, LINEAR_TESDIQ_STATE_ID, LINEAR_TRIAGE_STATE_ID, LINEAR_BACKLOG_STATE_ID,
     LINEAR_TODO_STATE_ID, LINEAR_DISCUSSION_STATE_ID, LINEAR_NEWS_TELEGRAM_CHANNEL,
     LINEAR_NEWS_TELEGRAM_ENABLED, LINEAR_NEWS_START_HOUR, LINEAR_NEWS_END_HOUR,
     PIPELINE_ID, RUFAT_CHAT_ID, SAMIL_CHAT_ID, RUFAT_COMPAT_CHAT_IDS,
-    RUFAT_LOGIN_LINK, RUFAT_PIPELINE_ID, RUFAT_STAGES, RUFAT_STAGE_NAMES,
+    RUFAT_PIPELINE_ID, RUFAT_STAGES, RUFAT_STAGE_NAMES,
     ADMIN_CHAT_ID, ADMIN_KOMMO_USER_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID,
     TECHNICAL_SUPPORT_NAME, NIZAMI_PIPELINE_ID, SOVDELESMELER_PIPELINE_ID, GOZLEME_PIPELINE_ID,
     HUSEYN_PIPELINE_ID, RASIM_PIPELINE_ID, HUSEYN_STAGES, HUSEYN_STAGE_NAMES,
@@ -3553,13 +3553,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # strand a user on an old Telegram message: issue the stable
             # signed account link instead.
             permanent_token = _make_permanent_web_login_token(chat_id)
-            permanent_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(permanent_token)}"
+            permanent_url = f"{CANONICAL_WEB_ORIGIN}/auth/web-login?token={quote(permanent_token)}"
             await update.message.reply_text(
                 "✅ Giriş linki yeniləndi. Aşağıdakı düymə ilə veb versiyaya daxil olun:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Veb versiyanı aç", url=permanent_url)]])
             )
             return
-        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(nonce)}"
+        login_url = f"{CANONICAL_WEB_ORIGIN}/auth/web-login?token={quote(nonce)}"
         await update.message.reply_text(
             "✅ Şəxsiyyətiniz təsdiqləndi. Aşağıdakı düymə ilə veb versiyaya daxil olun:",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Veb versiyanı aç", url=login_url)]]),
@@ -3569,7 +3569,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(chat_id) in users:
         info = users[str(chat_id)]
         permanent_token = _make_permanent_web_login_token(chat_id)
-        login_url = f"{WEB_APP_URL.rsplit('/webapp', 1)[0]}/auth/web-login?token={quote(permanent_token)}"
+        login_url = f"{CANONICAL_WEB_ORIGIN}/auth/web-login?token={quote(permanent_token)}"
         await update.message.reply_text(
             f"👋 Salam, {info.get('name', '')}!\n\n"
             f"🌐 Aşağıdakı düymə ilə veb versiyaya daxil olun:",
@@ -17525,33 +17525,14 @@ async def handle_web_login_complete(request: web.Request) -> web.Response:
     chat_id = _consume_web_login_request(token) or _consume_permanent_web_login_token(token)
     if not chat_id or not employee_access_profile(chat_id).get("active"):
         return web.Response(status=403, text="Login link is invalid or access is disabled.")
-    response = web.HTTPFound(WEB_APP_URL)
+    response = web.HTTPFound(APP_URL)
     response.set_cookie(_WEB_SESSION_COOKIE, _make_web_session(chat_id), max_age=_WEB_SESSION_TTL_SEC,
                         httponly=True, secure=True, samesite="Lax", path="/")
     return response
 
-async def serve_webapp(request: web.Request) -> web.Response:
-    """Serve the web app from either the deployment layout or the source layout.
-
-    Railway deployments have used both ``docs/index.html`` and a flat
-    ``index.html`` beside bot.py.  The old implementation only supported the
-    former and consequently raised FileNotFoundError when the latter layout
-    was deployed.
-    """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = (
-        os.path.join(base_dir, "docs", "index.html"),
-        os.path.join(base_dir, "index.html"),
-    )
-    html_path = next((path for path in candidates if os.path.isfile(path)), None)
-    if not html_path:
-        logger.error("Web app index not found; checked: %s", ", ".join(candidates))
-        return web.Response(status=404, text="Web app index not found")
-    logger.info("Serving web app from %s", html_path)
-    resp = web.FileResponse(html_path)
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+async def serve_webapp(_request: web.Request) -> web.Response:
+    """Keep old bookmarks working while sending them to the registered app."""
+    raise web.HTTPFound("/app")
 
 
 async def serve_landing_page(request: web.Request) -> web.Response:
@@ -17680,17 +17661,21 @@ async def serve_privacy_policy(request: web.Request) -> web.Response:
 
 
 async def serve_web_asset(request: web.Request) -> web.Response:
-    """Serve PWA files from the same Railway origin as ``/webapp``.
-
-    The HTML is routed explicitly, so unlike GitHub Pages, Railway does not
-    automatically expose the neighbouring manifest, service worker and icons.
-    Without these exact routes Android cannot finish installing the PWA.
-    """
+    """Retire the former root PWA while preserving its update path once."""
     filename = str(request.match_info.get("filename") or "")
-    allowed = {"manifest.json", "sw.js", "icon-192.png", "icon-512.png", "apple-touch-icon.png", "alarm.wav"}
+    allowed = {"manifest.json", "sw.js", "icon-192.png", "icon-512.png", "apple-touch-icon.png"}
     if filename not in allowed:
         raise web.HTTPNotFound()
+    if filename == "manifest.json":
+        raise web.HTTPFound("/app/manifest.webmanifest")
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    if filename == "sw.js":
+        asset_path = os.path.join(base_dir, "docs", "retired-sw.js")
+        if not os.path.isfile(asset_path):
+            raise web.HTTPNotFound()
+        response = web.FileResponse(asset_path)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        return response
     candidates = (
         os.path.join(base_dir, "docs", filename),
         os.path.join(base_dir, filename),
@@ -17699,8 +17684,6 @@ async def serve_web_asset(request: web.Request) -> web.Response:
     if not asset_path:
         raise web.HTTPNotFound()
     response = web.FileResponse(asset_path)
-    if filename in {"manifest.json", "sw.js"}:
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
     return response
 
 _WEB_SESSION_COOKIE = "bein_tg_session"
@@ -18452,7 +18435,7 @@ async def handle_whatsapp_webhook(request: web.Request) -> web.Response:
 
 
 def _register_legacy_web_routes(app_web: web.Application) -> None:
-    """Register the existing BeinSystems webapp and integration endpoints."""
+    """Register legacy CRM APIs and integration endpoints still in use."""
     app_web.router.add_route('OPTIONS', '/api/action', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/notifications', lambda r: web.Response())
     app_web.router.add_route('OPTIONS', '/api/samil/overview', lambda r: web.Response())
@@ -18941,7 +18924,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/app", auth_api["app_page"])
     app_web.router.add_get("/app/", auth_api["app_page"])
     app_web.router.add_get("/webapp", serve_webapp)
-    app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png|alarm\\.wav}", serve_web_asset)
+    app_web.router.add_get("/webapp/", serve_webapp)
+    app_web.router.add_get("/{filename:manifest\\.json|sw\\.js|icon-192\\.png|icon-512\\.png|apple-touch-icon\\.png}", serve_web_asset)
     app_web.router.add_get("/deal.html", serve_deal_page)
     app_web.router.add_get("/privacy-policy", serve_privacy_policy)
     app_web.router.add_get("/moderation/login", serve_moderation_login)

@@ -14,13 +14,11 @@ class AppDesignTests(unittest.TestCase):
         self.assertIn('target.click()', shell)
         self.assertIn("target&&!target.hidden&&target.style.display!=='none'", shell)
 
-    def test_only_app_loads_new_design(self):
+    def test_only_app_loads_new_design_and_legacy_bundle_is_removed(self):
         app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')
-        legacy = (ROOT / 'docs/index.html').read_text(encoding='utf-8')
         self.assertIn('data-app-ui="kwid"', app)
-        self.assertNotIn('data-app-ui="kwid"', legacy)
-        self.assertNotIn('app-shell', legacy)
-        self.assertNotIn('tenant-chakra-ui.js', legacy)
+        self.assertFalse((ROOT / 'docs/index.html').exists())
+        self.assertFalse((ROOT / 'docs/manifest.json').exists())
 
     def test_native_connect_deal_does_not_claim_a_kommo_id(self):
         app = (ROOT / 'docs/tenant-app.html').read_text(encoding='utf-8')

@@ -73,9 +73,7 @@ def test_report_ui_is_app_only_and_has_no_pilot_dependencies():
     assert 'src="/assets/tenant-night-report.js"' in page
     assert 'href="/assets/tenant-night-report.css"' in page
     assert '/webapp' not in page and 'tenant-webapp' not in page
-    pilot=(ROOT/'docs/index.html').read_text(encoding='utf-8-sig')
-    assert 'nightReportNav' not in pilot and '/assets/tenant-night-report.js' not in pilot
-    assert '/app/night-report' not in pilot
+    assert not (ROOT/'docs/index.html').exists(), 'the retired pilot WebApp page must not be shipped'
     app=(ROOT/'docs/tenant-app.html').read_text(encoding='utf-8-sig')
     assert app.count('id="nightReportNav"') == 1
     # Primary report navigation is native; retained legacy URL stays compatible.
