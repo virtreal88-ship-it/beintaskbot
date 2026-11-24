@@ -13,7 +13,7 @@ const missing=row(3,{customer_name:'100000000003@lid',display_phone_editable:tru
 const closed=row(6,{customer_name:'Closed without phone',display_phone_editable:false,lifecycle:{state:'closed'}});
 const conflict=row(7,{display_phone_editable:true,contact_identity_conflict:true});
 const noPermission=row(8,{display_phone_editable:false});
-let profile=worker,pending,job=null,holdMergeStatus=null,projection=null,holdOlder=null,holdRoute=null,actionRoutes=null;
+let profile=worker,pending,job=null,holdMergeStatus=null,projection=null,holdOlder=null,holdRoute=null,actionRoutes=null,hideCompletedPair=false;
 const timers=new Map();
 let timerSequence=-1;
 const realTimeout=w.setTimeout.bind(w),realClear=w.clearTimeout.bind(w);
@@ -36,7 +36,7 @@ w.fetch=async (target,options)=>{
  if(resource==='/duplicates'){
    seen.push({resource,method:options.method,body,search:url.search});
    if(body.mode==='name')return new Promise(resolve=>pending=()=>resolve(response({dialogs:[row(9)],next_offset:null})));
-   return response({dialogs:body.mode==='missing'?[missing,closed,conflict,noPermission]:[first,second,...more],next_offset:null});
+   return response({dialogs:body.mode==='missing'?[missing,closed,conflict,noPermission]:hideCompletedPair?more:[first,second,...more],next_offset:null});
  }
  if(resource==='/duplicates/preview'){
    seen.push({resource,body});
@@ -170,11 +170,17 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  assert.equal($('[data-dupe-merge-progress]').textContent,'66%');
  assert.match($('[data-dupe-merge-note]').textContent,/merge steps|этапы объединения|birləşdirmə mərhələlərini/i);
  assert.equal($('[data-dupe-merge-note]').hidden,false);
- job={...job,processed:3,state:'completed'};await firePoll();
+ const scansBeforeCompletion=seen.filter(req=>req.resource==='/duplicates').length;
+ hideCompletedPair=true;job={...job,processed:3,state:'completed'};await firePoll();
  assert.equal($('#operatorHistoryMerge progress').value,100); assert.match($('#operatorHistoryMerge h2').textContent,/merged|диалоги объединены|birləşdirildi/i);
  assert.equal(timers.size,0);
  assert.equal(seen.filter(req=>req.resource==='/history').length,beforeHistory,'job UI never loads a dialogue history');
  $('[data-dupe-merge-close]').click();
+ assert.equal(seen.filter(req=>req.resource==='/duplicates').length,scansBeforeCompletion+1,'success refreshes duplicate results once');
+ assert.match($('#operatorDuplicateSearch').textContent,/Other A/);
+ assert.doesNotMatch($('#operatorDuplicateSearch').textContent,/Synthetic 2/);
+ hideCompletedPair=false;
+ $('[data-dupe-close]').click();await searchDuplicates();
  job={...job,processed:1,state:'running'};
  $('[data-dupe-merge-status]').click();await settle();$('[data-dupe-merge-cancel]').click();await settle();
  assert.equal(mergeCalls().at(-1).operation,'cancel');assert.equal(mergeCalls().at(-1).job_id,'job-1');

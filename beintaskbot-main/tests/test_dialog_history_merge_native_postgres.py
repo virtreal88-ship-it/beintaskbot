@@ -7,6 +7,7 @@ from psycopg.rows import dict_row
 import tenant_dialog_history_merge_jobs as jobs
 from test_dialog_history_merge_jobs import (merge_case, active, setup, staged_source, managed,
                                            gateway, pilot, db, command,
+                                           test_duplicate_search_omits_effective_completed_pairs_and_restores_undone,
                                            test_independent_display_choices_snapshot_never_affects_provider_route_or_proof,
                                            test_stale_or_unoffered_display_choices_leave_no_job,
                                            test_display_edit_between_proof_and_publication_requires_fresh_comparison,
