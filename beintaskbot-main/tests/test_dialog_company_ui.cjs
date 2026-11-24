@@ -101,7 +101,7 @@ const read=p=>fs.readFileSync(p,'utf8');
     assert.deepEqual(tabs().map(x=>x.textContent),labels);
   }
   w.tenantI18n.setLanguage('en');await tick();
-  assert(!$('#operatorCompanyPanelClose'),'no second panel close button');
+  assert($('#operatorCompanyPanelClose'),'the mobile-only close control exists inside the panel');
   for(const [i,key,action] of [[1,'tasks','company_tasks'],[2,'modules','company_modules'],[3,'history','company_history']]){
     tabs()[i].click();await tick();
     assert.equal(tabs()[i].getAttribute('aria-selected'),'true');
