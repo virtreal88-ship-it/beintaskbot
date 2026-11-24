@@ -1162,9 +1162,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 # Only entries matching already-authorized rows are projected.
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
-                from tenant_dialog_lifecycle import no_reply_marks
+                from tenant_dialog_lifecycle import optional_no_reply_marks
                 visible_routes={(str(r['channel_id']),r['conversation_id']) for r in rows if r['provider']=='connect'}
-                marked=no_reply_marks(cur,tenant,[(channel,conversation,workflow.get('last_inbound_id'))
+                marked=optional_no_reply_marks(cur,tenant,[(channel,conversation,workflow.get('last_inbound_id'))
                     for (channel,conversation),workflow in workflows.items()
                     if workflow['state'] in {'waiting','accepted'} and (channel,conversation) in visible_routes])
                 if marked:

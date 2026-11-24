@@ -133,6 +133,30 @@ def test_optional_audit_timeout_preserves_history_and_cursor(episodes, monkeypat
     assert 'operator_events_retry_after_ms' not in retry
 
 
+def test_accepted_rhetorical_marker_is_bounded_under_audit_lock(episodes,monkeypatch):
+    from collections import OrderedDict
+    import tenant_dialog_lifecycle as lifecycle
+    import tenant_dialog_operator_timeline as timeline
+    import tenant_operator_dialogs as operator
+    monkeypatch.setattr(timeline,"_cooldown",OrderedDict())
+    monkeypatch.setattr(operator, "_connect", lambda: psycopg.connect(episodes.dsn,row_factory=dict_row))
+    accept=lifecycle.mutate(PROFILE,payload())['lifecycle']
+    detail=operator.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']
+    marker=lifecycle.mutate(PROFILE,payload('dismiss',accept['revision'],
+        message_id=detail['last_inbound_id'],individual_no_reply=True))['lifecycle']
+    assert marker['no_reply_needed']
+    with psycopg.connect(episodes.dsn,row_factory=dict_row) as holder:
+        holder.execute("LOCK saas_tenant_audit_events IN ACCESS EXCLUSIVE MODE")
+        busy=operator.history(PROFILE,'connect',41,CA,'client',include_operator_events=True)
+        state=busy['dialog']['lifecycle']
+        assert busy['messages'] and busy['read_through_message_id']
+        assert state['state']=='accepted' and state['can_close'] and not state['can_dismiss']
+        assert 'operator_events' not in busy and 'operator_events_retry_after_ms' in busy
+    recovered=operator.history(PROFILE,'connect',41,CA,'client')
+    assert recovered['messages']==busy['messages']
+    assert recovered['dialog']['lifecycle']['no_reply_needed']
+
+
 def test_group_notes_remain_exact_to_selected_source_even_with_union_message_cursor(episodes, monkeypatch):
     import tenant_dialog_lifecycle as lifecycle
     import tenant_operator_dialogs as operator

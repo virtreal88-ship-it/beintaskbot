@@ -161,6 +161,27 @@ def no_reply_marks(cur, tenant, keys):
 
 
 
+def optional_no_reply_marks(cur, tenant, keys):
+    """Bound a UI-only lookup and release its audit-table locks before timeline enrichment."""
+    keys=[key for key in keys if key[-1]]
+    if not keys:return set()
+    from psycopg.errors import LockNotAvailable, QueryCanceled
+    cur.execute("SAVEPOINT dialog_no_reply_lookup")
+    try:
+        cur.execute("""SELECT setting::integer AS milliseconds
+          FROM pg_settings WHERE name='statement_timeout'""")
+        timeout=(cur.fetchone() or {}).get('milliseconds') or 150
+        cur.execute("SELECT set_config('statement_timeout',%s,true)",(f'{min(timeout,150)}ms',))
+        return no_reply_marks(cur,tenant,keys)
+    except (LockNotAvailable, QueryCanceled):
+        return None
+    finally:
+        # RELEASE alone retains AccessShare until the outer transaction ends.
+        # Rewind on success too: this subtransaction performs no writes.
+        cur.execute("ROLLBACK TO SAVEPOINT dialog_no_reply_lookup")
+        cur.execute("RELEASE SAVEPOINT dialog_no_reply_lookup")
+
+
 def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False, search_overview=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     # The caller's independent tenant/source policy still gates every row.
@@ -463,8 +484,10 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
           AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
           ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+str(dialog['channel_id']),dialog['lead_id']))
         last=cur.fetchone() or {}
-    no_reply=state in {'waiting','accepted'} and (_no_reply_marked or bool(details and last.get('id') and no_reply_marks(
-        cur,tenant,[(str(dialog['channel_id']),dialog['conversation_id'],last['id'])])))
+    markers=set()
+    if state in {'waiting','accepted'} and details and last.get('id'):
+        markers=optional_no_reply_marks(cur,tenant,[(str(dialog['channel_id']),dialog['conversation_id'],last['id'])])
+    no_reply=state in {'waiting','accepted'} and (_no_reply_marked or bool(markers))
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
@@ -473,7 +496,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
             and _can_update is True and (own or dialog.get('can_send') is True)
             and dialog.get('channel_active') is True
             and (online or (own and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
-        'can_dismiss':state=='accepted' and own and rollout.admission_enabled and _can_update is True and bool(last) and not no_reply,
+        'can_dismiss':state=='accepted' and own and rollout.admission_enabled and _can_update is True and bool(last) and markers is not None and not no_reply,
         'no_reply_needed':no_reply,
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
