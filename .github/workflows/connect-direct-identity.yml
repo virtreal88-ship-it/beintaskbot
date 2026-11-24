@@ -76,6 +76,7 @@ jobs:
           tests/test_connect_direct_identity.py
           tests/test_connect_identity_inventory_postgres.py
           tests/test_connect_dependent_reconcile_postgres.py
+          tests/test_dialog_duplicates_postgres.py
           tests/test_connect_rollback_timestamp_postgres.py
           tests/test_connect_channel_multiprocess.py
           tests/test_native_whatsapp_contact.py
