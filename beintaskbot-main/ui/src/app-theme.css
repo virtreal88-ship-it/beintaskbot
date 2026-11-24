@@ -4,7 +4,7 @@ html[data-app-theme],body[data-app-ui="kwid"] {
   --app-ink:#18181b; --app-muted:#71717a; --app-line:#e4e4e7;
   --app-input:#fff; --app-hover:#f4f4f5; --app-accent:#0284c7;
   --app-accent-hover:#0369a1; --app-accent-soft:#e0f2fe;
-  --app-danger:#dc2626; --app-sidebar:288px; --app-motion:180ms;
+  --app-danger:#dc2626; --app-sidebar:288px; --app-topbar-height:64px; --app-motion:180ms;
   --app-warning-bg:#fffbeb; --app-warning-ink:#92400e; --app-warning-line:#fde68a;
   --ink:var(--app-ink); --muted:var(--app-muted); --line:var(--app-line);
   --paper:var(--app-bg); --card:var(--app-surface); --brand:var(--app-accent); --brand-deep:var(--app-accent-hover);
@@ -26,7 +26,7 @@ body[data-app-ui="kwid"] [hidden] {display:none!important}
 body[data-app-ui="kwid"] .shell {display:grid;grid-template-columns:var(--app-sidebar) minmax(0,1fr);min-height:100dvh;transition:grid-template-columns var(--app-motion) ease}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] {--app-sidebar:88px}
 body[data-app-ui="kwid"] aside {display:flex;flex-direction:column;align-items:stretch;width:100%;height:100dvh;position:sticky;top:0;padding:0;background:var(--app-bg);color:var(--app-ink);gap:0;z-index:40;overflow:hidden;border-right:1px solid var(--app-line)}
-body[data-app-ui="kwid"] .app-sidebar-header {height:56px;min-height:56px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--app-surface);border-bottom:1px solid var(--app-line)}
+body[data-app-ui="kwid"] .app-sidebar-header {height:var(--app-topbar-height);min-height:var(--app-topbar-height);padding:0 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--app-surface);border-bottom:1px solid var(--app-line)}
 body[data-app-ui="kwid"] .app-sidebar-header .brand {display:flex;font-size:17px;font-weight:700;letter-spacing:-.45px;line-height:1.3;white-space:nowrap;gap:0;min-width:0}
 body[data-app-ui="kwid"] .app-sidebar-header~div:has(.company) {display:none!important}
 body[data-app-ui="kwid"] .mark {display:none}
@@ -55,7 +55,7 @@ body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-re
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) :is(#dialogsAttentionCount,#supportUnresolvedCount,#supportCasesPending) {position:static;inset:auto;transform:none;display:block;box-sizing:border-box;width:max-content;max-width:30px;min-width:0;height:10px;margin:0;padding:0 3px;overflow:hidden;border-radius:5px;font-size:8px;line-height:10px;text-align:center;white-space:nowrap}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-items {display:grid!important}
 body[data-app-ui="kwid"] main {padding:96px 32px 32px!important;width:100%;max-width:1440px!important;margin:0 auto;min-width:0}
-body[data-app-ui="kwid"] .app-topbar {position:fixed;top:0;left:var(--app-sidebar);right:0;z-index:35;height:64px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 32px;background:var(--app-surface);border-bottom:1px solid var(--app-line);transition:left var(--app-motion) ease}
+body[data-app-ui="kwid"] .app-topbar {position:fixed;top:0;left:var(--app-sidebar);right:0;z-index:35;height:var(--app-topbar-height);display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 32px;background:var(--app-surface);border-bottom:1px solid var(--app-line);transition:left var(--app-motion) ease}
 body[data-app-ui="kwid"] .app-topbar-context {font-size:13px;font-weight:500;color:var(--app-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 body[data-app-ui="kwid"] .app-topbar-actions {display:flex;align-items:center;gap:12px;margin-left:auto}
 body[data-app-ui="kwid"] .app-icon-button {border:0;background:transparent;color:var(--app-muted);border-radius:8px;width:36px;height:36px;display:grid;place-items:center;flex:none;padding:8px;transition:color 75ms,background 75ms}
@@ -177,6 +177,7 @@ html[data-app-theme="dark"] body[data-app-ui="kwid"] {
 }
 @keyframes app-appear {from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @media(max-width:1023px) {
+  body[data-app-ui="kwid"] .app-sidebar-header {height:56px;min-height:56px}
   body[data-app-ui="kwid"] .shell {grid-template-columns:minmax(0,1fr)}
   body[data-app-ui="kwid"] aside {position:fixed;inset:0 auto 0 0;width:288px;transform:translateX(-100%);transition:transform var(--app-motion) ease;background:var(--app-surface);z-index:100;height:100dvh}
   body[data-app-ui="kwid"][data-mobile-menu="open"] aside {transform:translateX(0)}

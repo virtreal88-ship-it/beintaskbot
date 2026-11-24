@@ -4,7 +4,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'../.support-test-deps/n
 const docs=path.resolve(__dirname,'../docs');
 const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
 const alpha='<b>Company A & Partners</b> '+ 'very long stored name '.repeat(10);
-const beta='@verified_account';
+const beta='@demo';
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
  try{for(const width of [360,430,1440]){
@@ -107,12 +107,29 @@ const beta='@verified_account';
   assert(await name.evaluate(n=>n.parentElement.matches('[data-header-meta]')),'company name stays in the compact metadata row');
   assert(await name.evaluate(n=>n.getBoundingClientRect().top>=document.querySelector('#operatorDialogTitleSlot').getBoundingClientRect().bottom),
     'company stays below the customer name');
-  assert(await name.evaluate(n=>n.scrollWidth>n.clientWidth&&getComputedStyle(n).textOverflow==='ellipsis'));
+  const longBadge=await name.evaluate(el=>{
+    const meta=el.parentElement,source=meta.querySelector('.operator-client-source');
+    const rect=el.getBoundingClientRect(),row=meta.getBoundingClientRect(),label=source.getBoundingClientRect();
+    const style=getComputedStyle(el);
+    return {
+      width:rect.width,cap:Math.min(180,row.width*.38),
+      fits:rect.left>=label.right-1&&rect.right<=row.right+1,
+      truncated:el.scrollWidth>el.clientWidth&&style.textOverflow==='ellipsis'&&style.whiteSpace==='nowrap',
+      sourceLegible:label.width>0&&source.scrollWidth<=source.clientWidth+1
+    };
+  });
+  assert(longBadge.width<=longBadge.cap+1&&longBadge.fits&&longBadge.truncated&&longBadge.sourceLegible,
+    'a long company badge is capped and truncated without clipping the header source: '+JSON.stringify(longBadge));
   assert.equal(await head.locator('.operator-channel-label').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.caseGets),[],'no case query while Information is closed');
   assert.deepEqual(await page.evaluate(()=>window.bindingGets),['a'],'header and side panel reuse one exact GET');
   assert.equal(await page.locator('#operatorClientCompanyHost [data-company-value]').textContent(),alpha);
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
+  assert.equal(await head.locator('.operator-client-source').innerText(),'Source a');
+  const transferSection=panel.locator('#operatorSidebarTransfer');
+  assert.equal(await transferSection.count(),1,'removing the source row preserves the transfer controls');
+  assert.equal(await transferSection.getByText('Source',{exact:true}).count(),0,'the transfer section does not repeat the header source');
+  assert.equal(await transferSection.getByText('Source a',{exact:true}).count(),0);
   assert.equal(await panel.isVisible(),width>900,'desktop details stay open; mobile starts with the overlay closed');
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),width<=900?[]:['a'],'company profile loads only when the details panel is visible');
   const pane=page.locator('#operatorConversationPane');
@@ -169,13 +186,11 @@ const beta='@verified_account';
   }
   if(width<=900)await page.waitForFunction(()=>window.savedOpen===true);
   else assert.equal(await page.evaluate(()=>window.savedOpen),false,'desktop auto-open does not persist a manual preference');
-  if(width<=900){
-    const transfer=panel.locator('#operatorSidebarTransfer summary');
-    await transfer.tap();
-    await panel.getByRole('button',{name:'Synthetic online operator',exact:true}).waitFor();
-    assert.equal(await page.evaluate(()=>window.transferReads),1,'tapping Transfer reads exact authorized recipients without writing');
-    await transfer.tap();
-  }
+  const transfer=transferSection.locator('summary');
+  if(width<=900)await transfer.tap();else await transfer.click();
+  await panel.getByRole('button',{name:'Synthetic online operator',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>window.transferReads),1,'opening Transfer still reads exact authorized recipients');
+  if(width<=900)await transfer.tap();else await transfer.click();
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
   assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
@@ -351,6 +366,16 @@ const beta='@verified_account';
   await reauthorize('visible','b');
   await name.waitFor();
   assert.equal(await name.textContent(),beta,'visible company does not require edit permission');
+  const badge=await name.evaluate(el=>{
+    const range=document.createRange(),style=getComputedStyle(el);
+    range.selectNodeContents(el);
+    return {width:el.getBoundingClientRect().width,text:range.getBoundingClientRect().width,
+      padding:parseFloat(style.paddingInlineStart)+parseFloat(style.paddingInlineEnd),
+      background:style.backgroundColor};
+  });
+  assert(Math.abs(badge.width-badge.text-badge.padding)<=1&&badge.background!=='rgba(0, 0, 0, 0)',
+    'the badge background fits the text plus its padding: '+JSON.stringify(badge));
+  assert.equal(await head.locator('.operator-client-source').innerText(),'Source b','switching the physical source updates the header');
   await page.locator('#operatorClientCardOpen').click();
   assert(!await acceptedBy.isVisible(),'a source without a verified acceptance must not borrow another source’s name');
   assert.equal(await acceptedBy.locator('span').textContent(),'');

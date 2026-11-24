@@ -14,7 +14,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    const member={tenant_id:'synthetic',telegram_id:11,role:'owner',active:true};
    window.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true},dialog_company_binding:true}};
    const source=(name,id)=>({provider:'connect',channel_id:id,channel_name:name,lead_id:id==='a'?41:42,conversation_id:'120363432608782851@g.us',customer_name:'Synthetic group',customer_kind:'group',can_send:false,lifecycle_enabled:true,lifecycle:{state:'waiting',revision:0,can_accept:true}});
-   const sources=[source('Huseyn','a'),source('Texniki Dəstək','b')];window.historyReads=[];window.companyReads=[];window.accountCalls=[];
+   const sources=[source('Synthetic source A','a'),source('Synthetic source B','b')];window.historyReads=[];window.companyReads=[];window.accountCalls=[];
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
@@ -84,7 +84,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const group=page.locator('.operator-row').first();
   assert.equal(await group.locator('.operator-row-sub').isVisible(),false,'missing group phone does not take space');
   assert.equal(await group.locator('.operator-row-preview').count(),0,'missing preview does not take space');
-  assert.equal(await group.locator('.operator-row-source').count(),0,'group source is shown in the right panel, not the list');
+  assert.equal(await group.locator('.operator-row-source').count(),0,'group source is shown in the chat header, not the list');
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));
@@ -103,7 +103,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await card.locator('#operatorConversationName').count(),1);
   const dialogueBlock=card.locator('.operator-client-panel-block').filter({has:page.locator('[data-panel-agent-status]')});
   assert(await dialogueBlock.locator('[data-panel-agent-status]').isVisible(),'agent mode stays in the dialogue block');
-  assert.match(await dialogueBlock.innerText(),/Huseyn/,'source is retained in the dialogue details block');
+  assert.match(await dialogueBlock.innerText(),/Synthetic source A/,'source is retained in the separate avatar modal');
   assert.equal(await card.locator('.operator-client-panel-block').last().locator('[data-group-participants]').count(),1,'the roster is the last block in groups');
   assert.equal(await card.locator('.operator-client-panel-block').last().getAttribute('open'),null,'group members are collapsed by default');
   const sourceRow=dialogueBlock.locator('.operator-client-panel-row').first();
@@ -118,7 +118,13 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const openWidth=(await chat.boundingBox()).width;
   if(width<900)assert(Math.abs(openWidth-closedWidth)<1,'company overlays on mobile without resizing the chat');
   else assert(openWidth<(await page.locator('.operator-conversation-pane').boundingBox()).width-100,'desktop right panel reserves a column beside the chat');
-  assert.match(await page.locator('#operatorSidebarDialogInfo').innerText(),/Huseyn/,'right panel shows the selected source');
+  const headerSource=page.locator('#operatorConversationHeader .operator-client-source');
+  assert.equal(await headerSource.innerText(),'Synthetic source A');
+  const sidebarInfo=panel.locator('#operatorSidebarDialogInfo');
+  assert.equal(await sidebarInfo.count(),1,'the structural Conversation container survives');
+  assert(!await sidebarInfo.isVisible(),'no empty Conversation section is shown after removing the duplicate source');
+  assert.equal(await sidebarInfo.evaluate(el=>el.getBoundingClientRect().height),0,'the hidden section reserves no space');
+  assert.equal(await panel.getByText('Synthetic source A',{exact:true}).count(),0,'the right panel does not repeat the source');
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
   assert.match(await page.locator('#operatorDialogueCompanySearch').inputValue(),/^Company A/);
@@ -131,6 +137,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    await page.locator('#operatorComposerSourceSelect').selectOption(String(index));
    await page.waitForFunction(channel=>window.historyReads.at(-1)===channel,index===0?'a':'b');
    await page.waitForFunction(name=>document.querySelector('[data-company-value]')?.textContent.startsWith(name),index===0?'Company A':'Company B');
+   assert.equal(await headerSource.innerText(),index===0?'Synthetic source A':'Synthetic source B','the group picker still updates the exact header source');
   }
   await page.evaluate(()=>{window.offerOperatorPicker='off';});
   await page.locator('#operatorComposerSourceSelect').selectOption('1');
@@ -138,7 +145,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   await page.locator('#operatorDialogTitleText').click();
   await card.locator('[data-client-transfer]').waitFor();
   assert.match(await card.locator('[data-client-transfer]').innerText(),/Synthetic sender → Synthetic recipient/);
-  assert.match(await card.innerText(),/Texniki Dəstək/);
+  assert.match(await card.innerText(),/Synthetic source B/);
   await page.keyboard.press('Escape');
   if(width<900)await page.locator('#operatorCompanyPanelOpen').click();
   else assert.equal(await panel.evaluate(node=>node.open),true,'desktop details remain open after closing the client card');

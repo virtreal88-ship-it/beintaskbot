@@ -9,11 +9,14 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
 (async()=>{
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
-  for(const [width,height,language] of [[320,800,'ru'],[320,800,'az'],[360,800,'ru'],[360,800,'az'],[390,844,'ru'],[390,844,'az'],[430,900,'ru'],[430,900,'az'],[390,844,'en'],[1280,900,'ru']]){
+  for(const [width,height,language,sidebar='expanded'] of [[320,800,'ru'],[320,800,'az'],[360,800,'ru'],[360,800,'az'],[390,844,'ru'],[390,844,'az'],[430,900,'ru'],[430,900,'az'],[390,844,'en'],[1024,900,'ru'],[1280,900,'ru'],[1280,900,'ru','collapsed']]){
    const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];
    page.on('pageerror',error=>errors.push(error.message));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
    // Production stores question templates in this tenant/employee scoped key.
-   await page.addInitScript(({tenant})=>localStorage.setItem(`tenant.operator.copilot-question-templates.${tenant}:33`,JSON.stringify(Array.from({length:12},(_,i)=>({id:'template-'+i,name:'Saved question '+i,prompt:'Saved question'})))),{tenant});
+   await page.addInitScript(({tenant,sidebar})=>{
+    localStorage.setItem('tenant-app-sidebar',sidebar);
+    localStorage.setItem(`tenant.operator.copilot-question-templates.${tenant}:33`,JSON.stringify(Array.from({length:12},(_,i)=>({id:'template-'+i,name:'Saved question '+i,prompt:'Saved question'}))));
+   },{tenant,sidebar});
    await page.route('**/*',async route=>{
     const request=route.request(),url=new URL(request.url()),name=url.pathname;calls.push({path:name,method:request.method(),body:request.postData()});
     if(name==='/app')return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});
@@ -41,8 +44,19 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await trigger.click();await popover.waitFor();const after=await read();
     for(const name of ['search','trigger','details','filter','toolbar'])assertStableGeometry(after[name],before[name],name+' on menu open');
     assert.equal(after.trigger.h,44);if(width<=900)assert.equal(after.filter.h,44);
-    const checkBounds=async()=>{const box=await popover.boundingBox();assert.ok(box.x>=7&&box.y>=7&&box.x+box.width<=width-7&&box.y+box.height<=height-7,JSON.stringify(box));};
+    const pane=page.locator('.operator-list-pane');
+    const checkBounds=async()=>{
+     const [box,list]=await Promise.all([popover.boundingBox(),pane.boundingBox()]);
+     assert.ok(box.x>=Math.max(7,list.x+7)&&box.y>=7&&box.x+box.width<=Math.min(width-7,list.x+list.width-7)&&box.y+box.height<=height-7,
+      'menu fits the visible dialog list and never opens behind the global sidebar: '+JSON.stringify({box,list,width,sidebar}));
+    };
     await checkBounds();assert.equal(await trigger.getAttribute('aria-expanded'),'true');
+    const hit=await popover.locator('button:visible').evaluateAll(buttons=>buttons.map(button=>{
+     const r=button.getBoundingClientRect();const y=r.top+r.height/2;
+     return {id:button.id,left:button.contains(document.elementFromPoint(r.left+3,y)),center:button.contains(document.elementFromPoint(r.left+r.width/2,y))};
+    }));
+    assert(hit.length>=3&&hit.every(point=>point.left&&point.center),'all visible actions are hit-testable across their width: '+JSON.stringify(hit));
+    await page.locator('#operatorSoundToggle').click({trial:true,position:{x:3,y:20}});
     await page.locator('#operatorSoundToggle').focus();await page.keyboard.press('End');assert.equal(await page.evaluate(()=>document.activeElement.id),'operatorMarkAllRead');
     await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>document.activeElement.id),'operatorSoundToggle');
     const nextId=await popover.evaluate(n=>[...n.querySelectorAll('button')].filter(b=>!b.disabled&&b.getClientRects().length)[1].id);await page.keyboard.press('ArrowDown');assert.equal(await page.evaluate(()=>document.activeElement.id),nextId);
@@ -55,7 +69,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.equal(calls.some(c=>c.method!=='GET'),false,'menu/keyboard/layout never performs a mutation');assert.deepEqual(errors,[]);
     await page.screenshot({path:'/tmp/list-toolbar-'+width+'-'+language+'.png'});
-    console.log('PASS list toolbar '+width+' '+language+': full HTML/CSS, fixed geometry, short search, viewport bounds, keyboard/focus/outside, no mutations');
+    console.log('PASS list toolbar '+width+' '+language+' '+sidebar+': full HTML/CSS, fixed geometry, short search, viewport bounds, keyboard/focus/outside, no mutations');
    }finally{await page.close();}
   }
  }finally{await browser.close();}

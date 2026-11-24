@@ -90,7 +90,7 @@
   let toolsPopoverCleanup=()=>{};
   function bindToolsPopover(menu){
     toolsPopoverCleanup();
-    const trigger=menu.querySelector('summary'),popover=menu.querySelector('#operatorToolsPopover'),listeners=[];
+    const trigger=menu.querySelector('summary'),popover=menu.querySelector('#operatorToolsPopover'),pane=menu.closest('.operator-list-pane'),listeners=[];
     const listen=(target,type,fn,options)=>{target?.addEventListener(type,fn,options);listeners.push(()=>target?.removeEventListener(type,fn,options));};
     const close=(restore=false)=>{menu.open=false;trigger.setAttribute('aria-expanded','false');delete popover.dataset.anchored;if(restore&&trigger.isConnected)trigger.focus({preventScroll:true});};
     const items=()=>[...popover.querySelectorAll('button')].filter(node=>!node.disabled&&node.getClientRects().length);
@@ -98,10 +98,13 @@
       if(!menu.open||!menu.isConnected)return;
       trigger.setAttribute('aria-expanded','true');
       const v=window.visualViewport,top=v?.offsetTop||0,left=v?.offsetLeft||0,width=v?.width||innerWidth,height=v?.height||innerHeight,rect=trigger.getBoundingClientRect(),bottom=top+height;
-      popover.style.width=Math.max(1,Math.min(280,width-16))+'px';popover.style.maxHeight=Math.max(1,height-16)+'px';
+      // Viewport-only clamping can place the dropdown behind the desktop
+      // navigation. Anchor it inside the visible portion of its own list.
+      const list=pane?.getBoundingClientRect(),minX=Math.max(left,list?.left??left)+8,maxX=Math.min(left+width,list?.right??left+width)-8;
+      popover.style.width=Math.max(1,Math.min(280,maxX-minX))+'px';popover.style.maxHeight=Math.max(1,height-16)+'px';
       const measured=popover.getBoundingClientRect(),below=Math.max(1,bottom-Math.max(rect.bottom+6,top+8)-8),above=Math.max(1,rect.top-top-14),down=below>=Math.min(measured.height,132)||below>=above,available=down?below:above;
       popover.style.maxHeight=available+'px';
-      const h=Math.min(measured.height,available),x=Math.max(left+8,Math.min(rect.right-measured.width,left+width-8-measured.width)),y=Math.max(top+8,Math.min(down?rect.bottom+6:rect.top-h-6,bottom-8-h));
+      const h=Math.min(measured.height,available),x=Math.max(minX,Math.min(rect.right-measured.width,maxX-measured.width)),y=Math.max(top+8,Math.min(down?rect.bottom+6:rect.top-h-6,bottom-8-h));
       popover.style.left=x+'px';popover.style.top=y+'px';popover.dataset.anchored='true';
     };
     const focusItem=(last=false)=>{position();const enabled=items();(last?enabled.at(-1):enabled[0])?.focus({preventScroll:true});};
@@ -113,7 +116,7 @@
     listen(document,'focusin',event=>{if(menu.open&&!menu.contains(event.target))close();});
     for(const type of ['tenant-view','tenant-profile','tenant-auth-invalid'])listen(document,type,()=>close());
     listen(document,'tenant-language',()=>{trigger.setAttribute('aria-label',toolsLabel());trigger.title=toolsLabel();popover.setAttribute('aria-label',toolsLabel());if(menu.open)requestAnimationFrame(position);});
-    if(window.ResizeObserver){const observer=new ResizeObserver(()=>{if(menu.open)position();});observer.observe(popover);listeners.push(()=>observer.disconnect());}
+    if(window.ResizeObserver){const observer=new ResizeObserver(()=>{if(menu.open)position();});observer.observe(popover);if(pane)observer.observe(pane);listeners.push(()=>observer.disconnect());}
     listen(window,'resize',position);listen(window,'scroll',position);listen(window.visualViewport,'resize',position);listen(window.visualViewport,'scroll',position);
     toolsPopoverCleanup=()=>listeners.forEach(remove=>remove());
   }
@@ -638,7 +641,6 @@
     choose:{ru:'Выберите компанию, чтобы завершить диалог.',az:'Dialoqu tamamlamaq üçün şirkət seçin.',en:'Choose a company to complete this dialogue.'},
     chooseOrSkip:{ru:'Выберите компанию или завершите без неё.',az:'Şirkət seçin və ya şirkətsiz tamamlayın.',en:'Choose a company or complete without one.'},
     skipOnly:{ru:'Диалог можно завершить без выбора компании.',az:'Dialoqu şirkət seçmədən tamamlamaq olar.',en:'You can complete the dialogue without choosing a company.'},
-    skip:{ru:'Без компании',az:'Şirkətsiz',en:'Without a company'},
     archivedSkip:{ru:'Компания архивирована. Можно завершить диалог без выбора новой компании и сохранить текущую привязку.',az:'Şirkət arxivləşdirilib. Yeni şirkət seçmədən dialoqu tamamlayıb mövcud əlaqəni saxlamaq olar.',en:'The company is archived. You can complete without choosing a replacement and keep the current link.'},
     archived:{ru:'Компания диалога архивирована. Для завершения выберите действующую CRM-компанию.',az:'Dialoq şirkəti arxivləşdirilib. Tamamlamaq üçün aktiv CRM şirkəti seçin.',en:'The dialogue company is archived. Choose an active CRM company to complete it.'},
     locked:{ru:'Нет прав на привязку CRM-компании. Диалог остаётся в работе.',az:'CRM şirkətini bağlamaq icazəsi yoxdur. Dialoq işdə qalır.',en:'You cannot link a CRM company. The dialogue stays open.'},
@@ -650,51 +652,107 @@
   }[key]?.[i18n.language]||key);
   function openLifecycleCompanyClose(route){
     closeLifecycleModal();
-    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
-    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle"><h2 id="operatorLifecycleTitle">${esc(companyCloseText('title'))}</h2><form data-company-search><label>${esc(companyCloseText('search'))}<input type="search" maxlength="120"></label><button type="submit">${esc(companyCloseText('search'))}</button></form><label>${esc(companyCloseText('choose'))}<select data-company-choice disabled><option value=""></option></select></label><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="button" class="primary" data-company-complete disabled>${esc(lifecycleText('close'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></section>`;
-    const form=modal.querySelector('form'),input=form.querySelector('input'),select=modal.querySelector('select'),
-      done=modal.querySelector('[data-company-complete]'),status=modal.querySelector('[role=status]');
+    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal operator-close-company';
+    const searchLabel=esc(companyCloseText('search'));
+    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-label="${esc(companyCloseText('title'))}"><div data-company-search><input id="operatorCloseCompanySearch" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="operatorCloseCompanyOptions" aria-label="${searchLabel}" autocomplete="off" autocapitalize="none" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" maxlength="120" placeholder="${searchLabel}"><div id="operatorCloseCompanyOptions" role="listbox" aria-label="${searchLabel}" hidden></div></div><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="button" class="primary" data-company-complete>${esc(lifecycleText('close'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></section>`;
+    const input=modal.querySelector('input'),options=modal.querySelector('[role=listbox]'),
+      done=modal.querySelector('[data-company-complete]'),cancel=modal.querySelector('[data-cancel]'),
+      status=modal.querySelector('[role=status]');
     const company=route.lifecycle.company_completion,canChoose=company.can_choose===true,canSkip=company.can_skip===true;
-    const searchButton=form.querySelector('button');
-    const skip=document.createElement('button');skip.type='button';skip.className='outline';skip.dataset.companySkip='';skip.textContent=companyCloseText('skip');skip.hidden=!canSkip;done.after(skip);
-    form.hidden=!canChoose;select.closest('label').hidden=!canChoose;done.hidden=!canChoose;
-    if(canSkip&&(company.status==='archived'||!canChoose)){const hint=document.createElement('p');hint.className='sub';hint.textContent=companyCloseText(company.status==='archived'?'archivedSkip':'skipOnly');status.before(hint);}
-    if(canChoose&&canSkip)select.closest('label').firstChild.textContent=companyCloseText('chooseOrSkip');
+    input.closest('[data-company-search]').hidden=!canChoose;done.disabled=!canSkip;
+    if(canChoose&&!canSkip)input.setAttribute('aria-required','true');
     const owner=identity(member),focus=document.activeElement;
-    let serial=0,submitting=false;
+    let serial=0,timer=null,flight=null,submitting=false,selected=null,active=-1;
     const current=()=>modal.isConnected&&owner===identity(member)&&sameDialog(route,currentDialog);
     const events=['tenant-chat-close','tenant-chat-open','tenant-auth-invalid','tenant-auth-pending','tenant-profile','tenant-view'];
-    const close=()=>{serial++;modal.remove();document.removeEventListener('keydown',key,true);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};if(focus?.isConnected)focus.focus();};
+    const stopSearch=()=>{serial++;clearTimeout(timer);timer=null;flight?.abort();flight=null;};
+    const hideOptions=()=>{
+      active=-1;options.hidden=true;options.replaceChildren();
+      input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');
+    };
+    const syncDone=()=>{done.disabled=submitting||!(canSkip||(canChoose&&selected&&selected.label===input.value));};
+    const close=()=>{
+      stopSearch();modal.remove();document.removeEventListener('keydown',key,true);
+      for(const name of events)document.removeEventListener(name,close);
+      closeLifecycleModal=()=>{};if(focus?.isConnected)focus.focus();
+    };
+    const cancelModal=()=>{if(!submitting)close();};
+    const choose=(event,item,node)=>{
+      if(!current()||submitting||!node.isConnected)return;
+      event.preventDefault();stopSearch();selected=item;input.value=item.label;
+      hideOptions();status.textContent='';syncDone();input.focus();
+    };
+    const highlight=index=>{
+      const nodes=[...options.children];if(!nodes.length)return;
+      active=(index+nodes.length)%nodes.length;
+      nodes.forEach((node,i)=>node.setAttribute('aria-selected',String(i===active)));
+      input.setAttribute('aria-activedescendant',nodes[active].id);nodes[active].scrollIntoView?.({block:'nearest'});
+    };
     const key=event=>{
-      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}
-      else if(event.key==='Tab'){const nodes=[...modal.querySelectorAll('input,select,button')].filter(node=>!node.disabled&&!node.closest('[hidden]'));if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}}
+      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();cancelModal();}
+      else if(event.key==='Tab'){
+        const nodes=[input,done,cancel].filter(node=>!node.disabled&&!node.closest('[hidden]'));
+        if(!nodes.length){event.preventDefault();return;}
+        if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}
+        else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}
+      }
+    };
+    async function search(){
+      if(!canChoose||!current()||submitting)return;
+      stopSearch();hideOptions();status.textContent='';
+      const term=input.value.trim();if(!term||selected)return;
+      const controller=new AbortController(),attempt=serial;flight=controller;
+      status.textContent=companyCloseText('searching');
+      try{
+        const query=new URLSearchParams({search:term,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+        const response=await rawApi('/api/platform/crm/native/companies?'+query,{signal:controller.signal});
+        if(!current()||attempt!==serial||term!==input.value.trim())return;
+        for(const item of response.companies||[]){
+          if(item.actions?.update!==true||typeof item.id!=='string'||!item.id||typeof item.name!=='string'||!item.name.trim())continue;
+          const row=document.createElement('div');row.id='operatorCloseCompanyOption'+options.childElementCount;
+          row.setAttribute('role','option');row.setAttribute('aria-selected','false');row.textContent=item.name;
+          row.onpointerdown=event=>event.preventDefault();
+          row.onclick=event=>choose(event,{id:item.id,label:item.name},row);options.append(row);
+        }
+        options.hidden=!options.childElementCount;
+        input.setAttribute('aria-expanded',String(!options.hidden));
+        status.textContent=options.hidden?companyCloseText('empty'):'';
+      }catch(error){if(current()&&attempt===serial)status.textContent=error.message;}
+      finally{if(flight===controller)flight=null;}
+    }
+    const onInput=()=>{
+      if(!current()||!canChoose||submitting)return;
+      stopSearch();hideOptions();selected=null;status.textContent='';syncDone();
+      if(input.value.trim())timer=setTimeout(search,220);
+    };
+    input.addEventListener('input',event=>{if(!event.isComposing)onInput();});
+    input.addEventListener('compositionend',onInput);
+    input.onkeydown=event=>{
+      if(event.isComposing)return;
+      if((event.key==='ArrowDown'||event.key==='ArrowUp')&&!options.hidden){
+        event.preventDefault();highlight(event.key==='ArrowDown'?active+1:active<0?options.childElementCount-1:active-1);
+      }else if(event.key==='Enter'){
+        event.preventDefault();
+        if(event.repeat)return;
+        if(!options.hidden&&active>=0)options.children[active].click();
+        else if(!options.hidden)highlight(0);
+        else if(!flight)void search();
+      }
     };
     closeLifecycleModal=close;document.addEventListener('keydown',key,true);for(const name of events)document.addEventListener(name,close);
-    modal.querySelector('[data-cancel]').onclick=close;modal.onclick=event=>{if(event.target===modal)close();};
-    form.onsubmit=async event=>{
-      event.preventDefault();if(!canChoose||!current()||submitting)return;
-      const attempt=++serial;done.disabled=true;select.disabled=true;select.replaceChildren(new Option('',''));status.textContent=companyCloseText('searching');
-      try{
-        const query=new URLSearchParams({search:input.value.trim(),expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
-        const response=await rawApi('/api/platform/crm/native/companies?'+query);
-        if(!current()||attempt!==serial)return;
-        const companies=(response.companies||[]).filter(company=>company.actions?.update===true&&company.id);
-        for(const item of companies)select.append(new Option(String(item.name||''),String(item.id)));
-        select.disabled=!companies.length;status.textContent=companies.length?'':companyCloseText('empty');
-      }catch(error){if(current()&&attempt===serial)status.textContent=error.message;}
+    cancel.onclick=cancelModal;modal.onclick=event=>{if(event.target===modal)cancelModal();};
+    done.onclick=async()=>{
+      if(!current()||submitting)return;
+      const choice=canChoose&&selected?.label===input.value?selected:null;
+      if(!choice&&!canSkip)return;
+      submitting=true;stopSearch();hideOptions();status.textContent='';input.disabled=true;cancel.disabled=true;
+      try{await lifecycleAction(route,'close',done,null,null,choice?.id,choice?null:'none');}
+      finally{if(current()){
+        submitting=false;input.disabled=false;cancel.disabled=false;
+        done.textContent=lifecycleText('close');syncDone();done.focus();
+      }}
     };
-    select.onchange=()=>{done.disabled=!select.value;};
-    const complete=async(withoutCompany)=>{
-      if(!current()||submitting||(withoutCompany?!canSkip:!canChoose||!select.value))return;
-      const selected=select.value,hadOptions=select.options.length>1;
-      submitting=true;serial++;select.disabled=true;searchButton.disabled=true;input.disabled=true;
-      const action=withoutCompany?skip:done;
-      (withoutCompany?done:skip).disabled=true;
-      try{await lifecycleAction(route,'close',action,null,null,withoutCompany?null:selected,withoutCompany?'none':null);}
-      finally{if(current()){submitting=false;select.disabled=!hadOptions;searchButton.disabled=false;input.disabled=false;done.disabled=!select.value;skip.disabled=false;}}
-    };
-    done.onclick=()=>void complete(false);skip.onclick=()=>void complete(true);
-    document.body.append(modal);(canChoose?input:skip).focus();
+    document.body.append(modal);(canChoose?input:done).focus();
   }
   function renderLifecycleActions(route,host,only=null){
     const state=route.lifecycle||{},company=state.company_completion;
@@ -801,6 +859,17 @@
     // Keep the mobile conversation header to one toolbar row; details stay in the existing menu/card.
     mobileStyle.textContent+=`@media(max-width:900px){#operatorConversationHeader{padding:4px;gap:2px;min-height:56px}#operatorConversationHeader .operator-back-to-list{width:32px;min-width:32px;min-height:44px;justify-content:center;padding:0}#operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;gap:4px}#operatorConversationHeader .operator-dialog-head-row{width:auto;flex:1;min-width:0}#operatorConversationHeader .operator-dialog-head-main{min-width:0;gap:0 4px}#operatorConversationHeader .operator-dialog-title{max-width:100%;min-width:0;min-height:0;font-size:14px;line-height:20px}#operatorConversationHeader .operator-dialog-title-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader #operatorClientCardOpen{width:44px;min-width:44px;height:44px;min-height:44px;margin:0 4px 0 0}#operatorConversationHeader #operatorClientCardOpen .operator-header-avatar{width:30px;height:30px}#operatorConversationHeader .operator-client-phone,#operatorConversationHeader .operator-channel-label{font-size:10px;line-height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader .operator-dialog-head-secondary{position:static;display:flex;flex:none;align-items:center;gap:2px;min-height:44px}#operatorConversationHeader #operatorCreateTicketHost button{width:auto;min-width:44px;height:44px;min-height:44px;padding:0 5px}#operatorConversationHeader .operator-more-actions{position:relative}#operatorConversationHeader .operator-action-menu{max-width:calc(100vw - 16px)}}`;
     document.head.appendChild(mobileStyle);
+    const compactCompanyCloseStyle=document.createElement('style');compactCompanyCloseStyle.textContent=`
+      .operator-close-company .operator-complete-card{box-sizing:border-box;width:min(400px,100%);padding:14px;max-height:calc(100dvh - 32px)}
+      .operator-close-company [data-company-search][hidden],.operator-close-company [role=listbox][hidden],.operator-close-company [role=status]:empty{display:none}
+      .operator-close-company input{box-sizing:border-box;width:100%;min-height:40px;margin:0;font-size:16px}
+      .operator-close-company [role=listbox]{max-height:min(184px,34dvh);overflow-y:auto;margin-top:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+      .operator-close-company [role=option]{padding:8px 10px;cursor:pointer;overflow-wrap:anywhere}
+      .operator-close-company [role=option]:hover,.operator-close-company [role=option][aria-selected=true]{background:var(--paper);color:var(--brand)}
+      .operator-close-company [role=status]{margin:6px 0 0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+      .operator-close-company .operator-complete-actions{margin-top:10px;flex-wrap:nowrap;justify-content:flex-end}
+      .operator-close-company .operator-complete-actions button{min-height:38px}
+    `;document.head.append(compactCompanyCloseStyle);
     const missedCallPreviewStyle=document.createElement('style');missedCallPreviewStyle.textContent='.operator-row-preview-missed-pending{color:var(--danger,#b42318)!important;font-weight:600}';document.head.append(missedCallPreviewStyle);
     bindFilterPopover();
     try{listScrollTop=Number(sessionStorage.getItem(`tenant.operator.list-scroll.${member?.tenant_id||''}.${member?.telegram_id||''}`))||0;}catch{listScrollTop=0;}
@@ -1568,7 +1637,7 @@
     #operatorConversationHeader .operator-header-meta:empty{display:none}
     #operatorConversationHeader .operator-client-phone,#operatorConversationHeader .operator-client-source{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #operatorConversationHeader .operator-client-source{flex:0 1 auto}
-    #operatorDialogCompanyName{display:block;align-self:center;flex:0 1 38%;min-width:0;max-width:min(180px,38%);box-sizing:border-box;padding-inline:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;font-size:10px;font-weight:600;line-height:11px;color:#1d4ed8;background:#e8f1ff}
+    #operatorDialogCompanyName{display:block;align-self:center;flex:0 1 auto;width:max-content;min-width:0;max-width:min(180px,38%);box-sizing:border-box;padding-inline:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;font-size:10px;font-weight:600;line-height:11px;color:#1d4ed8;background:#e8f1ff}
     #operatorDialogCompanyName[hidden]{display:none!important}
     [data-theme="dark"] #operatorDialogCompanyName{color:#bfdbfe;background:#1e3a5f}
     #operatorClientCardOpen,#operatorDialogTitleText{box-sizing:border-box;border:0;background:transparent;color:inherit;cursor:pointer;padding:0}
@@ -1792,8 +1861,7 @@
     const companyPanelResize=companyPanel?document.createElement('button'):null;
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
-      const sourceRow=`<div class="operator-client-panel-row"><small>${esc(clientCardText('source'))}</small><span data-user-content>${esc(channel||'—')}</span></div>`;
-      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong>${sourceRow}<details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:`<section id="operatorSidebarDialogInfo"><strong>${esc(clientCardText('dialog'))}</strong>${sourceRow}</section>`}${reminder}</div>`;
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
       companyPanelResize.id='operatorCompanyPanelResize';companyPanelResize.type='button';companyPanelResize.setAttribute('role','separator');companyPanelResize.setAttribute('aria-orientation','vertical');companyPanelResize.setAttribute('aria-label',clientCardText('resize'));companyPanelResize.setAttribute('aria-controls',companyPanel.id);companyPanelResize.setAttribute('tabindex','0');
       layout.append(companyPanelResize,companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';

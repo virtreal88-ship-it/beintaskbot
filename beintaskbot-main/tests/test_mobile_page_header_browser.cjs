@@ -8,7 +8,8 @@ const shell=read('ui/src/app-shell.js').replace("import themeCss from './app-the
 (async()=>{const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});try{
  for(const width of [320,390,430,1023,1440])for(const theme of ['light','dark']){
   const page=await browser.newPage({viewport:{width,height:860}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-  await page.setContent(html);await page.evaluate(()=>{window.tenantI18n={language:'ru',t:k=>({dialogs:'Диалоги',tasks:'Задачи',deals:'Сделки'}[k]||k)};window.tenantOpenSettingsHub=()=>window.settingsOpened=true;});
+  await page.route('https://layout.test/**',route=>route.request().isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort());
+  await page.goto('https://layout.test/app');await page.evaluate(()=>{window.tenantI18n={language:'ru',t:k=>({dialogs:'Диалоги',tasks:'Задачи',deals:'Сделки'}[k]||k)};window.tenantOpenSettingsHub=()=>window.settingsOpened=true;});
   await page.addScriptTag({content:moduleSource+'\n'+shell});await page.addScriptTag({content:read('docs/tenant-mobile-crm-toolbar.js')});await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
   for(const route of ['tasks','deals','dialogs','profile']){
    await page.evaluate(route=>{document.querySelectorAll('main>.view').forEach(v=>v.classList.toggle('active',v.id==='view-'+route));},route);await page.waitForTimeout(80);
@@ -22,6 +23,23 @@ const shell=read('ui/src/app-shell.js').replace("import themeCss from './app-the
     await page.keyboard.press('Escape');assert.equal(await page.locator('.app-user-menu').isVisible(),false);assert(await page.locator('.app-avatar-button').evaluate(n=>n===document.activeElement));
    }else{assert.equal(await page.locator('.app-mobile-title-row').count(),0);assert.equal(await page.locator('.app-topbar').evaluate(n=>getComputedStyle(n).position),'fixed');assert(await page.locator('.app-topbar-actions [data-app-language]').isVisible());}
   }
+  const brandHeader=page.locator('.app-sidebar-header'),topbar=page.locator('.app-topbar');
+  const assertDesktopHeaderAlignment=async()=>{
+   const [left,main]=await Promise.all([brandHeader.boundingBox(),topbar.boundingBox()]);
+   assert.equal(left.y,main.y,'desktop headers start on the same row');
+   assert.equal(left.height,main.height,'desktop brand and main header heights match');
+   assert.equal(left.y+left.height,main.y+main.height,'desktop horizontal dividers meet exactly');
+  };
+  if(width>1023){
+   assert.equal((await topbar.boundingBox()).height,64,'main top bar height is unchanged');
+   assert.match(await brandHeader.locator('.brand').textContent(),/CRM Smart Assistant/);
+   await assertDesktopHeaderAlignment();
+   const chevron=brandHeader.getByRole('button');
+   await chevron.click();await page.waitForFunction(()=>document.body.dataset.sidebar==='collapsed');
+   await assertDesktopHeaderAlignment();
+   await chevron.click();await page.waitForFunction(()=>document.body.dataset.sidebar==='expanded');
+   await assertDesktopHeaderAlignment();
+  }else assert.equal(await brandHeader.isVisible(),false,'mobile bottom navigation does not show the desktop branding header');
   assert.deepEqual(await page.locator('.app-nav-group[data-group=crm] [data-view]').evaluateAll(nodes=>nodes.map(n=>n.dataset.view).filter(v=>['tasks','deals','customers','companies'].includes(v))),['tasks','deals','customers','companies']);
   if(width===320){await page.evaluate(()=>document.querySelectorAll('.nav [data-view]').forEach(n=>{n.hidden=false;n.style.display=''}));await page.waitForTimeout(80);const tiles=await page.locator('.nav [data-view]:visible').evaluateAll(ns=>ns.map(n=>n.getBoundingClientRect()).filter(r=>r.width>0));assert(tiles.every(r=>r.width===64),'compact 64px navigation tiles');assert(tiles.filter(r=>r.x>=0&&r.right<=320).length>=5,'five items fit at320');}
   if(width<=1023){
