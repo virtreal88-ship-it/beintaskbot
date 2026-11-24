@@ -597,7 +597,10 @@
         applyLifecycleReceipt(route,action,result);
         return;
       }
-      if(action==='start')window.tenantDialogueCompany?.refresh?.();
+      if(action==='start'){
+        showLifecycleTimelineEvent(result.operator_event,'start');
+        window.tenantDialogueCompany?.refresh?.();
+      }
       if(action==='transfer'){showLifecycleTransferReceipt(route,result.operator_event);void refresh();return;}
       if(action==='dismiss'){
         if(currentPage&&result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true){
@@ -1740,10 +1743,10 @@
     if(!events.length&&!Number.isFinite(omission))return false;
     const messageTimes=new Map((page.messages||[]).map(m=>[String(m.id),timelineStamp(m.happened_at||m.created_at)]));
     const text={
-      ru:{accept:'Диалог принят',start:'Начал(а) диалог',transfer:'Диалог передан',acceptUnknown:'Диалог принят сотрудником',startUnknown:'Диалог начат сотрудником',transferUnknown:'Диалог передан сотруднику'},
-      az:{accept:'Dialoq qəbul edildi',start:'Dialoqa başladı',transfer:'Dialoq ötürüldü',acceptUnknown:'Dialoq əməkdaş tərəfindən qəbul edildi',startUnknown:'Dialoq əməkdaş tərəfindən başladıldı',transferUnknown:'Dialoq əməkdaşa ötürüldü'},
-      en:{accept:'Dialog accepted',start:'Started dialog',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'}
-    }[i18n.language]||{accept:'Dialog accepted',start:'Started dialog',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'};
+      ru:{accept:'Диалог принят',start:'Диалог начат',transfer:'Диалог передан',acceptUnknown:'Диалог принят сотрудником',startUnknown:'Диалог начат сотрудником',transferUnknown:'Диалог передан сотруднику'},
+      az:{accept:'Dialoq qəbul edildi',start:'Dialoq başladıldı',transfer:'Dialoq ötürüldü',acceptUnknown:'Dialoq əməkdaş tərəfindən qəbul edildi',startUnknown:'Dialoq əməkdaş tərəfindən başladıldı',transferUnknown:'Dialoq əməkdaşa ötürüldü'},
+      en:{accept:'Dialog accepted',start:'Dialog started',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'}
+    }[i18n.language]||{accept:'Dialog accepted',start:'Dialog started',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'};
     const existing=new Map([...chat.children].filter(node=>node.dataset.operatorTimelineEvent).map(node=>[node.dataset.operatorTimelineEvent,node]));
     const kept=new Set(events.map(event=>event.id));for(const [id,node] of existing)if(!kept.has(id))node.remove();
     let omitted=chat.querySelector('[data-operator-timeline-omissions]');
