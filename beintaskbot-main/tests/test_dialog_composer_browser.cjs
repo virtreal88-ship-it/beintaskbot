@@ -1,6 +1,6 @@
 const {revealAccountControl,selectAppLanguage}=require('./account_controls_browser.cjs');
 /* Unchanged application HTML and real assets; every API/provider request mocked. */
-const {chromium}=require('../.support-test-deps/node_modules/playwright');
+const {chromium}=require(process.env.PLAYWRIGHT_PATH||'../.support-test-deps/node_modules/playwright');
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const root=path.join(__dirname,'..');
 const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
@@ -11,6 +11,10 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
  try{
   for(const [width,height,language] of [[320,760,'ru'],[320,760,'az'],[360,800,'ru'],[360,800,'az'],[390,844,'ru'],[390,844,'az'],[430,900,'ru'],[430,900,'az'],[1280,900,'ru'],[1280,900,'az']]){
    const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];let mediaRequests=0,mediaStatus=503,mediaGate=null,releaseMedia=null;
+   const testsEnter=language==='ru'&&(width===390||width===1280);
+   let finishSend;
+   const sendGate=new Promise(resolve=>{finishSend=resolve;});
+   const sendCalls=()=>calls.filter(call=>call.path==='/api/platform/crm/chat/send'&&call.method==='POST');
    // Hold visibility delivery so this suite exercises the explicit menu fallback.
    await page.addInitScript(()=>{window.IntersectionObserver=class{observe(){}unobserve(){}disconnect(){}};});
    page.on('pageerror',error=>errors.push(error.message));page.on('dialog',()=>assert.fail('Unexpected native dialog'));
@@ -22,6 +26,10 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
     if(name.endsWith('/crm/chat/attachment')){mediaRequests++;if(mediaGate)await mediaGate;if(mediaStatus!==200)return route.fulfill({status:mediaStatus,headers:{'Retry-After':'60'},json:{error:'Synthetic temporary file failure'}});const bytes=Buffer.alloc(44+32000);bytes.write('RIFF');bytes.writeUInt32LE(bytes.length-8,4);bytes.write('WAVEfmt ',8);bytes.writeUInt32LE(16,16);bytes.writeUInt16LE(1,20);bytes.writeUInt16LE(1,22);bytes.writeUInt32LE(8000,24);bytes.writeUInt32LE(16000,28);bytes.writeUInt16LE(2,32);bytes.writeUInt16LE(16,34);bytes.write('data',36);bytes.writeUInt32LE(32000,40);return route.fulfill({contentType:'audio/wav',body:bytes});}
     if(name==='/api/platform/me')return route.fulfill({json:profile});
+    if(name==='/api/platform/crm/chat/send'&&request.method()==='POST'){
+     if(testsEnter)await sendGate;
+     return route.fulfill({json:{success:true,state:'accepted'}});
+    }
     if(name.endsWith('/crm/chat/voice-capability'))return route.fulfill({json:{success:true,enabled:true,recovery_enabled:true}});
     let result={};
     if(name.endsWith('/dialogs/history'))result={dialog,messages:[{id:'voice-row',external_id:'voice-1',source:'connect',source_lead_id:41,source_channel_id:channel,source_conversation_id:dialog.conversation_id,direction:'incoming',message_type:'audio',body:'',media_version:'a'.repeat(64),duration_seconds:2,media_size_bytes:0,analysis_state:'failed',happened_at:'2026-10-21T10:00:00Z'},{id:'after-voice',external_id:'after',direction:'incoming',message_type:'text',body:'Message below the voice',happened_at:'2026-10-21T10:01:00Z'}],next_before:null};
@@ -69,9 +77,21 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
       await page.locator('.operator-composer').screenshot({path:path.join(process.env.COMPOSER_SCREENSHOT_DIR,'composer-send.png')});
     }
     assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-    assert.deepEqual(errors,[]);assert.equal(calls.some(call=>/chat\/send/.test(call.path)&&call.method==='POST'),false);
+    if(testsEnter){
+      await input.fill('');await input.press('Enter');assert.equal(sendCalls().length,0,'an empty Enter never records or sends');
+      await input.fill('First line');await input.press('End');await input.press('Shift+Enter');await page.keyboard.insertText('Second line');
+      assert.equal(await input.inputValue(),'First line\nSecond line');
+      await input.evaluate(node=>node.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true,cancelable:true})));
+      assert.equal(sendCalls().length,0,'IME confirmation does not send');
+      await Promise.all([page.waitForRequest(request=>new URL(request.url()).pathname==='/api/platform/crm/chat/send'&&request.method()==='POST'),input.press('Enter')]);
+      await input.press('Enter');
+      assert.equal(sendCalls().length,1,'a second Enter while sending cannot submit twice');
+      assert.equal(JSON.parse(sendCalls()[0].body).text,'First line\nSecond line');
+      finishSend();await page.waitForFunction(()=>document.querySelector('#chatText').value==='');
+    }
+    assert.deepEqual(errors,[]);assert.equal(sendCalls().length,Number(testsEnter));
     console.log('PASS compact composer '+width+' '+language);
-   }finally{await page.close();}
+   }finally{finishSend();await page.close();}
   }
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

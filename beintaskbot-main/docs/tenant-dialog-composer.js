@@ -56,6 +56,14 @@
     observer.observe(input,{attributes:true,attributeFilter:['disabled']});
     if(panel)observer.observe(panel,{attributes:true,attributeFilter:['hidden']});
     input.addEventListener('input',refresh);
+    input.setAttribute('enterkeyhint','send');
+    input.addEventListener('keydown',event=>{
+      if(active?.primary!==primary||event.defaultPrevented||event.key!=='Enter'||event.shiftKey||event.altKey||event.ctrlKey||event.metaKey||event.isComposing||event.keyCode===229)return;
+      event.preventDefault();
+      if(event.repeat||input.disabled)return;
+      refresh();
+      if(primary.dataset.action==='send'&&!primary.disabled)primary.click();
+    });
     primary.onclick=()=>{refresh();if(primary.disabled)return;if(primary.dataset.action==='media'){window.tenantCustomerMedia?.action()?.run();return;}const target=primary.dataset.action==='send'?send:actions.querySelector('.operator-voice-mic');target?.click();refresh();};
     ai.onclick=()=>{if(ai.disabled)return;const opening=menu.hidden;menu.hidden=!opening;ai.setAttribute('aria-expanded',String(opening));if(opening)menu.querySelector('button:not(:disabled)')?.focus();};
     refresh();
