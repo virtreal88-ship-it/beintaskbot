@@ -27,7 +27,7 @@ const beta='@verified_account';
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
-   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.reminderWrites=0;window.savedOpen=false;
+   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.reminderWrites=0;window.transferReads=0;window.savedOpen=false;
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
@@ -65,6 +65,11 @@ const beta='@verified_account';
      const binding=mode==='masked'?{company_id:null,company_name:null,can_manage:false}:fixtures[channel];
      return {ok:true,json:async()=>({success:true,binding})};
     }
+    if(api.endsWith('/dialogs/transfer-candidates')){
+     if(opt.method||q.get('channel_id')!=='a'||q.get('lead_id')!=='41'||q.get('expected_revision')!=='3')throw Error('Inexact transfer candidate read');
+     window.transferReads++;
+     return ok({targets:[{employee_id:22,name:'Synthetic online operator'}]});
+    }
     if(api.endsWith('/dialogs/history')){
      const channel=q.get('channel_id'),source=sources.find(r=>r.channel_id===channel);
      if(q.get('support_case_only')==='1'){
@@ -76,7 +81,7 @@ const beta='@verified_account';
       if(window.holdCaseRead)await new Promise(release=>window.caseWaiters.push(release));
       return ok({dialog:{provider,lead_id,channel_id,conversation_id,support_case}});
      }
-     return ok({dialog:{...source,...(channel==='a'?{lifecycle:{state:'accepted',accepted_by_name:'Actual & <b>accepting</b> employee'}}:{})},messages:[],next_before:null});
+     return ok({dialog:{...source,...(channel==='a'?{lifecycle:{state:'accepted',revision:3,can_transfer:true,accepted_by_name:'Actual & <b>accepting</b> employee'}}:{})},messages:[],next_before:null});
     }
     if(api.endsWith('/dialogs'))return ok({dialogs:[{...sources[0],group_sources:sources}],channels:[],agents:[],next_offset:null});
     if(api.endsWith('/dialogs/group-participants'))return ok({status:'available',phones:[],total:0});
@@ -160,6 +165,13 @@ const beta='@verified_account';
     assert(await toggle.evaluate(hitTarget),'the desktop panel does not intercept the toggle');
   }
   await page.waitForFunction(()=>window.savedOpen===true);
+  if(width<=900){
+    const transfer=panel.locator('#operatorSidebarTransfer summary');
+    await transfer.tap();
+    await panel.getByRole('button',{name:'Synthetic online operator',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.transferReads),1,'tapping Transfer reads exact authorized recipients without writing');
+    await transfer.tap();
+  }
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
   assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
