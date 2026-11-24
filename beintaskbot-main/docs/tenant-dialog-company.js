@@ -1,12 +1,12 @@
-/* Local CRM company binding for the exact authorized dialogue route. */
+/* Company panel for the exact authorized dialogue route. */
 (()=>{
   'use strict';
   const endpoint='/api/platform/operator/dialog-company';
   const publicLinkEndpoint=endpoint+'/public-link';
   const labels={
-    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',empty:'В CRM нет совпадений.',error:'Не удалось получить или изменить компанию.'},
-    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',empty:'CRM-də uyğun şirkət tapılmadı.',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
-    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',restricted:'Company selection requires access',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',empty:'No matching CRM companies.',error:'Could not get or change the company.'}
+    ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',error:'Не удалось получить или изменить компанию.'},
+    az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
+    en:{label:'Company',unknown:'No company selected',unavailable:'Unavailable',loading:'Loading…',search:'Find a company',restricted:'Company selection requires access',remove:'Remove company link',confirm:'Remove the company link from this dialogue?',error:'Could not get or change the company.'}
   };
   const operatorLabels={
     ru:{empty:'Аккаунты Operator не найдены.',error:'Не удалось найти аккаунты Operator.',bindError:'Не удалось привязать аккаунт Operator.',},
@@ -574,16 +574,7 @@
     s.status.textContent=t('loading');
     try{
       const selection={...s.route,...fields,expected_company_id};
-      let response=await request(endpoint,s.member,selection,true);
-      if(response.confirm_existing_company&&current(s)){
-        const pair=companyName(s.binding)+' ↔ @'+fields.operator_account;
-        const prompt={az:'CRM şirkətini Operator hesabına bağlamaq istəyirsiniz?',ru:'Связать компанию CRM с аккаунтом Operator?',en:'Link this CRM company to this Operator account?'};
-        if(!window.confirm((prompt[window.tenantI18n?.language]||prompt.az)+'\n'+pair)){
-          s.reset();s.status.textContent='';return;
-        }
-        response=await request(endpoint,s.member,{...selection,confirm_existing:true},true);
-      }
-      const {binding}=response;
+      const {binding}=await request(endpoint,s.member,selection,true);
       if(!current(s))return;
       if(!binding||(fields.company_id===null?binding.company_id:!binding.company_id))throw Error(t('error'));
       s.reset();s.status.textContent='';paint(s,binding);
@@ -685,7 +676,8 @@
         if(!Array.isArray(payload.accounts))throw Error('invalid account list');
         const accounts=[...new Set(payload.accounts
           .map(row=>row?.account).filter(value=>typeof value==='string'&&value.trim()&&value.length<=120))].slice(0,5);
-        render(operatorRows,accounts.map(account=>[account.startsWith('@')?account:'@'+account,{operator_account:account}]));
+        render(operatorRows,accounts.map(account=>[account.startsWith('@')?account:'@'+account,
+          {operator_account:account,selection_search:query}]));
         operatorStatus.textContent=accounts.length?'':copy('empty');
       }catch(error){if(active()&&seq===serial)operatorStatus.textContent=[401,403,424].includes(error.status)?profileText('denied'):copy('error');}
     }

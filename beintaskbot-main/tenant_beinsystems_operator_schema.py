@@ -27,6 +27,22 @@ def migrate_company_actions(cur):
 def migrate_operator_identity_links(cur) -> None:
     migrate_customer_links(cur)
     migrate_company_actions(cur)
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_dialog_accounts (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK(provider IN ('connect','kommo')),
+      lead_id BIGINT NOT NULL CHECK(lead_id>0),
+      channel_id TEXT NOT NULL CHECK(length(channel_id)<=256),
+      conversation_id TEXT NOT NULL CHECK(length(conversation_id)<=256),
+      id UUID NOT NULL,
+      account TEXT CHECK(length(account) BETWEEN 2 AND 120),
+      generation TEXT,
+      instance_id UUID,
+      updated_by BIGINT NOT NULL CHECK(updated_by>0),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,provider,lead_id,channel_id,conversation_id),
+      CHECK((account IS NULL AND generation IS NULL AND instance_id IS NULL) OR
+            (account IS NOT NULL AND generation IS NOT NULL AND instance_id IS NOT NULL))
+    )''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_links (
       id UUID PRIMARY KEY,
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,

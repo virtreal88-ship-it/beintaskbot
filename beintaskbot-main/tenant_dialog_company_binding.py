@@ -226,6 +226,9 @@ def list_route_key(row):
 
 def _listed_companies(cur, tenant, keys):
     """Only names already allowed in the context of an exact, visible route."""
+    if dialogue_chooser_enabled(tenant):
+        from tenant_dialog_operator_account import listed
+        return listed(cur,tenant,keys)
     companies = {}
     for provider, table, match in (
         ('connect', CONNECT, 'b.channel_id=r.channel_id::uuid'),
@@ -253,6 +256,8 @@ def matching_list_company_routes(cur, tenant, policy, rows, query):
     if (not rows or not query.strip() or not is_operator_workspace(tenant)
             or policy.profile.get('tenant_status') != 'active'):
         return set()
+    if dialogue_chooser_enabled(tenant) and not policy.allows_action('operator_data','view'):
+        return set()
     owner = policy.profile.get('role') == 'owner'
     keys = {key for row in rows
             if (owner or not (row.get('archive_read_only') or row.get('search_overview_read_only')))
@@ -261,9 +266,11 @@ def matching_list_company_routes(cur, tenant, policy, rows, query):
             if query in name.casefold()}
 
 
-def attach_list_company_names(cur, tenant, cards):
+def attach_list_company_names(cur, tenant, cards, *, policy=None):
     """Read only linked company names for the already authorized dialogue page."""
     if not cards or not is_operator_workspace(tenant):
+        return
+    if dialogue_chooser_enabled(tenant) and (not policy or not policy.allows_action('operator_data','view')):
         return
 
     keys_by_card = [[list_route_key(row) for row in card.get('group_sources', [card])] for card in cards]
@@ -323,6 +330,9 @@ def read_dialogue_binding(cur, tenant, actor, policy, route):
         exact = _key(route['provider'],route['lead_id'],route['channel_id'],route['conversation_id'])
     except OperatorError:
         return None
+    if dialogue_chooser_enabled(tenant):
+        from tenant_dialog_operator_account import ready, snapshot
+        return snapshot(cur,tenant,policy,exact,True) if ready(cur) else None
     table,_,_ = _pred(tenant,exact)
     if not _ready(cur,table):
         return None
@@ -363,6 +373,26 @@ def binding(profile, *, provider, lead_id, channel_id, conversation_id, company_
         raise OperatorError('Диалоги этого рабочего пространства недоступны.',404)
     route = _key(provider,lead_id,channel_id,conversation_id)
     write = company_id is not _NO_WRITE
+    if dialogue_chooser_enabled(profile['tenant_id']) and company_search is None:
+        from tenant_dialog_company_operator import unlink
+        from tenant_dialog_operator_account import ready, snapshot
+        if write:
+            if company_id is not None:
+                raise OperatorError('Выберите аккаунт Operator в поиске диалога.')
+            return unlink(profile,provider=provider,lead_id=lead_id,channel_id=channel_id,
+                          conversation_id=conversation_id,expected_company_id=expected_company_id)
+        from tenant_operator_access import access
+        try:
+            with _connect() as conn, conn.cursor() as cur:
+                tenant,_,policy=access(cur,profile,'dialogs','view')
+                if policy.profile.get('tenant_status')!='active':
+                    raise OperatorError('Нет доступа к активному рабочему пространству.',403)
+                if not ready(cur):
+                    raise OperatorError('Привязка компании для этого источника недоступна.',503)
+                _prove(cur,tenant,policy,route,owner_overview=policy.profile.get('role')=='owner')
+                return snapshot(cur,tenant,policy,route,True)
+        except TenantLinearError as error:
+            raise OperatorError(str(error),error.status) from error
     if write:
         normalize_company_id(company_id)
     if expected_company_id is not _UNCHECKED:

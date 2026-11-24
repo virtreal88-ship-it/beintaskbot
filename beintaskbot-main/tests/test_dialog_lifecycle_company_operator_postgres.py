@@ -2,7 +2,7 @@
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event
+from threading import Barrier
 
 import psycopg
 import pytest
@@ -13,8 +13,6 @@ import tenant_beinsystems_operator as provider
 import tenant_crm_native_companies as native
 import tenant_dialog_company_binding as binding
 import tenant_dialog_company_operator as service
-from tenant_crm_native_access import CRMAccessError
-from tenant_operator_company_name_guard import lock_name_writes
 from test_connect_channel_multiprocess import database
 from test_dialog_lifecycle_company_completion import STAFF, bindings, companies
 from test_dialog_lifecycle_pglite import command, episodes
@@ -69,8 +67,8 @@ def count(db,table):
     return result
 
 
-def choose(term,**route):
-    return service.chooser(OWNER,**{**ROUTE,**route},term=term,choice=True)['binding']
+def choose(term,**options):
+    return service.chooser(OWNER,**{**ROUTE,**options},term=term,choice=True)['binding']
 
 
 def test_owner_search_returns_only_account_and_never_creates(ready,monkeypatch):
@@ -93,47 +91,66 @@ def test_owner_search_returns_only_account_and_never_creates(ready,monkeypatch):
     assert disabled.value.status==404 and len(calls)==2
 
 
-def test_exact_selection_creates_once_then_reuses_and_refuses_replacement(ready):
+def test_exact_selection_reuses_the_direct_binding_and_refuses_blind_replacement(ready):
     db,calls,_=ready
+    company_count=count(db,'saas_crm_native_companies')
     one=choose('exact-one')
-    assert one['company_name']=='exact-one' and one['can_search_operator'] is True
+    assert one['operator_account']=='exact-one' and one['can_search_operator'] is True
     assert choose('exact-one')==one
-    assert calls==[('me',{}),('accounts',{'search':'exact-one','limit':1})]*2
+    assert calls==[('me',{}),('accounts',{'search':'exact-one','limit':5})]*2
     with pytest.raises(provider.OperatorError) as refuses:
         choose('exact-other')
     assert refuses.value.status==409
-    assert [row['company_id'] for row in bindings(db)]==[one['company_id']]
-    assert count(db,'saas_beinsystems_operator_company_imports')==1
-    assert db.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE name IN ('exact-one','exact-other')")==[{'n':1}]
-    assert db.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action='operator_dialog_company_selected'")==[{'n':1}]
-    db.commit()
+    assert binding.binding(OWNER,**ROUTE)==one
+    assert count(db,'saas_operator_dialog_accounts')==1
+    assert count(db,'saas_crm_native_companies')==company_count
+    assert not bindings(db)
+    assert count(db,'saas_beinsystems_operator_company_imports')==0
 
 
-def test_inline_company_replacement_rejects_a_stale_link(ready):
+def test_inline_replace_and_unlink_require_current_exact_binding(ready):
     db,_,_=ready
     original=choose('inline-original',expected_company_id=None)
     changed=choose('inline-next',expected_company_id=original['company_id'])
-    assert changed['company_name']=='inline-next'
+    assert changed['operator_account']=='inline-next'
     with pytest.raises(provider.OperatorError) as stale:
         choose('stale-inline',expected_company_id=original['company_id'])
     assert stale.value.status==409
     with pytest.raises(provider.OperatorError) as stale_unlink:
         binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=original['company_id'])
     assert stale_unlink.value.status==409
-    assert [row['company_id'] for row in bindings(db)]==[changed['company_id']]
     assert binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=changed['company_id'])['company_id'] is None
-    assert count(db,'saas_beinsystems_operator_company_imports')==2
+    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==0
 
 
-def test_same_name_has_no_identity_evidence(ready):
-    db,_,_=ready
-    db.execute("INSERT INTO saas_crm_native_companies (id,tenant_id,name) VALUES(%s::uuid,%s::uuid,'Same Name')",(str(uuid.uuid4()),A))
+@pytest.mark.parametrize('active',[False,True])
+def test_uniset_exact_result_is_verified_again_and_linked_without_touching_crm(ready,monkeypatch,active):
+    db,calls,instance=ready
+    if active:
+        _activate_synthetic(db,instance)
+    for name in ('UniSet','UNISET'):
+        db.execute("INSERT INTO saas_crm_native_companies (id,tenant_id,name) VALUES(%s::uuid,%s::uuid,%s)",(str(uuid.uuid4()),A,name))
     db.commit()
-    with pytest.raises(provider.OperatorError) as duplicate:
-        choose('same name')
-    assert duplicate.value.status==409
-    assert not bindings(db)
+    original=provider._request_operator
+    def ranked(endpoint,body,**credentials):
+        if endpoint=='me':
+            return original(endpoint,body,**credentials)
+        calls.append((endpoint,body))
+        assert body=={'search':'unis','limit':5}
+        return {'status':'success','data':[{'account':'uniset-other'},{'account':'uniset'}]}
+    monkeypatch.setattr(provider,'_request_operator',ranked)
+    assert service.chooser(OWNER,**ROUTE,term='unis')['accounts'][1]=={'account':'uniset'}
+    selected=choose('uniset',expected_company_id=None,selection_search='unis')
+    assert selected['operator_account']=='uniset'
+    assert binding.binding(OWNER,**ROUTE)==selected
+    with pytest.raises(provider.OperatorError) as different:
+        choose('UniSet',expected_company_id=selected['company_id'],selection_search='unis')
+    assert different.value.status==409
+    assert binding.binding(OWNER,**ROUTE)==selected
     assert count(db,'saas_beinsystems_operator_company_imports')==0
+    assert not bindings(db)
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE lower(name)='uniset'")==[{'n':2}]
+    db.commit()
 
 
 def test_provider_result_and_current_pending_credential_are_rechecked(ready,monkeypatch):
@@ -159,47 +176,6 @@ def test_provider_result_and_current_pending_credential_are_rechecked(ready,monk
     assert changed_auth.value.status==409
     assert not bindings(db)
     assert count(db,'saas_beinsystems_operator_company_imports')==0
-
-
-def test_failed_binding_rolls_back_local_company_and_mapping(ready,monkeypatch):
-    db,_,_=ready
-    def fail(*_args,**_kwargs):
-        raise provider.OperatorError('synthetic failed binding',409)
-    monkeypatch.setattr(service,'_bind_once',fail)
-    with pytest.raises(provider.OperatorError):
-        choose('rolled-back')
-    assert db.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE name='rolled-back'")==[{'n':0}]
-    db.commit()
-    assert not bindings(db)
-    assert count(db,'saas_beinsystems_operator_company_imports')==0
-
-
-def test_native_writers_share_guard_and_reject_only_protected_target_names(ready,monkeypatch):
-    db,_,_=ready
-    dsn=db.dsn
-    monkeypatch.setattr(native,'_connect',lambda:psycopg.connect(dsn,row_factory=dict_row))
-    monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
-    with psycopg.connect(dsn,row_factory=dict_row) as first:
-        assert lock_name_writes(first.cursor(),A)
-        with pytest.raises(CRMAccessError) as busy:
-            native.create_company(A,'protected-name',actor_id=11)
-        assert busy.value.code=='company_name_busy'
-        # An unrelated tenant does not take the lock or reserve names.
-        native.create_company(B,'protected-name',actor_id=22)
-    ident=choose('protected-name')['company_id']
-    for later in (lambda:native.create_company(A,'PROTECTED-NAME',actor_id=11),
-                  lambda:native.update_company(A,native.create_company(A,'Ordinary',actor_id=11)['id'],
-                                               'PROTECTED-NAME',actor_id=11)):
-        with pytest.raises(CRMAccessError) as conflict:
-            later()
-        assert conflict.value.code=='company_name_conflict'
-    assert native.find_or_create_company(A,'protected-name')['id']==uuid.UUID(ident)
-    assert native.update_company(A,ident,'New label',actor_id=11)['name']=='New label'
-    with pytest.raises(CRMAccessError) as reserved:
-        native.find_or_create_company(A,'protected-name')
-    assert reserved.value.code=='company_name_conflict'
-    assert native.create_company(A,'Unrelated',actor_id=11)['name']=='Unrelated'
-
 
 
 def test_disabled_chooser_leaves_existing_ordinary_name_rules_unchanged(ready,monkeypatch):
@@ -251,22 +227,6 @@ def _activate_synthetic(db,instance):
     db.commit()
 
 
-def test_confirm_bound_company_after_live_operator_selection(ready):
-    db,_,instance=ready
-    _activate_synthetic(db,instance)
-    company=str(uuid.uuid4())
-    db.execute("INSERT INTO saas_crm_native_companies (id,tenant_id,name) VALUES(%s::uuid,%s::uuid,'example')",(company,A))
-    db.commit()
-    binding.binding(OWNER,**ROUTE,company_id=company,expected_company_id=None)
-    selection=dict(term='example',choice=True,expected_company_id=company)
-    assert service.chooser(OWNER,**ROUTE,**selection)=={'confirm_existing_company':True}
-    assert count(db,'saas_beinsystems_operator_company_imports')==0
-    for _ in range(2):
-        result=service.chooser(OWNER,**ROUTE,**selection,confirm_existing=True)
-        assert result['binding']['company_id']==company
-    assert count(db,'saas_beinsystems_operator_company_imports')==1
-
-
 def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready):
     db,_,instance=ready
     _activate_synthetic(db,instance)
@@ -279,7 +239,7 @@ def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready)
     assert selected['company_name']=='example' and selected['can_unlink']
     detached=binding.binding(STAFF,**ROUTE,company_id=None,expected_company_id=selected['company_id'])
     assert detached['company_id'] is None
-    assert count(db,'saas_beinsystems_operator_company_imports')==1
+    assert count(db,'saas_beinsystems_operator_company_imports')==0
     with pytest.raises(provider.OperatorError):
         binding.binding(STAFF,**{**ROUTE,'channel_id':CB},company_id=None,expected_company_id=None)
 
@@ -322,205 +282,41 @@ def test_employee_reads_active_connection_for_owned_route_only(ready):
     assert len(calls)==1
 
 
-@pytest.mark.parametrize('first',['manual','chooser','two-choosers'])
-def test_manual_identity_and_live_chooser_share_two_connection_winner_order(ready,monkeypatch,first):
-    db,_,instance=ready
-    _activate_synthetic(db,instance)
-    target=db.execute("SELECT id::text AS id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1",(A,))[0]['id']
-    db.commit()
-    dsn=db.dsn
-    def connect():
-        return psycopg.connect(dsn,row_factory=dict_row)
-    monkeypatch.setattr(provider,'_connect',connect)
-    monkeypatch.setattr(binding,'_connect',connect)
-    started=Event()
-    commit_first=Event()
-    next_entered=Event()
-    account='race-identity'
-    import tenant_operator_company_name_guard as guard
-    if first=='chooser':
-        manual_lock=guard.lock_name_writes
-        def observe_manual_acquisition(*args,**kwargs):
-            next_entered.set()
-            return manual_lock(*args,**kwargs)
-        monkeypatch.setattr(guard,'lock_name_writes',observe_manual_acquisition)
-    elif first=='two-choosers':
-        authorize_second=service._authorized
-        def observe_second_route(*args):
-            if started.is_set():
-                next_entered.set()
-            return authorize_second(*args)
-        monkeypatch.setattr(service,'_authorized',observe_second_route)
-    else:
-        source_for_second=service.imports._selected_source_credentials
-        def observe_second_preflight(profile):
-            if started.is_set():
-                next_entered.set()
-            return source_for_second(profile)
-        monkeypatch.setattr(service.imports,'_selected_source_credentials',observe_second_preflight)
-    if first!='manual':
-        original=service._bind_once
-        def hold_before_binding(*args):
-            started.set()
-            assert commit_first.wait(15), 'test did not release first transaction'
-            return original(*args)
-        monkeypatch.setattr(service,'_bind_once',hold_before_binding)
-    else:
-        original=guard.require_unreserved_account_pair
-        def hold_before_confirmation(*args):
-            original(*args)
-            started.set()
-            assert commit_first.wait(15), 'test did not release first transaction'
-        monkeypatch.setattr(guard,'require_unreserved_account_pair',hold_before_confirmation)
-    def manual():
-        return provider.confirm_account_link(OWNER,local_entity_type='company',local_entity_id=target,
-          external_account=account,evidence_summary='Synthetic reviewed evidence only')
-    def chooser():
-        return choose(account)
-    wins, follows=(manual,chooser) if first=='manual' else (chooser,manual)
-    if first=='two-choosers':
-        follows=lambda:choose('competing-identity')
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        ahead=pool.submit(wins)
-        try:
-            assert started.wait(15), 'first transaction did not reach reserved mutation'
-            behind=pool.submit(follows)
-            assert next_entered.wait(10)
-        finally:
-            commit_first.set()
-        result=ahead.result(20)
-        if first=='manual':
-            assert result['status']=='confirmed'
-            assert behind.result(20)['company_id']==target
-            assert count(db,'saas_beinsystems_operator_company_imports')==0
-            monkeypatch.setattr(native,'_connect',connect)
-            monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
-            with pytest.raises(CRMAccessError) as conflict:
-                native.create_company(A,account.upper(),actor_id=11)
-            assert conflict.value.code=='company_name_conflict'
-        else:
-            assert result['company_id']!=target
-            with pytest.raises(provider.OperatorError) as conflict:
-                behind.result(20)
-            assert conflict.value.status==409
-            assert count(db,'saas_beinsystems_operator_company_imports')==1
-    bound=bindings(db)
-    assert len(bound)==1 and bound[0]['company_id']==(target if first=='manual' else result['company_id'])
-
-
-
-@pytest.mark.parametrize('writer',['create','rename','ai'])
-@pytest.mark.parametrize('first',['native','chooser'])
-def test_real_ordinary_writer_and_chooser_winner_before_commit(ready,monkeypatch,writer,first):
+def test_concurrent_initial_choices_have_one_winner(ready,monkeypatch):
     db,_,_=ready
-    dsn=db.dsn
-    def connect():
-        return psycopg.connect(dsn,row_factory=dict_row)
-    monkeypatch.setattr(provider,'_connect',connect)
-    monkeypatch.setattr(binding,'_connect',connect)
-    monkeypatch.setattr(native,'_connect',connect)
-    monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
-    paused,release=Event(),Event()
-    name='one-safe-name'
-    renamed=native.create_company(A,'prior-unrelated-name',actor_id=11)['id'] if writer=='rename' else None
-    def native_mutation():
-        if writer=='create':
-            return native.create_company(A,name,actor_id=11)
-        if writer=='rename':
-            return native.update_company(A,renamed,name,actor_id=11)
-        return native.find_or_create_company(A,name)
-    if first=='native':
-        class PauseCommit:
-            """Hold a real native mutation transaction after INSERT/UPDATE."""
-            def __init__(self):
-                self.connection=connect()
-            def __enter__(self):
-                self.connection.__enter__()
-                return self
-            def __exit__(self,*args):
-                return self.connection.__exit__(*args)
-            def cursor(self):
-                return self.connection.cursor()
-            def commit(self):
-                with self.cursor() as cur:
-                    cur.execute("SELECT id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid AND name=%s",(A,name))
-                    assert cur.fetchone() is not None
-                paused.set()
-                assert release.wait(20)
-                self.connection.commit()
-        monkeypatch.setattr(native,'_connect',PauseCommit)
-    else:
-        bind=service._bind_once
-        def pause_bind(*args):
-            bind(*args)
-            paused.set()
-            assert release.wait(20)
-        monkeypatch.setattr(service,'_bind_once',pause_bind)
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        winner=pool.submit(native_mutation if first=='native' else lambda:choose(name))
+    original=provider._request_operator
+    barrier=Barrier(2)
+    def simultaneous(endpoint,body,**credentials):
+        if endpoint=='accounts':
+            barrier.wait(timeout=10)
+        return original(endpoint,body,**credentials)
+    monkeypatch.setattr(provider,'_request_operator',simultaneous)
+    monkeypatch.setattr(binding,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row))
+    monkeypatch.setattr(provider,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row))
+    def pick(account):
         try:
-            assert paused.wait(15), 'expected real first transaction has not changed the local row'
-            with connect() as observation:
-                assert observation.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE tenant_id=%s::uuid AND name=%s", (A,name)).fetchone()['n']==0
-            loser=pool.submit((lambda:choose(name)) if first=='native' else native_mutation)
-            if first=='native':
-                with pytest.raises(provider.OperatorError) as busy:
-                    loser.result(15)
-                assert busy.value.status==409 and 'сейчас обновляются' in str(busy.value)
-            else:
-                with pytest.raises(CRMAccessError) as busy:
-                    loser.result(15)
-                assert busy.value.code=='company_name_busy'
-        finally:
-            release.set()
-        row=winner.result(20)
-    if first=='native':
-        with pytest.raises(provider.OperatorError) as conflict:
-            choose(name)
-        assert conflict.value.status==409 and not bindings(db)
-        assert count(db,'saas_beinsystems_operator_company_imports')==0
-        ident=str(row['id'])
-    else:
-        ident=row['company_id']
-        if writer=='ai':
-            assert str(native_mutation()['id'])==ident  # Existing verified AI behavior.
-        else:
-            with pytest.raises(CRMAccessError) as conflict:
-                native_mutation()
-            assert conflict.value.code=='company_name_conflict'
-        assert count(db,'saas_beinsystems_operator_company_imports')==1
-    assert db.execute("SELECT id::text AS id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid AND lower(name)=lower(%s)", (A,name))==[{'id':ident}]
-    db.commit()
+            return choose(account,expected_company_id=None)['operator_account']
+        except provider.OperatorError as error:
+            assert error.status==409
+            return None
+    with ThreadPoolExecutor(2) as workers:
+        futures=[workers.submit(pick,account) for account in ('uniset','other')]
+        results=[future.result(timeout=15) for future in futures]
+    winner=next(result for result in results if result)
+    assert results.count(None)==1
+    assert binding.binding(OWNER,**ROUTE)['operator_account']==winner
+    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==0
 
 
-@pytest.mark.parametrize('takeover',[False,True])
-def test_kommo_exact_route_and_manual_takeover_are_fenced(ready,monkeypatch,takeover):
+def test_kommo_requires_exact_route_and_keeps_connect_binding_separate(ready):
     from test_dialog_lifecycle_company_binding_postgres import _deal
     db,calls,_=ready
     route=_deal(db)
-    with db.cursor() as cur:
-        binding.provision_kommo(cur)
-    db.commit()
     with pytest.raises(provider.OperatorError) as invalid:
         choose('kommo-picked',**{**route,'conversation_id':'fabricated'})
     assert invalid.value.status==404 and calls==[]
-    if takeover:
-        manual=db.execute("SELECT id::text AS id FROM saas_crm_native_companies WHERE tenant_id=%s::uuid ORDER BY id LIMIT 1",(A,))[0]['id']
-        db.commit()
-        underlying=provider._request_operator
-        def manual_between_reads(endpoint,body,**credentials):
-            if endpoint=='accounts':
-                binding.binding(OWNER,**route,company_id=manual)
-            return underlying(endpoint,body,**credentials)
-        monkeypatch.setattr(provider,'_request_operator',manual_between_reads)
-        with pytest.raises(provider.OperatorError) as conflict:
-            choose('kommo-picked',**route)
-        assert conflict.value.status==409
-        assert count(db,'saas_beinsystems_operator_company_imports')==0
-        wanted=manual
-    else:
-        row=choose('kommo-picked',**route)
-        assert row['company_name']=='kommo-picked' and count(db,'saas_beinsystems_operator_company_imports')==1
-        wanted=row['company_id']
-    assert binding.binding(OWNER,**route)['company_id']==wanted
-    assert not bindings(db)  # Never wrote to the same tenant's Connect route.
+    chosen=choose('kommo-picked',**route)
+    assert binding.binding(OWNER,**route)==chosen
+    assert binding.binding(OWNER,**ROUTE)['operator_account'] is None
+    assert not bindings(db)
+    assert count(db,'saas_beinsystems_operator_company_imports')==0

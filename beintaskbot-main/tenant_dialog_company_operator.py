@@ -1,4 +1,4 @@
-"""One verified Operator account in one exact BeinSystems CRM dialogue."""
+"""Choose a verified Operator account for one exact BeinSystems dialogue."""
 import hashlib
 import uuid
 
@@ -6,14 +6,12 @@ import tenant_beinsystems_operator as operator
 import tenant_beinsystems_operator_company_import as imports
 import tenant_dialog_company_binding as dialogue
 from tenant_beinsystems_operator_access import dialogue_chooser_enabled
-from tenant_crm_native_access import CRMAccessError, authorize_create, current_access, locked_resource
+import tenant_dialog_operator_account as accounts
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
-from tenant_operator_company_name_guard import lock_name_writes
 
 
 _LIMIT = 5
-_CONFLICT = 'Аккаунт нельзя однозначно связать с компанией. Проверьте существующую связь в CRM.'
 
 
 def _term(value, *, exact=False):
@@ -50,13 +48,12 @@ def _authorized(cur,profile,route):
     if not dialogue._operator_choice_allowed(cur,tenant,policy,route,enforce=True):
         raise operator.OperatorError('Нет доступа к выбору аккаунта в этом диалоге.',403)
     dialogue._prove(cur,tenant,policy,route)
-    table,_,_=dialogue._pred(tenant,route)
-    if not dialogue._ready(cur,table):
+    if not accounts.ready(cur):
         raise operator.OperatorError('Привязка компании для этого источника недоступна.',503)
     return tenant,actor,policy
 
 
-def _read_live(profile, route, term, *, choice):
+def _read_live(profile, route, term, *, choice, selection_search=None):
     # Do not disclose provider data or spend upstream calls for a forged route.
     with dialogue._connect() as conn:
         with conn.cursor() as cur:
@@ -76,18 +73,18 @@ def _read_live(profile, route, term, *, choice):
     operator._record_operator_read(profile,'accounts',{'account':term} if choice else {})
     if owner:
         imports._selected_source_fence(profile,tenant,actor,source,credentials)
-    limit=1 if choice else _LIMIT
-    # Same documented, bounded read as the existing exact-account workflow.
-    # For accounts-only, /me was verified against the stored fingerprint.
+    # The search can rank similar accounts first. Re-run the bounded search
+    # that exposed the choice and require the unchanged account ID in it.
+    query = selection_search if choice and selection_search is not None else term
     try:
-        response=operator._request_operator('accounts',{'search':term,'limit':limit},
+        response=operator._request_operator('accounts',{'search':query,'limit':_LIMIT},
             token=credentials['token'],base_url=credentials['base_url'])
     except operator.OperatorError as error:
         if error.upstream_http_status in (401,403):
             raise operator.OperatorError('Operator не разрешил поиск аккаунтов.',424) from None
         raise
-    accounts=_enumerate(response,limit)
-    if choice and accounts!=[term]:
+    accounts=_enumerate(response,_LIMIT)
+    if choice and term not in accounts:
         raise operator.OperatorError('Operator не подтвердил точное совпадение выбранного аккаунта.',409)
     return tenant,actor,source,credentials,accounts
 
@@ -117,154 +114,59 @@ def _assert_fresh(cur,tenant,actor,source,credentials):
             raise operator.OperatorError('Доступ к аккаунтам Operator истёк. Подтвердите его заново.',409)
 
 
-def _resolve(cur,tenant,account,credentials):
-    maps,prior=imports._first_batch_prior_identity(cur,tenant,[account])
-    cur.execute("""SELECT local_entity_id::text AS company_id FROM saas_beinsystems_operator_links
-      WHERE tenant_id=%s::uuid AND local_entity_type='company' AND external_entity_type='account'
-        AND external_scope_id='' AND revoked_at IS NULL AND external_id=%s
-        AND connection_generation=%s AND connection_instance_id=%s::uuid FOR UPDATE""",
-      (tenant,account,credentials['generation'],credentials['connection_instance_id']))
-    explicit={r['company_id'] for r in cur.fetchall()}
-    mapped=maps.get(account)
-    proven=explicit | ({mapped} if mapped else set())
-    if len(proven)>1 or (prior.get(account,set())-proven):
-        raise operator.OperatorError(_CONFLICT,409)
-    if not proven:
-        return None
-    target=next(iter(proven))
-    cur.execute("""SELECT EXISTS(SELECT 1 FROM saas_beinsystems_operator_company_imports
-       WHERE tenant_id=%s::uuid AND company_id=%s::uuid AND external_account<>%s)
-      OR EXISTS(SELECT 1 FROM saas_beinsystems_operator_links WHERE tenant_id=%s::uuid
-       AND local_entity_type='company' AND local_entity_id=%s::uuid AND external_entity_type='account'
-       AND external_scope_id='' AND revoked_at IS NULL AND external_id<>%s) AS other""",
-      (tenant,target,account,tenant,target,account))
-    if cur.fetchone()['other']:
-        raise operator.OperatorError(_CONFLICT,409)
-    return target
-
-
-def _current_binding(cur,table,pred,key):
-    cur.execute(f'SELECT company_id::text AS company_id FROM {table} WHERE {pred} FOR UPDATE',key)
-    return (cur.fetchone() or {}).get('company_id')
-
-
-def _bind_once(cur,route,table,pred,key,company,actor):
-    fields='tenant_id,channel_id,conversation_id' if route[0]=='connect' else 'tenant_id,lead_id,channel_id,conversation_id'
-    values='%s::uuid,%s::uuid,%s' if route[0]=='connect' else '%s::uuid,%s,%s,%s'
-    cur.execute(f"""INSERT INTO {table}({fields},company_id,created_by,updated_by)
-      VALUES({values},%s::uuid,%s,%s) ON CONFLICT({fields}) DO NOTHING RETURNING company_id""",
-      (*key,company,actor,actor))
-    if not cur.fetchone() and _current_binding(cur,table,pred,key)!=company:
-        raise operator.OperatorError('Компания диалога изменилась. Обновите диалог.',409)
-
-
-def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_confirm=False,confirm=False,accepted_policy=None):
-    table,pred,key=dialogue._pred(tenant,route)
-    bound=_current_binding(cur,table,pred,key)
-    dialogue.assert_expected_company(bound,expected)
-    company=_resolve(cur,tenant,account,credentials)
-    if expected is dialogue._UNCHECKED and bound and bound!=company:
-        raise operator.OperatorError('У диалога уже есть компания. Текущая привязка не изменена.',409)
-    if confirm and (not can_confirm or not bound or expected != bound or (company and company != bound)):
-        raise operator.OperatorError(_CONFLICT,409)
-    if not company and can_confirm and bound and expected == bound:
-        # Offer only the selected, writable CRM record. A matching label alone never writes a mapping.
-        grant=None if accepted_policy else current_access(cur,tenant,actor,'companies','update')
-        local=locked_resource(cur,grant,'companies','update',dialogue.COMPANIES,tenant,bound)
-        if local and local['name'].casefold()==account.casefold():
-            if not confirm:
-                return {'confirm_existing_company':True}
-            if not imports._put_mapping(cur,tenant,account,bound,actor,credentials):
-                raise operator.OperatorError(_CONFLICT,409)
-            company=bound
-        elif confirm:
-            raise operator.OperatorError(_CONFLICT,409)
-    created=False
-    if not company:
-        if accepted_policy is None:
-            create=current_access(cur,tenant,actor,'companies','create')
-            authorize_create(cur,create,'companies',tenant,actor)
-        # Matching names (including archived) are only reason to stop, never
-        # identity evidence. All ordinary name writers share the same lock.
-        cur.execute("""SELECT 1 FROM saas_crm_native_companies WHERE tenant_id=%s::uuid
-          AND lower(name)=lower(%s) LIMIT 1""",(tenant,account))
-        if cur.fetchone():
-            raise operator.OperatorError(_CONFLICT,409)
-        company=str(uuid.uuid4())
-        cur.execute("""INSERT INTO saas_crm_native_companies
-          (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
-          VALUES(%s::uuid,%s::uuid,%s,'','','',NULL,%s) RETURNING id""",(company,tenant,account,actor))
-        if not cur.fetchone() or not imports._put_mapping(cur,tenant,account,company,actor,credentials):
-            raise operator.OperatorError('Связь аккаунта с CRM-компанией изменилась. Операция отменена.',409)
-        created=True
-    grant=None if accepted_policy else current_access(cur,tenant,actor,'companies','view')
-    if not locked_resource(cur,grant,'companies','view',dialogue.COMPANIES,tenant,company):
-        raise CRMAccessError()
-    if not created and source=='active':
-        # Refresh only a pre-existing, exact imported identity after live re-verification.
-        # A manually confirmed link remains its own sole identity record.
-        cur.execute("""UPDATE saas_beinsystems_operator_company_imports SET
-          last_seen_generation=%s,last_seen_connection_instance_id=%s::uuid,
-          updated_by=%s,last_seen_at=now(),updated_at=now()
-          WHERE tenant_id=%s::uuid AND external_account=%s AND company_id=%s::uuid
-            AND (last_seen_generation,last_seen_connection_instance_id)
-                IS DISTINCT FROM (%s,%s::uuid)""",
-          (credentials['generation'],credentials['connection_instance_id'],actor,tenant,account,company,
-           credentials['generation'],credentials['connection_instance_id']))
-    _assert_fresh(cur,tenant,actor,source,credentials)
-    if bound!=company:
-        if expected is dialogue._UNCHECKED:
-            _bind_once(cur,route,table,pred,key,company,actor)
-        else:
-            dialogue.write_binding(cur,route,table,pred,key,company,actor,expected)
-        account_hash=hashlib.sha256(account.encode('utf-8')).hexdigest()
-        cur.execute("""INSERT INTO saas_tenant_audit_events
-          (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-          VALUES(%s,%s::uuid,%s,'operator_dialog_company_selected','operator_endpoint',%s,%s::jsonb)""",
-          (str(uuid.uuid4()),tenant,actor,account_hash,
-           operator._json({'account_hash':account_hash,'result':'created' if created else 'reused','source':source})))
-    if accepted_policy:
-        return dialogue._binding_snapshot(cur,tenant,accepted_policy,route,True)
-    return {**dialogue._read(cur,tenant,actor,route,True),'can_search_operator':True}
-
-
 def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, choice=False,
-            expected_company_id=dialogue._UNCHECKED,confirm_existing=False):
-    tenant=operator._tenant(profile)
-    if not dialogue_chooser_enabled(tenant):
-        raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
+            expected_company_id=dialogue._UNCHECKED, selection_search=None):
     route=dialogue._key(provider,lead_id,channel_id,conversation_id)
     term=_term(term,exact=choice)
+    if selection_search is not None:
+        if not choice:
+            raise operator.OperatorError('Некорректный запрос Operator.')
+        selection_search=_term(selection_search)
     if expected_company_id is not dialogue._UNCHECKED:
         dialogue.normalize_company_id(expected_company_id)
     try:
-        tenant,actor,source,credentials,accounts=_read_live(profile,route,term,choice=choice)
-        with dialogue._connect() as conn:
-            with conn.cursor() as cur:
-                if choice and not lock_name_writes(cur,tenant):
-                    raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
-                policy=_fenced_local(cur,profile,route,tenant,actor,source,credentials)
-                if choice:
-                    if policy.profile.get('role')!='owner' and expected_company_id is dialogue._UNCHECKED:
-                        raise operator.OperatorError('Обновите диалог перед выбором компании.',409)
-                    can_confirm=(source=='active' and policy.profile.get('role')=='owner'
-                                 and policy.allows_action('operator_data','link'))
-                    accepted=dialogue.accepted_api_operator(cur,tenant,actor,policy,route)
-                    bound=_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id,
-                                  can_confirm=can_confirm or (accepted and source=="active"),confirm=confirm_existing,
-                                  accepted_policy=policy if accepted else None)
-                    if bound.get('confirm_existing_company'):
-                        return bound
-                    bound['can_unlink']=dialogue._manage(cur,tenant,actor,policy,route,write=False)
-                    result={'binding':bound}
-                else:
-                    _assert_fresh(cur,tenant,actor,source,credentials)
-                    result={'accounts':[{'account':account} for account in accounts]}
+        tenant,actor,source,credentials,verified=_read_live(profile,route,term,choice=choice,selection_search=selection_search)
+        with dialogue._connect() as conn, conn.cursor() as cur:
+            policy=_fenced_local(cur,profile,route,tenant,actor,source,credentials)
+            _assert_fresh(cur,tenant,actor,source,credentials)
+            if not choice:
+                return {'accounts':[{'account':account} for account in verified]}
+            current=accounts.row(cur,tenant,route,lock=True)
+            actual=current['id'] if current and current['account'] else None
+            if expected_company_id is dialogue._UNCHECKED:
+                if policy.profile.get('role')!='owner' or (actual and current['account']!=term):
+                    raise operator.OperatorError('Обновите диалог перед выбором компании.',409)
+            else:
+                dialogue.assert_expected_company(actual,expected_company_id)
+            saved=accounts.save(cur,tenant,actor,route,current,term,
+                                credentials['generation'],credentials['connection_instance_id'])
+            if not current or current['id']!=saved['id']:
+                account_hash=hashlib.sha256(term.encode('utf-8')).hexdigest()
+                cur.execute("""INSERT INTO saas_tenant_audit_events
+                  (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                  VALUES(%s,%s::uuid,%s,'operator_dialog_company_selected','operator_endpoint',%s,%s::jsonb)""",
+                  (str(uuid.uuid4()),tenant,actor,account_hash,
+                   operator._json({'account_hash':account_hash,'source':source})))
+            result={'binding':accounts.snapshot(cur,tenant,policy,route,True,record=saved)}
             conn.commit()
-        return result
+            return result
     except TenantLinearError as error:
         raise operator.OperatorError(str(error),error.status) from error
-    except CRMAccessError as error:
-        if error.code=='company_name_busy':
-            raise operator.OperatorError('Компании сейчас обновляются. Повторите выбор через несколько секунд.',409) from error
-        raise operator.OperatorError('CRM-компания недоступна по вашим правам.',error.status) from error
+
+
+def unlink(profile, *, provider, lead_id, channel_id, conversation_id, expected_company_id):
+    route=dialogue._key(provider,lead_id,channel_id,conversation_id)
+    expected=dialogue.normalize_company_id(expected_company_id)
+    if not expected:
+        raise operator.OperatorError('Обновите диалог перед снятием привязки.',409)
+    try:
+        with dialogue._connect() as conn, conn.cursor() as cur:
+            tenant,actor,policy=_authorized(cur,profile,route)
+            current=accounts.row(cur,tenant,route,lock=True)
+            dialogue.assert_expected_company(current['id'] if current and current['account'] else None,expected)
+            saved=accounts.save(cur,tenant,actor,route,current,None)
+            result=accounts.snapshot(cur,tenant,policy,route,True,record=saved)
+            conn.commit()
+            return result
+    except TenantLinearError as error:
+        raise operator.OperatorError(str(error),error.status) from error

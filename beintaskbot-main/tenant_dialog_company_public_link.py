@@ -116,6 +116,21 @@ def _locked_snapshot(cur,profile,route,expected_company,*,owner_read=False):
         access(cur, profile, 'dialogs', 'update')
         require_source(cur, tenant, policy, route[0], route[2], 'update')
         dialogue._prove(cur, tenant, policy, route)
+    from tenant_beinsystems_operator_access import dialogue_chooser_enabled
+    if dialogue_chooser_enabled(tenant):
+        from tenant_dialog_operator_account import ready, row
+        if not ready(cur):
+            raise operator.OperatorError('Привязка компании недоступна.',503)
+        direct=row(cur,tenant,route,lock=True)
+        if not direct or not direct['account'] or direct['id']!=expected_company:
+            raise operator.OperatorError('Компания диалога изменилась или недоступна.',409)
+        integration=operator._operator_row(cur,tenant)
+        generation,instance=operator._link_connection_scope(integration)
+        if not generation or not instance or integration.get('status')!='connected':
+            return 'not_connected'
+        if (generation,instance)!=(direct['generation'],direct['instance_id']):
+            return 'not_linked'
+        return tenant,direct['account'],generation,instance
     table, _, _ = dialogue._pred(tenant, route)
     if not dialogue._ready(cur, table):
         raise operator.OperatorError('Привязка компании недоступна.', 503)

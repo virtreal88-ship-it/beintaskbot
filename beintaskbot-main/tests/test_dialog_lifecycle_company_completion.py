@@ -47,6 +47,30 @@ def bindings(database):
     return rows
 
 
+@pytest.mark.parametrize('existing',[False,True])
+def test_individual_finish_keeps_company_and_returns_controls(companies,existing):
+    database, company, *_=companies
+    accepted=command(actor=33)
+    assert accepted['controls']['lifecycle']['can_close'] is True
+    if existing:
+        database.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+          (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+          VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,company))
+        database.commit()
+    before=bindings(database)
+    request=payload('close',1,company_choice='unchanged')
+    with pytest.raises(TenantLinearError):
+        lifecycle.mutate(PROFILE,request)
+    result=lifecycle.mutate(STAFF,request)
+    assert result['lifecycle']['state']=='closed'
+    controls=result['controls']
+    assert controls['can_send'] is False and controls['lifecycle']['can_close'] is False
+    assert controls['lifecycle']['can_submit_case'] is True
+    assert controls['closed_episode']['id']==accepted['lifecycle']['id']
+    assert lifecycle.mutate(STAFF,request)==result
+    assert bindings(database)==before
+
+
 def test_accept_send_and_receipt_replay_and_atomic_completion(companies,monkeypatch):
     database, company, second, _, _=companies
     # A regular employee accepts with no company. Existing send guard stays unchanged.

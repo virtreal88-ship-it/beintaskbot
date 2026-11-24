@@ -337,7 +337,7 @@
   }
 
   const lifecycleText=key=>({dismiss:{ru:'Риторический вопрос',az:'Ritorik sual',en:'Rhetorical question'},accept:{ru:'Принять диалог',az:'Dialoqu qəbul et',en:'Accept dialogue'},start:{ru:'Начать диалог',az:'Dialoqa başla',en:'Start dialogue'},close:{ru:'Завершить',az:'Tamamla',en:'Complete'},transfer:{ru:'Передать',az:'Ötür',en:'Transfer'},recipient:{ru:'Сотрудник',az:'Əməkdaş',en:'Employee'},episode:{ru:'Завершённое обращение',az:'Tamamlanmış müraciət',en:'Completed request'},cancel:{ru:'Отмена',az:'Ləğv et',en:'Cancel'},case:{ru:'Отправить в кейсы',az:'Hallara göndər',en:'Send to cases'},casePublished:{ru:'Кейс опубликован для назначенного агента.',az:'Hal təyin edilmiş agent üçün dərc edildi.',en:'Case published for the assigned agent.'},caseDone:{ru:'Черновик кейса создан. Публикации не было.',az:'Halın qaralaması yaradıldı. Dərc edilmədi.',en:'Case draft created. Nothing was published.'},caseBudget:{ru:'AI проверит выбранное обращение. Подтверждённое решение публикуется только для назначенного агента при наличии ваших прав; иначе сохраняется черновик с причиной. Используется действующий AI-бюджет, без дополнительного платного анализа вложений.',az:'AI seçilmiş müraciəti yoxlayacaq. Təsdiqlənmiş həll yalnız hüquqlarınız olduqda təyin edilmiş agent üçün dərc edilir, əks halda səbəbi ilə qaralama saxlanılır. Mövcud AI büdcəsi istifadə olunur; əlavələrə əlavə ödəniş yoxdur.',en:'AI checks only the selected completed request. Proven solutions publish to the assigned agent only with your existing permissions; otherwise a draft explains why. Uses the existing AI budget without additional paid attachment analysis.'},casePending:{ru:'Анализ ещё не завершён. Повторное нажатие проверит тот же запрос, без нового платного запуска.',az:'Təhlil hələ tamamlanmayıb. Təkrar klik eyni sorğunu yoxlayır, yeni ödənişli iş başlatmır.',en:'Analysis is not complete. Clicking again checks the same request without a new paid run.'},caseUnsuitable:{ru:'AI не нашёл материала, пригодного для обучения. Кейс не создан.',az:'AI təlim üçün uyğun material tapmadı. Hal yaradılmadı.',en:'AI found no suitable learning material. No case was created.'},caseFailed:{ru:'Черновик не создан. Новый платный запуск не выполнялся. Проверьте результат анализа в диагностике.',az:'Qaralama yaradılmadı. Yeni ödənişli iş başladılmadı. Təhlilin nəticəsini diaqnostikada yoxlayın.',en:'No draft was created. No new paid run was started. Review the analysis diagnostic.'},unavailable:{ru:'Диалог больше недоступен в вашей очереди.',az:'Dialoq artıq növbənizdə əlçatan deyil.',en:'Dialogue is no longer available in your queue.'},retry:{ru:'Повторить проверку',az:'Yenidən yoxla',en:'Check again'}}[key]?.[i18n.language]||key);
-  const lifecycleRequests=new Map(),lifecycleListStates=new Map();
+  const lifecycleRequests=new Map(),lifecycleListStates=new Map(),lifecycleInFlight=new Set();
   function rememberLifecycleListState(route,state){
     if(!route?.lifecycle_enabled||!state||!Number.isInteger(state.revision))return;
     const key=contextKey('lifecycle-list',route),previous=lifecycleListStates.get(key);
@@ -514,22 +514,56 @@
   function lifecycleUnavailable(error,route){
     if(route?.lifecycle_enabled&&[403,404,409].includes(error.status)){removeLifecycleDialog(route);notice(lifecycleText('unavailable'));return true;}return false;
   }
-  async function lifecycleAction(route,action,button,target,episodeId,companyId,companyChoice){
+  function applyLifecycleReceipt(route,action,result){
+    const state=result.lifecycle,controls=result.controls;
+    if(!currentPage||!sameDialog(currentPage.dialog,route)||!state||
+       state.revision!==Number(route.lifecycle?.revision)+1||
+       String(state.operator_id)!==String(member.telegram_id)||
+       state.state!==(action==='accept'?'accepted':'closed'))return;
+    const previous=currentDialog.lifecycle;
+    if(Number(previous?.revision)>=state.revision)return;
+    const {company_completion,...prior}=previous||{};
+    const lifecycle={...prior,can_accept:false,can_dismiss:false,can_takeover:false,
+      can_close:action==='accept',can_transfer:false,can_start:false,can_submit_case:false,
+      no_reply_needed:false,...controls?.lifecycle,...state};
+    if(controls?.closed_episode){
+      const episode=controls.closed_episode;
+      lifecycle.completed_episodes=[episode,...(prior.completed_episodes||[]).filter(old=>old.id!==episode.id)].slice(0,20);
+    }
+    const canSend=action==='accept'&&controls?.can_send===true&&
+      !currentDialog.archive_read_only&&!currentDialog.owner_overview_read_only&&!currentDialog.search_overview_read_only;
+    // A pre-transition read of this view must not replace the receipt or
+    // remove a dialogue the server has just confirmed is ours.
+    dialogReadSerial++;
+    pendingDialogRoute=null;
+    $('operatorConversationContent')?.setAttribute('aria-busy','false');
+    currentDialog={...currentDialog,lifecycle,can_send:canSend,send_block_reason:canSend?'':'dialog_accept_required',missed_call_pending:false};
+    selectedDialog=currentDialog;
+    currentPage={...currentPage,dialog:currentDialog,scroll_to_latest:false};
+    renderDialog(currentPage,{suppressRead:true});
+    if(action==='accept')window.tenantDialogueCompany?.refresh?.();
+  }
+  async function lifecycleAction(route,action,button,target,episodeId){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const owner=identity(member),key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+(companyId?'.company.'+companyId:companyChoice?'.company-choice.'+companyChoice:'');
+    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
+    if(lifecycleInFlight.has(key))return;
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(companyId?{company_id:companyId}:action==='close'&&companyChoice==='none'?{company_choice:'none'}:{})};lifecycleRequests.set(key,payload);}
-    button.disabled=true;
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{})};lifecycleRequests.set(key,payload);}
+    lifecycleInFlight.add(key);button.disabled=true;
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
       lifecycleRequests.delete(key);
-      if(owner!==identity(member))return;
+      if(version!==epoch)return;
       if(['accept','takeover','start','close','dismiss'].includes(action))updateLifecycleList(route,result.lifecycle||result.dialog?.lifecycle);
-      if(!sameDialog(route,currentDialog))return;
+      if(view!==openRevision||!sameDialog(route,currentDialog))return;
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       // A successful receipt is authoritative even while history is refreshing.
       if(['accept','takeover','start','close'].includes(action))button.remove();
-      if(action==='accept'||action==='start')window.tenantDialogueCompany?.refresh?.();
+      if(action==='accept'||action==='close'){
+        applyLifecycleReceipt(route,action,result);
+        return;
+      }
+      if(action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'){removeLifecycleDialog(route);void refresh();return;}
       if(action==='dismiss'){
         if(result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true&&currentPage&&
@@ -539,10 +573,10 @@
         }
         void refresh(false,false,{revalidateSelected:true,suppressRead:true});return;
       }
-      if(action==='case'){await openDialog(route,true);if(owner===identity(member)&&sameDialog(route,currentDialog)&&$('operatorChatError')){const key=result.publication?.state==='published'?'casePublished':result.case_state==='completed'&&result.case_id?'caseDone':result.case_state==='not_suitable'?'caseUnsuitable':['running','unknown'].includes(result.case_state)?'casePending':'caseFailed';$('operatorChatError').textContent=lifecycleText(key)+(result.suitability?.reason?' '+result.suitability.reason:'')+(result.publication?.state==='draft'&&result.publication.reason?' '+result.publication.reason:'');}return;}
+      if(action==='case'){await openDialog(route,true);if(version===epoch&&sameDialog(route,currentDialog)&&$('operatorChatError')){const key=result.publication?.state==='published'?'casePublished':result.case_state==='completed'&&result.case_id?'caseDone':result.case_state==='not_suitable'?'caseUnsuitable':['running','unknown'].includes(result.case_state)?'casePending':'caseFailed';$('operatorChatError').textContent=lifecycleText(key)+(result.suitability?.reason?' '+result.suitability.reason:'')+(result.publication?.state==='draft'&&result.publication.reason?' '+result.publication.reason:'');}return;}
       await openDialog({...route,...(result.dialog||{}),lifecycle:result.lifecycle||result.dialog?.lifecycle||route.lifecycle},true);
     }catch(error){
-      if(owner===identity(member)&&sameDialog(route,currentDialog)){
+      if(version===epoch&&view===openRevision&&sameDialog(route,currentDialog)){
         if(action==='dismiss'&&error.status===409){
           await openDialog(route,true,'',{suppressRead:true});
           const status=$('operatorChatError');if(status&&sameDialog(route,currentDialog))status.textContent=error.message;
@@ -551,9 +585,9 @@
         const unavailable=lifecycleUnavailable(error,route);
         if(unavailable){if(action==='start')void refresh();}
         else{const status=$('operatorLifecycleStatus')||$('operatorChatError');if(status)status.textContent=error.message;
-          button.disabled=false;if(!companyChoice)button.textContent=lifecycleText('retry');}
+          button.disabled=false;button.textContent=lifecycleText('retry');}
       }
-    }
+    }finally{lifecycleInFlight.delete(key);}
   }
   const transferSidebarText=key=>({
     ru:{empty:'Нет доступных операторов в сети.',loading:'Проверяем, кто в сети…',failed:'Не удалось передать диалог. Проверьте список и попробуйте снова.',stale:'Диалог или статус оператора изменился. Обновите список.',sending:'Передаём диалог…',retry:'Обновить список'},
@@ -644,185 +678,16 @@
     modal.querySelector('form').onsubmit=event=>{event.preventDefault();if(owner!==identity(member)||!sameDialog(route,currentDialog)){closeLifecycleModal();return;}const chosen=(route.lifecycle.completed_episodes||[]).find(episode=>String(episode.id)===select.value&&!episode.case_id);if(chosen)void lifecycleAction(route,'case',submit,null,chosen.id);};document.body.append(modal);
   }
   const companyCloseText=key=>({
-    title:{ru:'Компания для завершения диалога',az:'Dialoqu tamamlamaq üçün şirkət',en:'Company for dialogue completion'},
-    search:{ru:'Найти CRM-компанию',az:'CRM şirkətini tap',en:'Find a CRM company'},
-    searching:{ru:'Ищем компании…',az:'Şirkətlər axtarılır…',en:'Searching companies…'},
-    empty:{ru:'Компании с правом привязки не найдены.',az:'Bağlaya biləcəyiniz şirkət tapılmadı.',en:'No linkable companies found.'},
-    choose:{ru:'Выберите компанию, чтобы завершить диалог.',az:'Dialoqu tamamlamaq üçün şirkət seçin.',en:'Choose a company to complete this dialogue.'},
-    chooseOrSkip:{ru:'Выберите компанию или завершите без неё.',az:'Şirkət seçin və ya şirkətsiz tamamlayın.',en:'Choose a company or complete without one.'},
-    skipOnly:{ru:'Диалог можно завершить без выбора компании.',az:'Dialoqu şirkət seçmədən tamamlamaq olar.',en:'You can complete the dialogue without choosing a company.'},
-    archivedSkip:{ru:'Компания архивирована. Можно завершить диалог без выбора новой компании и сохранить текущую привязку.',az:'Şirkət arxivləşdirilib. Yeni şirkət seçmədən dialoqu tamamlayıb mövcud əlaqəni saxlamaq olar.',en:'The company is archived. You can complete without choosing a replacement and keep the current link.'},
-    archived:{ru:'Компания диалога архивирована. Для завершения выберите действующую CRM-компанию.',az:'Dialoq şirkəti arxivləşdirilib. Tamamlamaq üçün aktiv CRM şirkəti seçin.',en:'The dialogue company is archived. Choose an active CRM company to complete it.'},
-    locked:{ru:'Нет прав на привязку CRM-компании. Диалог остаётся в работе.',az:'CRM şirkətini bağlamaq icazəsi yoxdur. Dialoq işdə qalır.',en:'You cannot link a CRM company. The dialogue stays open.'},
-    invalid:{ru:'Не удалось подтвердить прежнюю компанию. Диалог остаётся в работе до проверки администратором.',az:'Əvvəlki şirkət təsdiqlənmədi. İnzibatçı yoxlayana qədər dialoq işdə qalır.',en:'The previous company could not be verified. The dialogue stays open for administrator review.'},
-    unavailable:{ru:'Проверка CRM-компании временно недоступна. Диалог остаётся в работе.',az:'CRM şirkətinin yoxlanması müvəqqəti əlçatan deyil. Dialoq işdə qalır.',en:'Company verification is unavailable. The dialogue stays open.'},
-    identity_unresolved:{ru:'Сначала нужно проверить адрес диалога WhatsApp.',az:'Əvvəlcə WhatsApp dialoqunun ünvanı yoxlanmalıdır.',en:'The WhatsApp dialogue address must be verified first.'},
     bulkChoice:{ru:'Оставлено в работе, нужна проверка компании: {count}.',az:'Şirkət yoxlanmalıdır, işdə qaldı: {count}.',en:'Left open for company verification: {count}.'},
     bulkWaiting:{ru:'Не приняты в работу: {count}.',az:'Hələ qəbul edilməyib: {count}.',en:'Not yet accepted: {count}.'}
   }[key]?.[i18n.language]||key);
-  function openLifecycleCompanyClose(route){
-    closeLifecycleModal();
-    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal operator-close-company';
-    const searchLabel=esc(companyCloseText('search'));
-    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-label="${esc(companyCloseText('title'))}"><div data-company-search><input id="operatorCloseCompanySearch" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="operatorCloseCompanyOptions" aria-label="${searchLabel}" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" maxlength="120" placeholder="${searchLabel}"><div id="operatorCloseCompanyOptions" role="listbox" aria-label="${searchLabel}" hidden></div></div><p id="operatorLifecycleStatus" role="status"></p><div class="operator-complete-actions"><button type="button" class="primary" data-company-complete>${esc(lifecycleText('close'))}</button><button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></section>`;
-    const input=modal.querySelector('input'),options=modal.querySelector('[role=listbox]'),
-      done=modal.querySelector('[data-company-complete]'),cancel=modal.querySelector('[data-cancel]'),
-      status=modal.querySelector('[role=status]');
-    const company=route.lifecycle.company_completion,canChoose=company.can_choose===true,canSkip=company.can_skip===true;
-    input.closest('[data-company-search]').hidden=!canChoose;done.disabled=!canSkip;
-    if(canChoose&&!canSkip)input.setAttribute('aria-required','true');
-    const owner=identity(member),focus=document.activeElement;
-    let serial=0,timer=null,flight=null,submitting=false,selected=null,active=-1;
-    const current=()=>modal.isConnected&&owner===identity(member)&&sameDialog(route,currentDialog);
-    const events=['tenant-chat-close','tenant-chat-open','tenant-auth-invalid','tenant-auth-pending','tenant-profile','tenant-view'];
-    const stopSearch=()=>{serial++;clearTimeout(timer);timer=null;flight?.abort();flight=null;};
-    const hideOptions=()=>{
-      active=-1;options.hidden=true;options.replaceChildren();
-      input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');
-    };
-    const syncDone=()=>{done.disabled=submitting||!(canSkip||(canChoose&&selected&&selected.label===searchValue(input)));};
-    const close=()=>{
-      stopSearch();modal.remove();document.removeEventListener('keydown',key,true);
-      for(const name of events)document.removeEventListener(name,close);
-      closeLifecycleModal=()=>{};if(focus?.isConnected)focus.focus();
-    };
-    const cancelModal=()=>{if(!submitting)close();};
-    const choose=(event,item,node)=>{
-      if(!current()||submitting||!node.isConnected)return;
-      event.preventDefault();stopSearch();selected=item;if(window.tenantSearchInputs)window.tenantSearchInputs.write(input,item.label);else input.value=item.label;
-      hideOptions();status.textContent='';syncDone();input.focus();
-    };
-    const highlight=index=>{
-      const nodes=[...options.children];if(!nodes.length)return;
-      active=(index+nodes.length)%nodes.length;
-      nodes.forEach((node,i)=>node.setAttribute('aria-selected',String(i===active)));
-      input.setAttribute('aria-activedescendant',nodes[active].id);nodes[active].scrollIntoView?.({block:'nearest'});
-    };
-    const key=event=>{
-      if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();cancelModal();}
-      else if(event.key==='Tab'){
-        const nodes=[input,done,cancel].filter(node=>!node.disabled&&!node.closest('[hidden]'));
-        if(!nodes.length){event.preventDefault();return;}
-        if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}
-        else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}
-      }
-    };
-    async function search(){
-      if(!canChoose||!current()||submitting)return;
-      stopSearch();hideOptions();status.textContent='';
-      const term=searchValue(input).trim();if(!term||selected)return;
-      const controller=new AbortController(),attempt=serial;flight=controller;
-      status.textContent=companyCloseText('searching');
-      try{
-        const query=new URLSearchParams({search:term,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
-        const response=await rawApi('/api/platform/crm/native/companies?'+query,{signal:controller.signal});
-        if(!current()||attempt!==serial||term!==searchValue(input).trim())return;
-        for(const item of response.companies||[]){
-          if(item.actions?.update!==true||typeof item.id!=='string'||!item.id||typeof item.name!=='string'||!item.name.trim())continue;
-          const row=document.createElement('div');row.id='operatorCloseCompanyOption'+options.childElementCount;
-          row.setAttribute('role','option');row.setAttribute('aria-selected','false');row.textContent=item.name;
-          row.onpointerdown=event=>event.preventDefault();
-          row.onclick=event=>choose(event,{id:item.id,label:item.name},row);options.append(row);
-        }
-        options.hidden=!options.childElementCount;
-        input.setAttribute('aria-expanded',String(!options.hidden));
-        status.textContent=options.hidden?companyCloseText('empty'):'';
-      }catch(error){if(current()&&attempt===serial)status.textContent=error.message;}
-      finally{if(flight===controller)flight=null;}
-    }
-    const onInput=()=>{
-      if(!current()||!canChoose||submitting)return;
-      stopSearch();hideOptions();selected=null;status.textContent='';syncDone();
-      if(searchValue(input).trim())timer=setTimeout(search,220);
-    };
-    input.addEventListener('input',event=>{if(!event.isComposing)onInput();});
-    input.addEventListener('compositionend',onInput);
-    input.onkeydown=event=>{
-      if(event.isComposing)return;
-      if((event.key==='ArrowDown'||event.key==='ArrowUp')&&!options.hidden){
-        event.preventDefault();highlight(event.key==='ArrowDown'?active+1:active<0?options.childElementCount-1:active-1);
-      }else if(event.key==='Enter'){
-        event.preventDefault();
-        if(event.repeat)return;
-        if(!options.hidden&&active>=0)options.children[active].click();
-        else if(!options.hidden)highlight(0);
-        else if(!flight)void search();
-      }
-    };
-    closeLifecycleModal=close;document.addEventListener('keydown',key,true);for(const name of events)document.addEventListener(name,close);
-    cancel.onclick=cancelModal;modal.onclick=event=>{if(event.target===modal)cancelModal();};
-    done.onclick=async()=>{
-      if(!current()||submitting)return;
-      const choice=canChoose&&selected?.label===searchValue(input)?selected:null;
-      if(!choice&&!canSkip)return;
-      submitting=true;stopSearch();hideOptions();status.textContent='';input.disabled=true;cancel.disabled=true;
-      try{await lifecycleAction(route,'close',done,null,null,choice?.id,choice?null:'none');}
-      finally{if(current()){
-        submitting=false;input.disabled=false;cancel.disabled=false;
-        done.textContent=lifecycleText('close');syncDone();done.focus();
-      }}
-    };
-    document.body.append(modal);window.tenantSearchInputs?.protect(input);(canChoose?input:done).focus();
-  }
-  const verifiedCloseCompany=route=>{
-    const status=route.lifecycle?.company_completion?.status;
-    if(route.identity_conflict===true)return false;
-    // For a scoped employee lifecycle can intentionally hide company status.
-    // Only use the binding already authorized by exact dialogue history.
-    return status==='ready'||(status==='choice_available'&&Boolean(route.company_binding?.company_id));
-  };
-  async function closeLifecycleDialogue(route,button){
-    if(button.disabled||!hasRight('dialogs')||!sameDialog(route,currentDialog)||currentDialog.lifecycle?.can_close!==true||
-       currentDialog.lifecycle.revision!==route.lifecycle?.revision||currentDialog.lifecycle.id!==route.lifecycle?.id)return;
-    const active=currentDialog,existing=active.lifecycle.company_completion;
-    if(!existing||verifiedCloseCompany(active)||(!(existing.can_choose||existing.can_skip)&&existing.required!==true))
-      return lifecycleAction(active,'close',button);
-    const owner=identity(member),version=epoch,revision=openRevision,episode=active.lifecycle;
-    const sameEpisode=candidate=>sameDialog(active,candidate)&&candidate.lifecycle?.id===episode.id&&
-      candidate.lifecycle?.revision===episode.revision&&candidate.lifecycle?.can_close===true;
-    const current=()=>button.isConnected&&version===epoch&&owner===identity(member)&&revision===openRevision&&
-      hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&sameEpisode(currentDialog);
-    if(!current())return;
-    let fresh;
-    button.disabled=true;
-    try{
-      // Another employee may have linked/unlinked it since this shell was
-      // mounted. One exact authorized read, with no open/read-marker effects.
-      const query=new URLSearchParams({provider:active.provider,lead_id:active.lead_id,
-        channel_id:active.channel_id,conversation_id:active.conversation_id});
-      fresh=(await api('dialogs/history?'+query))?.dialog;
-      if(!current())return;
-      if(!sameEpisode(fresh)||fresh.archive_read_only||fresh.owner_overview_read_only||fresh.search_overview_read_only){
-        notice(lifecycleText('unavailable'));return;
-      }
-    }catch(error){
-      if(current()&&!lifecycleUnavailable(error,active))notice(error.message);
-      return;
-    }finally{
-      if(button.isConnected)button.disabled=false;
-    }
-    const company=fresh.lifecycle.company_completion,linked=verifiedCloseCompany(fresh);
-    if(!linked&&(company?.can_choose||company?.can_skip)){
-      openLifecycleCompanyClose(fresh);return;
-    }
-    if(!linked&&company?.required===true){
-      notice(companyCloseText(company.status));return;
-    }
-    return lifecycleAction(fresh,'close',button);
-  }
   function renderLifecycleActions(route,host,only=null){
-    const state=route.lifecycle||{},company=state.company_completion;
-    const hasSelectedCompany=verifiedCloseCompany(route);
-    if(!only&&!hasSelectedCompany&&state.can_close&&company?.status&&company.status!=='ready'&&(company.required!==false||company.can_choose||company.can_skip)){
-      const reason=document.createElement('p');reason.className='sub';reason.dataset.companyCompletion=company.status;reason.setAttribute('role','status');
-      reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
-      $('operatorAcceptAction').append(reason);
-    }
-    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['close',state.can_close&&(hasSelectedCompany||!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    const state=route.lifecycle||{};
+    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['close',state.can_close===true],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start','takeover'].includes(action)?'primary':'outline';button.textContent=action==='takeover'?({ru:'Забрать себе',az:'Üzərimə götür',en:'Take over'}[i18n.language]||'Take over'):lifecycleText(action);button.dataset.operatorLifecycle=action;
       if(action==='dismiss'){const marked=state.no_reply_needed===true;button.setAttribute('aria-pressed',String(marked));button.disabled=marked;}
       if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='close'?closeLifecycleDialogue(route,button):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||action==='dismiss')$('operatorActiveLifecycleActions').append(button);else host.append(button);
+      button.onclick=()=>action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||action==='dismiss')$('operatorActiveLifecycleActions').append(button);else host.append(button);
     }
   }
   function openCompletion(route){
@@ -918,15 +783,6 @@
     mobileStyle.textContent+=`@media(max-width:900px){#operatorConversationHeader{padding:4px;gap:2px;min-height:56px}#operatorConversationHeader .operator-back-to-list{width:32px;min-width:32px;min-height:44px;justify-content:center;padding:0}#operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;gap:4px}#operatorConversationHeader .operator-dialog-head-row{width:auto;flex:1;min-width:0}#operatorConversationHeader .operator-dialog-head-main{min-width:0;gap:0 4px}#operatorConversationHeader .operator-dialog-title{max-width:100%;min-width:0;min-height:0;font-size:14px;line-height:20px}#operatorConversationHeader .operator-dialog-title-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader #operatorClientCardOpen{width:44px;min-width:44px;height:44px;min-height:44px;margin:0 4px 0 0}#operatorConversationHeader #operatorClientCardOpen .operator-header-avatar{width:30px;height:30px}#operatorConversationHeader .operator-client-phone,#operatorConversationHeader .operator-channel-label{font-size:10px;line-height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader .operator-dialog-head-secondary{position:static;display:flex;flex:none;align-items:center;gap:2px;min-height:44px}#operatorConversationHeader #operatorCreateTicketHost button{width:auto;min-width:44px;height:44px;min-height:44px;padding:0 5px}#operatorConversationHeader .operator-more-actions{position:relative}#operatorConversationHeader .operator-action-menu{max-width:calc(100vw - 16px)}}`;
     document.head.appendChild(mobileStyle);
     const compactCompanyCloseStyle=document.createElement('style');compactCompanyCloseStyle.textContent=`
-      .operator-close-company .operator-complete-card{box-sizing:border-box;width:min(400px,100%);padding:14px;max-height:calc(100dvh - 32px)}
-      .operator-close-company [data-company-search][hidden],.operator-close-company [role=listbox][hidden],.operator-close-company [role=status]:empty{display:none}
-      .operator-close-company input{box-sizing:border-box;width:100%;min-height:40px;margin:0;font-size:16px}
-      .operator-close-company [role=listbox]{max-height:min(184px,34dvh);overflow-y:auto;margin-top:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
-      .operator-close-company [role=option]{padding:8px 10px;cursor:pointer;overflow-wrap:anywhere}
-      .operator-close-company [role=option]:hover,.operator-close-company [role=option][aria-selected=true]{background:var(--paper);color:var(--brand)}
-      .operator-close-company [role=status]{margin:6px 0 0;color:var(--muted);font-size:13px;overflow-wrap:anywhere}
-      .operator-close-company .operator-complete-actions{margin-top:10px;flex-wrap:nowrap;justify-content:flex-end}
-      .operator-close-company .operator-complete-actions button{min-height:38px}
     `;document.head.append(compactCompanyCloseStyle);
     const missedCallPreviewStyle=document.createElement('style');missedCallPreviewStyle.textContent='.operator-row-preview-missed-pending{color:var(--danger,#b42318)!important;font-weight:600}';document.head.append(missedCallPreviewStyle);
     bindFilterPopover();
@@ -2396,8 +2252,8 @@
   // same route and permissions. Mutate the page object captured by handlers.
   const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!(key==='customer_name'&&isDirectConnectDialog(route))&&!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).map(([key,value])=>{
     if(key!=='lifecycle'||!value)return [key,value];
-    const {accepted_by_name,...lifecycle}=value;
-    return [key,lifecycle];
+    const {accepted_by_name,company_completion,...lifecycle}=value;
+    return [key,Object.entries(lifecycle).sort(([a],[b])=>a.localeCompare(b))];
   }).sort(([a],[b])=>a.localeCompare(b))]);
   function updateDialogueAcceptor(route,card=$('operatorClientCard')){
     if(card?.dataset.scope!==contextKey('client-card',route))return;
