@@ -104,8 +104,8 @@ const beta='@verified_account';
   assert.equal(await name.locator('b').count(),0);
   assert.equal(await name.getAttribute('title'),alpha);
   assert.equal(await head.evaluate(n=>n.offsetHeight),height,'the tag never adds a header row');
-  assert.equal(await name.evaluate(n=>n.previousElementSibling.id),'operatorDialogTitleSlot');
-  assert(await name.evaluate(n=>n.getBoundingClientRect().top>=n.previousElementSibling.getBoundingClientRect().bottom),
+  assert(await name.evaluate(n=>n.parentElement.matches('[data-header-meta]')),'company name stays in the compact metadata row');
+  assert(await name.evaluate(n=>n.getBoundingClientRect().top>=document.querySelector('#operatorDialogTitleSlot').getBoundingClientRect().bottom),
     'company stays below the customer name');
   assert(await name.evaluate(n=>n.scrollWidth>n.clientWidth&&getComputedStyle(n).textOverflow==='ellipsis'));
   assert.equal(await head.locator('.operator-channel-label').count(),0);
