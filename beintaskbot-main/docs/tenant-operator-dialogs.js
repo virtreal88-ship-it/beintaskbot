@@ -755,9 +755,9 @@
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;
   const duplicateCopy=(key)=>({
-    ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',more:'Ещё',empty:'Диалоги не найдены.',choose:'Выберите два диалога одного источника.',keep:'Оставить диалог',review:'Проверить объединение',confirm:'Объединить',back:'Назад',nameToKeep:'Имя после объединения',phoneToKeep:'Номер после объединения',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',merged:'Диалоги объединены.',reviewHint:'Проверьте, какой диалог останется и какие данные будут показаны.',busy:'Загрузка…',pair:'Выбрать для объединения',manual:'Указать номер для отображения',save:'Сохранить'},
-    az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',more:'Daha çox',empty:'Dialoq tapılmadı.',choose:'Eyni mənbədən iki dialoq seçin.',keep:'Saxlanacaq dialoq',review:'Birləşməni yoxla',confirm:'Birləşdir',back:'Geri',nameToKeep:'Birləşmədən sonrakı ad',phoneToKeep:'Birləşmədən sonrakı nömrə',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',merged:'Dialoqlar birləşdirildi.',reviewHint:'Saxlanacaq dialoqu və göstəriləcək məlumatları yoxlayın.',busy:'Yüklənir…',pair:'Birləşdirmək üçün seç',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
-    en:{title:'Find duplicates',phone:'By phone',name:'By name',missing:'Dialogs without a phone',search:'Search',query:'Name or last 7 digits',close:'Close',more:'More',empty:'No dialogs found.',choose:'Select two dialogs from the same source.',keep:'Dialog to keep',review:'Review merge',confirm:'Merge',back:'Back',nameToKeep:'Name after merge',phoneToKeep:'Phone after merge',noPhone:'No verified phone',noName:'No name',failed:'Could not complete the action. Refresh the search and try again.',merged:'Dialogs merged.',reviewHint:'Check which dialog will remain and which details will be shown.',busy:'Loading…',pair:'Select for merge',manual:'Set display phone',save:'Save'}
+    ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',open:'Открыть',prev:'Предыдущая',next:'Следующая',count:'{index} из {total}',more:'Ещё',empty:'Диалоги не найдены.',choose:'Выберите два диалога одного источника.',keep:'Оставить диалог',review:'Проверить объединение',confirm:'Объединить',back:'Назад',nameToKeep:'Имя после объединения',phoneToKeep:'Номер после объединения',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',merged:'Диалоги объединены.',reviewHint:'Проверьте, какой диалог останется и какие данные будут показаны.',busy:'Загрузка…',pair:'Выбрать для объединения',manual:'Указать номер для отображения',save:'Сохранить'},
+    az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',open:'Aç',prev:'Əvvəlki',next:'Növbəti',count:'{index} / {total}',more:'Daha çox',empty:'Dialoq tapılmadı.',choose:'Eyni mənbədən iki dialoq seçin.',keep:'Saxlanacaq dialoq',review:'Birləşməni yoxla',confirm:'Birləşdir',back:'Geri',nameToKeep:'Birləşmədən sonrakı ad',phoneToKeep:'Birləşmədən sonrakı nömrə',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',merged:'Dialoqlar birləşdirildi.',reviewHint:'Saxlanacaq dialoqu və göstəriləcək məlumatları yoxlayın.',busy:'Yüklənir…',pair:'Birləşdirmək üçün seç',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
+    en:{title:'Find duplicates',phone:'By phone',name:'By name',missing:'Dialogs without a phone',search:'Search',query:'Name or last 7 digits',close:'Close',open:'Open',prev:'Previous',next:'Next',count:'{index} of {total}',more:'More',empty:'No dialogs found.',choose:'Select two dialogs from the same source.',keep:'Dialog to keep',review:'Review merge',confirm:'Merge',back:'Back',nameToKeep:'Name after merge',phoneToKeep:'Phone after merge',noPhone:'No verified phone',noName:'No name',failed:'Could not complete the action. Refresh the search and try again.',merged:'Dialogs merged.',reviewHint:'Check which dialog will remain and which details will be shown.',busy:'Loading…',pair:'Select for merge',manual:'Set display phone',save:'Save'}
   }[i18n.language]||{})[key]||({title:'Find duplicates',close:'Close'}[key]||key);
   const canUseDuplicateSearch=()=>member?.role==='owner'&&hasRight('dialogs');
   let duplicateDialog=null;
@@ -775,23 +775,42 @@
     if(!force&&canUseDuplicateSearch())$('operatorToolsMenu')?.querySelector('summary')?.focus();
   }
   const duplicateCurrent=state=>state===duplicateDialog&&state.epoch===epoch&&state.owner===identity(member)&&canUseDuplicateSearch();
+  function duplicateGroups(state){
+    const groups=new Map();
+    for(const row of state.results){
+      if(!Number.isSafeInteger(row.candidate_group))continue;
+      // Defense-in-depth: a server group cannot authorize a cross-source pair.
+      const key=JSON.stringify([row.candidate_group,row.channel_id]);
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(row);
+    }
+    return [...groups.values()].filter(group=>group.length>=2);
+  }
   function duplicateSelection(state){
-    const pair=state.results.filter(row=>state.selected.has(dialogKey(row))).slice(0,2);
-    return pair.length===2&&pair[0].channel_id===pair[1].channel_id?pair:null;
+    const pair=(duplicateGroups(state)[state.groupIndex]||[]).filter(row=>!row.archive_read_only&&state.selected.has(dialogKey(row)));
+    return pair.length===2?pair:null;
+  }
+  function pickDuplicateGroup(state,index){
+    state.groupIndex=index;state.selected.clear();state.keep=0;
+    const pair=(duplicateGroups(state)[index]||[]).filter(row=>!row.archive_read_only).slice(0,2);
+    for(const row of pair)state.selected.add(dialogKey(row));
+  }
+  const duplicateCardDetails=row=>[verifiedDialogPhone(row)||verifiedDialogPhone({phone:row.manual_display_phone}),row.channel_name].filter(Boolean).join(' · ');
+  function duplicatePairMarkup(pair,keep){
+    return `<div class="operator-dupe-pair">${pair.map((row,index)=>`<div class="operator-dupe-row" data-dupe-compare>${index===keep?`<small>${esc(duplicateCopy('keep'))}</small>`:''}<strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><button type="button" class="outline" data-dupe-compare-open="${index}">${esc(duplicateCopy('open'))}</button></div>`).join('')}</div>`;
   }
   function renderDuplicateResults(state){
     if(!duplicateCurrent(state))return;
     const panel=state.node.querySelector('[data-dupe-results]');
-    const pair=duplicateSelection(state),busy=['searching','previewing','merging','saving'].includes(state.stage);
+    const groups=duplicateGroups(state),group=groups[state.groupIndex]||[],pair=duplicateSelection(state),busy=['searching','previewing','merging','saving'].includes(state.stage);
     const status=state.node.querySelector('[data-dupe-status]');
     status.textContent=state.error||((busy)?duplicateCopy('busy'):'');
-    state.node.querySelectorAll('[data-dupe-form] input,[data-dupe-form] select,[data-dupe-form] button,[data-dupe-missing]').forEach(el=>el.disabled=['merging','saving'].includes(state.stage));
+    state.node.querySelectorAll('[data-dupe-form] input,[data-dupe-form] button').forEach(el=>el.disabled=['merging','saving'].includes(state.stage));
     state.node.querySelector('[data-dupe-close]').disabled=['merging','saving'].includes(state.stage);
     state.node.querySelector('[data-dupe-form]').hidden=state.stage==='review'||state.stage==='merging';
-    state.node.querySelector('[data-dupe-missing]').hidden=state.stage==='review'||state.stage==='merging';
     if(state.stage==='review'||state.stage==='merging'){
       const options=(items,selected)=>items.map(item=>`<option value="${esc(item.value)}" ${selected===item.value?'selected':''}>${esc(item.label)}</option>`).join('');
-      panel.innerHTML=`<p>${esc(duplicateCopy('reviewHint'))}</p><p data-user-content>${esc(duplicateCopy('keep'))}: <strong>${esc(duplicateCardName(pair[state.keep]))}</strong> · ${esc(pair[state.keep].channel_name||'')}</p>
+      panel.innerHTML=`<p>${esc(duplicateCopy('reviewHint'))}</p>${duplicatePairMarkup(pair,state.keep)}
         <label>${esc(duplicateCopy('nameToKeep'))}<select data-dupe-name>${options(state.preview.names,state.name)}</select></label>
         <label>${esc(duplicateCopy('phoneToKeep'))}<select data-dupe-phone>${options(state.preview.phones,state.phone)}</select></label>
         <div class="operator-dupe-actions"><button type="button" class="outline" data-dupe-back>${esc(duplicateCopy('back'))}</button><button type="button" class="primary" data-dupe-confirm>${esc(duplicateCopy('confirm'))}</button></div>`;
@@ -800,16 +819,36 @@
       panel.querySelectorAll('button,select').forEach(el=>el.disabled=busy);
       panel.querySelector('[data-dupe-back]').onclick=()=>{state.preview=null;state.stage='results';state.error='';renderDuplicateResults(state);};
       panel.querySelector('[data-dupe-confirm]').onclick=()=>void mergeDuplicateDialogs(state);
+      panel.querySelectorAll('[data-dupe-compare-open]').forEach(button=>button.onclick=()=>{
+        const row=pair[Number(button.dataset.dupeCompareOpen)];
+        if(!duplicateCurrent(state)||state.stage!=='review'||!row)return;
+        closeDuplicateSearch();void openDialog(row,false,'',{userOpened:true});
+      });
       return;
     }
-    panel.innerHTML=state.results.map((row,index)=>{
-      const key=dialogKey(row),checked=state.selected.has(key),selectable=state.mode!=='missing'&&!row.archive_read_only;
+    const visible=state.mode==='missing'?state.results:group;
+    const cards=visible.map(row=>{
+      const index=state.results.indexOf(row);
+      const key=dialogKey(row),checked=state.selected.has(key),selectable=state.mode!=='missing'&&group.length>2&&!row.archive_read_only;
       // No internal route identifiers ever enter displayed HTML or attributes.
-      return `<div class="operator-dupe-row"><button type="button" class="outline operator-dupe-open" data-dupe-open="${index}"><strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc([verifiedDialogPhone(row)||verifiedDialogPhone({phone:row.manual_display_phone}),row.channel_name].filter(Boolean).join(' · '))}</span></button>
+      return `<div class="operator-dupe-row"><button type="button" class="outline operator-dupe-open" data-dupe-open="${index}"><strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><small>${esc(duplicateCopy('open'))}</small></button>
       ${selectable?`<label><input type="checkbox" data-dupe-pick="${index}" ${checked?'checked':''} ${busy||!checked&&state.selected.size>=2?'disabled':''}> ${esc(duplicateCopy('pair'))}</label>`:''}
       ${state.mode==='missing'&&!row.archive_read_only?`<form data-dupe-phone-form="${index}"><input type="tel" maxlength="32" aria-label="${esc(duplicateCopy('manual'))}" placeholder="${esc(duplicateCopy('manual'))}" required ${busy?'disabled':''}><button type="submit" class="outline" ${busy?'disabled':''}>${esc(duplicateCopy('save'))}</button></form>`:''}</div>`;
-    }).join('')||((state.searched&&!busy&&!state.error)?`<p>${esc(duplicateCopy('empty'))}</p>`:'');
-    if(state.mode!=='missing'&&state.results.length){
+    }).join('');
+    panel.innerHTML=cards?(state.mode==='missing'?cards:`<div class="operator-dupe-pair">${cards}</div>`):((state.searched&&!busy&&!state.error)?`<p>${esc(duplicateCopy('empty'))}</p>`:'');
+    if(groups.length&&state.mode!=='missing'){
+      const count=duplicateCopy('count').replace('{index}',String(state.groupIndex+1)).replace('{total}',String(groups.length));
+      panel.insertAdjacentHTML('afterbegin',`<nav class="operator-dupe-actions"><button type="button" class="outline" data-dupe-prev ${busy||!state.groupIndex?'disabled':''}>← <span>${esc(duplicateCopy('prev'))}</span></button><span aria-live="polite" data-dupe-count>${esc(count)}</span><button type="button" class="outline" data-dupe-next ${busy||state.groupIndex>=groups.length-1?'disabled':''}><span>${esc(duplicateCopy('next'))}</span> →</button></nav>`);
+      panel.querySelector('[data-dupe-prev]').onclick=()=>move(-1);
+      panel.querySelector('[data-dupe-next]').onclick=()=>move(1);
+      function move(increment){
+        const next=state.groupIndex+increment;
+        if(!duplicateCurrent(state)||busy||next<0||next>=groups.length)return;
+        state.error='';pickDuplicateGroup(state,next);renderDuplicateResults(state);
+        panel.querySelector(increment>0?'[data-dupe-next]:not(:disabled)':'[data-dupe-prev]:not(:disabled)')?.focus();
+      }
+    }
+    if(state.mode!=='missing'&&group.length){
       panel.insertAdjacentHTML('beforeend',pair?
         `<button type="button" class="primary" data-dupe-preview ${busy?'disabled':''}>${esc(duplicateCopy('review'))}</button>`:
         `<p>${esc(duplicateCopy('choose'))}</p>`);
@@ -836,22 +875,24 @@
     });
     const preview=panel.querySelector('[data-dupe-preview]'),more=panel.querySelector('[data-dupe-more]');
     if(preview)preview.onclick=()=>void previewDuplicateDialogs(state);
-    if(more)more.onclick=()=>void searchDuplicateDialogs(state,state.mode,state.query,true);
+    if(more)more.onclick=()=>void searchDuplicateDialogs(state,state.mode,true);
   }
-  async function searchDuplicateDialogs(state,mode,query,append=false){
+  async function searchDuplicateDialogs(state,mode,append=false){
     if(!duplicateCurrent(state)||['merging','saving'].includes(state.stage))return;
     const rev=++state.rev;
     state.error='';state.stage='searching';state.searched=true;
-    if(!append){state.results=[];state.offset=null;state.selected.clear();state.keep=0;}
-    state.mode=mode;state.query=query;
+    if(!append){state.results=[];state.offset=null;pickDuplicateGroup(state,0);}
+    state.mode=mode;
     renderDuplicateResults(state);
     try{
-      const result=await api('dialogs/duplicates','POST',{mode,q:query,offset:append?state.offset:0});
+      const result=await api('dialogs/duplicates','POST',{mode,offset:append?state.offset:0});
       if(!duplicateCurrent(state)||rev!==state.rev)return;
       const incoming=Array.isArray(result?.dialogs)?result.dialogs.filter(row=>row?.provider==='connect'&&row.channel_id&&row.conversation_id&&row.lead_id):[];
+      const hadGroups=duplicateGroups(state).length>0;
       const rowsByKey=new Map(state.results.map(row=>[dialogKey(row),row]));
       for(const row of incoming)rowsByKey.set(dialogKey(row),row);
       state.results=[...rowsByKey.values()];
+      if(!hadGroups&&mode!=='missing')pickDuplicateGroup(state,0);
       state.offset=Number.isSafeInteger(result?.next_offset)?result.next_offset:null;
     }catch{if(duplicateCurrent(state)&&rev===state.rev)state.error=duplicateCopy('failed');}
     if(duplicateCurrent(state)&&rev===state.rev){state.stage='results';renderDuplicateResults(state);}
@@ -935,18 +976,20 @@
     const node=document.createElement('dialog');
     node.id='operatorDuplicateSearch';node.setAttribute('aria-labelledby','operatorDuplicateTitle');
     node.innerHTML=`<header><h2 id="operatorDuplicateTitle">${esc(duplicateCopy('title'))}</h2><button type="button" class="outline" data-dupe-close aria-label="${esc(duplicateCopy('close'))}">×</button></header>
-      <form data-dupe-form><select data-dupe-mode aria-label="${esc(duplicateCopy('search'))}"><option value="phone">${esc(duplicateCopy('phone'))}</option><option value="name">${esc(duplicateCopy('name'))}</option></select><input type="search" maxlength="100" autocomplete="off" placeholder="${esc(duplicateCopy('query'))}" aria-label="${esc(duplicateCopy('query'))}"><button type="submit" class="primary">${esc(duplicateCopy('search'))}</button></form>
-      <button type="button" class="outline" data-dupe-missing>${esc(duplicateCopy('missing'))}</button>
+      <form data-dupe-form>
+        <label><input type="checkbox" data-dupe-mode="phone" checked> ${esc(duplicateCopy('phone'))}</label>
+        <label><input type="checkbox" data-dupe-mode="name"> ${esc(duplicateCopy('name'))}</label>
+        <button type="submit" class="primary">${esc(duplicateCopy('search'))}</button>
+      </form>
       <p role="status" data-dupe-status></p><section data-dupe-results></section>`;
-    const state={node,owner:identity(member),epoch,rev:0,mode:'phone',query:'',offset:null,results:[],selected:new Set(),keep:0,stage:'results'};
+    const state={node,owner:identity(member),epoch,rev:0,mode:'phone',offset:null,results:[],selected:new Set(),keep:0,groupIndex:0,stage:'results'};
     duplicateDialog=state;document.body.append(node);
-    const form=node.querySelector('form'),input=form.querySelector('input');
-    form.onsubmit=event=>{event.preventDefault();const q=input.value.trim();void searchDuplicateDialogs(state,q?form.querySelector('select').value:'missing',q);};
-    node.querySelector('[data-dupe-missing]').onclick=()=>void searchDuplicateDialogs(state,'missing','');
+    const form=node.querySelector('form'),phone=form.querySelector('[data-dupe-mode="phone"]'),name=form.querySelector('[data-dupe-mode="name"]');
+    form.onsubmit=event=>{event.preventDefault();void searchDuplicateDialogs(state,phone.checked?(name.checked?'both':'phone'):(name.checked?'name':'missing'));};
     node.querySelector('[data-dupe-close]').onclick=()=>closeDuplicateSearch();
     node.addEventListener('cancel',event=>{event.preventDefault();closeDuplicateSearch();});
     if(typeof node.showModal==='function')node.showModal();else node.setAttribute('open','');
-    input.focus();
+    phone.focus();
   }
   function install(){
     const host=$('operatorDialogs');if(!host||$('operatorRows'))return;
@@ -990,7 +1033,7 @@
     $('operatorFindDuplicates').onclick=openDuplicateSearch;
     syncDuplicateButton();
     const dupeStyle=document.createElement('style');
-    dupeStyle.textContent=`#operatorDuplicateSearch{width:min(470px,calc(100% - 24px));max-height:85dvh;overflow:auto;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);color:var(--ink)}#operatorDuplicateSearch::backdrop{background:#071d1677}#operatorDuplicateSearch header,#operatorDuplicateSearch form,.operator-dupe-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}#operatorDuplicateSearch header{justify-content:space-between}#operatorDuplicateSearch h2{font-size:18px;margin:0}#operatorDuplicateSearch form{margin:12px 0 8px}#operatorDuplicateSearch form input{flex:1;min-width:135px}#operatorDuplicateSearch [data-dupe-results]{display:grid;gap:7px}#operatorDuplicateSearch .operator-dupe-row{display:grid;gap:4px;padding:6px;border:1px solid var(--line);border-radius:8px}#operatorDuplicateSearch .operator-dupe-open{display:grid;gap:2px;text-align:start;overflow-wrap:anywhere}#operatorDuplicateSearch .operator-dupe-open span{color:var(--muted);font-size:12px}#operatorDuplicateSearch label select{display:block;max-width:100%}#operatorDuplicateSearch [hidden],#operatorFindDuplicates[hidden]{display:none!important}`;
+    dupeStyle.textContent=`#operatorDuplicateSearch{width:min(470px,calc(100% - 24px));max-height:85dvh;overflow:auto;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);color:var(--ink)}#operatorDuplicateSearch::backdrop{background:#071d1677}#operatorDuplicateSearch header,#operatorDuplicateSearch form,.operator-dupe-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}#operatorDuplicateSearch header{justify-content:space-between}#operatorDuplicateSearch h2{font-size:18px;margin:0}#operatorDuplicateSearch form{margin:12px 0 8px}#operatorDuplicateSearch [data-dupe-phone-form] input{flex:1;min-width:135px}#operatorDuplicateSearch .operator-dupe-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#operatorDuplicateSearch .operator-dupe-pair>*{min-width:0;overflow-wrap:anywhere}#operatorDuplicateSearch .operator-dupe-row input[type=checkbox]{width:auto}#operatorDuplicateSearch [data-dupe-results]{display:grid;gap:7px}#operatorDuplicateSearch .operator-dupe-row{display:grid;gap:4px;padding:6px;border:1px solid var(--line);border-radius:8px}#operatorDuplicateSearch .operator-dupe-open{display:grid;gap:2px;text-align:start;overflow-wrap:anywhere}#operatorDuplicateSearch .operator-dupe-open span{color:var(--muted);font-size:12px}#operatorDuplicateSearch label select{display:block;max-width:100%}#operatorDuplicateSearch [hidden],#operatorFindDuplicates[hidden]{display:none!important}`;
     document.head.append(dupeStyle);
     $('operatorBulkAssignment').onclick=()=>openBulkAssignmentPreview();
     $('operatorCompleteAll').onclick=completeAllDialogs;
@@ -1323,6 +1366,7 @@
       const phone=dialogPhoneLabel(currentDialog);
       for(const label of [head.querySelector('[data-header-phone]'),$('operatorClientCard')?.querySelector('[data-panel-phone]')])if(label)label.textContent=phone;
       const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
+      const manualForm=$('operatorManualDisplayPhone');if(manualForm)manualForm.hidden=!canEditManualPhone(currentDialog);
       const panelName=$('operatorClientCard')?.querySelector('[data-panel-name]');if(panelName)panelName.textContent=dialogTitle(currentDialog);
       updateRowContact(route);
     });
@@ -1929,6 +1973,10 @@
     previous.customer_name=route.customer_name;
     currentDialog.customer_name=route.customer_name;
   }
+  const pendingManualPhones=new Set();
+  const canEditManualPhone=route=>canUseDuplicateSearch()&&route?.provider==='connect'&&!isDialogGroup(route)
+    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.case_attachment
+    &&!route.contact_identity_conflict&&!route.identity_conflict&&!verifiedDialogPhone(route)&&!contactDetails(route)?.phone;
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
@@ -1962,7 +2010,8 @@
     const block=(label,content,expanded=true)=>`<details${expanded?' open':''} class="operator-client-panel-block"><summary>${esc(label)}</summary>${content}</details>`;
     const roster=group&&!route.archive_read_only?block(clientCardText('group'),'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>',false):'';
     const display=editable?'' : `<div class="operator-client-panel-row"><small>${esc(t('displayName'))}</small><span data-panel-name data-user-content>${esc(name)}</span></div>`;
-    const phoneRow=group?'':`<div class="operator-client-panel-row"><small>${esc(clientCardText('phone'))}</small><span data-panel-phone data-user-content>${esc(phone||phoneUnavailable())}</span></div>`;
+    const phoneRow=group?'':`<div class="operator-client-panel-row"><small>${esc(clientCardText('phone'))}</small><span data-panel-phone data-user-content>${esc(phone||phoneUnavailable())}</span></div>
+      ${canEditManualPhone(route)?`<form id="operatorManualDisplayPhone" class="operator-client-panel-row"><label for="operatorManualDisplayPhoneInput">${esc(duplicateCopy('manual'))}</label><input id="operatorManualDisplayPhoneInput" type="tel" maxlength="32" autocomplete="off" value="${esc(verifiedDialogPhone({phone:route.manual_display_phone}))}" required><button type="submit" class="outline">${esc(duplicateCopy('save'))}</button><p data-manual-phone-status role="status"></p></form>`:''}`;
     const nameForm=editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<span class="operator-display-name-field"><input id="operatorConversationNameInput" maxlength="180" autocomplete="off"><span data-client-name-saved role="status" aria-label="${esc(clientCardText('saved'))}" title="${esc(clientCardText('saved'))}" hidden>✓</span></span></label><p data-client-card-error role="alert"></p></form>`:'';
     const handoff=route.handoff_active?[route.handoff_source==='ai_handoff'?'AI':'',route.handoff_assignee_name||''].filter(Boolean).join(' → '):'';
     const reminder=canScheduleReminder?
@@ -2223,6 +2272,38 @@
         const field=activeCard()?.querySelector('#operatorConversationNameInput');
         if(field)field.readOnly=false;
       }
+    }
+    const phoneForm=card.querySelector('#operatorManualDisplayPhone');
+    if(phoneForm){
+      const phoneInput=phoneForm.querySelector('input'),phoneButton=phoneForm.querySelector('button');
+      phoneInput.disabled=phoneButton.disabled=pendingManualPhones.has(scope);
+      phoneForm.onsubmit=async event=>{
+        event.preventDefault();
+        if(!current()||!canEditManualPhone(currentDialog)||pendingManualPhones.has(scope))return;
+        const phone=verifiedDialogPhone({phone:phoneInput.value});
+        const status=node=>node?.querySelector('[data-manual-phone-status]');
+        if(!phone){status(card).textContent=duplicateCopy('noPhone');return;}
+        const version=epoch;
+        pendingManualPhones.add(scope);phoneInput.disabled=phoneButton.disabled=true;status(card).textContent='';
+        try{
+          const result=await api('dialogs/contact-display-phone','POST',{...duplicateRoute(route),phone});
+          const stored=verifiedDialogPhone({phone:result?.display_phone});
+          if(!stored)throw new Error('no display phone');
+          if(version!==epoch||owner!==identity(member)||!sameDialog(currentDialog,route)||!canUseDuplicateSearch())return;
+          currentDialog.manual_display_phone=stored;
+          if(sameDialog(currentPage?.dialog,route))currentPage.dialog.manual_display_phone=stored;
+          for(const row of rows)if(sameDialog(row,route))row.manual_display_phone=stored;
+          const active=activeCard(),field=active?.querySelector('#operatorManualDisplayPhoneInput');
+          if(field)field.value=stored;
+          if(status(active))status(active).textContent=clientCardText('saved');
+          for(const label of [active?.querySelector('[data-panel-phone]'),head.querySelector('[data-header-phone]')])if(label)label.textContent=dialogPhoneLabel(currentDialog);
+          renderRows();
+        }catch{if(version===epoch&&status(activeCard()))status(activeCard()).textContent=duplicateCopy('failed');}
+        finally{
+          pendingManualPhones.delete(scope);
+          activeCard()?.querySelectorAll('#operatorManualDisplayPhone input,#operatorManualDisplayPhone button').forEach(field=>field.disabled=false);
+        }
+      };
     }
     if(form){
       form.onsubmit=event=>{event.preventDefault();void persistName();};

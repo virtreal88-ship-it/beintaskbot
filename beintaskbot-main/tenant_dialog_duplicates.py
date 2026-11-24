@@ -1,6 +1,4 @@
 """Owner-only duplicate discovery. Search matches are never identity evidence."""
-import re
-
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
 from tenant_platform import _connect
@@ -12,15 +10,8 @@ def discover(profile, params):
     from tenant_ai_agent_runtime_flags import enabled
     from tenant_operator_dialogs import projection
     mode = params.get('mode', 'phone')
-    query = str(params.get('q') or '').strip()
-    if mode not in ('phone','name','missing') or len(query)>160:
+    if mode not in ('phone','name','both','missing'):
         raise TenantLinearError('Некорректный поиск диалогов.',400)
-    if mode=='phone':
-        if not re.fullmatch(r'[+0-9(). -]+',query) or len(digits:=re.sub(r'[^0-9]','',query))<7:
-            raise TenantLinearError('Введите не менее 7 цифр номера.',400)
-        query=digits[-7:]
-    if mode=='name' and len(query)<2:
-        raise TenantLinearError('Введите не менее двух символов имени.',400)
     offset=max(0,min(int(params.get('offset') or 0),5000))
     with _connect() as conn, conn.cursor() as cur:
         tenant,actor,policy=access(cur,profile,'dialogs')
@@ -58,13 +49,13 @@ def discover(profile, params):
                 OR v.customer_name ~* '@(lid|g[.]us|s[.]whatsapp[.]net|c[.]us)$' THEN '' ELSE v.customer_name END AS customer_name,
              """+manual_value+""" AS manual_display_phone,
              """+archive_value+""" AS archive_read_only,
-             CASE WHEN identity_conflict THEN '' ELSE COALESCE(
+             CASE WHEN identity_conflict OR (p.ambiguous AND v.conversation_id LIKE '%%@lid') THEN '' ELSE COALESCE(
                 CASE WHEN v.phone ~ '^\\+?[0-9(). -]+$' AND length(regexp_replace(v.phone,'[^0-9]','','g')) BETWEEN 7 AND 15
                    AND NOT (v.conversation_id LIKE '%%@lid' AND split_part(v.conversation_id,'@',1)=regexp_replace(v.phone,'[^0-9]','','g'))
                   THEN v.phone END, p.phone,'') END AS phone
            FROM visible v
            CROSS JOIN LATERAL (
-             SELECT CASE WHEN count(*)=1 THEN '+'||min(pn) END AS phone
+             SELECT CASE WHEN count(*)=1 THEN '+'||min(pn) END AS phone,count(*)>1 AS ambiguous
                 FROM (SELECT split_part(v.conversation_id,'@',1) AS pn
                  WHERE v.conversation_id ~ '^[1-9][0-9]{6,14}@(s[.]whatsapp[.]net|c[.]us)$'
                  """+alias_sql+""") proofs
@@ -73,13 +64,31 @@ def discover(profile, params):
            """+manual_join+" "+archive_join+(" CROSS JOIN (SELECT %s::bigint AS id) actor" if archive else "")+"""
            WHERE v.provider='connect' AND v.conversation_kind IN ('contact','') AND
              v.conversation_id ~ '^[1-9][0-9]{5,22}@(s[.]whatsapp[.]net|c[.]us|lid)$'
-        ) SELECT provider,channel_id,conversation_id,lead_id,customer_name,phone,manual_display_phone,archive_read_only,channel_name FROM direct WHERE """
-        if mode=='phone':
-            sql+="right(regexp_replace(COALESCE(NULLIF(phone,''),manual_display_phone),'[^0-9]','','g'),7)=%s";args.append(query)
-        elif mode=='name':
-            sql+="strpos(lower(customer_name),lower(%s))>0";args.append(query)
-        else:sql+="phone='' AND manual_display_phone=''"
-        cur.execute(sql+" ORDER BY last_message_at DESC NULLS LAST,channel_id,lead_id LIMIT %s OFFSET %s",
-                    (*args,PAGE_SIZE+1,offset))
+        ), hints AS (
+          SELECT d.*,
+            CASE WHEN length(regexp_replace(COALESCE(NULLIF(phone,''),manual_display_phone),'[^0-9]','','g'))>=7
+                 THEN right(regexp_replace(COALESCE(NULLIF(phone,''),manual_display_phone),'[^0-9]','','g'),7)
+                 ELSE '' END AS suffix,
+            CASE WHEN customer_name ~ '^[+0-9().[:space:]-]+$' OR lower(btrim(customer_name)) IN
+                 ('whatsapp contact','контакт whatsapp','whatsapp kontaktı') THEN ''
+                 ELSE lower(regexp_replace(btrim(customer_name),'[[:space:]]+',' ','g')) END AS normalized_name
+          FROM direct d
+        ) """
+        columns="provider,channel_id,conversation_id,lead_id,customer_name,phone,manual_display_phone,archive_read_only,channel_name"
+        if mode=='missing':
+            sql+="SELECT "+columns+" FROM hints WHERE phone='' AND manual_display_phone='' ORDER BY last_message_at DESC NULLS LAST,channel_id,lead_id"
+        else:
+            # Partition by exact source because merge may never cross a source.
+            # A windowed group emits one row per route, never all N² pairs.
+            keys={'phone':'suffix','name':'normalized_name','both':'suffix,normalized_name'}[mode]
+            present={'phone':"suffix<>''",'name':"normalized_name<>''",'both':"suffix<>'' AND normalized_name<>''"}[mode]
+            sql+=""" , candidate_rows AS (
+              SELECT h.*,count(*) OVER (PARTITION BY channel_id,"""+keys+""") AS group_size,
+                min(lead_id) OVER (PARTITION BY channel_id,"""+keys+""") AS candidate_group
+              FROM hints h WHERE """+present+"""
+            ) SELECT """+columns+""",candidate_group,group_size FROM candidate_rows
+                  WHERE group_size>1 ORDER BY channel_id,candidate_group,last_message_at DESC NULLS LAST,lead_id"""
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        cur.execute(sql+" LIMIT %s OFFSET %s",(*args,PAGE_SIZE+1,offset))
         rows=[dict(row) for row in cur.fetchall()]
     return {'dialogs':rows[:PAGE_SIZE],'next_offset':offset+PAGE_SIZE if len(rows)>PAGE_SIZE and offset<5000 else None}

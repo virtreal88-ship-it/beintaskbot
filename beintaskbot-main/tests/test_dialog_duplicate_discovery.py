@@ -8,13 +8,15 @@ from test_tenant_support_inbox import A, B, CA, CB, PROFILE, database, db
 @pytest.fixture
 def exact(db,monkeypatch):
     monkeypatch.setattr(duplicates,'_connect',lambda:db)
+    db.execute("INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name) VALUES (%s,%s,'Fixture separate source')",(A,CB))
     rows=[
-        (A,CA,501,'441121234567@s.whatsapp.net','Fixture One','+44 112 1234567','contact'),
-        (A,CA,502,'191234567@s.whatsapp.net','Fixture Two','+1 91 234567','contact'),
-        (A,CA,503,'9991234567@lid','Fixture Missing','9991234567','contact'),
-        (A,CA,504,'1234567@g.us','Fixture Group','+441234567','group'),
-        (B,CB,505,'441121234567@s.whatsapp.net','Fixture Foreign','+441121234567','contact'),
-        (A,CA,506,'3331234567@lid','Fixture Alias','','contact'),
+        (A,CA,501,'441121234567@s.whatsapp.net','Fixture Name','+44 112 1234567','contact'),
+        (A,CA,502,'191234567@s.whatsapp.net','Fixture  NAME','+1 91 234567','contact'),
+        (A,CA,503,'9991234567@lid','Fixture Name','9991234567','contact'),
+        (A,CA,504,'1234567@g.us','Fixture Name','+441234567','group'),
+        (B,CB,505,'441121234567@s.whatsapp.net','Fixture Name','+441121234567','contact'),
+        (A,CA,506,'3331234567@lid','Different fixture','','contact'),
+        (A,CB,507,'441121234567@s.whatsapp.net','Fixture Name','+441121234567','contact'),
     ]
     for tenant,ch,lead,jid,name,phone,kind in rows:
         db.execute("""INSERT INTO saas_connect_conversations
@@ -31,12 +33,12 @@ def ids(**params):
     return {d['lead_id'] for d in duplicates.discover(PROFILE,params)['dialogs']}
 
 
-def test_phone_suffix_only_uses_allowed_direct_real_phone(exact):
-    assert ids(q='+44 (112) 123-4567')=={501,502,506}
-    assert ids(mode='name',q='fixture')=={501,502,503,506}
-    assert ids(mode='name',q='Fixture_%')==set()
+def test_default_phone_suffix_is_discovery_only_and_both_uses_and(exact):
+    assert ids()=={501,502,506}
+    assert ids(mode='name')=={501,502,503}
+    assert ids(mode='both')=={501,502}
     assert ids(mode='missing')=={503}
-    with pytest.raises(TenantLinearError):ids(q='123456')
+    with pytest.raises(TenantLinearError):ids(mode='arbitrary')
 
 
 def test_owner_only_and_conflicted_lid_has_no_phone(exact):
@@ -46,20 +48,22 @@ def test_owner_only_and_conflicted_lid_has_no_phone(exact):
       (tenant_id,connect_channel_id,conversation_id,event_id,evidence) VALUES (%s,%s,%s,'fixture','{}')""",
       (A,CA,'3331234567@lid'))
     exact.commit()
-    assert ids(q='1234567')=={501,502}
+    assert ids()=={501,502}
     assert ids(mode='missing')=={503,506}
     with pytest.raises(TenantLinearError) as error:
         duplicates.discover({'tenant_id':A,'telegram_id':33},{'mode':'missing'})
     assert error.value.status==403
 
 
-
-def test_result_pages_have_stable_slice_and_bound(exact,monkeypatch):
+def test_result_pages_emit_each_route_once_not_cartesian_pairs(exact,monkeypatch):
     monkeypatch.setattr(duplicates,'PAGE_SIZE',2)
-    first=duplicates.discover(PROFILE,{'mode':'name','q':'fixture'})
-    second=duplicates.discover(PROFILE,{'mode':'name','q':'fixture','offset':first['next_offset']})
-    assert len(first['dialogs'])==len(second['dialogs'])==2
-    assert {r['lead_id'] for r in first['dialogs']}.isdisjoint(r['lead_id'] for r in second['dialogs'])
+    first=duplicates.discover(PROFILE,{'mode':'name'})
+    second=duplicates.discover(PROFILE,{'mode':'name','offset':first['next_offset']})
+    assert len(first['dialogs'])==2 and len(second['dialogs'])==1
+    all_rows=first['dialogs']+second['dialogs']
+    assert {r['lead_id'] for r in all_rows}=={501,502,503}
+    assert len({r['candidate_group'] for r in all_rows})==1
+    assert all(r['group_size']==3 for r in all_rows)
     assert second['next_offset'] is None
 
 
@@ -71,7 +75,7 @@ def test_manual_number_is_a_separate_discovery_hint_and_exits_missing_queue(exac
         (A,CA,'9991234567@lid',503,'+441091234567'))
     try:
         exact.commit()
-        row=next(x for x in duplicates.discover(PROFILE,{'q':'1234567'})['dialogs'] if x['lead_id']==503)
+        row=next(x for x in duplicates.discover(PROFILE,{})['dialogs'] if x['lead_id']==503)
         assert row['phone']=='' and row['manual_display_phone']=='+441091234567'
         assert 503 not in ids(mode='missing')
     finally:
