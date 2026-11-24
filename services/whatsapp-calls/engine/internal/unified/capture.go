@@ -3,11 +3,13 @@ package unified
 import (
 	"context"
 	"encoding/json"
+
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types/events"
 )
 
 // Capture acknowledges protocol messages only after the encrypted journal commit.
-func (j *Journal) Capture(ctx context.Context, raw any) bool {
+func (j *Journal) Capture(ctx context.Context, raw any, device *store.Device) bool {
 	switch event := raw.(type) {
 	case *events.Message:
 		key, envelope, retain, err := MessageEnvelope(event)
@@ -16,6 +18,9 @@ func (j *Journal) Capture(ctx context.Context, raw any) bool {
 		}
 		if !retain {
 			return true
+		}
+		if !envelope.FromMe && envelope.Variant == "control" {
+			attachIncomingReaction(ctx, &envelope, event, device)
 		}
 		payload, err := json.Marshal(envelope)
 		if err != nil {

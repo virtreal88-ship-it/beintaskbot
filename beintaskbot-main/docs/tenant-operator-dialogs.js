@@ -149,7 +149,8 @@
     .operator-message .operator-media-card>button[data-photo-preview]{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;box-sizing:border-box;width:min(260px,100%);min-width:0;min-height:150px;overflow:hidden;padding:12px;background:var(--paper);color:var(--muted);white-space:normal}.operator-media-card [data-photo-preview] [data-media-thumbnail]{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(7px);opacity:.55;transform:scale(1.1);pointer-events:none}.operator-media-card [data-photo-preview]>span,.operator-media-card [data-photo-preview]>small{position:relative;z-index:1;background:var(--card);padding:3px 5px;border-radius:4px;max-width:100%;overflow-wrap:anywhere}.operator-media-card [data-photo-preview] [data-photo-placeholder]{width:48px;height:48px}.operator-media-card[data-media-kind=image]>[data-media-preview=image]{display:block;max-width:100%;height:auto;max-height:320px;object-fit:contain}
     .operator-copy-control{display:inline-flex;align-items:center;gap:3px;max-width:100%;vertical-align:middle}.operator-copy-message{display:inline-grid;place-items:center;min-width:32px;min-height:32px;margin:0 0 0 3px;padding:0;border:0;background:transparent;color:var(--muted);cursor:pointer;vertical-align:middle}.operator-copy-message:focus-visible{outline:2px solid var(--brand);outline-offset:1px}.operator-copy-control [data-copy-status]{font-size:11px;color:var(--muted);overflow-wrap:anywhere}.operator-copy-control [data-copy-status]:empty{display:none}@media(max-width:900px){.operator-copy-message{min-width:44px;min-height:44px}}
     .operator-message .operator-message-meta{display:flex;flex-wrap:wrap;align-items:flex-end;gap:4px;margin-top:4px;min-width:0}.operator-message-origin{display:flex;flex:1 1 130px;flex-wrap:wrap;align-items:center;gap:4px;min-width:0;overflow-wrap:anywhere}.operator-message-actions{display:inline-flex;align-items:center;justify-content:flex-end;gap:2px;flex:0 1 auto;max-width:100%;margin-left:auto}.operator-copy-control{min-width:0}.operator-copy-control [data-copy-status]{max-width:150px}.operator-delivery-ticks{display:inline-flex;flex:none;align-items:center;color:#64746f}.operator-delivery-ticks[data-delivery-state=read]{color:#096db3}.operator-delivery-note{font-size:11px;max-width:170px;overflow-wrap:anywhere;color:var(--muted)}.operator-delivery-note[data-delivery-state=failed]{color:var(--danger)}html[data-app-theme=dark] .operator-delivery-ticks{color:#aab8b2}html[data-app-theme=dark] .operator-delivery-ticks[data-delivery-state=read]{color:#73c7ff}.operator-reply-context-menu [role=status]:empty{display:none}@media(max-width:900px){.operator-message:has(.operator-reply-action:focus-visible) .operator-message-actions{margin-right:48px}}
-    [data-whatsapp-reaction]:not([hidden]){display:inline-block;margin-top:4px;padding:2px 7px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
+    .operator-reaction-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.operator-reaction-row[hidden]{display:none}
+    [data-whatsapp-reaction]:not([hidden]),.operator-peer-reaction{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border:1px solid var(--line);border-radius:14px;background:var(--card)}
     .operator-reaction-picker{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;border-top:1px solid var(--line)}
     .operator-reaction-picker>span{grid-column:1/-1;padding:5px 10px;font-size:12px;color:var(--muted)}
     .operator-reaction-picker button{text-align:center;font-size:18px}.operator-reaction-picker button[aria-checked=true]{background:var(--line)}
@@ -1239,7 +1240,7 @@
       const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
       const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
         sameDialog(nameHint,currentPage.dialog)&&nameHint.customer_name!==currentPage.dialog.customer_name);
-      if(currentDialog&&!pendingDialogRoute&&(currentDialog.lifecycle_enabled||historyMergeId(currentPage)||options.revalidateSelected)){
+      if(currentDialog&&!pendingDialogRoute&&(currentDialog.lifecycle_enabled||currentDialog.wecall||historyMergeId(currentPage)||options.revalidateSelected)){
         await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true||nameOnly,revalidateAccess:options.revalidateSelected===true});
       }else if(nameOnly&&!pendingDialogRoute)await appendNewMessages(currentDialog,true,true);
       else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);
@@ -1957,13 +1958,22 @@
   const reactionEmoji=['👍','❤️','😂','😮','😢','🙏'];
   const reactionEndpoint='/api/platform/crm/chat/reaction';
   const reactionCopy=key=>({
-    ru:{action:'Реакция',remove:'Снять реакцию',check:'Проверить реакцию',unknown:'Результат отправки реакции пока неизвестен.',failed:'Реакция недоступна для этого сообщения.'},
-    az:{action:'Reaksiya',remove:'Reaksiyanı sil',check:'Reaksiyanı yoxla',unknown:'Reaksiyanın göndərilmə nəticəsi hələ məlum deyil.',failed:'Bu mesaj üçün reaksiya əlçatan deyil.'},
-    en:{action:'Reaction',remove:'Remove reaction',check:'Check reaction',unknown:'The reaction is not confirmed yet.',failed:'Reactions are unavailable for this message.'}
+    ru:{action:'Реакция',peers:'Реакции собеседников',remove:'Снять реакцию',check:'Проверить реакцию',unknown:'Результат отправки реакции пока неизвестен.',failed:'Реакция недоступна для этого сообщения.'},
+    az:{action:'Reaksiya',peers:'Digər iştirakçıların reaksiyaları',remove:'Reaksiyanı sil',check:'Reaksiyanı yoxla',unknown:'Reaksiyanın göndərilmə nəticəsi hələ məlum deyil.',failed:'Bu mesaj üçün reaksiya əlçatan deyil.'},
+    en:{action:'Reaction',peers:'Reactions from others',remove:'Remove reaction',check:'Check reaction',unknown:'The reaction is not confirmed yet.',failed:'Reactions are unavailable for this message.'}
   }[i18n.language]||{})[key]||key;
-  function paintReaction(article,emoji){
-    const chip=article?.querySelector('[data-whatsapp-reaction]');
-    if(chip){chip.textContent=emoji||'';chip.hidden=!emoji;}
+  function reactionMarkup(message){
+    const own=message.wa_reaction;
+    const peers=message.wa_peer_reactions||[];
+    if(!message.wa_reaction_available&&!own&&!peers.length)return '';
+    return `<div class="operator-reaction-row" data-whatsapp-reactions ${own||peers.length?'':'hidden'}><span data-whatsapp-reaction aria-label="${esc(reactionCopy('action'))}" ${own?'':'hidden'}>${esc(own||'')}</span>${peers.map(({emoji,count})=>`<span class="operator-peer-reaction" title="${esc(reactionCopy('peers'))}">${esc(emoji)}${count>1?` <small>${esc(count)}</small>`:''}</span>`).join('')}</div>`;
+  }
+  function paintReactions(article,message){
+    if(!article)return;
+    const row=article.querySelector('[data-whatsapp-reactions]');
+    const markup=reactionMarkup(message);
+    if(row){row.insertAdjacentHTML('beforebegin',markup);row.remove();}
+    else if(markup)article.querySelector('footer')?.insertAdjacentHTML('beforebegin',markup);
   }
   function messageMarkup(items,route=currentDialog,{readOnly=false}={}){readOnly=readOnly||route?.owner_overview_read_only===true||route?.search_overview_read_only===true;return items.map((m,index)=>{
     if(m.message_type==='call_recording'&&m.call_recording){
@@ -1988,7 +1998,7 @@
     const label=media?attachmentLabel(m):'';
     const original=m.quoted_provider_message_id?(readOnly?items:currentPage?.messages||items).find(item=>item.provider_message_id===m.quoted_provider_message_id&&String(item.source_channel_id||route.channel_id)===String(m.source_channel_id||route.channel_id)):null;const quote=m.quoted_provider_message_id?`<button type="button" class="operator-quote" data-quote-jump="${esc(m.quoted_provider_message_id)}">${esc(original?(messageAuthor(original)+' · '+String(quotedMessagePreview(original)).slice(0,160)):({ru:'Исходное сообщение не загружено',az:'Orijinal mesaj yüklənməyib',en:'Original message is not loaded'}[i18n.language]||'Original message is not loaded'))}</button>`:'';
     const content=missed?`<div ${observed?'data-observed-call':invalidated?'data-invalidated-call':rejected?'data-rejected-call':'data-missed-call'}>${esc(observed?observedCallLabel(m.call_is_video===true):invalidated?invalidatedCallLabel(m.call_is_video===true):rejected?rejectedCallLabel(m.call_is_video===true):missedCallLabel(m.call_is_video===true))}</div>`:media?`${caption&&!m.has_transcription?`<div class="operator-message-caption" data-user-content>${esc(caption)}</div>`:''}<div class="operator-media-card" ${directAudio?'data-native-audio="true" data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"':'data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"'} data-message-row-id="${esc(m.id||'')}" data-media-filename="${esc(m.media_filename||m.file_name||'')}" data-media-version="${esc(m.media_version||'')}" data-media-duration="${esc(m.duration_seconds||'')}">${directAudio?`<div class="operator-audio-heading"><span data-media-title>${esc(label)}${Number.isFinite(Number(m.duration_seconds))&&Number(m.duration_seconds)>0?` <span class="operator-audio-duration">· ${esc(duration(m.duration_seconds))}</span>`:``}</span><span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span></div><div class="operator-audio-controls" aria-disabled="true" inert><audio class="operator-native-audio" controls preload="none" tabindex="-1" aria-label="${esc(label)}"></audio></div><button type="button" data-media-open hidden>${esc(t('loadAttachment'))}</button>${audioActions}`:`<span data-media-title>${esc(label)}</span><button type="button" class="outline" data-media-open ${m.message_type==='image'?`data-photo-preview aria-label="${esc(photoLoadLabel())}"`:``}>${m.message_type==='image'?photoPreviewMarkup(m):esc(mediaAction(m))}</button>${mediaActions}`}<span data-media-load-status role="status" aria-live="polite"></span>${directAudio||m.message_type==='image'?`<details class="${directAudio?'operator-audio-analysis':'operator-photo-analysis'}"><summary>${esc(({ru:'AI-анализ',az:'AI təhlili',en:'AI analysis'})[i18n.language]||'AI analysis')}</summary><span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span></details>`:`<span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span>`}${directAudio?'':`<span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span>`}</div>`:`<div data-user-content>${esc(m.body||t('attachment'))}</div>`;
-    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${transcript}${m.wa_reaction_available||m.wa_reaction?`<div><span data-whatsapp-reaction aria-label="${esc(reactionCopy('action'))}" ${m.wa_reaction?'':'hidden'}>${esc(m.wa_reaction||'')}</span></div>`:''}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
+    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${transcript}${reactionMarkup(m)}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
   }).join('');}
 
   // The case history uses the same presentation without activating a composer or dialogue side effects.
@@ -2848,14 +2858,13 @@
       const prior=byId.get(String(message.id));
       if(!prior){if(!(old.messages||[]).length&&chat.textContent.trim()===t('emptyHistory'))chat.replaceChildren();chat.insertAdjacentHTML('beforeend',messageMarkup([message],latest.dialog));old.messages.push(message);byId.set(String(message.id),message);}
       else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}
-        if(prior.wa_reaction_event!==message.wa_reaction_event||prior.wa_reaction_available!==message.wa_reaction_available){
+        const ownChanged=prior.wa_reaction_event!==message.wa_reaction_event||
+          prior.wa_reaction_available!==message.wa_reaction_available;
+        if(!ownChanged)message.wa_reaction=prior.wa_reaction;
+        if(ownChanged||JSON.stringify(prior.wa_peer_reactions||[])!==JSON.stringify(message.wa_peer_reactions||[])){
           const article=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.dataset.messageId===String(message.id));
-          if(!article?.querySelector('[data-whatsapp-reaction]')&&(message.wa_reaction_available||message.wa_reaction)){
-            const chip=document.createElement('span');chip.dataset.whatsappReaction='';chip.setAttribute('aria-label',reactionCopy('action'));
-            const line=document.createElement('div');line.append(chip);article?.querySelector('footer')?.before(line);
-          }
-          paintReaction(article,message.wa_reaction);
-        }else if(prior.wa_reaction_event===message.wa_reaction_event)message.wa_reaction=prior.wa_reaction;
+          paintReactions(article,message);
+        }
         Object.assign(prior,message);}
     }
     retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
@@ -3119,7 +3128,7 @@
         if(sessionStorage.getItem(storageKey)===requestId)sessionStorage.removeItem(storageKey);
         if(same()&&article.isConnected&&message.wa_reaction_event===originalEvent){
           message.wa_reaction=result.emoji;
-          paintReaction(article,result.emoji);
+          paintReactions(article,message);
         }
       }catch(error){
         if((error.message==='reaction_request_unavailable'||!pending&&error.status&&error.status<500)&&sessionStorage.getItem(storageKey)===requestId)sessionStorage.removeItem(storageKey);

@@ -22,7 +22,7 @@ async function run(browser, group, mergeMode = null) {
         provider:'connect', lead_id:41, channel_id:channel,
         conversation_id:group ? '15550000003@g.us' : '15550000002@s.whatsapp.net',
         customer_kind:group ? 'group' : 'contact', state:'human', can_send:true,
-        controls_allowed:true, available_actions:[],
+        controls_allowed:true, available_actions:[], wecall:true,
         ...(mergeMode?{history_merge_id:'synthetic-merge'}:{}),
         ...(mergeMode==='passive'?{owner_overview_read_only:true,can_send:false}:{})
       };
@@ -34,6 +34,7 @@ async function run(browser, group, mergeMode = null) {
       window.checks = [];
       window.value = '';
       window.event = 0;
+      window.peers = [];
       window.timeout = false;
       window.fetch = async (url, options={}) => {
         url = String(url);
@@ -54,7 +55,7 @@ async function run(browser, group, mergeMode = null) {
             {id:'original', external_id:'connect:original', provider_message_id:'TEST_MSG', direction:'incoming',
               author_type:group?'participant':'customer', message_type:'text', body:'Synthetic original',
               source_channel_id:channel,source_conversation_id:window.testRoute.conversation_id,source_lead_id:41,
-              wa_reaction_available:true, wa_reaction:window.value, wa_reaction_event:String(window.event)},
+              wa_reaction_available:true, wa_reaction:window.value, wa_reaction_event:String(window.event), wa_peer_reactions:window.peers},
             {id:'unavailable', external_id:'connect:unavailable', provider_message_id:'UNAVAILABLE_MSG',
               direction:'outgoing', author_type:'operator', message_type:'text', body:'Unavailable'},
             ...(mergeMode?[{id:'companion', external_id:'connect:companion', provider_message_id:'COMPANION_MSG',
@@ -114,9 +115,14 @@ async function run(browser, group, mergeMode = null) {
     await page.evaluate(() => {
       window.value = '🙏';
       window.event++;
-      return window.tenantOperator.openDialog(window.testRoute,true);
+      window.peers = [{emoji:'😮',count:2}];
+      // A stock WeCall dialogue with no lifecycle flag/list changes still
+      // revisits its authorized history when a peer only reacts.
+      return window.tenantOperator.refresh();
     });
     assert.equal(await chip.innerText(),'🙏');
+    assert.match(await article.locator('.operator-peer-reaction').innerText(),/😮\s*2/);
+    assert.equal(await page.evaluate(()=>window.posts.length),4,'refresh does not send a reaction');
     await page.locator('[data-message-id="unavailable"]').press('Shift+F10');
     assert.equal(await menu.locator('.operator-reaction-picker').count(),0);
   } finally {
