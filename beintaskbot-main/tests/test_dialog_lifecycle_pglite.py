@@ -878,5 +878,10 @@ def test_owner_explicit_takeover_keeps_episode_and_replays_receipt(episodes):
     result = lifecycle.mutate(profile, request)
     assert lifecycle.mutate(profile, request) == result
     assert result['lifecycle'] == dict(initial, operator_id=11, revision=2)
+    event = result['operator_event']
+    assert event['kind'] == 'takeover' and event['employee_name'] == 'Owner'
+    audit = episodes.execute("SELECT action,payload,created_at FROM saas_tenant_audit_events WHERE id=%s::uuid", (event['id'],))
+    assert audit[0]['action'] == 'dialog_transfer' and audit[0]['payload']['takeover'] is True
+    assert audit[0]['created_at'].isoformat() == event['at']
     rows = episodes.execute('SELECT accepted_by,operator_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid', (A, initial['id']))
     assert (rows[0]['accepted_by'], rows[0]['operator_id']) == (33, 11)

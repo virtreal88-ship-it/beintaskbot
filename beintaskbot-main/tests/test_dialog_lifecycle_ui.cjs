@@ -112,6 +112,8 @@ async function verifyOwnerOverview(){
  const observer={provider:'connect',lead_id:77,channel_id:'a',conversation_id:'other',customer_name:'Other',customer_kind:'contact',
   lifecycle_enabled:true,archive_read_only:true,owner_overview_read_only:true,can_send:false,can_use_copilot:false,
   lifecycle:{state:'accepted',revision:1,operator_id:22}};
+ const takeoverEvent={id:'takeover-event',kind:'takeover',at:'2026-01-01T02:00:00Z',employee_name:'Алина'};
+ let viewRoute=observer,takeoverHistoryPause,takeoverRequest;
  const calls=[];let acks=0;
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
  w.tenantSharedReminders={markRows(){},dialogOpened(){acks++;}};
@@ -121,12 +123,23 @@ async function verifyOwnerOverview(){
    if(url.pathname.endsWith('/dialogs/preferences'))return success({lifecycle:'all'});
    if(url.pathname.endsWith('/dialogs')){
      const isOverview=url.searchParams.get('owner_overview')==='1';
-     return success({dialogs:isOverview?[observer]:[],agents:[],channels:[{id:'connect:a',name:'A'}],next_offset:null});
+     return success({dialogs:isOverview?[viewRoute]:[],agents:[],channels:[{id:'connect:a',name:'A'}],next_offset:null});
+   }
+   if(url.pathname.endsWith('/dialogs_lifecycle')){
+     takeoverRequest=JSON.parse(opt.body);
+     assert.equal(takeoverRequest.action,'takeover');
+     viewRoute={...observer,archive_read_only:false,owner_overview_read_only:false,can_send:true,
+       lifecycle:{state:'accepted',revision:2,operator_id:33,can_close:true}};
+     return success({lifecycle:viewRoute.lifecycle,operator_event:takeoverEvent});
    }
    if(url.pathname.endsWith('/dialogs/history')){
-     assert.equal(url.searchParams.get('owner_overview'),'1');assert.equal(url.searchParams.get('expected_user_id'),'33');
-     return success({dialog:observer,messages:[{id:'message',direction:'incoming',body:'Visible to owner only'}],next_before:null});
+     if(takeoverHistoryPause)await takeoverHistoryPause;
+     if(viewRoute===observer)assert.equal(url.searchParams.get('owner_overview'),'1');
+     assert.equal(url.searchParams.get('expected_user_id'),'33');
+     return success({dialog:viewRoute,messages:[{id:'message',direction:'incoming',body:'Visible to owner only'}],next_before:null,
+       ...(viewRoute===observer?{}:{operator_events:[takeoverEvent]})});
    }
+   if(url.pathname.endsWith('/dialogs/read'))return success({updated:true});
    if(url.pathname.endsWith('/me'))return {ok:true,json:async()=>profile};
    throw Error('Unexpected request '+url);
  };
@@ -147,6 +160,24 @@ async function verifyOwnerOverview(){
  lifecycle.value='active';lifecycle.dispatchEvent(new w.Event('change'));await tick();
  assert(!d.querySelector('#chatRows'),'leaving All hides the observational chat');
  assert(!calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams.has('owner_overview'));
+ lifecycle.value='all';lifecycle.dispatchEvent(new w.Event('change'));await tick();
+ w.tenantI18n.setLanguage('ru');
+ observer.lifecycle.can_takeover=true;
+ await w.tenantOperator.openDialog(observer);
+ const take=d.querySelector('[data-operator-lifecycle=takeover]');
+ assert.equal(take?.textContent,'Забрать себе');
+ let resumeTakeoverHistory;
+ takeoverHistoryPause=new Promise(resolve=>{resumeTakeoverHistory=resolve;});
+ take.click();await tick();await tick();
+ assert.equal(takeoverRequest.expected_revision,1);
+ const renderedTakeover=()=>d.querySelectorAll('#chatRows [data-operator-timeline-event="takeover-event"]');
+ assert.equal(renderedTakeover().length,1,'the receipt renders the takeover before history returns');
+ assert.equal(renderedTakeover()[0].firstElementChild.textContent,'Диалог взят в работу: Алина');
+ assert(d.querySelector('#sendChat').disabled,'the overview stays read-only until fresh access is loaded');
+ takeoverHistoryPause=null;resumeTakeoverHistory();await tick();await tick();
+ assert.equal(renderedTakeover().length,1,'history reconciles the same takeover audit event');
+ assert(!d.querySelector('[data-operator-lifecycle=takeover]'));
+ assert(!d.querySelector('#sendChat').disabled);
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,role:'operator'}}}));
  await tick();
  assert.equal(d.querySelectorAll('#operatorAdvanced select').length,4);

@@ -597,10 +597,8 @@
         applyLifecycleReceipt(route,action,result);
         return;
       }
-      if(action==='start'){
-        showLifecycleTimelineEvent(result.operator_event,'start');
-        window.tenantDialogueCompany?.refresh?.();
-      }
+      if(action==='start'||action==='takeover')showLifecycleTimelineEvent(result.operator_event,action);
+      if(action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'){showLifecycleTransferReceipt(route,result.operator_event);void refresh();return;}
       if(action==='dismiss'){
         if(currentPage&&result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true){
@@ -1654,7 +1652,7 @@
     return query;
   }
   const timelineStamp=value=>Date.parse(value||'');
-  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','no_reply','close'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
+  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','takeover','no_reply','close'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
   const operatorEventOrder=(a,b)=>timelineStamp(a.at)-timelineStamp(b.at)||a.at.localeCompare(b.at)||a.id.localeCompare(b.id);
   const OPERATOR_TIMELINE_LIMIT=180;
   function noteOperatorEventOmission(page,at){
@@ -1742,11 +1740,15 @@
     const omission=omissions.length?Math.max(...omissions):NaN;
     if(!events.length&&!Number.isFinite(omission))return false;
     const messageTimes=new Map((page.messages||[]).map(m=>[String(m.id),timelineStamp(m.happened_at||m.created_at)]));
-    const text={
-      ru:{accept:'Диалог принят',start:'Диалог начат',transfer:'Диалог передан',acceptUnknown:'Диалог принят сотрудником',startUnknown:'Диалог начат сотрудником',transferUnknown:'Диалог передан сотруднику'},
-      az:{accept:'Dialoq qəbul edildi',start:'Dialoq başladıldı',transfer:'Dialoq ötürüldü',acceptUnknown:'Dialoq əməkdaş tərəfindən qəbul edildi',startUnknown:'Dialoq əməkdaş tərəfindən başladıldı',transferUnknown:'Dialoq əməkdaşa ötürüldü'},
-      en:{accept:'Dialog accepted',start:'Dialog started',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'}
-    }[i18n.language]||{accept:'Dialog accepted',start:'Dialog started',transfer:'Dialog transferred',acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee'};
+    const labels={
+      ru:{accept:'Диалог принят',start:'Диалог начат',transfer:'Диалог передан',takeover:'Диалог взят в работу',
+        acceptUnknown:'Диалог принят сотрудником',startUnknown:'Диалог начат сотрудником',transferUnknown:'Диалог передан сотруднику',takeoverUnknown:'Диалог взят в работу сотрудником'},
+      az:{accept:'Dialoq qəbul edildi',start:'Dialoq başladıldı',transfer:'Dialoq ötürüldü',takeover:'Dialoq icraya götürüldü',
+        acceptUnknown:'Dialoq əməkdaş tərəfindən qəbul edildi',startUnknown:'Dialoq əməkdaş tərəfindən başladıldı',transferUnknown:'Dialoq əməkdaşa ötürüldü',takeoverUnknown:'Dialoq əməkdaş tərəfindən icraya götürüldü'},
+      en:{accept:'Dialog accepted',start:'Dialog started',transfer:'Dialog transferred',takeover:'Dialog taken over',
+        acceptUnknown:'Dialog accepted by an employee',startUnknown:'Dialog started by an employee',transferUnknown:'Dialog transferred to an employee',takeoverUnknown:'Dialog taken over by an employee'}
+    };
+    const text=labels[i18n.language]||labels.en;
     const existing=new Map([...chat.children].filter(node=>node.dataset.operatorTimelineEvent).map(node=>[node.dataset.operatorTimelineEvent,node]));
     const kept=new Set(events.map(event=>event.id));for(const [id,node] of existing)if(!kept.has(id))node.remove();
     let omitted=chat.querySelector('[data-operator-timeline-omissions]');

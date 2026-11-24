@@ -147,12 +147,14 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
     revision=archived['revision']
     start_a,start_b=payload('start',revision),payload('start',revision)
     values=race(episodes,[(11,start_a,'mutate'),(33,start_b,'mutate')])
-    winners=[value[1]['lifecycle'] for value in values if value[0]=='ok']
+    winners=[value[1] for value in values if value[0]=='ok']
     assert len(winners)==1 and ('denied',409) in values
-    winner=winners[0]['operator_id']
+    winner_result=winners[0]
+    winner_state=winner_result['lifecycle']
+    winner=winner_state['operator_id']
     assert winner in {11,33}
     row=episodes.execute('SELECT id::text,state,operator_id,revision FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))[0]
-    assert row=={'id':winners[0]['id'],'state':'accepted','operator_id':winner,'revision':revision+1}
+    assert row=={'id':winner_state['id'],'state':'accepted','operator_id':winner,'revision':revision+1}
     pair=episodes.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid ORDER BY accepted_at,id',(A,))
     assert pair[:-1]==old and len(pair)==(2 if outcome=='closed' else 1)
     assert not old or old[0]['closed_at'] is not None
@@ -162,8 +164,12 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
     assert {rid:receipts[rid] for rid in previous_receipts}==previous_receipts
     won,lost=(start_a,start_b) if winner==11 else (start_b,start_a)
     assert lost['request_id'] not in receipts
-    assert receipts[won['request_id']]=={'request_id':won['request_id'],'actor_id':winner,'result':{'lifecycle':winners[0]}}
-    assert episodes.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_start'",(A,))[0]['n']==1
+    assert receipts[won['request_id']]=={'request_id':won['request_id'],'actor_id':winner,'result':winner_result}
+    events=episodes.execute("SELECT id::text,created_at FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_start'",(A,))
+    assert len(events)==1
+    assert winner_result['operator_event']=={
+        'id':events[0]['id'],'kind':'start','at':events[0]['created_at'].isoformat(),
+        'employee_name':'Owner' if winner==11 else 'Employee'}
     episodes.commit()
     loser=11 if winner==33 else 33
     assert race(episodes,[(loser,payload(),'guarded_send')])==[('denied',404)]
