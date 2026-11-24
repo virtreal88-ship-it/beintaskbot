@@ -140,7 +140,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.match(await card.locator('[data-client-transfer]').innerText(),/Synthetic sender → Synthetic recipient/);
   assert.match(await card.innerText(),/Texniki Dəstək/);
   await page.keyboard.press('Escape');
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<900)await page.locator('#operatorCompanyPanelOpen').click();
+  else assert.equal(await panel.evaluate(node=>node.open),true,'desktop details remain open after closing the client card');
   const search=page.locator('#operatorDialogueCompanySearch');
   const header=()=>page.locator('#operatorConversationHeader').evaluate(node=>[node.offsetWidth,node.offsetHeight,node.textContent]);
   const before=await header();
@@ -151,7 +152,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const priorReads=await page.evaluate(()=>window.companyReads.length);
   await page.evaluate(()=>{window.offerOperatorPicker='on';document.dispatchEvent(new Event('tenant-dialog-reauthorized'));});
   await page.waitForFunction(n=>window.companyReads.length>n,priorReads);
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<900)await page.locator('#operatorCompanyPanelOpen').click();
+  else assert.equal(await panel.evaluate(node=>node.open),true,'desktop details remain open while permissions refresh');
   assert.deepEqual(await header(),before);
   await search.click();
   const drop=page.locator('#operatorDialogueCompanySuggestions'),input=search;
