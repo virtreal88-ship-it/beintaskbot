@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const {chromium} = require('../.support-test-deps/node_modules/playwright');
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-deps/node_modules/playwright');
 const {docs, assets, appHtml, installNotificationCaseFixture} = require('./notification_case_targets_fixture.cjs');
 
 const asset = 'tenant-dialog-quick-replies.js';
@@ -65,7 +65,7 @@ function installQuickReplyFixture() {
 (async()=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const origin = 'http://127.0.0.1:'+server.address().port;
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined});
   try {
     for (const width of [390,1440]) {
       const context = await browser.newContext({viewport:{width,height:844},isMobile:width===390,hasTouch:width===390});

@@ -103,6 +103,20 @@ class TenantAiAgentStartupTests(unittest.TestCase):
                 self.assertEqual(optional.call_count,expected)
                 self.assertIn('verified',events)
 
+    def test_optional_history_merge_schema_requires_effective_gate(self):
+        for allowed in (False, True):
+            events=[]
+            modules=self._bootstrap_modules(events)
+            modules['tenant_dialog_history_merge_jobs']=SimpleNamespace(
+                enabled=lambda:allowed,provision=lambda cur:events.append('history_schema'))
+            with (self.subTest(allowed=allowed),
+                  patch.dict('os.environ',{'DIALOG_HISTORY_MERGE_ENABLED':'1'},clear=True),
+                  patch.dict('sys.modules',modules)):
+                prepare_database()
+            self.assertEqual('history_schema' in events,allowed)
+            self.assertIn('verified',events)
+            self.assertEqual(events[-1],'close')
+
     def test_pre_17_server_fails_closed_before_any_sql(self):
         events=[]
         with patch.dict('sys.modules',self._bootstrap_modules(events,server_version=160006)):
@@ -337,9 +351,10 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         with patch('tenant_ai_agent_startup.require_database_ready',side_effect=_InvalidMigration):
             with self.assertRaises(_InvalidMigration):asyncio.run(namespace['start_webhook_server']())
         self.assertEqual(events,[])
-        with patch('tenant_ai_agent_startup.require_database_ready',side_effect=lambda:events.append('ready')):
+        with patch('tenant_ai_agent_startup.require_database_ready',side_effect=lambda:events.append('ready')), \
+             patch('tenant_ai_agent_startup.install_history_merge_worker_cleanup',side_effect=lambda app:events.append('cleanup hook')):
             asyncio.run(namespace['start_webhook_server']())
-        self.assertEqual(events,['ready','application',('runner',30),'setup',('site','0.0.0.0',49157),'listen'])
+        self.assertEqual(events,['ready','application','cleanup hook',('runner',30),'setup',('site','0.0.0.0',49157),'listen'])
 
     def test_listener_port_uses_railway_port_with_existing_default(self):
         for environment,expected in (({},8080),({'PORT':'49157'},49157)):

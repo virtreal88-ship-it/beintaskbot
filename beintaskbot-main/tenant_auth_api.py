@@ -368,6 +368,13 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             from tenant_dialog_company_binding import feature_for as dialog_company_feature_for
             if dialog_company_feature_for(profile):
                 capabilities["dialog_company_binding"] = True
+            from tenant_dialog_history_merge_jobs import available as history_merge_available, enabled as history_merge_enabled
+            if history_merge_enabled() and await asyncio.to_thread(history_merge_available, profile):
+                from tenant_dialog_history_merge_scope import source_for
+                merge_source=source_for(profile['tenant_id'])
+                if merge_source:
+                    capabilities['dialog_history_merge'] = True
+                    capabilities['dialog_history_merge_source_id'] = merge_source
             if context.dialog_reply_templates_ready:
                 try:
                     capabilities["dialog_reply_templates"] = await asyncio.to_thread(
