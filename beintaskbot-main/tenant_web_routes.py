@@ -185,6 +185,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/reply-templates', reply_templates_handler(member, origin, logger), ('GET','POST')),
+        ('dialogs/quick-replies', operator_handler(member, origin, logger, 'quick_replies'), ('POST',)),
         ('dialogs/personal-reminders', reminders_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/shared-reminders', reminders_handler(member, origin, logger, shared=True), ('GET','POST')),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
