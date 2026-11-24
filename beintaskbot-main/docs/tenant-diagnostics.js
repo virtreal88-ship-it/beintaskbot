@@ -3,14 +3,18 @@
   let profile=null, revision=0, controller=null;
   const labels={crm_sync:'CRM sinxronizasiya',task_commands:'Tapşırıq əməliyyatları',deal_commands:'Sövdələşmə əməliyyatları',chat_sends:'Mesaj göndərilməsi',chat_ai:'Çat AI',approval_telegram:'Tapşırıq bildirişləri',crm_notices:'CRM bildirişləri',deal_notices:'Sövdələşmə təsdiqləri',linear_notices:'Linear bildirişləri',news_publications:'Xəbər nəşrləri',hot_order_notices:'İsti sifariş bildirişləri',task_decisions:'Tapşırıq təsdiq nəticələri'};
   const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  document.addEventListener('tenant-profile',e=>{
-    const me=e.detail.member;profile=me;revision++;controller?.abort();
+  function show(me){
+    profile=me;revision++;controller?.abort();
     document.getElementById('tenantDiagnostics')?.remove();
-    if(me?.role!=='owner')return;
-    const host=document.querySelector('#view-settings .grid');if(!host)return;
+    if(me?.role!=='owner' || me.active===false)return;
+    const host=document.getElementById('profile-company-settings') || document.querySelector('#view-settings > .grid');
+    if(!host)return;
     host.insertAdjacentHTML('beforeend','<article class="panel" id="tenantDiagnostics"><h2>Diaqnostika</h2><p>Növbələr və inteqrasiyalar. Yalnız bu şirkətə aiddir.</p><button class="outline" id="diagnosticsRefresh">Yoxla</button><div id="diagnosticsResult" role="status" style="overflow-wrap:anywhere;margin-top:12px"></div></article>');
     document.getElementById('diagnosticsRefresh').onclick=load;
-  });
+  }
+  document.addEventListener('tenant-profile',event=>show(event.detail?.member));
+  for(const type of ['tenant-auth-invalid','tenant-auth-pending']) document.addEventListener(type,()=>show(null));
+  if(window.tenantProfileSnapshot) show(window.tenantProfileSnapshot.member);
   async function load(){
     const box=document.getElementById('diagnosticsResult'),button=document.getElementById('diagnosticsRefresh');
     if(!box||profile?.role!=='owner')return;

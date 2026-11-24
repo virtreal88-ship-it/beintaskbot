@@ -167,7 +167,7 @@
     // Personal account fields live directly in Profile; these tabs contain the
     // remaining personal and company settings that used to sit under General.
     if (panel.id === 'staffManagement') return 'employees';
-    if (panel.id === 'chakra-notification-settings-root') return 'notifications';
+    if (['chakra-notification-settings-root','telegramBinding'].includes(panel.id)) return 'notifications';
     if (panel.id === 'chakra-settings-root') return 'profile';
     if (panel.id === 'connectWhatsAppSettings') return 'integrations';
     if (['companyManagement','summaryLanguageSettings'].includes(panel.id)) return 'companies';
