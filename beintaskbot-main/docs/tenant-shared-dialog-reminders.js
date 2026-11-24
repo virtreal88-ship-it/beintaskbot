@@ -214,7 +214,6 @@
       createControl.id='operatorSharedReminderCreate';createControl.setAttribute('aria-haspopup','dialog');
       const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
       for(const [key,value] of Object.entries({'aria-hidden':'true',focusable:'false',width:'14',height:'14',viewBox:'0 0 24 24'}))icon.setAttribute(key,value);
-      icon.style.cssText='flex:none;vertical-align:-2px;margin-inline-end:6px';
       const line=document.createElementNS(icon.namespaceURI,'path');
       for(const [key,value] of Object.entries({d:'M12 5v14M5 12h14',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round'}))line.setAttribute(key,value);
       icon.append(line);createControl.append(icon,node('span',t('schedule')));
@@ -232,7 +231,9 @@
   style.textContent=`
     #operatorClientSharedReminderHost[hidden],#operatorSharedReminderCreate[hidden]{display:none!important}
     #operatorClientSharedReminderHost{margin-top:4px}
-    #operatorCompanyPanel #operatorSharedReminderCreate{width:100%;min-height:36px;text-align:start}
+    #operatorCompanyPanel #operatorSharedReminderCreate{display:flex;flex-flow:row nowrap;align-items:center;justify-content:flex-start;gap:6px;width:100%;min-height:36px;text-align:start}
+    #operatorSharedReminderCreate>svg{display:block;flex:none}
+    #operatorSharedReminderCreate>span{white-space:nowrap}
     .operator-shared-reminder-badge{border-radius:9px;padding-inline:5px;background:var(--paper);color:var(--app-warning-ink,#9b5f08);font-weight:700}
     #sharedDialogReminderModal{box-sizing:border-box;width:min(440px,calc(100% - 24px));max-height:calc(100dvh - 24px);padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);overflow:auto}
     #sharedDialogReminderModal::backdrop{background:#071d1688}
