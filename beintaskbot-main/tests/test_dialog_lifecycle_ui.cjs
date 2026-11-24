@@ -56,7 +56,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-lifecycle=dismiss]'),'waiting never shows rhetorical even if an older server advertises it');
  route={...route,can_send:true,lifecycle:{state:'accepted',revision:4,operator_id:33,can_close:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
  await w.tenantOperator.openDialog(route);const rhetorical=d.querySelector('[data-operator-lifecycle=dismiss]');
- assert.equal(rhetorical.textContent,'Ritorik sual');assert.equal(rhetorical.previousElementSibling.dataset.operatorLifecycle,'close');
+ assert.equal(rhetorical.textContent,'Ritorik sual');assert.equal(rhetorical.nextElementSibling.dataset.operatorLifecycle,'close');
  rhetorical.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');
  assert(d.querySelector('#chatRows'),'rhetorical mark retains the active conversation');assert(d.querySelector('[data-operator-lifecycle=dismiss]').disabled);assert.equal(d.querySelector('[data-operator-lifecycle=dismiss]').getAttribute('aria-pressed'),'true');
  assert(d.querySelector('[data-operator-lifecycle=close]'),'rhetorical mark keeps explicit completion');assert(!d.querySelector('#sendChat').disabled);

@@ -69,7 +69,10 @@ function gate(){
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
     const companyPanel=page.locator('#operatorCompanyPanelOpen');
-    await company.waitFor();await templates.waitFor();await input.fill('Unsaved reply');
+    await company.waitFor();
+    const more=page.locator('#operatorMoreActions > summary');
+    await more.click();await templates.waitFor();await more.click();
+    await input.fill('Unsaved reply');
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true');
     assert.deepEqual(preferenceWrites,[],'desktop opens the details panel automatically without a saved preference');
     await page.evaluate(()=>{
