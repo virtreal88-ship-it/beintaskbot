@@ -193,7 +193,12 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await input.inputValue(),'Selected Operator account');
   const calls=await page.evaluate(()=>window.accountCalls.map(({operator_search,operator_account,channel_id,lead_id})=>[operator_search??null,operator_account??null,channel_id,lead_id]));
   assert.deepEqual(calls,[['synthetic',null,'b','42'],[null,'synthetic_a','b','42']]);
-  if(width<900){await page.locator('[data-operator-back]').click();await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');}
+  if(width<900){
+   await panel.locator('#operatorCompanyPanelClose').click();
+   await panel.waitFor({state:'hidden'});
+   await page.locator('[data-operator-back]').click();
+   await page.waitForFunction(()=>document.querySelector('#operatorWorkspace').dataset.selected==='false');
+  }
   await page.close();
  }
  console.log('PASS Chromium group routes, Operator dropdown geometry and explicit account binding at 360/1440px');

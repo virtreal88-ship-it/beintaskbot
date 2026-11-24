@@ -359,6 +359,6 @@ const beta='@verified_account';
   assert(!await name.isVisible()&&!(await name.textContent()),'identity transition clears company name');
   await page.close();
  }
- console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/1440px');
+ console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/430/1440px');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
