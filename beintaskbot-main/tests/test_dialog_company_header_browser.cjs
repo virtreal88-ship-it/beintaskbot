@@ -149,8 +149,8 @@ const beta='@verified_account';
     return {height:h.height,tabHeight:tabs.height,contained:tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right,
       paddingStart:style.paddingBlockStart,paddingEnd:style.paddingBlockEnd};
   });
-  assert(compactHeader.contained&&compactHeader.height<=(width<=900?54:42),'four tabs fit the compact header: '+JSON.stringify(compactHeader));
-  assert.deepEqual([compactHeader.paddingStart,compactHeader.paddingEnd],['4px','4px'],'company-specific padding wins when shared styles load last');
+  assert(compactHeader.contained&&compactHeader.height<=(width<=900?56:60),'four tabs fit the chat-aligned header: '+JSON.stringify(compactHeader));
+  assert.deepEqual([compactHeader.paddingStart,compactHeader.paddingEnd],['0px','0px'],'tabs fill the aligned header without extra vertical padding');
   for(const tab of await companyHeader.getByRole('tab').all()){
     assert.deepEqual(await tab.evaluate(corners),['0px','0px','0px','0px'],'tab edges and the active underline are square');
     assert((await tab.boundingBox()).height>=32,'compact tabs retain a usable click target');
