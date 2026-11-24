@@ -25,6 +25,8 @@ def _ensure_schema(conn) -> None:
             migrate_test_call_recordings(cur)
             from tenant_browser_calls import migrate as migrate_browser_calls
             migrate_browser_calls(cur)
+            from tenant_whatsapp_native_reactions import migrate as migrate_reactions
+            migrate_reactions(cur)
             # Durable per-user fencing for the owner-scoped Realtime pilot.
             # Additive only; no provider traffic or account setting is enabled
             # by creating this table.

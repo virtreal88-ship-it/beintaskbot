@@ -18,6 +18,7 @@ from tenant_chat_ai_api import handler as chat_ai_handler
 from tenant_chat_ai_api import model_management_handler as chat_ai_model_handler
 from tenant_chat_ai_api import recorded_voice_access_handler as chat_ai_recorded_voice_access_handler
 from tenant_chat_send_api import handler as chat_send_handler, receipt_handler as chat_receipt_handler, send_status_handler as chat_send_status_handler, close_unsubmitted_handler as chat_close_unsubmitted_handler
+from tenant_whatsapp_reaction_api import handler as whatsapp_reaction_handler
 from tenant_chat_upload_api import handler as chat_upload_handler
 from tenant_customer_media_api import handler as customer_media_handler, read_handler as customer_media_read_handler
 from tenant_customer_voice_api import handler as customer_voice_handler, receipt_handler as customer_voice_receipt_handler, capability_handler as customer_voice_capability_handler, status_handler as customer_voice_status_handler, manual_confirmation_handler as customer_voice_manual_confirmation_handler
@@ -116,6 +117,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/crm/chat/send-status', chat_send_status_handler(member, logger), ('GET',)),
         ('/api/platform/crm/chat/send-status/close-unsubmitted', chat_close_unsubmitted_handler(member, origin, logger), ('POST',)),
         ('/api/platform/crm/chat/send', chat_send_handler(member, origin, context.crm_request, context.wait_slot, logger), ('POST',)),
+        ('/api/platform/crm/chat/reaction', whatsapp_reaction_handler(member, origin, logger), ('GET','POST')),
         ('/api/platform/crm/chat/send-media', customer_media_handler(member,origin,logger), ('POST',)),
         ('/api/platform/crm/chat/media-capability', customer_media_read_handler(member,logger), ('GET',)),
         ('/api/platform/crm/chat/media-receipt', customer_media_read_handler(member,logger,receipt=True), ('GET',)),

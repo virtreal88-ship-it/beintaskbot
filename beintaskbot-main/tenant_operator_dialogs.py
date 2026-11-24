@@ -1610,6 +1610,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 _attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
                 _attach_saved_visual_status(cur,tenant,messages[:50])
                 _attach_call_recording_directions(cur,tenant,messages[:50])
+                from tenant_whatsapp_native_reactions import attach as attach_reactions
+                attach_reactions(cur,tenant,messages[:50])
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's

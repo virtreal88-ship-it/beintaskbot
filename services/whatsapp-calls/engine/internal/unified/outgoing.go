@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
@@ -20,17 +21,18 @@ import (
 // Outgoing is private Worker-to-engine data, never a browser authorization.
 // Scope is checked against the process binding before calling Deliver.
 type Outgoing struct {
-	Scope       Scope        `json:"scope"`
-	Operation   string       `json:"operation"`
-	Chat        string       `json:"chat"`
-	Kind        string       `json:"kind"`
-	Text        string       `json:"text"`
-	MIME        string       `json:"mime"`
-	Name        string       `json:"name"`
-	Data        []byte       `json:"data"`
-	QuoteEvent  string       `json:"quote_event,omitempty"`
-	QuoteID     string       `json:"quote_id,omitempty"`
-	LegacyQuote *LegacyQuote `json:"legacy_quote,omitempty"`
+	Scope       Scope           `json:"scope"`
+	Operation   string          `json:"operation"`
+	Chat        string          `json:"chat"`
+	Kind        string          `json:"kind"`
+	Text        string          `json:"text"`
+	MIME        string          `json:"mime"`
+	Name        string          `json:"name"`
+	Data        []byte          `json:"data"`
+	QuoteEvent  string          `json:"quote_event,omitempty"`
+	QuoteID     string          `json:"quote_id,omitempty"`
+	LegacyQuote *LegacyQuote    `json:"legacy_quote,omitempty"`
+	Reaction    *ReactionTarget `json:"reaction,omitempty"`
 }
 
 // LegacyQuote comes only from the authenticated Worker's exact historical row.
@@ -53,6 +55,17 @@ var messagePeer = regexp.MustCompile(`^[1-9][0-9]{4,29}(?:-[0-9]{5,20})?@(s\.wha
 func (r Outgoing) Validate(scope Scope) error {
 	if r.Scope != scope || r.Operation == "" || len(r.Operation) > 128 || !messagePeer.MatchString(r.Chat) ||
 		!utf8.ValidString(r.Text) || len(r.Text) > 65536 || strings.ContainsRune(r.Text, 0) || len(r.Name) > 200 || strings.ContainsAny(r.Name, "/\\\x00\r\n") {
+		return ErrConfiguration
+	}
+	if r.Kind == "reaction" {
+		if r.Reaction == nil || !r.Reaction.valid(r.Chat) || !validReactionText(r.Text) ||
+			len(r.Data) != 0 || r.MIME != "" || r.Name != "" ||
+			r.QuoteEvent != "" || r.QuoteID != "" || r.LegacyQuote != nil {
+			return ErrConfiguration
+		}
+		return nil
+	}
+	if r.Reaction != nil {
 		return ErrConfiguration
 	}
 	if ((r.QuoteEvent == "" && r.LegacyQuote == nil) != (r.QuoteID == "")) || (r.QuoteEvent != "" && (len(r.QuoteEvent) != 64 || r.LegacyQuote != nil)) {
@@ -133,7 +146,15 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		if quote != nil {
 			msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: &request.Text, ContextInfo: quote}}
 		}
-		if request.Kind != "text" {
+		if target := request.Reaction; target != nil {
+			msg = &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{
+				Key: &waCommon.MessageKey{
+					RemoteJID: proto.String(request.Chat), ID: proto.String(target.ID),
+					FromMe: proto.Bool(target.FromMe), Participant: optionalParticipant(target.Participant),
+				},
+				Text: proto.String(request.Text), SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
+			}}
+		} else if request.Kind != "text" {
 			mediaType := whatsmeow.MediaDocument
 			switch request.Kind {
 			case "image":
