@@ -66,11 +66,6 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await companyCard.count(),1);
   const companyLine=await companyCard.evaluate(row=>{
     const c=row.querySelector('.operator-row-company');
-    const source=row.querySelector('.operator-row-source'),meta=row.querySelector('.operator-row-meta');
-    const companyBox=c.getBoundingClientRect(),sourceBox=source.getBoundingClientRect();
-    const sameLine=Math.abs((companyBox.top+companyBox.bottom)-(sourceBox.top+sourceBox.bottom))<2;
-    const right=Math.abs(sourceBox.right-meta.getBoundingClientRect().right)<1&&sourceBox.left>=companyBox.right;
-    const sameInk=getComputedStyle(source).color===getComputedStyle(c).color;
     const fullHeight=row.offsetHeight,literal=c.textContent.includes('<b>stored</b>')&&!c.querySelector('b');
     const truncated=c.scrollWidth>c.clientWidth&&getComputedStyle(c).textOverflow==='ellipsis';
     const sample=document.createElement('span');
@@ -79,31 +74,23 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
     const former=getComputedStyle(sample),badge=getComputedStyle(c);
     const sameBadge=['backgroundColor','color','borderRadius','fontSize','fontWeight'].every(key=>former[key]===badge[key]);
     sample.remove();
-    c.textContent='Short company';return {literal,truncated,sameBadge,sameLine,right,sameInk,noGrowth:fullHeight===row.offsetHeight};
+    c.textContent='Short company';return {literal,truncated,sameBadge,noGrowth:fullHeight===row.offsetHeight};
   });
-  assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,sameLine:true,right:true,sameInk:true,noGrowth:true});
+  assert.deepEqual(companyLine,{literal:true,truncated:true,sameBadge:true,noGrowth:true});
   assert.equal(await page.locator('#operatorRows .operator-row-status').count(),0);
   assert(await companyCard.locator('.operator-row-company').evaluate(n=>n.parentElement.nextElementSibling.matches('.operator-row-preview')),'company precedes the preview');
-  const sourceOnly=page.locator('.operator-row').filter({has:page.locator('.operator-row-context-with-preview')});
-  assert.equal(await sourceOnly.count(),2);
-  for(const row of await sourceOnly.all()){
-   const g=await row.evaluate(el=>{
-    const rect=selector=>el.querySelector(selector).getBoundingClientRect();
-    return {preview:rect('.operator-row-preview').toJSON(),source:rect('.operator-row-source').toJSON(),
-     context:rect('.operator-row-context').toJSON(),time:rect('.operator-row-time').toJSON()};
-   });
-   assert(g.preview.right<=g.source.left&&Math.abs(g.source.right-g.context.right)<1,'preview fills the unused left slot without moving the source from the right');
-   assert(Math.abs((g.preview.top+g.preview.bottom)-(g.source.top+g.source.bottom))<2,'no blank row above a preview without a company');
-   assert(g.time.width>0,'right-side timestamp stays visible');
-  }
+  assert.equal(await page.locator('#operatorRows .operator-row-source').count(),0,'sources are not duplicated in the list');
+  assert.equal(await page.locator('.operator-row-context-with-preview').count(),0);
   const group=page.locator('.operator-row').first();
   assert.equal(await group.locator('.operator-row-sub').isVisible(),false,'missing group phone does not take space');
   assert.equal(await group.locator('.operator-row-preview').count(),0,'missing preview does not take space');
-  assert.equal(await group.locator('.operator-row-source').isVisible(),true,'keep a row if it contains a source on the right');
+  assert.equal(await group.locator('.operator-row-source').count(),0,'group source is shown in the right panel, not the list');
   await page.locator('.operator-row').first().click();
   await page.waitForFunction(()=>window.historyReads.at(-1)==='a');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent.startsWith('Company A'));
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
+  if(width>900)await page.waitForFunction(()=>document.querySelector('#operatorCompanyPanel')?.open===true);
+  else assert.equal(await panel.evaluate(node=>node.open),false,'right panel starts closed on mobile');
   const chat=page.locator('#operatorConversationContent');
   const closedWidth=(await chat.boundingBox()).width;
   assert.equal(await card.isVisible(),false);
@@ -116,6 +103,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.equal(await card.locator('#operatorConversationName').count(),1);
   const dialogueBlock=card.locator('.operator-client-panel-block').filter({has:page.locator('[data-panel-agent-status]')});
   assert(await dialogueBlock.locator('[data-panel-agent-status]').isVisible(),'agent mode stays in the dialogue block');
+  assert.match(await dialogueBlock.innerText(),/Huseyn/,'source is retained in the dialogue details block');
   assert.equal(await card.locator('.operator-client-panel-block').last().locator('[data-group-participants]').count(),1,'the roster is the last block in groups');
   assert.equal(await card.locator('.operator-client-panel-block').last().getAttribute('open'),null,'group members are collapsed by default');
   const sourceRow=dialogueBlock.locator('.operator-client-panel-row').first();
@@ -125,9 +113,12 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   }),['6px','6px','3px'],'read-only source label and value use compact spacing');
   assert.equal(await card.locator('[data-client-transfer]').isVisible(),false);
   await page.keyboard.press('Escape');
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<900)await page.evaluate(()=>document.querySelector('#operatorCompanyPanelOpen').click());
+  else assert.equal(await panel.evaluate(node=>node.open),true,'right panel stays open on desktop');
   const openWidth=(await chat.boundingBox()).width;
-  assert.equal(Math.abs(openWidth-closedWidth)<1,width<900,'company overlays on mobile and reserves a right column on desktop');
+  if(width<900)assert(Math.abs(openWidth-closedWidth)<1,'company overlays on mobile without resizing the chat');
+  else assert(openWidth<(await page.locator('.operator-conversation-pane').boundingBox()).width-100,'desktop right panel reserves a column beside the chat');
+  assert.match(await page.locator('#operatorSidebarDialogInfo').innerText(),/Huseyn/,'right panel shows the selected source');
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');
   assert.match(await page.locator('#operatorDialogueCompanySearch').inputValue(),/^Company A/);
@@ -149,7 +140,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   assert.match(await card.locator('[data-client-transfer]').innerText(),/Synthetic sender → Synthetic recipient/);
   assert.match(await card.innerText(),/Texniki Dəstək/);
   await page.keyboard.press('Escape');
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<900)await page.locator('#operatorCompanyPanelOpen').click();
+  else assert.equal(await panel.evaluate(node=>node.open),true,'desktop details remain open after closing the client card');
   const search=page.locator('#operatorDialogueCompanySearch');
   const header=()=>page.locator('#operatorConversationHeader').evaluate(node=>[node.offsetWidth,node.offsetHeight,node.textContent]);
   const before=await header();
@@ -160,7 +152,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const priorReads=await page.evaluate(()=>window.companyReads.length);
   await page.evaluate(()=>{window.offerOperatorPicker='on';document.dispatchEvent(new Event('tenant-dialog-reauthorized'));});
   await page.waitForFunction(n=>window.companyReads.length>n,priorReads);
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<900)await page.locator('#operatorCompanyPanelOpen').click();
+  else assert.equal(await panel.evaluate(node=>node.open),true,'desktop details remain open while permissions refresh');
   assert.deepEqual(await header(),before);
   await search.click();
   const drop=page.locator('#operatorDialogueCompanySuggestions'),input=search;

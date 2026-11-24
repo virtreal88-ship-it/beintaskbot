@@ -26,12 +26,13 @@ body[data-app-ui="kwid"] [hidden] {display:none!important}
 body[data-app-ui="kwid"] .shell {display:grid;grid-template-columns:var(--app-sidebar) minmax(0,1fr);min-height:100dvh;transition:grid-template-columns var(--app-motion) ease}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] {--app-sidebar:88px}
 body[data-app-ui="kwid"] aside {display:flex;flex-direction:column;align-items:stretch;width:100%;height:100dvh;position:sticky;top:0;padding:0;background:var(--app-bg);color:var(--app-ink);gap:0;z-index:40;overflow:hidden;border-right:1px solid var(--app-line)}
-body[data-app-ui="kwid"] .app-sidebar-header {height:64px;min-height:64px;padding:0 24px;display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--app-surface);border-bottom:1px solid var(--app-line)}
-body[data-app-ui="kwid"] .brand {font-size:17px;font-weight:700;letter-spacing:-.45px;line-height:1.3;white-space:nowrap;gap:0;min-width:0}
+body[data-app-ui="kwid"] .app-sidebar-header {height:56px;min-height:56px;padding:0 16px;display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--app-surface);border-bottom:1px solid var(--app-line)}
+body[data-app-ui="kwid"] .app-sidebar-header .brand {display:flex;font-size:17px;font-weight:700;letter-spacing:-.45px;line-height:1.3;white-space:nowrap;gap:0;min-width:0}
+body[data-app-ui="kwid"] .app-sidebar-header~div:has(.company) {display:none!important}
 body[data-app-ui="kwid"] .mark {display:none}
 body[data-app-ui="kwid"] .company {display:block;margin:24px 20px 20px;padding:12px 4px;font-size:13px;font-weight:600;color:var(--app-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 body[data-app-ui="kwid"] .app-nav-label {font-size:13px}
-body[data-app-ui="kwid"] .nav {flex:1;overflow:auto;display:flex;flex-direction:column;gap:20px;padding:0 16px 24px;min-height:0;scrollbar-width:thin}
+body[data-app-ui="kwid"] .nav {flex:1;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:6px 16px 24px;min-height:0;scrollbar-width:thin}
 body[data-app-ui="kwid"] .app-nav-group {display:grid;gap:4px}
 body[data-app-ui="kwid"] .app-nav-group-title {display:flex;justify-content:space-between;align-items:center;width:100%;padding:8px;color:var(--app-muted);background:none;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;border-radius:6px;min-height:30px}
 body[data-app-ui="kwid"] .app-nav-group-title svg {width:14px;height:14px;transition:transform var(--app-motion) ease}
@@ -42,8 +43,8 @@ body[data-app-ui="kwid"] .app-nav-group[data-collapsed="true"] .app-nav-group-it
 body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav) {width:100%;min-height:38px;padding:8px 10px;gap:12px;border-radius:8px;color:var(--app-ink);background:transparent;font-size:13px;font-weight:500;text-align:left;display:flex;align-items:center;margin:0!important;white-space:nowrap;transition:background-color 75ms,color 75ms}
 body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav):hover {background:var(--app-hover)}
 body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav).active {background:var(--app-hover);color:var(--app-accent)}
-body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav)>span:first-child {width:22px;height:22px;display:grid;place-items:center;flex:none}
-body[data-app-ui="kwid"] .nav svg {width:22px;height:22px;stroke-width:1.5}
+body[data-app-ui="kwid"] .nav :is([data-view],[data-report-link],#settingsFamilyNav)>span:first-child {width:20px;height:20px;display:grid;place-items:center;flex:none}
+body[data-app-ui="kwid"] .nav svg {width:20px;height:20px;stroke-width:1.55}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-sidebar-header {justify-content:center;padding:0 16px}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .brand,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-label,body[data-app-ui="kwid"][data-sidebar="collapsed"] .app-nav-group-title {display:none}
 body[data-app-ui="kwid"][data-sidebar="collapsed"] .company {font-size:0;margin:24px 16px 20px;text-align:center}
@@ -377,3 +378,5 @@ body[data-app-ui=kwid] button.connect-number-add,.connect-number-add{background:
 #operatorConnectionStatusHost .operator-connection-badge[data-connected="true"] { color:var(--app-success, #168247); }
 #operatorIntegrationSettings :is(input, select) { max-width:100%; min-width:0; }
 #operatorIntegrationSettings [data-connected-login] { overflow-wrap:anywhere; }
+
+@media(min-width:901px){body[data-app-ui="kwid"] main:has(#view-dialogs.active){padding-left:8px!important;padding-right:8px!important}}
