@@ -7,7 +7,8 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'client',agent_id:'agent',agent_name:'Agent',state:'human',can_send:false,send_block_reason:'dialog_accept_required',controls_allowed:true,available_actions:['resume'],lifecycle_enabled:true,lifecycle:{id:'episode',state:'waiting',revision:1,can_accept:true,last_inbound_id:'latest-inbound'}};
  const rhetoricalEvent={id:'rhetorical-event',kind:'no_reply',at:'2026-01-01T00:30:00Z'};
- let rhetoricalHistoryPause;
+ const startedEvent={id:'started-event',kind:'start',at:'2026-01-01T01:00:00Z',employee_name:'Alina'};
+ let rhetoricalHistoryPause,startHistoryPause;
  let failed=false,hold=false,release,denyHistory=false,denyCase=false;let caseResult={case_state:'completed',case_id:'draft'};const calls=[];
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.fetch=async(url,options={})=>{url=String(url);const body=options.body?JSON.parse(options.body):null;calls.push({url,body});let result;
@@ -19,9 +20,10 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(body.action==='start'){route={...route,archive_read_only:false,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
    if(body.action==='dismiss'){route={...route,lifecycle:{...route.lifecycle,revision:5,no_reply_needed:true,can_dismiss:false}};}
-   result={lifecycle:route.lifecycle,controls:{lifecycle:route.lifecycle,can_send:route.can_send},...(body.action==='case'?caseResult:{}),...(body.action==='dismiss'?{operator_event:rhetoricalEvent}:{})};
-  }else if(url.includes('/dialogs/history')){if(rhetoricalHistoryPause)await rhetoricalHistoryPause;if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null,
-   ...(route.lifecycle.no_reply_needed?{operator_events:[rhetoricalEvent]}:{})};}
+   const operatorEvent={dismiss:rhetoricalEvent,start:startedEvent}[body.action];
+   result={lifecycle:route.lifecycle,controls:{lifecycle:route.lifecycle,can_send:route.can_send},...(body.action==='case'?caseResult:{}),...(operatorEvent?{operator_event:operatorEvent}:{})};
+  }else if(url.includes('/dialogs/history')){if(rhetoricalHistoryPause)await rhetoricalHistoryPause;if(startHistoryPause)await startHistoryPause;if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null,
+   ...(route.lifecycle.no_reply_needed?{operator_events:[rhetoricalEvent]}:route.lifecycle.id==='new-episode'?{operator_events:[startedEvent]}:{})};}
   else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[],attention_count:0,next_offset:null};
   else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   else if(url.includes('/dialogs/read'))result={updated:true};
@@ -83,7 +85,23 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  assert(d.querySelector('#sendChat').disabled);
  assert.equal(archiveAcknowledged,0,'opening read-only history must not acknowledge another operator’s reminder');
  assert.equal(calls.filter(c=>c.url.includes('/dialogs/read')).length,beforeArchive);
- const start=d.querySelector('[data-operator-lifecycle=start]');assert(start,'closed dialog has a start action');assert.equal(start.textContent,'Dialoqa başla','start action is localized');assert.equal(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),true);start.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='start').body.expected_revision,7);assert(!d.querySelector('[data-operator-lifecycle=start]'));assert(!d.querySelector('#sendChat').disabled);assert(!calls.some(c=>c.url.includes('/send')),'starting a dialog sends no customer message');
+ const start=d.querySelector('[data-operator-lifecycle=start]');
+ assert(start,'closed dialog has a start action');
+ assert.equal(start.textContent,'Dialoqa başla','start action is localized');
+ assert.equal(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),true);
+ let resumeStartHistory;
+ startHistoryPause=new Promise(resolve=>{resumeStartHistory=resolve;});
+ start.click();await tick();await tick();
+ assert.equal(calls.find(c=>c.body?.action==='start').body.expected_revision,7);
+ const renderedStart=()=>d.querySelectorAll('#chatRows [data-operator-timeline-event="started-event"]');
+ assert.equal(renderedStart().length,1,'the start receipt renders the system event before history refresh returns');
+ assert.equal(renderedStart()[0].firstElementChild.textContent,'Dialoq başladıldı: Alina');
+ assert(d.querySelector('#sendChat').disabled,'archive remains read-only while fresh permissions are loading');
+ startHistoryPause=null;resumeStartHistory();await tick();await tick();
+ assert.equal(renderedStart().length,1,'history refresh reconciles the same start audit ID');
+ assert(!d.querySelector('[data-operator-lifecycle=start]'));
+ assert(!d.querySelector('#sendChat').disabled);
+ assert(!calls.some(c=>c.url.includes('/send')),'starting a dialog sends no customer message');
  await w.tenantOperator.openDialog(route);denyHistory=true;await w.tenantOperator.openDialog(route);assert(!d.querySelector('#chatRows'),'access rejection clears rendered history');assert(!d.querySelector('#chatText'));assert(!d.querySelector('[data-operator-lifecycle]'));
  dom.window.close();console.log('dialog lifecycle UI passed');
 })().catch(error=>{console.error(error);process.exitCode=1;});

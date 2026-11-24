@@ -80,7 +80,7 @@ const tick=async()=>{for(let i=0;i<18;i++)await new Promise(resolve=>setImmediat
  await w.tenantOperator.openDialog(first,true,'',{suppressRead:true});await tick();
  assert.deepEqual(view(),['m2','transferred-a','m3','transferred-b','started-c']);
  assert.match(find('transferred-b').textContent,/to an employee|передан сотруднику|əməkdaşa ötürüldü/);
- assert.match(find('started-c').textContent,/Started dialog|Начал\(а\) диалог|Dialoqa başladı/);
+ assert.match(find('started-c').textContent,/Dialog started|Диалог начат|Dialoq başladıldı/);
  assert.equal(w.document.getElementById('operatorNewMessages').hidden,true,'an audit note is not a new client message');
  cooldown=true;
  exact={...first,lifecycle:{...first.lifecycle,revision:10}};

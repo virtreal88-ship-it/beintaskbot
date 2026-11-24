@@ -860,11 +860,11 @@ def _mutate_once(profile, payload):
               (audit_id,tenant,actor,audit_action,str(audit_episode),json.dumps(audit_payload)))
             if action=='dismiss':
                 result['lifecycle']['no_reply_needed']=True
-            if action in ('accept','dismiss','close','transfer'):
+            if action in ('accept','start','dismiss','close','transfer'):
                 result['operator_event']={
                     'id':audit_id,'kind':'no_reply' if action=='dismiss' else action,
                     'at':cur.fetchone()['created_at'].isoformat()}
-                if action=='accept':
+                if action in ('accept','start'):
                     result['operator_event']['employee_name']=str(policy.profile.get('display_name') or '').strip()[:120]
                 if action=='transfer':
                     cur.execute('''SELECT display_name FROM saas_tenant_members
