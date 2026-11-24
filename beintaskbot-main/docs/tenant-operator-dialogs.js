@@ -1158,7 +1158,7 @@
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
-  const deviceDisplayPhone=route=>!route.contact_identity_conflict&&verifiedDialogPhone({phone:route.device_display_phone});
+  const deviceDisplayPhone=route=>verifiedDialogPhone({phone:route.device_display_phone});
   const displayDialogPhone=route=>verifiedDialogPhone(route)||deviceDisplayPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
   const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
   const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
