@@ -577,10 +577,21 @@
       if(action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'){removeLifecycleDialog(route);void refresh();return;}
       if(action==='dismiss'){
-        if(result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true&&currentPage&&
-          Number(currentDialog.lifecycle?.revision??-1)<=result.lifecycle.revision){
-          currentDialog={...currentDialog,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_dismiss:false}};
-          currentPage.dialog=currentDialog;renderDialog(currentPage,{suppressRead:true});
+        if(currentPage&&result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true){
+          const event=result.operator_event;
+          if(event?.kind==='no_reply'&&validOperatorEvent(event)){
+            retainOperatorEvents(currentPage,{operator_events:[event]});
+            const chat=$('chatRows');
+            if(chat){
+              const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+              placeOperatorEvents(chat,currentPage);
+              setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),true);
+            }
+          }
+          if(Number(currentDialog.lifecycle?.revision??-1)<=result.lifecycle.revision){
+            currentDialog={...currentDialog,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_dismiss:false}};
+            currentPage.dialog=currentDialog;renderDialog(currentPage,{suppressRead:true});
+          }
         }
         void refresh(false,false,{revalidateSelected:true,suppressRead:true});return;
       }

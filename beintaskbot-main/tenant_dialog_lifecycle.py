@@ -840,11 +840,25 @@ def _mutate_once(profile, payload):
             if (action=='accept' and exact_route) or individual_close:
                 result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
                                                         current,rollout,policy,closed_episode)
-            if action=='dismiss':result['lifecycle']['no_reply_needed']=True
+            audit_id = marker if action=='dismiss' else str(uuid.uuid4())
+            audit_action = 'dialog_no_reply' if action=='dismiss' else 'dialog_'+action
+            audit_episode = current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']
+            audit_payload = {'channel_id':channel,'conversation_id':conversation,
+                             'operator_id':current['operator_id'],'revision':current['revision']}
+            if action=='dismiss':
+                audit_payload.update(message_id=payload['message_id'],counts_as_missed=False)
+            if bound_on_close:
+                audit_payload['company_bound_on_close']=bound_on_close
+            if action=='close' and payload.get('company_choice') in ('none','unchanged'):
+                audit_payload['company_choice']=payload['company_choice']
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb) RETURNING created_at''',
+              (audit_id,tenant,actor,audit_action,str(audit_episode),json.dumps(audit_payload)))
+            if action=='dismiss':
+                result['lifecycle']['no_reply_needed']=True
+                result['operator_event']={'id':audit_id,'kind':'no_reply','at':cur.fetchone()['created_at'].isoformat()}
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(marker if action=='dismiss' else str(uuid.uuid4()),tenant,actor,'dialog_no_reply' if action=='dismiss' else 'dialog_'+action,str(current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id'],'counts_as_missed':False} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':payload['company_choice']} if action=='close' and payload.get('company_choice') in ('none','unchanged') else {})})))
         conn.commit()
     return result
 
