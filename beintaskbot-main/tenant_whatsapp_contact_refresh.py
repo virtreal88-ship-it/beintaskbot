@@ -1,6 +1,5 @@
-"""Refresh missing, verified phone aliases for one explicitly enabled WeCall source."""
+"""Refresh missing, verified phone aliases for explicitly enabled WeCall sources."""
 import asyncio
-import contextlib
 import json
 import os
 import re
@@ -27,17 +26,20 @@ def migrate(cur):
           REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE)""")
 
 
-def enabled_source():
+def enabled_sources():
     value = os.environ.get('BEINTASKBOT_NATIVE_CONTACT_SOURCE', '')
     try:
-        tenant, channel = value.split(':')
-        return str(uuid.UUID(tenant)), str(uuid.UUID(channel))
+        scopes = set()
+        for entry in value.split(','):
+            tenant, channel = entry.strip().split(':')
+            scopes.add((str(uuid.UUID(tenant)), str(uuid.UUID(channel))))
+        return scopes
     except ValueError:
-        return None
+        return set()
 
 
 def enabled_for(tenant, channel):
-    return enabled_source() == (str(tenant), str(channel))
+    return (str(tenant), str(channel)) in enabled_sources()
 
 
 def _binding(cur, tenant, channel):
@@ -163,35 +165,38 @@ def save_confirmation(tenant, channel, binding, candidate, phone):
 
 
 def attach_display_phones(cur, tenant, dialogs):
-    source = enabled_source()
-    if not source or source[0] != str(tenant):
+    channels = {channel for company, channel in enabled_sources() if company == str(tenant)}
+    if not channels:
         return
-    rows = {row['conversation_id']: row for row in dialogs
-            if str(row['channel_id']) == source[1] and row['conversation_id'].endswith('@lid')
+    rows = {(str(row['channel_id']), row['conversation_id']): row for row in dialogs
+            if str(row['channel_id']) in channels and row['conversation_id'].endswith('@lid')
             and not row.get('phone') and not row.get('contact_identity_conflict')}
     if not rows:
         return
-    cur.execute("""SELECT d.conversation_id,d.phone
+    routes = [{'channel': channel, 'conversation': conversation} for channel, conversation in rows]
+    cur.execute("""SELECT d.channel_id::text AS channel,d.conversation_id,d.phone
         FROM saas_whatsapp_device_display_phones d
+        JOIN jsonb_to_recordset(%s::jsonb) AS requested(channel uuid,conversation text)
+          ON (d.channel_id,d.conversation_id)=(requested.channel,requested.conversation)
         JOIN saas_whatsapp_native_routes r USING(tenant_id,channel_id,generation)
         JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
         JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
           AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
         JOIN saas_connect_channels c ON c.tenant_id=g.tenant_id AND c.connect_channel_id=g.channel_id
-        WHERE d.tenant_id=%s::uuid AND d.channel_id=%s::uuid AND d.conversation_id=ANY(%s)
+        WHERE d.tenant_id=%s::uuid
           AND (d.gateway_id,d.account_jid)=(g.gateway_id,g.account_jid)
           AND r.enabled AND NOT r.paused AND g.enabled AND g.projection_enabled AND s.enabled AND c.active
           AND NOT EXISTS(SELECT 1 FROM saas_connect_identity_conflicts f
             WHERE f.tenant_id=d.tenant_id AND f.connect_channel_id=d.channel_id
               AND f.conversation_id IN (d.conversation_id,substring(d.phone from 2)||'@s.whatsapp.net',
-                                        substring(d.phone from 2)||'@c.us'))""", (*source, list(rows)))
+                                        substring(d.phone from 2)||'@c.us'))""", (json.dumps(routes), tenant))
     for fact in cur.fetchall():
-        rows[fact['conversation_id']]['device_display_phone'] = fact['phone']
+        rows[(fact['channel'], fact['conversation_id'])]['device_display_phone'] = fact['phone']
 
 
-async def refresh_batch(tenant, channel, after=0):
+async def refresh_batch(tenant, channel, after=0, *, slots=None):
     binding, rows = await asyncio.to_thread(candidates, tenant, channel, after)
-    slots = asyncio.Semaphore(2)
+    slots = slots if slots is not None else asyncio.Semaphore(2)
 
     async def confirm(candidate):
         async with slots:
@@ -206,15 +211,15 @@ async def refresh_batch(tenant, channel, after=0):
 
 
 def install(app, logger):
-    scope = enabled_source()
-    if not scope:
+    scopes = enabled_sources()
+    if not scopes:
         return
 
-    async def run():
+    async def run(scope, slots):
         after = 0
         while True:
             try:
-                after, checked, confirmed, failures = await refresh_batch(*scope, after)
+                after, checked, confirmed, failures = await refresh_batch(*scope, after, slots=slots)
                 if confirmed or failures:
                     logger.info('whatsapp_contact_refresh checked=%d confirmed=%d failures=%d',
                                 checked, confirmed, failures)
@@ -223,12 +228,13 @@ def install(app, logger):
             await asyncio.sleep(INTERVAL_SECONDS)
 
     async def context(_):
-        task = asyncio.create_task(run(), name='whatsapp-contact-refresh')
+        slots = asyncio.Semaphore(2)
+        tasks = [asyncio.create_task(run(scope, slots), name='whatsapp-contact-refresh') for scope in sorted(scopes)]
         try:
             yield
         finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app.cleanup_ctx.append(context)

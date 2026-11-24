@@ -472,3 +472,43 @@ def test_device_confirmation_cannot_link_conflicts_or_other_sources(active, monk
             dialogs._attach_verified_phone(cur, A, another)
         assert 'device_display_phone' not in another
     db.commit()
+
+
+def test_device_display_uses_exact_source_for_same_lid(setup, monkeypatch):
+    import tenant_whatsapp_contact_refresh as refresh
+    import tenant_whatsapp_integration as integration
+    from test_tenant_support_inbox import PROFILE
+    from tenant_connect_transport import _upsert_conversation
+
+    db, _, _, remote = setup
+    monkeypatch.setattr(refresh, '_connect', lambda: db)
+    lid = '188888888@lid'
+    channels = []
+    cards = []
+    for n in (1, 2):
+        account = f'99410000077{n}'
+        remote.return_value = {'public_key': str(n)*64, 'qr': 'YWJj'}
+        channel = integration.begin(PROFILE, account, f'Synthetic source {n}')['channel_id']
+        remote.return_value = {'connected': True, 'account_jid': account+'@s.whatsapp.net'}
+        integration.activate(PROFILE, channel)
+        channels.append(channel)
+        phone = f'+1555000000{n}'
+        with db.cursor() as cur:
+            lead = _upsert_conversation(cur, A, channel, lid, {'kind': 'contact'})
+            _upsert_conversation(cur, A, channel, phone[1:]+'@s.whatsapp.net', {'kind': 'contact'})
+        cards.append(({'lead_id': lead, 'conversation_id': lid, 'channel_id': channel}, phone))
+        db.commit()
+    flag = ','.join(f'{A}:{channel}' for channel in channels)
+    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', flag)
+    assert not refresh.enabled_for(B, channels[0])
+    assert not refresh.enabled_for(A, CA)
+    for card, phone in cards:
+        scope = (A, card['channel_id'])
+        binding, _ = refresh.candidates(*scope, 0)
+        assert refresh.save_confirmation(*scope, binding, card, phone)
+    with db.cursor() as cur:
+        refresh.attach_display_phones(cur, A, [row for row, _ in cards])
+        assert all(row['device_display_phone'] == phone for row, phone in cards)
+        monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', flag+',invalid')
+        assert not refresh.enabled_for(A, channels[0])
+    db.commit()
