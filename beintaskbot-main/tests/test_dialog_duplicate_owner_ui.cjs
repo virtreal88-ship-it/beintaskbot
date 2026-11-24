@@ -26,12 +26,8 @@ w.fetch=async (target,options)=>{
    if(body.mode==='name')return new Promise(resolve=>pending=()=>resolve(response({dialogs:[row(9)],next_offset:null})));
    return response({dialogs:body.mode==='missing'?[missing,closed,conflict,noPermission]:[first,second,...more],next_offset:null});
  }
- if(resource==='/duplicates/preview'){
-   seen.push({resource,body});return response({eligible:true,pair_id:'synthetic-pair',precondition:'synthetic-precondition',
-     canonical_lead_id:2,split_lead_id:1,phone:'+994500000001',name_choices:[{lead_id:1,display_name:'First name'},{lead_id:2,display_name:'Second name'}]});
- }
- if(resource==='/duplicates/merge'){
-   seen.push({resource,body});return response({merged:true});
+ if(resource==='/duplicates/preview'||resource==='/duplicates/merge'){
+   seen.push({resource,body});throw new Error('no merge network is allowed from the browser');
  }
  if(resource==='/contact-display-phone'){
    seen.push({resource,body});return response({display_phone:'+994500000009'});
@@ -62,20 +58,13 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  $('[data-dupe-next]').click();assert.match($('[data-dupe-count]').textContent,/2.*2/);
  assert.match($('[data-dupe-results]').textContent,/Other A/);
  assert.equal(w.document.querySelectorAll('[data-dupe-open]').length,2,'only one candidate group is shown');
- $('[data-dupe-preview]').click();await settle();
- assert(seen.some(req=>req.resource==='/duplicates/preview'&&req.body.left.lead_id===4),'archived candidate can be checked in preview');
- assert.equal($('[data-dupe-confirm]'),null,'client never offers merge for an archive even if server says eligible');
+ assert.equal($('[data-dupe-preview]'),null);
+ assert.equal($('[data-dupe-confirm]'),null);
+ assert.match($('[data-dupe-merge-unavailable]').textContent,/not available|недоступно|mümkün/i);
+ assert.equal(w.document.querySelectorAll('.operator-dupe-pair [data-dupe-open]').length,2);
  $('[data-dupe-prev]').click();assert.match($('[data-dupe-count]').textContent,/1.*2/);
- $('[data-dupe-preview]').click();await settle();
- assert.equal(seen.filter(req=>req.resource==='/duplicates/merge').length,0,'preview must not merge');
- assert.equal(w.document.querySelectorAll('[data-dupe-compare]').length,2,'review compares side by side');
- assert.equal($('[data-dupe-name]').value,'2','server retained route controls defaults');
- $('[data-dupe-name]').value='1';$('[data-dupe-name]').dispatchEvent(new w.Event('change'));
- $('[data-dupe-confirm]').click();await settle();
- const merge=seen.find(req=>req.resource==='/duplicates/merge');
- assert.equal(merge.body.confirm,true);assert.equal(merge.body.name_lead_id,1);assert.equal(merge.body.phone_lead_id,2);
- assert(merge.body.request_id&&merge.body.precondition==='synthetic-precondition');
- assert.equal($('#operatorDuplicateSearch'),null);
+ assert.equal(seen.filter(req=>req.resource==='/duplicates/preview'||req.resource==='/duplicates/merge').length,0);
+ $('[data-dupe-close]').click();
  $('#operatorFindDuplicates').click();$('[data-dupe-mode="phone"]').checked=false;submit($('[data-dupe-form]'));await settle();
  assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'missing');
  assert.equal($('[data-dupe-pick]'),null,'missing mode never selects merge pairs');
@@ -100,6 +89,6 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  $('[data-dupe-mode="phone"]').checked=false;submit($('[data-dupe-form]'));await settle();
  assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'name');
  emitProfile(worker);pending();await settle();assert.equal($('#operatorDuplicateSearch'),null);
- console.log('PASS: owner-only duplicate modal, no query in URLs, preview/confirm, missing navigation and display-only phone, profile race.');
+ console.log('PASS: owner-only duplicate modal, no query in URLs, browse-only comparisons and no merge, missing navigation and display-only phone, profile race.');
  dom.window.close();
 })().catch(err=>{console.error(err);dom.window.close();process.exitCode=1;});

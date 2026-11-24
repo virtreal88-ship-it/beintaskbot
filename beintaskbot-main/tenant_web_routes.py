@@ -179,7 +179,6 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/transfer-details', operator_handler(member, origin, logger, 'transfer_details'), ('GET',)),
         ('dialogs/avatar', operator_handler(member, origin, logger, 'avatar'), ('GET',)),
         ('dialogs/duplicates/preview', operator_handler(member, origin, logger, 'dialog_duplicate_preview'), ('POST',)),
-        ('dialogs/duplicates/merge', operator_handler(member, origin, logger, 'dialog_duplicate_merge'), ('POST',)),
         ('dialogs/contact-display-phone', operator_handler(member, origin, logger, 'contact_display_phone'), ('POST',)),
         ('dialogs/duplicates', operator_handler(member, origin, logger, 'dialog_duplicates'), ('POST',)),
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),

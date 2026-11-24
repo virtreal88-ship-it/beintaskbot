@@ -755,9 +755,9 @@
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;
   const duplicateCopy=(key)=>({
-    ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',open:'Открыть',prev:'Предыдущая',next:'Следующая',count:'{index} из {total}',more:'Ещё',empty:'Диалоги не найдены.',choose:'Выберите два диалога одного источника.',keep:'Оставить диалог',review:'Проверить объединение',confirm:'Объединить',back:'Назад',nameToKeep:'Имя после объединения',phoneToKeep:'Номер после объединения',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',merged:'Диалоги объединены.',reviewHint:'Проверьте, какой диалог останется и какие данные будут показаны.',busy:'Загрузка…',pair:'Выбрать для объединения',manual:'Указать номер для отображения',save:'Сохранить'},
-    az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',open:'Aç',prev:'Əvvəlki',next:'Növbəti',count:'{index} / {total}',more:'Daha çox',empty:'Dialoq tapılmadı.',choose:'Eyni mənbədən iki dialoq seçin.',keep:'Saxlanacaq dialoq',review:'Birləşməni yoxla',confirm:'Birləşdir',back:'Geri',nameToKeep:'Birləşmədən sonrakı ad',phoneToKeep:'Birləşmədən sonrakı nömrə',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',merged:'Dialoqlar birləşdirildi.',reviewHint:'Saxlanacaq dialoqu və göstəriləcək məlumatları yoxlayın.',busy:'Yüklənir…',pair:'Birləşdirmək üçün seç',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
-    en:{title:'Find duplicates',phone:'By phone',name:'By name',missing:'Dialogs without a phone',search:'Search',query:'Name or last 7 digits',close:'Close',open:'Open',prev:'Previous',next:'Next',count:'{index} of {total}',more:'More',empty:'No dialogs found.',choose:'Select two dialogs from the same source.',keep:'Dialog to keep',review:'Review merge',confirm:'Merge',back:'Back',nameToKeep:'Name after merge',phoneToKeep:'Phone after merge',noPhone:'No verified phone',noName:'No name',failed:'Could not complete the action. Refresh the search and try again.',merged:'Dialogs merged.',reviewHint:'Check which dialog will remain and which details will be shown.',busy:'Loading…',pair:'Select for merge',manual:'Set display phone',save:'Save'}
+    ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',open:'Открыть',prev:'Предыдущая',next:'Следующая',count:'{index} из {total}',more:'Ещё',empty:'Диалоги не найдены.',unavailable:'Объединение пока недоступно',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',busy:'Загрузка…',manual:'Указать номер для отображения',save:'Сохранить'},
+    az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',open:'Aç',prev:'Əvvəlki',next:'Növbəti',count:'{index} / {total}',more:'Daha çox',empty:'Dialoq tapılmadı.',unavailable:'Birləşdirmə hələ mümkün deyil',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',busy:'Yüklənir…',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
+    en:{title:'Find duplicates',phone:'By phone',name:'By name',missing:'Dialogs without a phone',search:'Search',query:'Name or last 7 digits',close:'Close',open:'Open',prev:'Previous',next:'Next',count:'{index} of {total}',more:'More',empty:'No dialogs found.',unavailable:'Merging is not available yet',noPhone:'No verified phone',noName:'No name',failed:'Could not complete the action. Refresh the search and try again.',busy:'Loading…',manual:'Set display phone',save:'Save'}
   }[i18n.language]||{})[key]||({title:'Find duplicates',close:'Close'}[key]||key);
   const canUseDuplicateSearch=()=>member?.role==='owner'&&hasRight('dialogs');
   let duplicateDialog=null;
@@ -768,7 +768,7 @@
     if(button){button.hidden=!canUseDuplicateSearch();button.textContent=duplicateCopy('title');}
   }
   function closeDuplicateSearch(force=false){
-    const state=duplicateDialog;if(!state||['merging','saving'].includes(state.stage)&&!force)return;
+    const state=duplicateDialog;if(!state||state.stage==='saving'&&!force)return;
     duplicateDialog=null;
     if(state.node.open&&typeof state.node.close==='function')state.node.close();
     state.node.remove();
@@ -789,53 +789,20 @@
   const completedDuplicateRoute=row=>Boolean(row.archive_read_only||['closed','dismissed'].includes(row.lifecycle?.state));
   const duplicateDisplayPhoneEditable=row=>row.display_phone_editable===true&&!completedDuplicateRoute(row)
     &&!row.contact_identity_conflict&&!row.identity_conflict&&!verifiedDialogPhone(row)&&!contactDetails(row)?.phone;
-  function duplicateSelection(state){
-    const pair=(duplicateGroups(state)[state.groupIndex]||[]).filter(row=>state.selected.has(dialogKey(row)));
-    return pair.length===2?pair:null;
-  }
-  function pickDuplicateGroup(state,index){
-    state.groupIndex=index;state.selected.clear();state.keep=0;
-    const pair=(duplicateGroups(state)[index]||[]).slice(0,2);
-    for(const row of pair)state.selected.add(dialogKey(row));
-  }
   const duplicateCardDetails=row=>[verifiedDialogPhone(row)||verifiedDialogPhone({phone:row.manual_display_phone}),row.channel_name].filter(Boolean).join(' · ');
-  function duplicatePairMarkup(pair,keep){
-    return `<div class="operator-dupe-pair">${pair.map((row,index)=>`<div class="operator-dupe-row" data-dupe-compare>${index===keep?`<small>${esc(duplicateCopy('keep'))}</small>`:''}<strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><button type="button" class="outline" data-dupe-compare-open="${index}">${esc(duplicateCopy('open'))}</button></div>`).join('')}</div>`;
-  }
   function renderDuplicateResults(state){
     if(!duplicateCurrent(state))return;
     const panel=state.node.querySelector('[data-dupe-results]');
-    const groups=duplicateGroups(state),group=groups[state.groupIndex]||[],pair=duplicateSelection(state),busy=['searching','previewing','merging','saving'].includes(state.stage);
+    const groups=duplicateGroups(state),group=groups[state.groupIndex]||[],busy=['searching','saving'].includes(state.stage);
     const status=state.node.querySelector('[data-dupe-status]');
     status.textContent=state.error||((busy)?duplicateCopy('busy'):'');
-    state.node.querySelectorAll('[data-dupe-form] input,[data-dupe-form] button').forEach(el=>el.disabled=['merging','saving'].includes(state.stage));
-    state.node.querySelector('[data-dupe-close]').disabled=['merging','saving'].includes(state.stage);
-    state.node.querySelector('[data-dupe-form]').hidden=state.stage==='review'||state.stage==='merging';
-    if(state.stage==='review'||state.stage==='merging'){
-      const options=(items,selected)=>items.map(item=>`<option value="${esc(item.value)}" ${selected===item.value?'selected':''}>${esc(item.label)}</option>`).join('');
-      panel.innerHTML=`<p>${esc(duplicateCopy('reviewHint'))}</p>${duplicatePairMarkup(pair,state.keep)}
-        <label>${esc(duplicateCopy('nameToKeep'))}<select data-dupe-name>${options(state.preview.names,state.name)}</select></label>
-        <label>${esc(duplicateCopy('phoneToKeep'))}<select data-dupe-phone>${options(state.preview.phones,state.phone)}</select></label>
-        <div class="operator-dupe-actions"><button type="button" class="outline" data-dupe-back>${esc(duplicateCopy('back'))}</button><button type="button" class="primary" data-dupe-confirm>${esc(duplicateCopy('confirm'))}</button></div>`;
-      const name=panel.querySelector('[data-dupe-name]'),phone=panel.querySelector('[data-dupe-phone]');
-      name.onchange=()=>{state.name=name.value;};phone.onchange=()=>{state.phone=phone.value;};
-      panel.querySelectorAll('button,select').forEach(el=>el.disabled=busy);
-      panel.querySelector('[data-dupe-back]').onclick=()=>{state.preview=null;state.stage='results';state.error='';renderDuplicateResults(state);};
-      panel.querySelector('[data-dupe-confirm]').onclick=()=>void mergeDuplicateDialogs(state);
-      panel.querySelectorAll('[data-dupe-compare-open]').forEach(button=>button.onclick=()=>{
-        const row=pair[Number(button.dataset.dupeCompareOpen)];
-        if(!duplicateCurrent(state)||state.stage!=='review'||!row)return;
-        closeDuplicateSearch();void openDialog(row,false,'',{userOpened:true});
-      });
-      return;
-    }
+    state.node.querySelectorAll('[data-dupe-form] input,[data-dupe-form] button').forEach(el=>el.disabled=state.stage==='saving');
+    state.node.querySelector('[data-dupe-close]').disabled=state.stage==='saving';
     const visible=state.mode==='missing'?state.results:group;
     const cards=visible.map(row=>{
       const index=state.results.indexOf(row);
-      const key=dialogKey(row),checked=state.selected.has(key),selectable=state.mode!=='missing'&&group.length>2;
       // No internal route identifiers ever enter displayed HTML or attributes.
       return `<div class="operator-dupe-row"><button type="button" class="outline operator-dupe-open" data-dupe-open="${index}"><strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><small>${esc(duplicateCopy('open'))}</small></button>
-      ${selectable?`<label><input type="checkbox" data-dupe-pick="${index}" ${checked?'checked':''} ${busy||!checked&&state.selected.size>=2?'disabled':''}> ${esc(duplicateCopy('pair'))}</label>`:''}
       ${state.mode==='missing'&&duplicateDisplayPhoneEditable(row)?`<form data-dupe-phone-form="${index}"><input type="tel" maxlength="32" aria-label="${esc(duplicateCopy('manual'))}" placeholder="${esc(duplicateCopy('manual'))}" required ${busy?'disabled':''}><button type="submit" class="outline" ${busy?'disabled':''}>${esc(duplicateCopy('save'))}</button></form>`:''}</div>`;
     }).join('');
     panel.innerHTML=cards?(state.mode==='missing'?cards:`<div class="operator-dupe-pair">${cards}</div>`):((state.searched&&!busy&&!state.error)?`<p>${esc(duplicateCopy('empty'))}</p>`:'');
@@ -847,15 +814,11 @@
       function move(increment){
         const next=state.groupIndex+increment;
         if(!duplicateCurrent(state)||busy||next<0||next>=groups.length)return;
-        state.error='';pickDuplicateGroup(state,next);renderDuplicateResults(state);
+        state.error='';state.groupIndex=next;renderDuplicateResults(state);
         panel.querySelector(increment>0?'[data-dupe-next]:not(:disabled)':'[data-dupe-prev]:not(:disabled)')?.focus();
       }
     }
-    if(state.mode!=='missing'&&group.length){
-      panel.insertAdjacentHTML('beforeend',pair?
-        `<button type="button" class="primary" data-dupe-preview ${busy?'disabled':''}>${esc(duplicateCopy('review'))}</button>`:
-        `<p>${esc(duplicateCopy('choose'))}</p>`);
-    }
+    if(state.mode!=='missing'&&group.length)panel.insertAdjacentHTML('beforeend',`<p data-dupe-merge-unavailable>${esc(duplicateCopy('unavailable'))}</p>`);
     if(state.offset!=null)panel.insertAdjacentHTML('beforeend',`<button type="button" class="outline" data-dupe-more ${busy?'disabled':''}>${esc(duplicateCopy('more'))}</button>`);
     panel.querySelectorAll('[data-dupe-open]').forEach(button=>button.onclick=()=>{
       const row=state.results[Number(button.dataset.dupeOpen)];
@@ -870,94 +833,26 @@
       }
       void saveDuplicateDisplayPhone(state,Number(form.dataset.dupePhoneForm),input.value);
     });
-    panel.querySelectorAll('[data-dupe-pick]').forEach(input=>input.onchange=()=>{
-      const row=state.results[Number(input.dataset.dupePick)],key=dialogKey(row);
-      if(input.checked)state.selected.add(key);else state.selected.delete(key);
-      state.keep=0;state.error='';renderDuplicateResults(state);
-      panel.querySelector(`[data-dupe-pick="${Number(input.dataset.dupePick)}"]`)?.focus();
-    });
-    const preview=panel.querySelector('[data-dupe-preview]'),more=panel.querySelector('[data-dupe-more]');
-    if(preview)preview.onclick=()=>void previewDuplicateDialogs(state);
+    const more=panel.querySelector('[data-dupe-more]');
     if(more)more.onclick=()=>void searchDuplicateDialogs(state,state.mode,true);
   }
   async function searchDuplicateDialogs(state,mode,append=false){
-    if(!duplicateCurrent(state)||['merging','saving'].includes(state.stage))return;
+    if(!duplicateCurrent(state)||state.stage==='saving')return;
     const rev=++state.rev;
     state.error='';state.stage='searching';state.searched=true;
-    if(!append){state.results=[];state.offset=null;pickDuplicateGroup(state,0);}
+    if(!append){state.results=[];state.offset=null;state.groupIndex=0;}
     state.mode=mode;
     renderDuplicateResults(state);
     try{
       const result=await api('dialogs/duplicates','POST',{mode,offset:append?state.offset:0});
       if(!duplicateCurrent(state)||rev!==state.rev)return;
       const incoming=Array.isArray(result?.dialogs)?result.dialogs.filter(row=>row?.provider==='connect'&&row.channel_id&&row.conversation_id&&row.lead_id):[];
-      const hadGroups=duplicateGroups(state).length>0;
       const rowsByKey=new Map(state.results.map(row=>[dialogKey(row),row]));
       for(const row of incoming)rowsByKey.set(dialogKey(row),row);
       state.results=[...rowsByKey.values()];
-      if(!hadGroups&&mode!=='missing')pickDuplicateGroup(state,0);
       state.offset=Number.isSafeInteger(result?.next_offset)?result.next_offset:null;
     }catch{if(duplicateCurrent(state)&&rev===state.rev)state.error=duplicateCopy('failed');}
     if(duplicateCurrent(state)&&rev===state.rev){state.stage='results';renderDuplicateResults(state);}
-  }
-  const duplicateRequestId=()=>crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),x=>x.toString(16).padStart(2,'0')).join('');
-  function duplicateBlocked(conflicts){
-    const reason=(conflicts||[])[0];
-    const labels={
-      dialog_lifecycle_in_use:{ru:'Есть история обращений. Сейчас эти диалоги нельзя объединить.',az:'Müraciət tarixçəsi var. Bu dialoqları hazırda birləşdirmək olmur.',en:'These dialogues have request history and cannot currently be merged.'},
-      provider_identity_conflict:{ru:'WhatsApp передал конфликтующие данные. Объединение заблокировано.',az:'WhatsApp məlumatları ziddiyyətlidir. Birləşdirmə bloklanıb.',en:'WhatsApp identity evidence conflicts. The merge is blocked.'},
-      provider_identity_unproven:{ru:'WhatsApp не подтвердил, что это один контакт.',az:'WhatsApp bunun eyni kontakt olduğunu təsdiqləməyib.',en:'WhatsApp has not confirmed these are the same contact.'},
-      verified_phone_required:{ru:'Для этой пары нет подтверждённого общего номера.',az:'Bu cütlük üçün təsdiqlənmiş ortaq nömrə yoxdur.',en:'This pair has no shared verified number.'},
-    };
-    return labels[reason]?.[i18n.language]||({ru:'Эту пару нельзя безопасно объединить.',az:'Bu cütlüyü təhlükəsiz birləşdirmək olmur.',en:'This pair cannot be safely merged.'}[i18n.language]||'This pair cannot be safely merged.');
-  }
-  async function previewDuplicateDialogs(state){
-    const pair=duplicateSelection(state);
-    if(!duplicateCurrent(state)||!pair||state.stage!=='results')return;
-    state.error='';state.stage='previewing';
-    const rev=++state.rev;
-    renderDuplicateResults(state);
-    try{
-      const result=await api('dialogs/duplicates/preview','POST',{left:duplicateRoute(pair[state.keep]),right:duplicateRoute(pair[1-state.keep])});
-      if(!duplicateCurrent(state)||rev!==state.rev)return;
-      if(result?.eligible!==true||pair.some(completedDuplicateRoute)){
-        state.error=duplicateBlocked(result?.conflicts);
-        state.stage='results';renderDuplicateResults(state);return;
-      }
-      if(!result.pair_id||!result.precondition)throw new Error('missing preview proof');
-      const keep=pair.findIndex(row=>String(row.lead_id)===String(result.canonical_lead_id));
-      if(keep<0||String(pair[1-keep].lead_id)!==String(result.split_lead_id))throw new Error('unexpected routes');
-      state.keep=keep;
-      const names=(result.name_choices||[]).filter(choice=>pair.some(row=>String(row.lead_id)===String(choice.lead_id))&&usableDialogName(choice.display_name)).map(choice=>({value:String(choice.lead_id),label:usableDialogName(choice.display_name)}));
-      const phone=verifiedDialogPhone(result);
-      if(!phone)throw new Error('missing verified phone');
-      const phoneChoices=Array.isArray(result.phone_choices)?result.phone_choices:pair.map(row=>({lead_id:row.lead_id,phone}));
-      const phones=phoneChoices.filter(choice=>pair.some(row=>String(row.lead_id)===String(choice.lead_id))&&verifiedDialogPhone(choice)).map(choice=>({value:String(choice.lead_id),label:[verifiedDialogPhone(choice),duplicateCardName(pair.find(row=>String(row.lead_id)===String(choice.lead_id)))].join(' · ')}));
-      if(!phones.length)throw new Error('no phone choice');
-      if(!names.length)names.push({value:'',label:duplicateCopy('noName')});
-      const prefer=items=>(items.find(item=>item.value===String(pair[keep].lead_id))||items[0]).value;
-      state.preview={pair_id:result.pair_id,precondition:result.precondition,names,phones};
-      state.name=prefer(names);state.phone=prefer(phones);state.stage='review';
-    }catch{if(duplicateCurrent(state)&&rev===state.rev){state.error=duplicateCopy('failed');state.stage='results';}}
-    if(duplicateCurrent(state)&&rev===state.rev)renderDuplicateResults(state);
-  }
-  async function mergeDuplicateDialogs(state){
-    const pair=duplicateSelection(state),preview=state.preview;
-    if(!duplicateCurrent(state)||state.stage!=='review'||!pair||pair.some(completedDuplicateRoute)||!preview)return;
-    state.stage='merging';state.error='';renderDuplicateResults(state);
-    try{
-      await api('dialogs/duplicates/merge','POST',{channel_id:pair[0].channel_id,pair_id:preview.pair_id,precondition:preview.precondition,
-        request_id:duplicateRequestId(),confirm:true,name_lead_id:state.name?Number(state.name):null,phone_lead_id:Number(state.phone)});
-      if(!duplicateCurrent(state))return;
-      state.stage='results';closeDuplicateSearch();
-      notice(duplicateCopy('merged'));
-      // Do not leave writable stale history open for either side of a merged pair.
-      if(pair.some(row=>sameDialog(currentDialog,row)||sameDialog(pendingDialogRoute,row)))closeDialog();
-      void refresh(false,false);
-    }catch{
-      if(!duplicateCurrent(state))return;
-      state.preview=null;state.stage='results';state.error=duplicateCopy('failed');renderDuplicateResults(state);
-    }
   }
   async function saveDuplicateDisplayPhone(state,index,value){
     const row=state.results[index],phone=String(value).trim();
@@ -985,7 +880,7 @@
         <button type="submit" class="primary">${esc(duplicateCopy('search'))}</button>
       </form>
       <p role="status" data-dupe-status></p><section data-dupe-results></section>`;
-    const state={node,owner:identity(member),epoch,rev:0,mode:'phone',offset:null,results:[],selected:new Set(),keep:0,groupIndex:0,stage:'results'};
+    const state={node,owner:identity(member),epoch,rev:0,mode:'phone',offset:null,results:[],groupIndex:0,stage:'results'};
     duplicateDialog=state;document.body.append(node);
     const form=node.querySelector('form'),phone=form.querySelector('[data-dupe-mode="phone"]'),name=form.querySelector('[data-dupe-mode="name"]');
     form.onsubmit=event=>{event.preventDefault();void searchDuplicateDialogs(state,phone.checked?(name.checked?'both':'phone'):(name.checked?'name':'missing'));};

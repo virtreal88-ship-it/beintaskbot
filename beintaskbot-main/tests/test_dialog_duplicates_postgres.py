@@ -2,9 +2,9 @@
 from test_connect_channel_multiprocess import database
 from test_tenant_support_inbox import db
 from test_dialog_duplicate_actions import (
-    test_browser_reuses_provider_merge_and_exact_rollback,
+    test_browser_comparison_is_read_only_and_does_not_attempt_identity_proof,
     test_manual_phone_never_changes_route_or_merge_evidence,
-    test_preflight_and_execute_respect_closed_lifecycle_fence,
+    test_closed_archive_can_be_compared_but_merge_is_never_offered,
 )
 from test_dialog_duplicate_discovery import (
     exact,

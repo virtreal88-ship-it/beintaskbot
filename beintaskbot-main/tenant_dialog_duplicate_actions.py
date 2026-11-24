@@ -1,14 +1,11 @@
-"""Owner-only browser access to provider-proven retained-route merges."""
-import json
-import os
+"""Exact owner-only inspection and display-only phone editing."""
 import re
 import uuid
 
-from tenant_ai_dialogue_merge import _pairs, _token, execute, provision_tables
 from tenant_ai_agents_store import _audit
 from tenant_connect_direct_identity import direct_identity
 from tenant_connect_direct_reconcile import _owner
-from tenant_connect_phone_evidence import collect, normalize_phone, normalize_phone_jid
+from tenant_connect_phone_evidence import normalize_phone, normalize_phone_jid
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 from tenant_platform import _connect
@@ -18,22 +15,12 @@ _ROUTE = {'provider', 'channel_id', 'conversation_id', 'lead_id'}
 PHONE_SCHEMA = {'saas_connect_dialog_display_phones': ('tenant_id', 'channel_id', 'conversation_id', 'lead_id', 'phone')}
 
 
-_MERGE_SCHEMA = {
-    'saas_ai_dialogue_merges': ('tenant_id','pair_id','state','snapshot'),
-    'saas_ai_dialogue_merge_requests': ('tenant_id','request_id','operation','pair_id','precondition','result'),
-}
-
-
 def prepare_schema(conn):
     """Startup-only, on the existing bounded migration connection."""
     from tenant_schema_preflight import ready
     with conn.cursor() as cur:
-        merge_ready = ready(cur, _MERGE_SCHEMA, [])
-        phone_ready = ready(cur, PHONE_SCHEMA, [])
-        if not merge_ready:
-            provision_tables(cur)
-    if phone_ready:
-        return
+        if ready(cur, PHONE_SCHEMA, []):
+            return
     with conn.cursor() as cur:
         cur.execute("""CREATE TABLE IF NOT EXISTS saas_connect_dialog_display_phones (
           tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
@@ -59,13 +46,6 @@ def _route(value):
     return str(uuid.UUID(value['channel_id'])), value['conversation_id'], value['lead_id']
 
 
-def _config(tenant, actor, channel):
-    # Keep pair tokens compatible with established MCP tooling where enabled.
-    secret = (os.environ.get('AI_LEARNING_MCP_CURSOR_SECRET') or '').strip() or (os.environ.get('TENANT_ENCRYPTION_KEY') or '').strip()
-    return {'AI_LEARNING_MCP_TENANT_ID': tenant, 'actor_id': actor,
-            'AI_LEARNING_MCP_CHANNEL_ID': channel, 'AI_LEARNING_MCP_CURSOR_SECRET': secret}
-
-
 def _labels(rows):
     choices = []
     for row in rows:
@@ -81,100 +61,43 @@ def _labels(rows):
     return choices
 
 
-def preview_token(cfg, precondition, routes):
-    labels = sorted(_labels(routes), key=lambda label: label['lead_id'])
-    return _token(cfg, 'browser-duplicate-preview', precondition, json.dumps(labels, sort_keys=True))
-
-
-def _phone(canonical_route):
-    # Only called after the core pair guard establishes one common phone.
-    jid = normalize_phone_jid(canonical_route)
-    return '+' + jid.split('@')[0] if jid else ''
-
-
 def preview(profile, payload):
     if not isinstance(payload, dict) or set(payload) != {'left', 'right'}:
         raise TenantLinearError('Выберите два диалога.', 400)
     a, b = _route(payload['left']), _route(payload['right'])
     if a[0] != b[0] or a[1] == b[1] or a[2] == b[2]:
         raise TenantLinearError('Выберите разные диалоги одного канала.', 400)
-    channel = a[0]
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            tenant, actor = _owner(cur, profile)
-            _, _, policy = access(cur, profile, 'dialogs', action='update')
-            cur.execute("SET LOCAL statement_timeout='5s'")
-            cur.execute("SET LOCAL lock_timeout='2s'")
-            # Preview grants no write capability. Waiting dialogues have no
-            # episode to accept; archived routes may be examined but the
-            # independent lifecycle fence below never allows merging them.
-            _, _, view_policy = access(cur, profile, 'dialogs')
-            rows = [assert_route(cur, tenant, view_policy, 'connect', conv, ch, lead, allow_closed_archive=True)
-                    for ch, conv, lead in sorted((a, b))]
-            from tenant_dialog_access import require_source
-            require_source(cur, tenant, policy, 'connect', channel, 'update')
-            _require_schema(cur, _MERGE_SCHEMA)
-            if any(r.get('conversation_kind') not in ('contact', '') for r in rows):
-                raise TenantLinearError('Групповые диалоги нельзя объединять.', 400)
-            cfg = _config(tenant, actor, channel)
-            _, _, _, items = _pairs(cur, cfg, exact_leads={a[2], b[2]})
-            item = next((x for x in items if {x['canonical_lead_id'], x['split_lead_id']} == {a[2], b[2]}), {})
-            phone = _phone(next((r['conversation_id'] for r in rows
-                                if r['lead_id'] == item.get('canonical_lead_id')), '')) if item.get('eligible') else ''
-            conflicts = list(item.get('conflicts') or ([] if phone else ['verified_phone_required']))
-            if phone:
-                from tenant_connect_dialog_equivalence import assert_lifecycle_unaffected
-                try:
-                    assert_lifecycle_unaffected(cur,tenant,channel,[a[1],b[1]])
-                except TenantLinearError:
-                    conflicts.append('dialog_lifecycle_in_use')
-            return {'eligible': bool(item.get('eligible') and phone and not conflicts),
-                    'conflicts': conflicts,
-                    'pair_id': item.get('pair_id', ''),
-                    'precondition': preview_token(cfg,item['precondition'],rows) if item else '',
-                    'canonical_lead_id': item.get('canonical_lead_id'), 'split_lead_id': item.get('split_lead_id'),
-                    'phone': phone, 'name_choices': _labels(rows)}
+    with _connect() as conn, conn.cursor() as cur:
+        _budget(cur)
+        tenant, _ = _owner(cur, profile)
+        _, _, policy = access(cur, profile, 'dialogs')
+        rows = [assert_route(cur, tenant, policy, 'connect', conv, ch, lead, allow_closed_archive=True)
+                for ch, conv, lead in sorted((a, b))]
+        if any(r.get('conversation_kind') not in ('contact', '') for r in rows):
+            raise TenantLinearError('Выберите личные WhatsApp-диалоги.',400)
+        return {'eligible':False,'conflicts':['merge_deferred'],'name_choices':_labels(rows)}
 
 
-def selection(canonical, rows, choices):
-    """Revalidate the presentation selections under the central merge locks."""
-    _, name_lead_id, phone_lead_id = choices
-    by_lead = {row['lead_id']: row for row in rows}
-    if len(by_lead) != 2 or phone_lead_id not in by_lead or not _phone(canonical):
-        raise TenantLinearError('Номер не подтверждён для обоих диалогов.', 409)
-    labels = {x['lead_id']: x['display_name'] for x in _labels(rows)}
-    if name_lead_id is None and not labels:
-        return None
-    if name_lead_id not in labels:
-        raise TenantLinearError('Выберите доступное имя.', 409)
-    previous = next(row.get('manual_display_name', '') for row in rows if row['conversation_id'] == canonical)
-    return {'selected': labels[name_lead_id], 'previous': previous}
+def _budget(cur):
+    cur.execute("SET LOCAL statement_timeout='5s'")
+    cur.execute("SET LOCAL lock_timeout='2s'")
 
 
-def merge(profile, payload):
-    expected = {'channel_id', 'pair_id', 'precondition', 'request_id', 'confirm',
-                'name_lead_id', 'phone_lead_id'}
-    if not isinstance(payload, dict) or set(payload) != expected or payload['confirm'] is not True:
-        raise TenantLinearError('Подтвердите действие над диалогами.', 400)
-    channel = str(uuid.UUID(payload['channel_id']))
-    name, phone = payload['name_lead_id'], payload['phone_lead_id']
-    if (name is not None and type(name) is not int) or type(phone) is not int:
-        raise TenantLinearError('Выберите имя и номер.', 400)
-    choices = (channel, name, phone)
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            tenant, actor = _owner(cur, profile)
-            _, _, policy = access(cur, profile, 'dialogs', action='update')
-            cur.execute("SET LOCAL statement_timeout='5s'")
-            cur.execute("SET LOCAL lock_timeout='2s'")
-            from tenant_dialog_access import require_source
-            require_source(cur, tenant, policy, 'connect', channel, 'update')
-            _require_schema(cur, _MERGE_SCHEMA)
-            result = execute(cur, _config(tenant, actor, channel),
-                {k: payload[k] for k in ('pair_id', 'precondition', 'request_id')} | {'operation': 'merge'},
-                display_selection=choices)
-        conn.commit()
-    return result
+def _phone_locked(cur, tenant, channel, conversation, route):
+    # Use current exact route data only; never load historical message payloads.
+    if normalize_phone_jid(conversation):
+        return True
+    stored=normalize_phone(route.get('phone'))
+    if stored and stored != conversation.split('@')[0]:
+        return True
+    cur.execute("""SELECT
+      EXISTS(SELECT 1 FROM saas_connect_direct_identities i
+        WHERE i.tenant_id=%s::uuid AND i.connect_channel_id=%s::uuid AND i.canonical_conversation_id=%s
+          AND i.identity_key ~ '^[1-9][0-9]{6,14}@(s[.]whatsapp[.]net|c[.]us)$')
+      OR EXISTS(SELECT 1 FROM saas_connect_identity_conflicts i
+        WHERE i.tenant_id=%s::uuid AND i.connect_channel_id=%s::uuid AND i.conversation_id=%s) AS blocked""",
+      (tenant,channel,conversation)*2)
+    return cur.fetchone()['blocked']
 
 
 def save_phone(profile, payload):
@@ -192,6 +115,7 @@ def save_phone(profile, payload):
     from tenant_connect_dialog_equivalence import canonical
     with _connect() as conn:
         with conn.cursor() as cur:
+            _budget(cur)
             tenant, actor = _owner(cur, profile)
             _, _, policy = access(cur, profile, 'dialogs', action='update')
             from tenant_dialog_access import require_source
@@ -207,8 +131,7 @@ def save_phone(profile, payload):
                     raise TenantLinearError('Закрытый диалог доступен только для чтения.', 409)
             if route.get('conversation_kind') not in ('contact', '') or canonical(cur, tenant, channel, conversation) != conversation:
                 raise TenantLinearError('Доступен только основной личный диалог.', 409)
-            if phone and (normalize_phone(route.get('phone')) or
-                          collect(cur, tenant, channel, [conversation])['phones_by_identity'].get(conversation)):
+            if phone and _phone_locked(cur, tenant, channel, conversation, route):
                 raise TenantLinearError('Подтверждённый номер нельзя заменить.', 409)
             _require_schema(cur, PHONE_SCHEMA)
             if phone:

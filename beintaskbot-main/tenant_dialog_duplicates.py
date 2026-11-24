@@ -14,6 +14,8 @@ def discover(profile, params):
         raise TenantLinearError('Некорректный поиск диалогов.',400)
     offset=max(0,min(int(params.get('offset') or 0),5000))
     with _connect() as conn, conn.cursor() as cur:
+        cur.execute("SET LOCAL statement_timeout='5s'")
+        cur.execute("SET LOCAL lock_timeout='2s'")
         tenant,actor,policy=access(cur,profile,'dialogs')
         if policy.profile.get('role')!='owner':
             raise TenantLinearError('Поиск дублей доступен владельцу.',403)
@@ -90,7 +92,6 @@ def discover(profile, params):
               FROM hints h WHERE """+present+"""
             ) SELECT """+columns+""",candidate_group,group_size FROM candidate_rows
                   WHERE group_size>1 ORDER BY channel_id,candidate_group,last_message_at DESC NULLS LAST,lead_id"""
-        cur.execute("SET LOCAL statement_timeout='5s'")
         cur.execute(sql+" LIMIT %s OFFSET %s",(*args,PAGE_SIZE+1,offset))
         rows=[dict(row) for row in cur.fetchall()]
     return {'dialogs':rows[:PAGE_SIZE],'next_offset':offset+PAGE_SIZE if len(rows)>PAGE_SIZE and offset<5000 else None}

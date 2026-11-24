@@ -27,33 +27,28 @@ def ensure_schema(conn):
     with conn.cursor() as cur:
         from tenant_connect_owner_identity import schema as owner_identity_schema
         owner_identity_schema(cur)
-        provision_tables(cur)
-
-
-def provision_tables(cur):
-    """Only logical merge bookkeeping; Connect's base schema is already installed."""
-    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
-      id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-      pair_id TEXT NOT NULL, channel_id UUID NOT NULL,
-      canonical_conversation_id TEXT NOT NULL, split_conversation_id TEXT NOT NULL,
-      canonical_lead_id BIGINT NOT NULL, split_lead_id BIGINT NOT NULL,
-      identity_digest TEXT NOT NULL, snapshot JSONB NOT NULL,
-      state TEXT NOT NULL CHECK(state IN ('merged','rolled_back')),
-      merged_by BIGINT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      rolled_back_by BIGINT NULL, rolled_back_at TIMESTAMPTZ NULL,
-      UNIQUE(tenant_id,pair_id),
-      CHECK(canonical_conversation_id<>split_conversation_id),
-      FOREIGN KEY(tenant_id,merged_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
-      FOREIGN KEY(tenant_id,rolled_back_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
-    )''')
-    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merge_requests(
-      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-      request_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('merge','rollback')),
-      pair_id TEXT NOT NULL, precondition TEXT NOT NULL, result JSONB NOT NULL,
-      created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY(tenant_id,request_id),
-      FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
-    )''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
+          id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          pair_id TEXT NOT NULL, channel_id UUID NOT NULL,
+          canonical_conversation_id TEXT NOT NULL, split_conversation_id TEXT NOT NULL,
+          canonical_lead_id BIGINT NOT NULL, split_lead_id BIGINT NOT NULL,
+          identity_digest TEXT NOT NULL, snapshot JSONB NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('merged','rolled_back')),
+          merged_by BIGINT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          rolled_back_by BIGINT NULL, rolled_back_at TIMESTAMPTZ NULL,
+          UNIQUE(tenant_id,pair_id),
+          CHECK(canonical_conversation_id<>split_conversation_id),
+          FOREIGN KEY(tenant_id,merged_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+          FOREIGN KEY(tenant_id,rolled_back_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+        )''')
+        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merge_requests(
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          request_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('merge','rollback')),
+          pair_id TEXT NOT NULL, precondition TEXT NOT NULL, result JSONB NOT NULL,
+          created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,request_id),
+          FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+        )''')
 
 
 def _secret(cfg):
@@ -79,7 +74,7 @@ def _owner(cur,cfg):
     return tenant,actor
 
 
-def _pairs(cur,cfg,*,exact_leads=None,selected_pair_id=None):
+def _pairs(cur,cfg):
     """Return only same-channel, non-group pairs proven by signed Connect data."""
     tenant,actor=_owner(cur,cfg); channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
     from tenant_connect_identity import inventory
@@ -92,14 +87,10 @@ def _pairs(cur,cfg,*,exact_leads=None,selected_pair_id=None):
     for proof in proofs:
         jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         left,right=routes.get(jid),routes.get(lid)
-        if exact_leads is not None and (not left or not right or {left['lead_id'],right['lead_id']}!=exact_leads):
-            continue
-        pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
-        if selected_pair_id is not None and not hmac.compare_digest(pair_id,selected_pair_id):
-            continue
         reasons=list(proof['conflicts'])
         if proof.get('reviewable_conflicts')==['historical_route_split']:
             reasons=[r for r in reasons if r!='provider_identity_conflict']
+        pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
         canonical={'n':0,'incoming':0,'outgoing':0};split={'n':0,'incoming':0,'outgoing':0}
         if left:
             cur.execute('''SELECT count(*) AS n,count(*) FILTER(WHERE direction='incoming') AS incoming,
@@ -214,7 +205,7 @@ def _request(cur,tenant,request_id,operation,pair_id,precondition):
     return result
 
 
-def execute(cur,cfg,args, *, display_selection=None):
+def execute(cur,cfg,args):
     if not isinstance(args,dict) or set(args)!={'operation','pair_id','precondition','request_id'}:
         raise TenantLinearError('Invalid dialogue merge request.',400)
     operation=str(args.get('operation') or '')
@@ -233,26 +224,12 @@ def execute(cur,cfg,args, *, display_selection=None):
     scan=inventory(cur,tenant,channel)
     from tenant_connect_owner_identity import merge_proofs
     proof=next((p for p in scan['pairs']+merge_proofs(cur,tenant,channel) if hmac.compare_digest(_token(cfg,'dialogue-pair',tenant,channel,p['canonical_id'],p['split_id']),pair_id)),None)
-    locked_routes=[]
-    if proof:
-        ids=[proof['canonical_id'],proof['split_id']]
-        lock_equivalence(cur,tenant,channel,ids)
-        if display_selection is not None:
-            cur.execute('''SELECT * FROM saas_connect_conversations WHERE tenant_id=%s::uuid
-              AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[])
-              ORDER BY conversation_id FOR UPDATE''',(tenant,channel,ids))
-            locked_routes=cur.fetchall()
-    tenant,actor,channel,items=_pairs(cur,cfg,selected_pair_id=pair_id)
-    request_precondition=(_token(cfg,'browser-display-request',precondition,*display_selection)
-                          if display_selection is not None else precondition)
-    replay=_request(cur,tenant,request_id,operation,pair_id,request_precondition)
+    if proof: lock_equivalence(cur,tenant,channel,[proof['canonical_id'],proof['split_id']])
+    tenant,actor,channel,items=_pairs(cur,cfg)
+    replay=_request(cur,tenant,request_id,operation,pair_id,precondition)
     if replay:return replay
     item=next((value for value in items if hmac.compare_digest(value['pair_id'],pair_id)),None)
-    expected=item['precondition'] if item else ''
-    if item and display_selection is not None:
-        from tenant_dialog_duplicate_actions import preview_token
-        expected=preview_token(cfg,expected,locked_routes)
-    if not item or not hmac.compare_digest(expected,precondition):
+    if not item or not hmac.compare_digest(item['precondition'],precondition):
         raise TenantLinearError('Dialogue merge preview is stale or unavailable.',409)
     cur.execute('SELECT * FROM saas_ai_dialogue_merges WHERE tenant_id=%s::uuid AND pair_id=%s FOR UPDATE',(tenant,pair_id))
     existing=cur.fetchone()
@@ -283,16 +260,7 @@ def execute(cur,cfg,args, *, display_selection=None):
         before=capture_retained(cur,tenant,channel,[jid,lid],[routes[jid]['lead_id'],routes[lid]['lead_id']])
         if merge_conflicts(cur,tenant,channel,[jid,lid],before):
             raise TenantLinearError('Dialogue dependencies changed; preview again.',409)
-        selected=None
-        if display_selection is not None:
-            from tenant_dialog_duplicate_actions import selection
-            selected=selection(jid,before['routes'],display_selection)
         activate(cur,tenant,channel,pair_id,[jid,lid],[routes[jid]['lead_id'],routes[lid]['lead_id']],before)
-        if selected:
-            snapshot['display_name_selection']=selected
-            cur.execute("""UPDATE saas_connect_conversations SET manual_display_name=%s
-              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s""",
-              (selected['selected'],tenant,channel,jid))
         if existing:
             cur.execute('''UPDATE saas_ai_dialogue_merges SET state='merged',snapshot=%s::jsonb,identity_digest=%s,
               merged_by=%s,merged_at=now(),rolled_back_by=NULL,rolled_back_at=NULL WHERE tenant_id=%s::uuid AND pair_id=%s''',
@@ -311,13 +279,6 @@ def execute(cur,cfg,args, *, display_selection=None):
         if existing['snapshot'].get('route_equivalence_version')==1:
             from tenant_connect_dialog_equivalence import rollback
             rollback(cur,tenant,channel,pair_id)
-        selected=existing['snapshot'].get('display_name_selection')
-        if selected:
-            # A deliberate post-merge edit must survive rollback.
-            cur.execute("""UPDATE saas_connect_conversations SET manual_display_name=%s
-              WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s
-                AND manual_display_name=%s""",
-              (selected['previous'],tenant,channel,existing['canonical_conversation_id'],selected['selected']))
         if existing['snapshot'].get('identity_source')=='owner_assertion':
             cur.execute('''UPDATE saas_connect_owner_identity_assertions SET revoked_by=%s,revoked_at=now()
               WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL''',
@@ -326,7 +287,7 @@ def execute(cur,cfg,args, *, display_selection=None):
           WHERE tenant_id=%s::uuid AND pair_id=%s''',(actor,tenant,pair_id))
         result={'pair_id':pair_id,'state':'rolled_back','logical_only':True,'preserved_message_ids':True,'idempotent_replay':False}
     cur.execute('''INSERT INTO saas_ai_dialogue_merge_requests(tenant_id,request_id,operation,pair_id,precondition,result,created_by)
-      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s)''',(tenant,request_id,operation,pair_id,request_precondition,json.dumps(result),actor))
+      VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s::jsonb,%s)''',(tenant,request_id,operation,pair_id,precondition,json.dumps(result),actor))
     _audit(cur,tenant,actor,'ai_dialogue_merge_'+operation,'ai_dialogue_merge',pair_id,
            {'channel_id':channel,'logical_only':True,'message_counts':{'canonical':item['canonical']['n'],'split':item['split']['n']}})
     return result

@@ -120,7 +120,7 @@ def handler(member_from_request,origin,logger,resource):
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','dialog_duplicate_merge','contact_display_phone'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -134,9 +134,9 @@ def handler(member_from_request,origin,logger,resource):
                     # Query text may contain an exact phone; do not put it in access-log URLs.
                     from tenant_dialog_duplicates import discover
                     return web.json_response({'success':True,'result':await asyncio.to_thread(discover,profile,payload)},headers=headers)
-                if resource in {'dialog_duplicate_preview','dialog_duplicate_merge','contact_display_phone'}:
-                    from tenant_dialog_duplicate_actions import preview, merge, save_phone
-                    action={'dialog_duplicate_preview':preview,'dialog_duplicate_merge':merge,
+                if resource in {'dialog_duplicate_preview','contact_display_phone'}:
+                    from tenant_dialog_duplicate_actions import preview, save_phone
+                    action={'dialog_duplicate_preview':preview,
                             'contact_display_phone':save_phone}[resource]
                     return web.json_response({'success':True,'result':await asyncio.to_thread(action,profile,payload)},headers=headers)
                 result=await asyncio.to_thread(presence_set_status if resource=='presence' else dialog_view_preferences if resource=='view_preferences' else company_panel_preferences if resource=='company_panel_preferences' else dialog_lifecycle if resource=='dialogs_lifecycle' else dialog_sources if resource=='sources' else mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
