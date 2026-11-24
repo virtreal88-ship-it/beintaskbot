@@ -1,7 +1,7 @@
 """Independent opt-in for a verified local company on human completion."""
 import os
 import uuid
-from tenant_beinsystems_operator_access import is_operator_workspace
+from tenant_beinsystems_operator_access import dialogue_chooser_enabled, is_operator_workspace
 from tenant_linear_policy import TenantLinearError
 
 ENV = 'TENANT_DIALOG_COMPANY_COMPLETION_REQUIRED'
@@ -12,7 +12,7 @@ _COMPANIES = 'saas_crm_native_companies'
 def available(tenant):
     # Optional choices are private to BeinSystems and independent of the
     # historical rollout that requires selecting a company on legacy closes.
-    return is_operator_workspace(tenant)
+    return is_operator_workspace(tenant) and not dialogue_chooser_enabled(tenant)
 
 
 def enabled(tenant):
@@ -88,6 +88,8 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
     # The individual Finish button closes the episode without touching CRM.
     # Legacy clients and bulk completion keep their existing company policy.
     if not supplied and payload.get('company_choice') == 'unchanged':
+        return None
+    if dialogue_chooser_enabled(tenant) and not supplied and payload.get('company_choice') in (None,'none'):
         return None
     # Old clients and all other tenants keep their ordinary close behavior.
     if not available(tenant):

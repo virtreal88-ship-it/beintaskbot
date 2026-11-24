@@ -9,7 +9,7 @@ from aiohttp import web
 
 import tenant_beinsystems_operator as operator
 import tenant_beinsystems_operator_company_import as company_import
-from tenant_beinsystems_operator_access import is_operator_workspace
+from tenant_beinsystems_operator_access import dialogue_chooser_enabled, is_operator_workspace
 from tenant_linear_policy import TenantLinearError
 
 
@@ -238,7 +238,7 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                 if fields == exact:
                     found = await asyncio.to_thread(exact_binding, profile,
                         **{key: query[key] for key in exact})
-                elif fields == legacy:
+                elif fields == legacy and not dialogue_chooser_enabled(profile['tenant_id']):
                     found = await asyncio.to_thread(operator.dialog_company_binding, profile,
                         channel_id=query["channel_id"], conversation_id=query["conversation_id"])
                 else:
@@ -261,21 +261,17 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                     logger.error("Operator dialogue company profile request failed")
                     raise operator.OperatorError("Данные компании недоступны.", 503) from None
                 return _json_response({"company_profile": result})
-            if set(data) in (exact | {"operator_search"}, exact | {"operator_account"},
-                             exact | {"operator_account", "expected_company_id"},
-                             exact | {"operator_account", "expected_company_id","confirm_existing"},
-                             exact | {"operator_account", "expected_company_id","confirm_existing","confirmed_company_id"}):
+            fields = set(data) - ({"selection_search"} if "operator_account" in data else set())
+            if fields in (exact | {"operator_search"}, exact | {"operator_account"},
+                          exact | {"operator_account", "expected_company_id"}):
                 from tenant_dialog_company_operator import chooser
                 choice = "operator_account" in data
-                if "confirm_existing" in data and data["confirm_existing"] is not True:
-                    raise operator.OperatorError("Invalid confirmation.")
-                if "confirmed_company_id" in data and not isinstance(data["confirmed_company_id"],str):
-                    raise operator.OperatorError("Invalid company confirmation.")
-                term = data["operator_account" if choice else "operator_search"]
+                if "selection_search" in data and not isinstance(data["selection_search"],str):
+                    raise operator.OperatorError("Invalid account search.")
+                term = data["operator_account"] if choice else data["operator_search"]
+                expected = {"expected_company_id": data["expected_company_id"]} if "expected_company_id" in data else {}
                 result = await asyncio.to_thread(chooser,profile,**{key:data[key] for key in exact},
-                                                 term=term,choice=choice,**({"confirm_existing":True} if "confirm_existing" in data else {}),
-                                                 **({"confirmed_company_id":data["confirmed_company_id"]} if "confirmed_company_id" in data else {}),**({"expected_company_id":data["expected_company_id"]}
-                                                     if "expected_company_id" in data else {}))
+                    term=term,choice=choice,selection_search=data.get("selection_search"),**expected)
                 return _json_response(result)
             if set(data) == exact | {"company_id", "expected_company_id"} and data["company_id"] is None:
                 found = await asyncio.to_thread(exact_binding, profile, **data)

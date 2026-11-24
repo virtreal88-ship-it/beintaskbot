@@ -515,7 +515,7 @@
     if(route?.lifecycle_enabled&&[403,404,409].includes(error.status)){removeLifecycleDialog(route);notice(lifecycleText('unavailable'));return true;}return false;
   }
   function applyLifecycleReceipt(route,action,result){
-    const state=result.lifecycle;
+    const state=result.lifecycle,controls=result.controls;
     if(!currentPage||!sameDialog(currentPage.dialog,route)||!state||
        state.revision!==Number(route.lifecycle?.revision)+1||
        String(state.operator_id)!==String(member.telegram_id)||
@@ -523,19 +523,29 @@
     const previous=currentDialog.lifecycle;
     if(Number(previous?.revision)>=state.revision)return;
     const {company_completion,...prior}=previous||{};
-    const lifecycle={...prior,...state,can_accept:false,can_dismiss:false,can_takeover:false,
-      can_close:action==='accept',can_transfer:action==='accept',can_start:false,can_submit_case:false,
-      no_reply_needed:false};
-    const canSend=action==='accept'&&result.can_send===true&&
+    const lifecycle={...prior,can_accept:false,can_dismiss:false,can_takeover:false,
+      can_close:action==='accept',can_transfer:false,can_start:false,can_submit_case:false,
+      no_reply_needed:false,...controls?.lifecycle,...state};
+    if(controls?.closed_episode){
+      const episode=controls.closed_episode;
+      lifecycle.completed_episodes=[episode,...(prior.completed_episodes||[]).filter(old=>old.id!==episode.id)].slice(0,20);
+    }
+    const canSend=action==='accept'&&controls?.can_send===true&&
       !currentDialog.archive_read_only&&!currentDialog.owner_overview_read_only&&!currentDialog.search_overview_read_only;
+    // A pre-transition read of this view must not replace the receipt or
+    // remove a dialogue the server has just confirmed is ours.
+    dialogReadSerial++;
+    pendingDialogRoute=null;
+    $('operatorConversationContent')?.setAttribute('aria-busy','false');
     currentDialog={...currentDialog,lifecycle,can_send:canSend,send_block_reason:canSend?'':'dialog_accept_required',missed_call_pending:false};
     selectedDialog=currentDialog;
     currentPage={...currentPage,dialog:currentDialog,scroll_to_latest:false};
     renderDialog(currentPage,{suppressRead:true});
+    if(action==='accept')window.tenantDialogueCompany?.refresh?.();
   }
   async function lifecycleAction(route,action,button,target,episodeId){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const owner=identity(member),view=openRevision,key=contextKey('lifecycle',route)+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
+    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
     if(lifecycleInFlight.has(key))return;
     let payload=lifecycleRequests.get(key);
     if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{})};lifecycleRequests.set(key,payload);}
@@ -543,7 +553,7 @@
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
       lifecycleRequests.delete(key);
-      if(owner!==identity(member))return;
+      if(version!==epoch)return;
       if(['accept','takeover','start','close','dismiss'].includes(action))updateLifecycleList(route,result.lifecycle||result.dialog?.lifecycle);
       if(view!==openRevision||!sameDialog(route,currentDialog))return;
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
@@ -551,7 +561,6 @@
       if(['accept','takeover','start','close'].includes(action))button.remove();
       if(action==='accept'||action==='close'){
         applyLifecycleReceipt(route,action,result);
-        void openDialog(currentDialog,true,'',{suppressRead:true,revalidateAccess:true});
         return;
       }
       if(action==='start')window.tenantDialogueCompany?.refresh?.();
@@ -564,10 +573,10 @@
         }
         void refresh(false,false,{revalidateSelected:true,suppressRead:true});return;
       }
-      if(action==='case'){await openDialog(route,true);if(owner===identity(member)&&sameDialog(route,currentDialog)&&$('operatorChatError')){const key=result.publication?.state==='published'?'casePublished':result.case_state==='completed'&&result.case_id?'caseDone':result.case_state==='not_suitable'?'caseUnsuitable':['running','unknown'].includes(result.case_state)?'casePending':'caseFailed';$('operatorChatError').textContent=lifecycleText(key)+(result.suitability?.reason?' '+result.suitability.reason:'')+(result.publication?.state==='draft'&&result.publication.reason?' '+result.publication.reason:'');}return;}
+      if(action==='case'){await openDialog(route,true);if(version===epoch&&sameDialog(route,currentDialog)&&$('operatorChatError')){const key=result.publication?.state==='published'?'casePublished':result.case_state==='completed'&&result.case_id?'caseDone':result.case_state==='not_suitable'?'caseUnsuitable':['running','unknown'].includes(result.case_state)?'casePending':'caseFailed';$('operatorChatError').textContent=lifecycleText(key)+(result.suitability?.reason?' '+result.suitability.reason:'')+(result.publication?.state==='draft'&&result.publication.reason?' '+result.publication.reason:'');}return;}
       await openDialog({...route,...(result.dialog||{}),lifecycle:result.lifecycle||result.dialog?.lifecycle||route.lifecycle},true);
     }catch(error){
-      if(owner===identity(member)&&view===openRevision&&sameDialog(route,currentDialog)){
+      if(version===epoch&&view===openRevision&&sameDialog(route,currentDialog)){
         if(action==='dismiss'&&error.status===409){
           await openDialog(route,true,'',{suppressRead:true});
           const status=$('operatorChatError');if(status&&sameDialog(route,currentDialog))status.textContent=error.message;
@@ -2243,8 +2252,8 @@
   // same route and permissions. Mutate the page object captured by handlers.
   const dialogRenderScope=route=>JSON.stringify([route?.shared_reminder?.can_schedule===true,Object.entries(route||{}).filter(([key])=>!(key==='customer_name'&&isDirectConnectDialog(route))&&!['unread_count','last_message_id','last_message_direction','last_message_type','last_message_text','last_message_preview','last_message_at','company_binding','dialog_company_name','shared_reminder'].includes(key)).map(([key,value])=>{
     if(key!=='lifecycle'||!value)return [key,value];
-    const {accepted_by_name,...lifecycle}=value;
-    return [key,lifecycle];
+    const {accepted_by_name,company_completion,...lifecycle}=value;
+    return [key,Object.entries(lifecycle).sort(([a],[b])=>a.localeCompare(b))];
   }).sort(([a],[b])=>a.localeCompare(b))]);
   function updateDialogueAcceptor(route,card=$('operatorClientCard')){
     if(card?.dataset.scope!==contextKey('client-card',route))return;

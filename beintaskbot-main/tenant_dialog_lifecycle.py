@@ -20,16 +20,19 @@ def acceptance_enabled(cur, tenant):
     return state.enforced and state.admission_enabled
 
 
-def _accepted_composer_ready(cur, tenant, channel):
-    cur.execute("""SELECT EXISTS(SELECT 1 FROM saas_tenant_integrations i
+def _transition_source(cur, tenant, channel, *, check_send):
+    cur.execute("""SELECT t.status='active' AS tenant_active,
+      EXISTS(SELECT 1 FROM saas_tenant_integrations i
       WHERE i.tenant_id=t.id AND i.provider='connect' AND i.status='connected') AS connected
-      FROM saas_connect_channels ch JOIN saas_tenants t ON t.id=ch.tenant_id AND t.status='active'
+      FROM saas_connect_channels ch JOIN saas_tenants t ON t.id=ch.tenant_id
       WHERE ch.tenant_id=%s::uuid AND ch.connect_channel_id=%s::uuid AND ch.active""", (tenant,channel))
     source = cur.fetchone()
-    if not source or source['connected']:
-        return bool(source)
+    if not check_send or not source or not source['tenant_active']:
+        return bool(source), False
+    if source['connected']:
+        return True, True
     from tenant_whatsapp_native_rollout import modes
-    return bool(modes(cur,tenant).get(channel,{}).get('enabled'))
+    return True, bool(modes(cur,tenant).get(channel,{}).get('enabled'))
 
 
 def migrate(cur):
@@ -587,6 +590,34 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
     return dialog
 
 
+def _transition_controls(cur, tenant, actor, channel, conversation, lead, current, rollout, policy, closed_episode):
+    accepted = current['state']=='accepted'
+    active, can_send = _transition_source(cur, tenant, channel, check_send=accepted)
+    last = None
+    markers = set()
+    if accepted:
+        cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
+          AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
+          ORDER BY created_at DESC,id DESC LIMIT 1""", (tenant,'connect:'+channel,lead))
+        last = (cur.fetchone() or {}).get('id')
+        if last:
+            markers = optional_no_reply_marks(cur,tenant,[(channel,conversation,last)])
+    view = decorate(cur,tenant,actor,{'provider':'connect','channel_id':channel,
+        'conversation_id':conversation,'channel_active':active,'can_send':can_send},
+        details=False,_rollout=rollout,_workflow=current,_last_inbound=last,_has_inbound=bool(last),
+        _can_update=True,_policy=policy,_no_reply_marked=bool(markers))
+    controls = view['lifecycle']
+    if accepted:
+        controls['can_dismiss'] = bool(last and markers is not None and not markers and rollout.admission_enabled)
+        name = str(policy.profile.get('display_name') or '').strip()
+        if name:
+            controls['accepted_by_name'] = name
+    else:
+        controls['can_submit_case'] = bool(closed_episode and not closed_episode['case_id'])
+    return {'lifecycle':controls,'can_send':view['can_send'],
+            **({'closed_episode':closed_episode} if closed_episode else {})}
+
+
 
 def mutate(profile, payload):
     """Retry only a proven rolled-back completion transaction, never ambiguity.
@@ -630,9 +661,11 @@ def _mutate_once(profile, payload):
     with _connect() as conn:
         with conn.cursor() as cur:
             tenant = str(uuid.UUID(str(profile.get('tenant_id'))))
-            if not enabled(cur, tenant):
+            from tenant_dialog_rollout import guard
+            rollout = guard(cur, tenant)
+            if not rollout.enforced:
                 raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
-            if action in {'accept','start','dismiss','takeover'} and not acceptance_enabled(cur, tenant):
+            if action in {'accept','start','dismiss','takeover'} and not rollout.admission_enabled:
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
@@ -702,9 +735,11 @@ def _mutate_once(profile, payload):
                 if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
                 require_access(cur,tenant,actor,'connect',channel,conversation,'view',owner=policy.profile.get('role')=='owner')
                 return receipt['result']
-            # An audited alias may resolve an identical historical receipt, but
-            # new no-reply marks require the full canonical route proof.
-            if action=='dismiss' and (payload.get('channel_id'),payload.get('conversation_id'),int(payload['lead_id'])) != (channel,conversation,int(fresh_route['lead_id'])):
+            individual_close=action=='close' and payload.get('company_choice')=='unchanged'
+            # An audited alias may resolve an identical historical receipt.
+            # New single-dialogue actions must still target the exact shown address.
+            exact_route=(payload.get('channel_id'),payload.get('conversation_id'),int(payload['lead_id'])) == (channel,conversation,int(fresh_route['lead_id']))
+            if (action=='dismiss' or individual_close) and not exact_route:
                 raise TenantLinearError('Обновите диалог.',409)
             # Keep membership/presence locks acquired BEFORE the route lock,
             # but only new mutations require Online. A retry still needs the
@@ -716,6 +751,7 @@ def _mutate_once(profile, payload):
             if {'company_id','company_choice'} & payload.keys() and action!='close':
                 raise TenantLinearError('Выбор компании доступен только при завершении диалога.',422)
             bound_on_close=None
+            closed_episode=None
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             if action=='dismiss':
@@ -791,11 +827,17 @@ def _mutate_once(profile, payload):
                     bound_on_close=require_on_close(cur,tenant,actor,channel,conversation,payload,policy=policy)
                     cur.execute("UPDATE saas_dialog_workflows SET state='closed',revision=revision+1,closed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s RETURNING closed_at",(tenant,channel,conversation))
                     closed_at=cur.fetchone()['closed_at']
-                    cur.execute('UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(closed_at,tenant,row['id']))
+                    cur.execute('''UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
+                      RETURNING id::text AS id,accepted_at,closed_at,case_id::text AS case_id''',(closed_at,tenant,row['id']))
+                    if individual_close:
+                        episode=cur.fetchone()
+                        closed_episode={key:(value.isoformat() if hasattr(value,'isoformat') else value)
+                                        for key,value in episode.items()}
             current=_row(cur,tenant,channel,conversation)
             result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
-            if action=='accept':
-                result['can_send']=_accepted_composer_ready(cur,tenant,channel)
+            if (action=='accept' and exact_route) or individual_close:
+                result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
+                                                        current,rollout,policy,closed_episode)
             if action=='dismiss':result['lifecycle']['no_reply_needed']=True
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))

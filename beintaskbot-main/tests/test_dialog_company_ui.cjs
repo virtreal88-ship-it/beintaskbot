@@ -48,6 +48,12 @@ const read=p=>fs.readFileSync(p,'utf8');
         assert.equal('operator_search' in q,false);assert.equal('company_id' in q,false);
         assert.equal(q.operator_account,'acct_001');
         if(failedOperator)return{ok:false,status:409,json:async()=>({success:false})};
+        if(route===freshCandidate){
+          assert.equal(q.expected_company_id,null);
+          assert.equal(q.selection_search,'acct');
+          bindings.set(route.lead_id,{...named('UniSet',true),company_id:'uniset-binding',operator_account:'acct_001'});
+          return{ok:true,json:async()=>({success:true,binding:bindings.get(route.lead_id)})};
+        }
         bindings.set(route.lead_id,{...named('Bound Operator company',true),can_search_operator:true});
       }else if(body){bindings.set(route.lead_id,q.company_id?named('Bound Operator company',true):{company_id:null,can_manage:true,can_search_operator:bindings.get(route.lead_id)?.can_search_operator});}
       if(delayRead&&route===a)await new Promise(resolve=>{releaseRead=resolve;});
@@ -237,6 +243,13 @@ const read=p=>fs.readFileSync(p,'utf8');
   openSearch();assert(!search().readOnly,'authorized history makes inline editing available on focus');
   assert.equal(search().placeholder,'Find a company');
   assert.equal(calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length,priorReads,'no follow-up company GET for an authorized snapshot');
+  bindings.set(46,{company_id:null,can_manage:true,can_search_operator:true});
+  await w.tenantOperator.openDialog(freshCandidate);await tick();
+  openSearch();type('acct');await debounce();
+  w.confirm=()=>{throw Error('Operator selection must not open a confirmation');};
+  remote().click();await tick();await tick();
+  assert.equal(value(),'UniSet');
+  assert.equal(calls.filter(c=>c.body?.lead_id==='46'&&c.body?.operator_account).length,1);
   assert(!calls.some(c=>c.path.includes('/send')));
   d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));assert(!section(),'auth transition immediately clears company');
   w.close();console.log('PASS: Company field and Operator chooser, exact Kommo/group routes, debounce, explicit bind, fallback, stale guards');

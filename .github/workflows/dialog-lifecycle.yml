@@ -9,6 +9,8 @@ on:
       - 'beintaskbot-main/tenant_operator_public_link_proof.py'
       - 'beintaskbot-main/tests/test_operator_public_link_proof*'
       - 'beintaskbot-main/tenant_dialog_company_operator.py'
+      - 'beintaskbot-main/tenant_dialog_operator_account.py'
+      - 'beintaskbot-main/tenant_beinsystems_operator_schema.py'
       - 'beintaskbot-main/tenant_operator_company_name_guard.py'
       - 'beintaskbot-main/tenant_crm_native_companies.py'
       - 'beintaskbot-main/tenant_dialog_company_completion.py'

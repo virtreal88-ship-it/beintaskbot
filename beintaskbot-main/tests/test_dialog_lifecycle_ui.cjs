@@ -13,11 +13,11 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(body.action==='case'&&denyCase)return{ok:false,status:404,json:async()=>({success:false,error:'Ownership changed'})};
    if(hold)await new Promise(r=>release=r);
    if(failed)throw Error('Network interrupted');
-   if(body.action==='accept'){route={...route,can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,accepted_by_name:'Operator & <b>Example</b>',revision:2,can_close:true,can_transfer:true,transfer_targets:[{employee_id:44,name:'Hüseyn'}]}};}
+   if(body.action==='accept'){route={...route,send_block_reason:'',can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,accepted_by_name:'Operator & <b>Example</b>',revision:2,can_accept:false,can_takeover:false,can_start:false,can_dismiss:false,can_submit_case:false,no_reply_needed:false,can_close:true,can_transfer:true,last_inbound_id:'latest-inbound',transfer_targets:[{employee_id:44,name:'Hüseyn'}]},missed_call_pending:false};}
    if(body.action==='start'){route={...route,archive_read_only:false,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
    if(body.action==='dismiss'){route={...route,lifecycle:{...route.lifecycle,revision:5,no_reply_needed:true,can_dismiss:false}};}
-   result={lifecycle:route.lifecycle,...(body.action==='case'?caseResult:{})};
+   result={lifecycle:route.lifecycle,controls:{lifecycle:route.lifecycle,can_send:route.can_send},...(body.action==='case'?caseResult:{})};
   }else if(url.includes('/dialogs/history')){if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null};}
   else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[],attention_count:0,next_offset:null};
   else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
@@ -130,12 +130,12 @@ async function verifyImmediateListState(grouped){
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true}}};
  const base={provider:'connect',lead_id:41,channel_id:'a',channel_name:'A',conversation_id:'client',customer_kind:grouped?'group':'contact',customer_name:'Synthetic',can_send:false,lifecycle_enabled:true};
- let state={state:'waiting',revision:1,can_accept:true,last_inbound_id:'in-1'},listState={...state},holdHistory=false,releaseHistory,fail=false;
+ let state={state:'waiting',revision:1,can_accept:true,last_inbound_id:'in-1'},listState={...state},historyReads=0,fail=false;
  const sibling={...base,channel_id:'b',channel_name:'B',lead_id:42,lifecycle:{state:'closed',revision:8}};
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.fetch=async(url,opt={})=>{url=String(url);let result;
-  if(url.endsWith('dialogs_lifecycle')){if(fail)throw Error('Synthetic failure');const action=JSON.parse(opt.body).action;state=action==='accept'?{state:'accepted',revision:2,can_close:true}:{state:'closed',revision:3};result={lifecycle:state};}
-  else if(url.includes('/dialogs/history')){if(holdHistory)await new Promise(r=>releaseHistory=r);result={dialog:{...base,lifecycle:{...state}},messages:[],next_before:null};}
+  if(url.endsWith('dialogs_lifecycle')){if(fail)throw Error('Synthetic failure');const action=JSON.parse(opt.body).action;state=action==='accept'?{state:'accepted',revision:2,operator_id:33,can_close:true}:{state:'closed',revision:3,operator_id:33};result={lifecycle:state};}
+  else if(url.includes('/dialogs/history')){historyReads++;result={dialog:{...base,lifecycle:{...state}},messages:[],next_before:null};}
   else if(url.includes('/dialogs?'))result={dialogs:[{...base,lifecycle:{...listState},unread_count:7,...(grouped?{group_sources:[{...base,lifecycle:{...listState}},sibling]}:{})}],channels:[],agents:[],total_count:1};
   else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   else if(url.includes('/dialogs/read'))result={updated:true};else throw Error(url);
@@ -145,8 +145,8 @@ async function verifyImmediateListState(grouped){
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await w.tenantOperator.refresh();await w.tenantOperator.openDialog({...base,lifecycle:state});
  const badge=()=>d.querySelector('.operator-row-indicators [data-lifecycle-state]');
  assert.equal(badge().dataset.lifecycleState,'waiting');fail=true;d.querySelector('[data-operator-lifecycle=accept]').click();await tick();await tick();assert.equal(badge().dataset.lifecycleState,'waiting','failed action must not show accepted');
- fail=false;holdHistory=true;d.querySelector('[data-operator-lifecycle=accept]').click();await tick();await tick();assert.equal(badge().dataset.lifecycleState,'accepted','receipt updates badge before history or list refresh');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
- holdHistory=false;releaseHistory();await tick();await tick();await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'accepted','older list snapshot cannot restore New');
+ fail=false;const priorReads=historyReads;d.querySelector('[data-operator-lifecycle=accept]').click();await tick();await tick();assert.equal(badge().dataset.lifecycleState,'accepted','receipt updates badge before history or list refresh');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
+ assert.equal(historyReads,priorReads,'accept does not reload history');await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'accepted','older list snapshot cannot restore New');
  d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();assert.equal(badge().dataset.lifecycleState,'closed');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
  state={state:'waiting',revision:4,can_accept:true,last_inbound_id:'in-2'};listState={...state};await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'waiting','new inbound after completion restores New');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');if(grouped){sibling.lifecycle={state:'waiting',revision:9};state={state:'accepted',revision:5};listState={...state};await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'waiting','accepting one source never accepts another waiting source');}dom.window.close();
 }
@@ -159,21 +159,12 @@ async function verifyCompanyCompletion(){
  let route={provider:'connect',lead_id:41,channel_id:'a',conversation_id:'client',customer_kind:'contact',customer_name:'Synthetic client',can_send:true,lifecycle_enabled:true,
   lifecycle:{id:'episode',state:'accepted',operator_id:33,revision:1,can_close:true,company_completion:{status:'missing',can_choose:true}}};
  const waiting={...route,lead_id:42,conversation_id:'waiting',lifecycle:{state:'waiting',revision:1,can_dismiss:false,has_inbound:true,last_inbound_id:'other-inbound',bulk_company_gate:'no_reply_separate'}};
- const calls=[];let allowClose=false,prelinked=false,heldSearch,failClose=null;
+ const calls=[];let allowClose=false,prelinked=false,failClose=null;
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.confirm=()=>{throw Error('company and waiting exclusions must not reach bulk confirmation');};
  w.fetch=async(url,opt={})=>{
    url=String(url);const body=opt.body?JSON.parse(opt.body):null;calls.push({url,body});
    if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
-   if(url.includes('/api/platform/crm/native/companies')){
-     const query=new URL(url,w.location.origin).searchParams;
-     assert.equal(query.get('expected_tenant_id'),'tenant');assert.equal(query.get('expected_user_id'),'33');
-     if(query.get('search')==='hold')await new Promise(resolve=>{heldSearch=resolve;});
-     return{ok:true,json:async()=>({success:true,companies:[
-      {id:'forbidden',name:'Not editable',actions:{update:false}},
-      {id:'11111111-1111-4111-8111-111111111111',name:'Editable CRM company',actions:{update:true}}
-     ]})};
-   }
    let result;
    if(url.includes('/dialogs/history'))result={dialog:route,messages:[{id:'m',body:'Synthetic history',direction:'incoming'}],next_before:null};
    else if(url.includes('/dialogs?'))result={dialogs:[{...route,lifecycle:{...route.lifecycle,bulk_company_gate:prelinked?'prelinked_unverified':'choose'}},waiting],channels:[],agents:[],next_offset:null,completion_preview:true};
@@ -201,80 +192,26 @@ async function verifyCompanyCompletion(){
  assert.match(d.querySelector('#operatorBulkCompletionStatus').textContent,/Left open for company verification: 1/);
  assert.match(d.querySelector('#chatRows').textContent,/Synthetic history/);
  prelinked=false;calls.length=0;
- const open=async()=>{d.querySelector('[data-operator-lifecycle=close]').click();await tick();return d.querySelector('#operatorLifecycleModal');};
- const finish=modal=>modal.querySelector('[data-company-complete]');
- const keyboard=(target,key)=>target.dispatchEvent(new w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
- const search=(modal,value)=>{
-   const field=modal.querySelector('[role=combobox]');
-   field.value=value;field.dispatchEvent(new w.Event('input',{bubbles:true}));keyboard(field,'Enter');return field;
- };
- const assertCompact=modal=>{
-   assert.equal(modal.querySelector('[role=dialog]').getAttribute('aria-label'),'Company for dialogue completion');
-   assert.equal(modal.querySelector('[role=dialog]').getAttribute('aria-modal'),'true');
-   assert.equal(modal.querySelectorAll('select,h2,form').length,0);
-   assert.deepEqual([...modal.querySelectorAll('button')].map(button=>button.textContent),['Complete','Cancel']);
- };
- let dialog=await open();assertCompact(dialog);
- assert(finish(dialog).disabled,'the genuinely mandatory route cannot close without a selection');
- search(dialog,'hold');await tick();assert.equal(typeof heldSearch,'function');
- dialog.querySelector('[data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));
- assert(!calls.some(c=>c.body?.action),'Cancel aborts pending search without a write');
- dialog=await open();const field=search(dialog,'Editable');heldSearch();await tick();await tick();
- assert.deepEqual([...dialog.querySelectorAll('[role=option]')].map(row=>row.textContent),['Editable CRM company']);
- assert.equal(field.getAttribute('aria-expanded'),'true');
- keyboard(field,'ArrowDown');assert(field.getAttribute('aria-activedescendant'));
- keyboard(field,'Enter');assert.equal(field.value,'Editable CRM company');assert.equal(field.getAttribute('aria-expanded'),'false');
- assert(!finish(dialog).disabled);assert(!calls.some(c=>c.body?.action),'search and keyboard selection are local only');
- keyboard(field,'Escape');assert(!d.querySelector('#operatorLifecycleModal'));assert(!calls.some(c=>c.body?.action),'Escape after selecting does not write');
- dialog=await open();search(dialog,'Editable');await tick();await tick();
- dialog.querySelector('[role=option]').click();
- assert(!calls.some(c=>c.body?.action),'click selection is also a draft');
- allowClose=true;
- dialog.querySelector('[data-company-complete]').click();await tick();await tick();
- const mutations=calls.filter(c=>c.body?.action);
- assert.equal(mutations.length,1);assert.equal(mutations[0].body.action,'close');
- assert.equal(mutations[0].body.company_id,'11111111-1111-4111-8111-111111111111');
- assert.equal(mutations[0].body.expected_revision,1);assert.equal(mutations[0].body.channel_id,'a');assert.equal(mutations[0].body.conversation_id,'client');
- assert(!d.querySelector('#operatorLifecycleModal'));
- assert.match(d.querySelector('#chatRows').textContent,/Synthetic history/);
- assert(!calls.some(c=>c.url.includes('/send')||c.url.includes('/operator/dialog-company')));
- route={...route,can_send:true,lifecycle:{state:'accepted',revision:3,can_close:true,company_completion:{status:'missing',can_choose:false,can_skip:true}}};
- await w.tenantOperator.openDialog(route);await tick();calls.length=0;
- const noCompany=await open();
- assertCompact(noCompany);
- assert(noCompany.querySelector('[data-company-search]').hidden,'no independent company permissions means no picker');
- assert(!finish(noCompany).disabled);
- assert(!calls.some(c=>c.body?.action),'blank choice still waits for explicit Finish');
- finish(noCompany).click();finish(noCompany).click();
- await tick();await tick();
- const skipped=calls.filter(c=>c.body?.action==='close');assert.equal(skipped.length,1);
- assert.equal(skipped[0].body.company_choice,'none');assert.equal('company_id' in skipped[0].body,false);
- assert.equal(skipped[0].body.expected_revision,3);
- assert(!calls.some(c=>c.url.includes('/crm/native/companies')||c.url.includes('/operator/dialog-company')));
- route={...route,can_send:true,lifecycle:{state:'accepted',revision:4,can_close:true,company_completion:{status:'ready',can_choose:false,can_skip:false}}};
- await w.tenantOperator.openDialog(route);await tick();calls.length=0;
- d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();
- const existing=calls.filter(c=>c.body?.action==='close');assert.equal(existing.length,1);
- assert.equal('company_choice' in existing[0].body,false);assert.equal('company_id' in existing[0].body,false);
- assert(!d.querySelector('#operatorLifecycleModal'),'existing binding closes without a picker');
- route={...route,can_send:true,lifecycle:{state:'accepted',revision:5,can_close:true,company_completion:{status:'unavailable',required:false,can_choose:false,can_skip:false}}};
- await w.tenantOperator.openDialog(route);await tick();calls.length=0;
- assert(!d.querySelector('[data-company-completion]'),'optional unavailability must not imply that closure is locked');
- d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();
+ const historyCount=()=>calls.filter(c=>c.url.includes('/dialogs/history')).length;
+ const closeButton=()=>d.querySelector('[data-operator-lifecycle=close]');
+ const initialReads=historyCount();
+ allowClose=true;failClose='Synthetic server rejection';
+ closeButton().click();closeButton().click();await tick();
  assert.equal(calls.filter(c=>c.body?.action==='close').length,1);
- assert(!calls.filter(c=>c.body?.action==='close')[0].body.company_choice);
- route={...route,can_send:true,lifecycle:{state:'accepted',revision:6,can_close:true,company_completion:{status:'archived',required:false,can_choose:true,can_skip:true}}};
- await w.tenantOperator.openDialog(route);await tick();calls.length=0;
- const archived=await open();assertCompact(archived);
- assert(!archived.querySelector('[data-company-search]').hidden);
- assert(!finish(archived).disabled,'optional archived route can finish without a replacement');
- failClose='A company is required by the server';finish(archived).click();await tick();await tick();
- assert(d.querySelector('#operatorLifecycleModal'),'server denial leaves the dialogue open');
- assert.equal(archived.querySelector('[role=status]').textContent,failClose);
- assert.equal(finish(archived).textContent,'Complete');
- const archiveClose=calls.find(c=>c.body?.action==='close');assert.equal(archiveClose.body.company_choice,'none');
- assert(!('company_id' in archiveClose.body));assert(!calls.some(c=>c.url.includes('/operator/dialog-company')));
- archived.querySelector('[data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));
+ assert.equal(historyCount(),initialReads);
+ assert.equal(d.querySelector('#operatorChatError').textContent,failClose);
+ assert.equal(d.querySelector('#sendChat').disabled,false,'failed close keeps the chat active');
+ failClose=null;closeButton().click();await tick();
+ const [first,retry]=calls.filter(c=>c.body?.action==='close').map(c=>c.body);
+ assert.deepEqual(first,retry,'close reuses the same receipt after an error');
+ assert.equal(retry.company_choice,'unchanged');
+ assert.equal(retry.expected_revision,1);assert.equal(retry.channel_id,'a');
+ assert(!('company_id' in retry));
+ assert.equal(historyCount(),initialReads);
+ assert.equal(d.querySelector('#sendChat').disabled,true);
+ assert(!closeButton());assert(!d.querySelector('#operatorLifecycleModal'));
+ assert.match(d.querySelector('#chatRows').textContent,/Synthetic history/);
+ assert(!calls.some(c=>c.url.includes('/send')||c.url.includes('/crm/native/companies')));
  dom.window.close();
 }
 

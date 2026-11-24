@@ -1308,7 +1308,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 _attach_verified_phones(cur,tenant,company_cards,check_conflicts=True)
                 from tenant_contact_phone import attach_list_source_revisions
                 attach_list_source_revisions(cur,tenant,company_cards)
-                attach_list_company_names(cur,tenant,company_cards)
+                attach_list_company_names(cur,tenant,company_cards,policy=policy)
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,

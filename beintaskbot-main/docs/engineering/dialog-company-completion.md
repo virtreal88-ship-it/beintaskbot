@@ -1,8 +1,12 @@
-# Company required before completing a human dialogue
+# Dialogue completion and company links
 
-This is a default-off BeinSystems pilot, for the existing durable Connect dialogue
-lifecycle. `TENANT_DIALOG_COMPANY_COMPLETION_REQUIRED=true` adds the company
-check only to a fresh explicit Close of the current operator's accepted episode.
+The individual **Complete** button closes the current operator's accepted episode
+with `company_choice: "unchanged"`. The server validates the exact tenant, source,
+conversation, operator and revision. The receipt updates the open chat from its
+current contents. Company selection remains available in the Company panel.
+
+`TENANT_DIALOG_COMPANY_COMPLETION_REQUIRED=true` enables the company check
+for bulk completion and legacy clients using the older close contract.
 Accept, Start, existing replies (including unlinked accepted episodes), inbound,
 history, and transfers do not require a company. No reply needed remains a
 distinct action on waiting messages; it cannot close an accepted episode.
@@ -18,13 +22,11 @@ binding, close, receipt and audit share one transaction. A 422 means the open
 dialogue and existing messages are not changed. Exact authorized retries recover
 their existing receipt; stale revisions cannot rebind or re-close a route.
 
-The inline picker works on ordinary and group Connect routes using the existing
-CRM catalogue permissions, and never matches by name automatically. It does not
-create companies, change employee rights, call Operator, send anything, store a
-draft or perform schema migration. Group links belong to one exact source; one
-source's proof cannot complete another. A member who lacks existing CRM access
-cannot choose, and the dialogue stays open. Unresolved identity and unknown
-existing binding require separate authorized repair.
+The Company panel stores the selected Operator account against the exact dialogue
+in `saas_operator_dialog_accounts`. The server repeats the original bounded
+Operator search and checks for the exact selected account ID. The association
+records the verified connection generation and instance. CRM company sync runs
+through the Company page. Historical CRM links stay in their original tables.
 
 With the rule on, the read-only Complete All preview finds accepted owned routes
 with a currently active local company link. It does not verify each dialogue
