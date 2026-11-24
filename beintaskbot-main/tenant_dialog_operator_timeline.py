@@ -57,10 +57,10 @@ def page(conn, cur, tenant, channel, conversation, **window):
 
 
 def history_window(cur, tenant, conversation, *, messages, before,
-                   history_leads, history_channel, group_channels=None):
+                   history_leads, history_channel, group_channels=None, authorized_before_stamp=None):
     """Fence metadata to the same authorized message page as the timeline."""
-    upper = None
-    if before:
+    upper = authorized_before_stamp if before else None
+    if before and upper is None:
         if group_channels is not None:
             cur.execute("""SELECT COALESCE(m.happened_at,m.created_at) AS stamp
               FROM saas_crm_messages m JOIN saas_connect_conversations c
@@ -84,7 +84,7 @@ def history_window(cur, tenant, conversation, *, messages, before,
 
 
 def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
-                 history_leads, history_channel, group_channels=None):
+                 history_leads, history_channel, group_channels=None, authorized_before_stamp=None):
     # No new index/migration. Limit the optional JSON audit read's latency,
     # and keep a timeout from suppressing otherwise valid chat history.
     # The statement setting is restored on success or savepoint rollback.
@@ -96,7 +96,8 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
         budget = min(setting["milliseconds"] or 200, 200)
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (f"{budget}ms",))
         window = history_window(cur,tenant,conversation,messages=messages,before=before,
-            history_leads=history_leads,history_channel=history_channel,group_channels=group_channels)
+            history_leads=history_leads,history_channel=history_channel,group_channels=group_channels,
+            authorized_before_stamp=authorized_before_stamp)
         if window is None:
             cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
             return {'operator_events': []}
@@ -106,7 +107,7 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
             AND m.telegram_id::text=a.payload->>'operator_id'
           WHERE a.tenant_id=%s::uuid AND a.entity_type='dialog_episode'
-            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply')
+            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply','dialog_close')
             AND a.payload->>'channel_id'=%s AND a.payload->>'conversation_id'=%s
             AND (a.action='dialog_transfer' OR a.actor_telegram_id::text=a.payload->>'operator_id')
             AND (%s::timestamptz IS NULL OR a.created_at>=%s::timestamptz)
@@ -115,7 +116,7 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
             (tenant,channel,conversation,lower,lower,upper,upper,_PAGE_LIMIT+1))
         rows=cur.fetchall()
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
-    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_no_reply":"no_reply"}
+    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_no_reply":"no_reply","dialog_close":"close"}
     shown=rows[:_PAGE_LIMIT]
     result={"operator_events": [{"id":row["id"],"kind":kinds[row["action"]],"at":row["created_at"].isoformat(),
                                 "employee_name":str(row["display_name"] or "").strip()[:120]}

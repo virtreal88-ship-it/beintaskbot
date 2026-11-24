@@ -5,10 +5,13 @@ import logging
 import os
 import time
 
+from aiohttp.web import AppKey
+
 
 _RETRYABLE_MIGRATION_SQLSTATES = {"40P01", "40001", "55P03", "25P04"}
 _STARTUP_SCHEMA_LOCK='tenant-service-startup-schema'
 _KOMMO_BINDING_PROVISION_ENV='BEINSYSTEMS_DIALOG_COMPANY_BINDINGS_PROVISION_ON_STARTUP'
+_HISTORY_MERGE_CLEANUP_SECONDS = 1.0
 
 
 def _retryable_migration_error(exc: Exception) -> bool:
@@ -73,6 +76,14 @@ def prepare_database() -> None:
         require_schema(conn)
         conn.commit()
         _provision_dialog_duplicates(conn)
+        if os.environ.get('DIALOG_HISTORY_MERGE_ENABLED') == '1':
+            try:
+                from tenant_dialog_history_merge_jobs import enabled as history_merge_enabled, provision as provision_history_merge_jobs
+                if history_merge_enabled():
+                    with conn.transaction(), conn.cursor() as cur:
+                        provision_history_merge_jobs(cur)
+            except Exception:
+                logging.getLogger(__name__).warning('Dialogue history merge schema preflight unavailable')
         # Opt-in only, on the dedicated startup connection. This fresh
         # transaction inherits the existing startup lock and timeout budget.
         # Closing the connection rolls back any partial template DDL.
@@ -236,6 +247,56 @@ def require_database_ready() -> None:
         require_schema(conn)
 
 
+class _HistoryMergeWorkerState:
+    def __init__(self):
+        self.task = None
+        self.stopping = False
+
+
+_HISTORY_MERGE_WORKER = AppKey('tenant_history_merge_worker', _HistoryMergeWorkerState)
+
+
+def install_history_merge_worker_cleanup(app):
+    """Register before AppRunner.setup(); deferred worker startup may run later."""
+    if _HISTORY_MERGE_WORKER not in app:
+        app.on_cleanup.append(_cleanup_history_merge_worker)
+        app[_HISTORY_MERGE_WORKER] = _HistoryMergeWorkerState()
+
+
+def _history_merge_worker_done(task):
+    # Observe any late exception, without including source identifiers or values.
+    if not task.cancelled() and (error := task.exception()) is not None:
+        logging.getLogger(__name__).warning('Dialogue history merge worker exited (%s)', type(error).__name__)
+
+
+async def _cleanup_history_merge_worker(app):
+    state = app[_HISTORY_MERGE_WORKER]
+    if state.stopping:
+        return
+    state.stopping = True  # Fence deferred readiness before the first await.
+    task = state.task
+    if task is None or task.done():
+        return
+    # No job mutation from shutdown. Cancelling a provider wait leaves its
+    # durable lease recoverable; an already-started finite DB thread may finish.
+    task.cancel()
+    # wait_for waits for cancellation acknowledgement and can overrun. This
+    # timeout bounds the aiohttp cleanup even if cancellation is delayed.
+    _, pending = await asyncio.wait({task}, timeout=_HISTORY_MERGE_CLEANUP_SECONDS)
+    if pending:
+        logging.getLogger(__name__).warning('Dialogue history merge worker cleanup reached its time limit')
+
+
+def _start_history_merge_worker(app):
+    state = app.get(_HISTORY_MERGE_WORKER)
+    if state is None or state.stopping or state.task is not None:
+        return
+    from tenant_dialog_history_merge_jobs import enabled, worker
+    if enabled():
+        state.task = asyncio.create_task(worker(), name='tenant-history-merge-worker')
+        state.task.add_done_callback(_history_merge_worker_done)
+
+
 async def start_worker(app, worker, kommo_request, logger, wait_slot,
                        *, prepare_database_first=False,
                        simulation_worker=None, prepare=prepare_database,require_ready=require_database_ready) -> None:
@@ -245,6 +306,7 @@ async def start_worker(app, worker, kommo_request, logger, wait_slot,
     await asyncio.to_thread(require_ready)
     app["tenant_ai_agent_worker"] = asyncio.create_task(
         worker(kommo_request, logger, wait_slot), name="tenant-ai-agent-worker")
+    _start_history_merge_worker(app)
     if simulation_worker is not None:
         from tenant_ai_agent_runtime_flags import enabled as runtime_flag
         if runtime_flag('AI_SIMULATION_ENABLED'):

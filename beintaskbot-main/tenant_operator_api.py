@@ -69,6 +69,8 @@ def handler(member_from_request,origin,logger,resource):
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
                 elif resource=='dialogs':
                     options={'combine_history':True} if query.get('paired_history')=='1' else {}
+                    if options and query.get('mixed_history_card')=='1':
+                        options['allow_mixed_history_card']=True
                     if query.get('completion_preview')=='1': options['completion_preview']=True
                     if 'lifecycle' in query: options['lifecycle']=query['lifecycle']
                     if query.get('search_overview')=='1' and query.get('search','').strip():
@@ -120,7 +122,7 @@ def handler(member_from_request,origin,logger,resource):
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','quick_replies'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','dialog_history_merges','quick_replies'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -130,6 +132,9 @@ def handler(member_from_request,origin,logger,resource):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 payload={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
+                if resource=='dialog_history_merges':
+                    from tenant_dialog_history_merge_jobs import action as history_merge_action
+                    return web.json_response({'success':True,'result':{'job':await asyncio.to_thread(history_merge_action,profile,payload)}},headers=headers)
                 if resource=='dialog_duplicates':
                     # Query text may contain an exact phone; do not put it in access-log URLs.
                     from tenant_dialog_duplicates import discover

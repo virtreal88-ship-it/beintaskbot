@@ -296,11 +296,15 @@ def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, mess
         return False
     if is_online(cur,tenant,row['operator_id'],source_channel=channel):
         return False
+    # Operator routing eligibility excludes owners. An active owner's
+    # availability is informational and must not release an accepted dialog.
     cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
         id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
         FROM saas_dialog_episodes e
         WHERE w.tenant_id=%s::uuid AND w.channel_id=%s::uuid AND w.conversation_id=%s
           AND w.id=e.id AND e.tenant_id=w.tenant_id AND w.state='accepted' AND e.closed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM saas_tenant_members m
+            WHERE m.tenant_id=w.tenant_id AND m.telegram_id=w.operator_id AND m.active AND m.role='owner')
           AND w.last_inbound_id IS DISTINCT FROM %s
           AND %s::timestamptz>GREATEST(e.accepted_at,w.updated_at)
         RETURNING w.updated_at""",
@@ -840,11 +844,35 @@ def _mutate_once(profile, payload):
             if (action=='accept' and exact_route) or individual_close:
                 result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
                                                         current,rollout,policy,closed_episode)
-            if action=='dismiss':result['lifecycle']['no_reply_needed']=True
+            audit_id = marker if action=='dismiss' else str(uuid.uuid4())
+            audit_action = 'dialog_no_reply' if action=='dismiss' else 'dialog_'+action
+            audit_episode = current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']
+            audit_payload = {'channel_id':channel,'conversation_id':conversation,
+                             'operator_id':current['operator_id'],'revision':current['revision']}
+            if action=='dismiss':
+                audit_payload.update(message_id=payload['message_id'],counts_as_missed=False)
+            if bound_on_close:
+                audit_payload['company_bound_on_close']=bound_on_close
+            if action=='close' and payload.get('company_choice') in ('none','unchanged'):
+                audit_payload['company_choice']=payload['company_choice']
+            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb) RETURNING created_at''',
+              (audit_id,tenant,actor,audit_action,str(audit_episode),json.dumps(audit_payload)))
+            if action=='dismiss':
+                result['lifecycle']['no_reply_needed']=True
+            if action in ('accept','dismiss','close','transfer'):
+                result['operator_event']={
+                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else action,
+                    'at':cur.fetchone()['created_at'].isoformat()}
+                if action=='accept':
+                    result['operator_event']['employee_name']=str(policy.profile.get('display_name') or '').strip()[:120]
+                if action=='transfer':
+                    cur.execute('''SELECT display_name FROM saas_tenant_members
+                      WHERE tenant_id=%s::uuid AND telegram_id=%s''',(tenant,current['operator_id']))
+                    recipient=cur.fetchone() or {}
+                    result['operator_event']['employee_name']=str(recipient.get('display_name') or '').strip()[:120]
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
-            cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(marker if action=='dismiss' else str(uuid.uuid4()),tenant,actor,'dialog_no_reply' if action=='dismiss' else 'dialog_'+action,str(current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id'],'counts_as_missed':False} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':payload['company_choice']} if action=='close' and payload.get('company_choice') in ('none','unchanged') else {})})))
         conn.commit()
     return result
 

@@ -65,8 +65,8 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  const input=w.document.getElementById('chatText'),button=w.document.getElementById('operatorReplyTemplatesOpen');
  assert.ok(w.document.querySelector('#operatorMenuExtra').contains(button),'template control is in the header menu');
  assert.equal(button.textContent,'Templates','the header menu shows the launcher label');
- assert.equal(button.getAttribute('aria-label'),'Templates');
- assert.equal(button.querySelector('svg').getAttribute('aria-hidden'),'true');
+ assert.equal(button.getAttribute('role'),'menuitem');
+ assert.equal(button.querySelector('svg'),null,'the template launcher is text only');
  assert.equal(dealActions.querySelector('#operatorReplyTemplatesOpen'),null,'decoy deal composer with overlapping IDs is not mounted');
  assert.equal(calls.length,1,'templates are loaded once for the current tenant');
  input.value='welcome';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();

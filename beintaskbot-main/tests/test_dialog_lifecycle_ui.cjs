@@ -6,6 +6,8 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'client',agent_id:'agent',agent_name:'Agent',state:'human',can_send:false,send_block_reason:'dialog_accept_required',controls_allowed:true,available_actions:['resume'],lifecycle_enabled:true,lifecycle:{id:'episode',state:'waiting',revision:1,can_accept:true,last_inbound_id:'latest-inbound'}};
+ const rhetoricalEvent={id:'rhetorical-event',kind:'no_reply',at:'2026-01-01T00:30:00Z'};
+ let rhetoricalHistoryPause;
  let failed=false,hold=false,release,denyHistory=false,denyCase=false;let caseResult={case_state:'completed',case_id:'draft'};const calls=[];
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.fetch=async(url,options={})=>{url=String(url);const body=options.body?JSON.parse(options.body):null;calls.push({url,body});let result;
@@ -17,8 +19,9 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(body.action==='start'){route={...route,archive_read_only:false,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
    if(body.action==='dismiss'){route={...route,lifecycle:{...route.lifecycle,revision:5,no_reply_needed:true,can_dismiss:false}};}
-   result={lifecycle:route.lifecycle,controls:{lifecycle:route.lifecycle,can_send:route.can_send},...(body.action==='case'?caseResult:{})};
-  }else if(url.includes('/dialogs/history')){if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null};}
+   result={lifecycle:route.lifecycle,controls:{lifecycle:route.lifecycle,can_send:route.can_send},...(body.action==='case'?caseResult:{}),...(body.action==='dismiss'?{operator_event:rhetoricalEvent}:{})};
+  }else if(url.includes('/dialogs/history')){if(rhetoricalHistoryPause)await rhetoricalHistoryPause;if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null,
+   ...(route.lifecycle.no_reply_needed?{operator_events:[rhetoricalEvent]}:{})};}
   else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[],attention_count:0,next_offset:null};
   else if(url.includes('/api/platform/me'))return{ok:true,json:async()=>profile};
   else if(url.includes('/dialogs/read'))result={updated:true};
@@ -57,7 +60,14 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  route={...route,can_send:true,lifecycle:{state:'accepted',revision:4,operator_id:33,can_close:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
  await w.tenantOperator.openDialog(route);const rhetorical=d.querySelector('[data-operator-lifecycle=dismiss]');
  assert.equal(rhetorical.textContent,'Ritorik sual');assert.equal(rhetorical.nextElementSibling.dataset.operatorLifecycle,'close');
+ let resumeRhetoricalHistory;
+ rhetoricalHistoryPause=new Promise(resolve=>{resumeRhetoricalHistory=resolve;});
  rhetorical.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');
+ const renderedRhetorical=()=>d.querySelectorAll('#chatRows [data-operator-timeline-event="rhetorical-event"]');
+ assert.equal(renderedRhetorical().length,1,'the POST receipt renders the event before history refresh returns');
+ assert.equal(renderedRhetorical()[0].firstElementChild.textContent,'Cavab ritorikdir');
+ rhetoricalHistoryPause=null;resumeRhetoricalHistory();await tick();await tick();
+ assert.equal(renderedRhetorical().length,1,'history refresh reconciles the same audit ID');
  assert(d.querySelector('#chatRows'),'rhetorical mark retains the active conversation');assert(d.querySelector('[data-operator-lifecycle=dismiss]').disabled);assert.equal(d.querySelector('[data-operator-lifecycle=dismiss]').getAttribute('aria-pressed'),'true');
  assert(d.querySelector('[data-operator-lifecycle=close]'),'rhetorical mark keeps explicit completion');assert(!d.querySelector('#sendChat').disabled);
  assert.equal(calls.filter(c=>c.body?.action==='case').length,3);
@@ -228,7 +238,8 @@ async function verifySidebarTransfer(){
  w.fetch=async(url,opt={})=>{
    const path=new URL(url,w.location.origin),body=opt.body?JSON.parse(opt.body):null;
    const ok=result=>({ok:true,status:200,json:async()=>({success:true,result})});
-   if(path.pathname.endsWith('/dialogs/history'))return ok({dialog:path.searchParams.get('channel_id')==='passive'?passive:own,messages:[]});
+   if(path.pathname.endsWith('/dialogs/history'))return ok({dialog:path.searchParams.get('channel_id')==='passive'?passive:own,
+     messages:[{id:'handoff-private-message',direction:'incoming',body:'Private conversation'}]});
    if(path.pathname.endsWith('/dialogs/transfer-candidates')){
      assert.equal(path.searchParams.get('channel_id'),'exact-source');assert.equal(path.searchParams.get('expected_revision'),'3');
      assert.equal(path.searchParams.get('expected_user_id'),'33');
@@ -238,7 +249,8 @@ async function verifySidebarTransfer(){
    if(path.pathname.endsWith('/dialogs_lifecycle')){
      requests.push(body);
      if(failed)return{ok:false,status:403,json:async()=>({success:false})};
-     return ok({lifecycle:{...own.lifecycle,revision:4,operator_id:44}});
+     return ok({lifecycle:{...own.lifecycle,revision:4,operator_id:44},
+       operator_event:{id:'confirmed-transfer',kind:'transfer',at:'2026-01-02T12:00:00Z',employee_name:'Online operator'}});
    }
    if(path.pathname.endsWith('/dialogs/company-panel/preferences'))return ok({open:body?.open||false});
    if(path.pathname.endsWith('/dialogs'))return ok({dialogs:[],channels:[],agents:[]});
@@ -282,6 +294,12 @@ async function verifySidebarTransfer(){
  assert.equal(requests.length,2,'one POST per confirmed choice, even with rapid repeated click');
  assert.equal(requests[1].online_only,true);assert.equal(requests[1].target_employee_id,44);assert.equal(requests[1].expected_revision,3);
  assert.equal(requests[1].channel_id,'exact-source');assert(!d.querySelector('#operatorLifecycleModal'));
- assert(!d.querySelector('#chatRows'),'successful transfer leaves the transferred chat');
+ const confirmation=d.querySelector('#chatRows [data-operator-timeline-event="confirmed-transfer"]');
+ assert.equal(confirmation?.firstElementChild.textContent,'Dialog transferred: Online operator');
+ assert(!d.querySelector('#chatRows [data-message-id]'),'the outgoing history is no longer visible');
+ assert(!d.querySelector('#sendChat'),'the transferred chat no longer has a composer');
+ d.querySelector('#operatorConversationHeader [data-operator-back]').click();
+ assert(!d.querySelector('#operatorTransferConfirmation'));
+ assert.equal(d.querySelector('#operatorDialogs').dataset.conversationOpen,'false');
  dom.window.close();
 }

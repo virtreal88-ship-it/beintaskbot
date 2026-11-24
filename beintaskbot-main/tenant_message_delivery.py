@@ -21,7 +21,12 @@ STATES = {'pending', 'retrying', 'unknown', 'failed', 'sent', 'delivered', 'read
 
 def candidates(result):
     batches = {}
-    if result.get('dialog', {}).get('provider') != 'connect':
+    dialog=result.get('dialog',{})
+    if dialog.get('provider') != 'connect':
+        return batches
+    merge_projection=bool(dialog.get('history_merge_id'))
+    if merge_projection and any(dialog.get(flag) for flag in (
+            'archive_read_only','owner_overview_read_only','search_overview_read_only')):
         return batches
     for message in result.get('messages', [])[:50]:
         if message.get('direction') != 'outgoing' or message.get('source') != 'connect':
@@ -37,6 +42,11 @@ def candidates(result):
         except (ValueError, TypeError, KeyError):
             continue
         key = (channel, conversation, lead)
+        # The merged transcript may include a separately authorized passive
+        # companion. Do not try to acquire fresh ACK privileges for it or fail
+        # the entire visible page because its normal action route is not owned.
+        if merge_projection and key != (str(dialog.get('channel_id')),dialog.get('conversation_id'),dialog.get('lead_id')):
+            continue
         if key not in batches and len(batches) >= 8: continue
         batches.setdefault(key, {})[ident] = message
     return batches

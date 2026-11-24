@@ -19,7 +19,7 @@ def discover(profile, params):
         tenant,actor,policy=access(cur,profile,'dialogs')
         if policy.profile.get('role')!='owner':
             raise TenantLinearError('Поиск дублей доступен владельцу.',403)
-        sql,scopes=projection(cur,policy,allow_closed_archive=True)
+        sql,scopes=projection(cur,policy,allow_closed_archive=True,duplicate_metadata_only=True)
         args=[tenant,tenant,*scopes,enabled('AI_AGENTS_ENABLED')]
         from tenant_schema_preflight import ready
         aliases=ready(cur,{'saas_connect_direct_identities':('tenant_id','connect_channel_id','canonical_conversation_id','identity_key')},[])

@@ -464,7 +464,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False, search_overview=False):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False, search_overview=False, duplicate_metadata_only=False):
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -521,6 +521,29 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         manual_phone="COALESCE(CASE WHEN "+canonical_direct+" THEN mdp.phone END,'')"
         phone_join='''LEFT JOIN saas_connect_dialog_display_phones mdp ON mdp.tenant_id=c.tenant_id
           AND mdp.channel_id=c.connect_channel_id AND mdp.conversation_id=c.conversation_id AND mdp.lead_id=c.lead_id'''
+    # Discovery needs stored metadata; no latest-message or cursor query.
+    if duplicate_metadata_only:
+        if include_read_cursors:
+            raise ValueError('metadata-only cannot project read cursors')
+        null_preview = ("NULL::text AS last_message_id,NULL::text AS last_message_direction,"
+                        "NULL::text AS last_message_type,NULL::text AS last_message_text")
+        connect_latest = "LEFT JOIN LATERAL(SELECT c.last_message_at,"+null_preview+") lm ON TRUE\n"
+        kommo_latest = "JOIN LATERAL(SELECT ''::text AS channel,NULL::timestamptz AS last_message_at,"+null_preview+") lm ON FALSE\n"
+    else:
+        connect_latest = '''      LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
+          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
+        FROM saas_crm_messages m
+        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL
+          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
+            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
+        ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
+'''
+        kommo_latest = '''      JOIN LATERAL(SELECT m.channel,COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
+          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
+        FROM saas_crm_messages m
+        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
+        ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
+'''
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(meaningful_name.dialog_name,NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
@@ -550,14 +573,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         AND j0.channel_id=c.connect_channel_id::text AND j0.conversation_id=c.conversation_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_agents a ON a.tenant_id=c.tenant_id AND a.id=cs.agent_id
       LEFT JOIN saas_ai_agent_settings s ON s.tenant_id=c.tenant_id
-      LEFT JOIN LATERAL(SELECT COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
-          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
-        FROM saas_crm_messages m
-        WHERE m.tenant_id=c.tenant_id AND m.kommo_lead_id=ANY(ARRAY(SELECT c.lead_id UNION ALL
-          SELECT dl.source_lead FROM saas_connect_dialog_links dl WHERE dl.tenant_id=c.tenant_id
-            AND dl.channel_id=c.connect_channel_id AND dl.canonical_id=c.conversation_id AND dl.active)) AND m.channel='connect:'||c.connect_channel_id::text
-        ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE ('''+ticket_filter+''') AND st.tenant_id=c.tenant_id
+'''+connect_latest+'''      LEFT JOIN LATERAL(SELECT st.* FROM saas_support_tickets st WHERE ('''+ticket_filter+''') AND st.tenant_id=c.tenant_id
         AND st.channel_id=c.connect_channel_id AND st.status<>'resolved'
         AND (st.conversation_id=c.conversation_id OR EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
           WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id
@@ -601,12 +617,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         EXISTS(SELECT 1 FROM saas_tenant_integrations i WHERE i.tenant_id=d.tenant_id AND i.provider='kommo' AND i.status='connected'),
         NULL::text,NULL::text,NULL::timestamptz,NULL::text,NULL::text,d.pipeline_id::text,d.status_id::text
       FROM saas_crm_deals d JOIN saas_tenants t ON t.id=d.tenant_id
-      JOIN LATERAL(SELECT m.channel,COALESCE(m.happened_at,m.created_at) AS last_message_at,m.id::text AS last_message_id,
-          m.direction AS last_message_direction,m.message_type AS last_message_type,left(COALESCE(m.body,''),240) AS last_message_text
-        FROM saas_crm_messages m
-        WHERE m.tenant_id=d.tenant_id AND m.kommo_lead_id=d.kommo_lead_id AND m.channel NOT LIKE 'connect:%%'
-        ORDER BY COALESCE(m.happened_at,m.created_at) DESC,m.id DESC LIMIT 1) lm ON TRUE
-      LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
+'''+kommo_latest+'''      LEFT JOIN LATERAL(SELECT j0.* FROM saas_ai_agent_jobs j0 WHERE j0.tenant_id=d.tenant_id AND j0.provider='kommo'
         AND j0.lead_id=d.kommo_lead_id ORDER BY j0.updated_at DESC LIMIT 1) j ON TRUE
       LEFT JOIN saas_ai_conversation_state cs ON cs.tenant_id=d.tenant_id AND cs.provider='kommo' AND cs.conversation_id=j.conversation_id AND cs.channel_id=j.scope_channel_id
       LEFT JOIN saas_ai_agents a ON a.tenant_id=d.tenant_id AND a.id=j.agent_id
@@ -678,10 +689,12 @@ _HANDOFF_REASONS={'human_handoff','operator_handoff','trigger_reply_sent_then_ha
 def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
     """Batch only authorized, exact direct routes; LID digits are not phones."""
     from tenant_connect_direct_identity import direct_identity, phone_jid
+    from tenant_whatsapp_contact_refresh import attach_display_phones
     pending={(str(d['channel_id']),d['conversation_id']):d for d in dialogs
              if d.get('provider','connect')=='connect'
              and d.get('customer_kind')!='group' and d.get('conversation_kind')!='group'
              and direct_identity(d.get('conversation_id'))}
+    display_candidates=list(pending.values())
     if check_conflicts:
         lids=[{'channel':ch,'conversation':conv} for ch,conv in pending if conv.endswith('@lid')]
         if lids:
@@ -697,7 +710,9 @@ def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
                     if dialog is not None:
                         dialog.update(phone='',contact_identity_conflict=True)
     pending={key:d for key,d in pending.items() if not d.get('phone')}
-    if not pending:return
+    if not pending:
+        attach_display_phones(cur, tenant, display_candidates)
+        return
     phones={key:{phone_jid(key[1])}-{''} for key in pending}
     cur.execute("SELECT to_regclass('public.saas_connect_direct_identities') AS relation")
     if (cur.fetchone() or {}).get('relation'):
@@ -715,8 +730,7 @@ def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
             if match:pending[key]['phone']='+'+match[1]
         elif check_conflicts and len(candidates)>1 and key[1].endswith('@lid'):
             pending[key]['contact_identity_conflict']=True
-    from tenant_whatsapp_contact_refresh import attach_display_phones
-    attach_display_phones(cur, tenant, pending.values())
+    attach_display_phones(cur, tenant, display_candidates)
 
 
 def _attach_verified_phone(cur,tenant,dialog):
@@ -1090,7 +1104,7 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False,
-            owner_overview=False,search_overview=False):
+            owner_overview=False,search_overview=False,allow_mixed_history_card=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1304,6 +1318,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=[r for r in rows if str(r.get('agent_id') or '')==selected_agent]
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
+            if interactive and combine_history and not completion_preview and not all_rows and not search_overview:
+                # Fold only two original visible physical routes, after filtering and
+                # before pagination. Keep counters and controls independent.
+                from tenant_dialog_history_merge_cards import fold_completed
+                merge_channel=str(channel).removeprefix('connect:') if str(channel).startswith('connect:') else None
+                rows=fold_completed(cur,tenant,policy,rows,history_companions,channel=merge_channel,
+                    allow_mixed=bool(allow_mixed_history_card and lifecycle=='all' and rollout.enforced))
             # Adding a read-only sibling must not replace an actionable route.
             rows=_fold_group_routes(rows,prefer_actionable=owner_overview or (interactive and employee_all))
             total_count=len(rows)
@@ -1489,6 +1510,14 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     # both exact routes have independently passed view checks.
                     return {'combined_dialog':{'provider':'connect','channel_id':channel,
                         'conversation_id':paired_history['primary_id'],'lead_id':paired_history['primary_lead']}}
+            history_merge=None
+            if (combine_history and not (support_case_only or search_overview or anchor)
+                    and provider=='connect' and not paired_history and len(history_members)==1
+                    and requested_route=={'provider':provider,'channel_id':channel,
+                                          'conversation_id':conversation,'lead_id':lead_id}):
+                from tenant_dialog_history_merge_projection import history_pair as completed_merge, lifecycle_enabled as merged_lifecycle
+                if not shared_archive or merged_lifecycle():
+                    history_merge=completed_merge(cur,tenant,policy,channel,conversation,lead_id,owner_overview=owner_overview)
             message_leads=history_leads.copy()
             if paired_history:
                 message_leads.append(paired_history['alternate_lead'])
@@ -1509,6 +1538,17 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['wecall']=bool(native_modes(cur,tenant).get(channel,{}).get('enabled'))
             if paired_history:
                 dialog['history_pair_id']=paired_history['id']
+            if history_merge:
+                dialog['history_merge_id']=history_merge.get('projection_revision',history_merge['id'])
+                for field in ('name','phone'):
+                    value=history_merge.get('display_'+field)
+                    if value:
+                        dialog['history_merge_display_'+field]=value
+                if history_merge.get('action_routes'):
+                    dialog['history_merge_action_routes']=history_merge['action_routes']
+                if history_merge.get('read_routes'):
+                    dialog['history_merge_certificate']=history_merge['id']
+                    dialog['history_merge_read_routes']=history_merge['read_routes']
             restricted_ai = _scoped_ai_documents(policy)
             # This server-produced binding is emitted only after the requested
             # route passes assert_route and the canonical route is visible.
@@ -1577,6 +1617,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 if not shared_archive:
                     require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
             group_channels=None
+            merge_timeline_boundary={}
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 from tenant_dialog_access import allowed_channels
@@ -1585,6 +1626,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                   channel_ids=group_channels,transcript_only=shared_archive)
                 for message in messages:
                     message['source_conversation_id']=conversation
+            elif history_merge:
+                from tenant_dialog_history_merge_projection import page as merged_page
+                messages=merged_page(cur,tenant,channel,history_merge,before=identifier(before) if before else None,
+                                     call_filter=_RECORDED_CALL_OBSERVATION_FILTER,
+                                     timeline_boundary=merge_timeline_boundary)
             else:
                 args=[tenant,message_leads,row['history_channel']];clause=''
                 if anchor_at:
@@ -1616,8 +1662,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 _attach_saved_audio_transcripts(cur,tenant,messages[:50],conversation_id=conversation,view_channel=channel)
                 _attach_saved_visual_status(cur,tenant,messages[:50])
                 _attach_call_recording_directions(cur,tenant,messages[:50])
-                from tenant_whatsapp_native_reactions import attach as attach_reactions
-                attach_reactions(cur,tenant,messages[:50])
+                if not history_merge:
+                    from tenant_whatsapp_native_reactions import attach as attach_reactions
+                    attach_reactions(cur,tenant,messages[:50])
             captured_group=[]
             if provider=='connect' and group_jid(conversation):
                 # A displayed group event can be represented by another channel's
@@ -1664,6 +1711,15 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
                 search_observer=search_observer,
                 _can_update=action_capabilities.get('update',False),_policy=policy)
+            if history_merge and not shared_archive and dialog.get('can_send') is True:
+                # A companion is a read projection only, even when the actor
+                # can act on it by explicitly opening its own separate route.
+                exact_messages=[m for m in messages[:50] if (
+                    m.get('source_channel_id'), m.get('source_conversation_id'), m.get('source_lead_id')
+                ) == (channel, conversation, lead_id)]
+                if exact_messages:
+                    from tenant_whatsapp_native_reactions import attach as attach_reactions
+                    attach_reactions(cur,tenant,exact_messages)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
             if before is None and not shared_archive:
@@ -1689,7 +1745,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_dialog_operator_timeline import page as operator_event_page
                 operator_timeline=operator_event_page(conn,cur,tenant,channel,conversation,messages=messages,
                     before=identifier(before) if before else None,history_leads=history_leads,
-                    history_channel=row['history_channel'],group_channels=group_channels)
+                    history_channel=row['history_channel'],group_channels=group_channels,
+                    authorized_before_stamp=merge_timeline_boundary.get('before_stamp'))
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
             if (include_shared_reminder_events and not shared_archive and provider=='connect' and not anchor

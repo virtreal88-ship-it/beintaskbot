@@ -478,6 +478,7 @@ def test_device_display_uses_exact_source_for_same_lid(setup, monkeypatch):
     import tenant_whatsapp_contact_refresh as refresh
     import tenant_whatsapp_integration as integration
     from test_tenant_support_inbox import PROFILE
+    from tenant_connect_direct_identity import record_conflict
     from tenant_connect_transport import _upsert_conversation
 
     db, _, _, remote = setup
@@ -495,7 +496,9 @@ def test_device_display_uses_exact_source_for_same_lid(setup, monkeypatch):
         phone = f'+1555000000{n}'
         with db.cursor() as cur:
             lead = _upsert_conversation(cur, A, channel, lid, {'kind': 'contact'})
-            _upsert_conversation(cur, A, channel, phone[1:]+'@s.whatsapp.net', {'kind': 'contact'})
+            pn = phone[1:]+'@s.whatsapp.net'
+            _upsert_conversation(cur, A, channel, pn, {'kind': 'contact'})
+            record_conflict(cur, A, channel, lid, lid, {'directIdentity': {'lid': lid, 'jid': pn}}, 'synthetic')
         cards.append(({'lead_id': lead, 'conversation_id': lid, 'channel_id': channel}, phone))
         db.commit()
     flag = ','.join(f'{A}:{channel}' for channel in channels)
@@ -511,4 +514,63 @@ def test_device_display_uses_exact_source_for_same_lid(setup, monkeypatch):
         assert all(row['device_display_phone'] == phone for row, phone in cards)
         monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', flag+',invalid')
         assert not refresh.enabled_for(A, channels[0])
+    db.commit()
+
+
+def test_exact_split_conflict_shows_device_phone_without_routing_change(active, monkeypatch):
+    import asyncio
+    import tenant_whatsapp_contact_refresh as refresh
+    import tenant_operator_dialogs as dialogs
+    from tenant_connect_direct_identity import record_conflict
+    from tenant_connect_transport import _upsert_conversation
+
+    db, channel, _, _, _ = active
+    scope = (A, channel)
+    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', ':'.join(scope))
+    monkeypatch.setattr(refresh, '_connect', lambda: db)
+    lid, pn = '188888888@lid', '15550000003@s.whatsapp.net'
+    phone = '+15550000003'
+    with db.cursor() as cur:
+        lead = _upsert_conversation(cur, *scope, lid, {'kind': 'contact'})
+        _upsert_conversation(cur, *scope, pn, {'kind': 'contact'})
+        record_conflict(cur, *scope, lid, lid, {'directIdentity': {'lid': lid, 'jid': pn}}, 'synthetic')
+        record_conflict(cur, *scope, lid, lid, {}, 'synthetic-no-alt')
+    db.commit()
+    binding, rows = refresh.candidates(*scope, 0)
+    candidate = {'lead_id': lead, 'conversation_id': lid}
+    assert rows == [candidate]
+
+    async def no_device_proof(_):
+        return {}
+
+    monkeypatch.setattr(refresh, 'fetch_contact', no_device_proof)
+    assert asyncio.run(refresh.refresh_batch(*scope)) == (0, 1, 0, 0)
+    assert not db.execute('SELECT 1 FROM saas_whatsapp_device_display_phones')
+    db.commit()
+
+    async def confirmed(route):
+        assert route['conversation_id'] == lid and route['native'] == binding
+        return {'phone': phone}
+
+    monkeypatch.setattr(refresh, 'fetch_contact', confirmed)
+    tables = ('saas_connect_conversations', 'saas_connect_direct_identities', 'saas_connect_dialog_links',
+              'saas_crm_messages', 'saas_connect_identity_conflicts')
+    before = {table: db.execute('SELECT * FROM '+table) for table in tables}
+    db.commit()
+    assert asyncio.run(refresh.refresh_batch(*scope)) == (0, 1, 1, 0)
+    assert {table: db.execute('SELECT * FROM '+table) for table in tables} == before
+    row = {**candidate, 'phone': '', 'provider': 'connect', 'channel_id': channel}
+    detail = dict(row)
+    with db.cursor() as cur:
+        dialogs._attach_verified_phones(cur, A, [row], check_conflicts=True)
+        dialogs._attach_verified_phone(cur, A, detail)
+    assert row == detail
+    assert row['device_display_phone'] == phone and row['phone'] == '' and row['contact_identity_conflict']
+
+    with db.cursor() as cur:
+        other = '15550000004@s.whatsapp.net'
+        record_conflict(cur, *scope, lid, lid, {'directIdentity': {'lid': lid, 'jid': other}}, 'synthetic-other')
+        stale = {**candidate, 'phone': '', 'provider': 'connect', 'channel_id': channel}
+        dialogs._attach_verified_phone(cur, A, stale)
+    assert stale['contact_identity_conflict'] and 'device_display_phone' not in stale
     db.commit()

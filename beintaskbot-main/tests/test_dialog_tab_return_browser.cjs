@@ -69,9 +69,15 @@ function gate(){
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
     const companyPanel=page.locator('#operatorCompanyPanelOpen');
-    await company.waitFor();
     const more=page.locator('#operatorMoreActions > summary');
-    await more.click();await templates.waitFor();await more.click();
+    async function expectTemplatesAvailable(){
+      // Templates now live in the actions menu, not directly in the header.
+      const wasOpen=await more.evaluate(summary=>summary.parentElement.open);
+      if(!wasOpen)await more.click();
+      await templates.waitFor({state:'visible'});
+      if(!wasOpen)await more.click();
+    }
+    await company.waitFor();await expectTemplatesAvailable();
     await input.fill('Unsaved reply');
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true');
     assert.deepEqual(preferenceWrites,[],'desktop opens the details panel automatically without a saved preference');
@@ -105,7 +111,7 @@ function gate(){
     // App navigation retains the chat body but must restore controls removed by view exit.
     await page.evaluate(()=>window.tenantAppNavigate('tasks',false));
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
-    await company.waitFor();await templates.waitFor();
+    await company.waitFor();await expectTemplatesAvailable();
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','desktop details panel stays open on return');
     assert.equal(await input.inputValue(),'Unsaved reply');
     historyGate.release();historyGate=null;
@@ -113,7 +119,9 @@ function gate(){
     // API-level access can disappear while the profile capability still says yes.
     featuresDenied=true;
     await tab(true);await tab(false);
-    await company.waitFor({state:'hidden'});await templates.waitFor({state:'hidden'});
+    await company.waitFor({state:'hidden'});
+    // Closed menus also hide the button, so test the permission state itself.
+    await page.waitForFunction(()=>!document.querySelector('#operatorReplyTemplatesOpen:not([hidden])'));
     assert.equal(await input.inputValue(),'Unsaved reply');
     // A route can disappear independently of the identity returned by /me.
     dialogDenied=true;
@@ -123,7 +131,7 @@ function gate(){
     dialogDenied=false;featuresDenied=false;
     await tab(true);await tab(false);
     await page.locator('.operator-row').first().click();
-    await input.waitFor();await company.waitFor();await templates.waitFor();
+    await input.waitFor();await company.waitFor();await expectTemplatesAvailable();
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','panel is already restored after authorized reopening');
     assert.deepEqual(preferenceWrites,[],'desktop access loss and recovery are not preference writes');
     // Desktop visibility is determined by the viewport and does not require
@@ -131,7 +139,7 @@ function gate(){
     const readsBeforeReload=preferenceReads;
     await page.reload();
     await page.locator('.operator-row').first().click();
-    await company.waitFor();await templates.waitFor();await input.waitFor();
+    await company.waitFor();await expectTemplatesAvailable();await input.waitFor();
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','desktop details panel opens after reload');
     assert.equal(preferenceReads,readsBeforeReload);
     assert.deepEqual(preferenceWrites,[]);
