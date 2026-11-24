@@ -98,7 +98,13 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	result, err := g.messages.Deliver(ctx, session.client, request)
+	result, err := g.messages.Deliver(ctx, session.client, request, session.client.Store.LIDs)
+	if errors.Is(err, unified.ErrQuoteUnavailable) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"error": "native_quote_not_sent", "confirmed": false,
+		})
+		return
+	}
 	code := 200
 	if errors.Is(err, unified.ErrConflict) {
 		code = 409

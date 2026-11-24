@@ -6,6 +6,7 @@ import (
 	"errors"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
 	"path/filepath"
@@ -36,7 +37,7 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 	client := &outgoingClient{}
 	request := Outgoing{Scope: testScope, Operation: "op1", Chat: "15550000002@s.whatsapp.net", Kind: "document", MIME: "text/plain", Name: "test.txt", Data: []byte("synthetic")}
 	for i := 0; i < 2; i++ {
-		if _, err := j.Deliver(context.Background(), client, request); err != nil {
+		if _, err := j.Deliver(context.Background(), client, request, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -44,7 +45,7 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 		t.Fatal("duplicate or wrong media")
 	}
 	request.Data = []byte("changed")
-	if _, err := j.Deliver(context.Background(), client, request); !errors.Is(err, ErrConflict) {
+	if _, err := j.Deliver(context.Background(), client, request, nil); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
 	if client.uploads != 1 || client.sends != 1 {
@@ -56,7 +57,7 @@ func TestOutgoingUnknownCannotResend(t *testing.T) {
 	client := &outgoingClient{fail: true}
 	request := Outgoing{Scope: testScope, Operation: "op1", Chat: "15550000002@s.whatsapp.net", Kind: "text", Text: "synthetic"}
 	for i := 0; i < 2; i++ {
-		if _, err := j.Deliver(context.Background(), client, request); !errors.Is(err, ErrUnknown) {
+		if _, err := j.Deliver(context.Background(), client, request, nil); !errors.Is(err, ErrUnknown) {
 			t.Fatal(err)
 		}
 	}
@@ -76,7 +77,7 @@ func TestOutgoingMediaEvidenceSurvivesRestartWithoutResending(t *testing.T) {
 	j := journal(t, db, testScope)
 	c := &outgoingClient{}
 	req := Outgoing{Scope: testScope, Operation: "media", Chat: "15550000002@s.whatsapp.net", Kind: "image", MIME: "image/png", Data: []byte("synthetic image"), Text: "caption"}
-	if _, err := j.Deliver(ctx, c, req); err != nil {
+	if _, err := j.Deliver(ctx, c, req, nil); err != nil {
 		t.Fatal(err)
 	}
 	items, err := j.Events(ctx, 0, 50)
@@ -93,7 +94,7 @@ func TestOutgoingMediaEvidenceSurvivesRestartWithoutResending(t *testing.T) {
 	}
 	db.Close()
 	j = journal(t, database(t, path), testScope)
-	if _, err = j.Deliver(ctx, c, req); err != nil {
+	if _, err = j.Deliver(ctx, c, req, nil); err != nil {
 		t.Fatal(err)
 	}
 	again, err := j.Events(ctx, 0, 50)
@@ -112,7 +113,7 @@ func TestMediaEvidenceFailureNeverResendsAcceptedProviderCall(t *testing.T) {
 	c := &outgoingClient{}
 	req := Outgoing{Scope: testScope, Operation: "media", Chat: "15550000002@s.whatsapp.net", Kind: "image", MIME: "image/png", Data: []byte("synthetic")}
 	for i := 0; i < 2; i++ {
-		if _, err := j.Deliver(ctx, c, req); !errors.Is(err, ErrUnknown) {
+		if _, err := j.Deliver(ctx, c, req, nil); !errors.Is(err, ErrUnknown) {
 			t.Fatal(err)
 		}
 	}
@@ -135,7 +136,7 @@ func TestOutgoingScopeCannotBeOverridden(t *testing.T) {
 			request.Scope.Generation = "other"
 		}
 		client := &outgoingClient{}
-		if _, err := j.Deliver(context.Background(), client, request); !errors.Is(err, ErrConfiguration) {
+		if _, err := j.Deliver(context.Background(), client, request, nil); !errors.Is(err, ErrConfiguration) {
 			t.Fatal(field, err)
 		}
 		if client.sends != 0 || client.uploads != 0 {
@@ -158,19 +159,19 @@ func TestQuoteUsesRetainedExactMessage(t *testing.T) {
 	c := &outgoingClient{}
 	bad := req
 	bad.Chat = "15550000003@s.whatsapp.net"
-	if _, err = j.Deliver(ctx, c, bad); !errors.Is(err, ErrConflict) {
+	if _, err = j.Deliver(ctx, c, bad, nil); !errors.Is(err, ErrQuoteUnavailable) {
 		t.Fatal("cross chat quote", err)
 	}
 	bad = req
 	bad.QuoteID = "OTHER_123"
-	if _, err = j.Deliver(ctx, c, bad); !errors.Is(err, ErrConflict) {
+	if _, err = j.Deliver(ctx, c, bad, nil); !errors.Is(err, ErrQuoteUnavailable) {
 		t.Fatal("wrong quote", err)
 	}
 	if c.sends != 0 {
 		t.Fatal("invalid quote sent")
 	}
 	for i := 0; i < 2; i++ {
-		if _, err = j.Deliver(ctx, c, req); err != nil {
+		if _, err = j.Deliver(ctx, c, req, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -185,7 +186,7 @@ func TestLookupRequiresExactActorOperationAndPeer(t *testing.T) {
 	j := journal(t, database(t, filepath.Join(t.TempDir(), "lookup.db")), testScope)
 	c := &outgoingClient{}
 	request := Outgoing{Scope: testScope, Operation: "employee:11:op1", Chat: "15550000002@s.whatsapp.net", Kind: "text", Text: "synthetic"}
-	if _, err := j.Deliver(ctx, c, request); err != nil {
+	if _, err := j.Deliver(ctx, c, request, nil); err != nil {
 		t.Fatal(err)
 	}
 	for _, pair := range [][2]string{{"employee:12:op1", request.Chat}, {request.Operation, "15550000003@s.whatsapp.net"}} {
@@ -213,7 +214,7 @@ func TestQuoteOnlyUsesProviderConfirmedPNLIDPair(t *testing.T) {
 	}
 	req := Outgoing{Scope: testScope, Operation: "alias", Chat: pn, Kind: "text", Text: "synthetic reply", QuoteEvent: event, QuoteID: e.ProviderID}
 	c := &outgoingClient{}
-	if _, err = j.Deliver(ctx, c, req); err != nil {
+	if _, err = j.Deliver(ctx, c, req, nil); err != nil {
 		t.Fatal(err)
 	}
 	if c.message.GetExtendedTextMessage().GetContextInfo().GetRemoteJID() != pn {
@@ -223,11 +224,68 @@ func TestQuoteOnlyUsesProviderConfirmedPNLIDPair(t *testing.T) {
 	body, _ = json.Marshal(e)
 	req.QuoteEvent, _ = j.Append(ctx, "wrong-alias", body)
 	req.Operation = "other"
-	if _, err = j.Deliver(ctx, c, req); !errors.Is(err, ErrConflict) {
+	if _, err = j.Deliver(ctx, c, req, nil); !errors.Is(err, ErrQuoteUnavailable) {
 		t.Fatal("guessed alias accepted", err)
 	}
 	if c.sends != 1 {
 		t.Fatal("bad alias sent")
+	}
+}
+
+type quoteMapping struct {
+	store.LIDStore
+	lid, phone types.JID
+	badReverse bool
+}
+
+func (m quoteMapping) GetPNForLID(_ context.Context, lid types.JID) (types.JID, error) {
+	if lid == m.lid {
+		return m.phone, nil
+	}
+	return types.EmptyJID, nil
+}
+
+func (m quoteMapping) GetLIDForPN(_ context.Context, phone types.JID) (types.JID, error) {
+	if phone == m.phone && !m.badReverse {
+		return m.lid, nil
+	}
+	return types.EmptyJID, nil
+}
+
+func TestHistoricalQuoteUsesPairedDeviceMapping(t *testing.T) {
+	ctx := context.Background()
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "historical-alias.db")), testScope)
+	pn := types.NewJID("15550000002", types.DefaultUserServer)
+	lid := types.NewJID("1234567890", types.HiddenUserServer)
+	original, _ := proto.Marshal(&waE2E.Message{Conversation: proto.String("synthetic original")})
+	e := Envelope{Kind: "message", Chat: lid.String(), Sender: lid.String(), ProviderID: "ORIGINAL_HISTORICAL", Proto: original}
+	body, _ := json.Marshal(e)
+	event, err := j.Append(ctx, "historical", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := Outgoing{Scope: testScope, Operation: "employee:11:historical", Chat: pn.String(), Kind: "text", Text: "reply", QuoteEvent: event, QuoteID: e.ProviderID}
+	c := &outgoingClient{}
+	mapping := quoteMapping{lid: lid, phone: pn}
+	for _, lids := range []store.LIDStore{nil, quoteMapping{lid: lid, phone: pn, badReverse: true}} {
+		if _, err := j.Deliver(ctx, c, req, lids); !errors.Is(err, ErrQuoteUnavailable) {
+			t.Fatal("missing identity evidence must disallow dispatch", err)
+		}
+	}
+	if _, err := j.Lookup(ctx, req.Operation, req.Chat); err == nil || c.sends != 0 {
+		t.Fatal("a refused quote reserved or sent the operation")
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := j.Deliver(ctx, c, req, mapping); err != nil {
+			t.Fatal(err)
+		}
+	}
+	quote := c.message.GetExtendedTextMessage().GetContextInfo()
+	if c.sends != 1 || quote.GetStanzaID() != e.ProviderID || quote.GetParticipant() != lid.String() || quote.GetRemoteJID() != pn.String() {
+		t.Fatal("historical quote context lost or sent twice")
+	}
+	if _, err := j.Deliver(ctx, c, req, nil); !errors.Is(err, ErrConflict) {
+		t.Fatal("an existing operation cannot later be classified as never sent", err)
 	}
 }
 
@@ -239,11 +297,11 @@ func TestLegacyQuoteScopeAndIdempotency(t *testing.T) {
 	c := &outgoingClient{}
 	bad := req
 	bad.Chat = "15550000003@s.whatsapp.net"
-	if _, err := j.Deliver(ctx, c, bad); !errors.Is(err, ErrConfiguration) {
+	if _, err := j.Deliver(ctx, c, bad, nil); !errors.Is(err, ErrConfiguration) {
 		t.Fatal("cross chat historical quote", err)
 	}
 	for i := 0; i < 2; i++ {
-		if _, err := j.Deliver(ctx, c, req); err != nil {
+		if _, err := j.Deliver(ctx, c, req, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -251,7 +309,7 @@ func TestLegacyQuoteScopeAndIdempotency(t *testing.T) {
 		t.Fatal("historical quote lost or resent")
 	}
 	req.LegacyQuote.Text = "changed"
-	if _, err := j.Deliver(ctx, c, req); !errors.Is(err, ErrConflict) {
+	if _, err := j.Deliver(ctx, c, req, nil); !errors.Is(err, ErrConflict) {
 		t.Fatal("changed historical quote replayed")
 	}
 }

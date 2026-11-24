@@ -17,10 +17,11 @@ import (
 )
 
 var (
-	ErrConfiguration = errors.New("unified_configuration_invalid")
-	ErrConflict      = errors.New("unified_operation_conflict")
-	ErrUnknown       = errors.New("unified_send_outcome_unknown")
-	ErrCapacity      = errors.New("unified_journal_capacity")
+	ErrConfiguration    = errors.New("unified_configuration_invalid")
+	ErrConflict         = errors.New("unified_operation_conflict")
+	ErrQuoteUnavailable = errors.New("unified_quote_source_unverified")
+	ErrUnknown          = errors.New("unified_send_outcome_unknown")
+	ErrCapacity         = errors.New("unified_journal_capacity")
 )
 
 type Scope struct {
@@ -312,6 +313,20 @@ func (j *Journal) BufferSeal(kind, identity string, payload []byte) ([]byte, err
 }
 func (j *Journal) BufferOpen(kind, identity string, body []byte) ([]byte, error) {
 	return j.openForScope(j.operationScope, fmt.Sprintf("buffer:%s:%s", kind, identity), body)
+}
+
+// A quote refusal is proof of no send only when the operation was never reserved.
+func (j *Journal) rejectQuote(ctx context.Context, operation string) error {
+	var reserved bool
+	err := j.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM unified_sends WHERE scope=? AND operation=?)`,
+		j.operationScope, j.digestForScope(j.operationScope, "operation", operation)).Scan(&reserved)
+	if err != nil {
+		return err
+	}
+	if reserved {
+		return ErrConflict
+	}
+	return ErrQuoteUnavailable
 }
 
 // Lookup never connects or dispatches. Exact operation, source and peer only.

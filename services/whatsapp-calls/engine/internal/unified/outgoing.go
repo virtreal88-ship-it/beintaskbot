@@ -11,6 +11,7 @@ import (
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
@@ -91,7 +92,7 @@ func (r Outgoing) Validate(scope Scope) error {
 
 // Upload AND Send are inside one durable operation. A timeout at either step
 // remains unknown; repeating the request cannot upload/send a second time.
-func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Outgoing) (Result, error) {
+func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Outgoing, lids store.LIDStore) (Result, error) {
 	if client == nil {
 		return Result{}, ErrConfiguration
 	}
@@ -109,12 +110,12 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	if request.QuoteEvent != "" {
 		event, err := j.Event(ctx, request.QuoteEvent)
 		var evidence Envelope
-		if err != nil || json.Unmarshal(event.Payload, &evidence) != nil || evidence.Kind != "message" || evidence.Variant != "" || !quoteChatMatches(evidence, request.Chat) || evidence.ProviderID != request.QuoteID || !messagePeer.MatchString(evidence.Sender) || strings.HasSuffix(evidence.Sender, "@g.us") {
-			return Result{}, ErrConflict
+		if err != nil || json.Unmarshal(event.Payload, &evidence) != nil || evidence.Kind != "message" || evidence.Variant != "" || !quoteChatMatches(ctx, evidence, request.Chat, lids) || evidence.ProviderID != request.QuoteID || !messagePeer.MatchString(evidence.Sender) || strings.HasSuffix(evidence.Sender, "@g.us") {
+			return Result{}, j.rejectQuote(ctx, request.Operation)
 		}
 		original := &waE2E.Message{}
 		if len(evidence.Proto) == 0 || proto.Unmarshal(evidence.Proto, original) != nil {
-			return Result{}, ErrConflict
+			return Result{}, j.rejectQuote(ctx, request.Operation)
 		}
 		quote = &waE2E.ContextInfo{StanzaID: &evidence.ProviderID, Participant: &evidence.Sender, RemoteJID: &request.Chat, QuotedMessage: original}
 	}
@@ -204,7 +205,7 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	})
 }
 
-func quoteChatMatches(e Envelope, chat string) bool {
+func quoteChatMatches(ctx context.Context, e Envelope, chat string, lids store.LIDStore) bool {
 	if e.Chat == chat {
 		return true
 	}
@@ -218,5 +219,33 @@ func quoteChatMatches(e Envelope, chat string) bool {
 		}
 		alternate = e.SenderAlt
 	}
-	return alternate == chat && ((strings.HasSuffix(e.Chat, "@lid") && strings.HasSuffix(chat, "@s.whatsapp.net")) || (strings.HasSuffix(e.Chat, "@s.whatsapp.net") && strings.HasSuffix(chat, "@lid")))
+	original, err := types.ParseJID(e.Chat)
+	if err != nil {
+		return false
+	}
+	target, err := types.ParseJID(chat)
+	if err != nil {
+		return false
+	}
+	lid, phone := original, target
+	if target.Server == types.HiddenUserServer {
+		lid, phone = target, original
+	}
+	if lid.Server != types.HiddenUserServer || phone.Server != types.DefaultUserServer {
+		return false
+	}
+	if alternate != "" {
+		return alternate == chat
+	}
+	if lids == nil {
+		return false
+	}
+	// Old encrypted events may predate alternate-address capture. Only the
+	// paired device's stored bidirectional WhatsApp mapping can fill that gap.
+	savedPhone, err := lids.GetPNForLID(ctx, lid)
+	if err != nil || savedPhone != phone {
+		return false
+	}
+	savedLID, err := lids.GetLIDForPN(ctx, phone)
+	return err == nil && savedLID == lid
 }
