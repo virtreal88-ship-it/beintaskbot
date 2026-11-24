@@ -63,7 +63,8 @@ const submit=(form,value)=>{form.querySelector('input').value=value;form.dispatc
  assert.equal(merge.body.confirm,true);assert.equal(merge.body.name_lead_id,1);assert.equal(merge.body.phone_lead_id,2);
  assert(merge.body.request_id&&merge.body.precondition==='synthetic-precondition');
  assert.equal($('#operatorDuplicateSearch'),null);
- $('#operatorFindDuplicates').click();$('[data-dupe-missing]').click();await settle();
+ $('#operatorFindDuplicates').click();submit($('[data-dupe-form]'),'');await settle();
+ assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'missing');
  assert.equal($('[data-dupe-pick]'),null,'missing mode never selects merge pairs');
  const phoneForm=$('[data-dupe-phone-form]');submit(phoneForm,'+994500000009');await settle();
  const manual=seen.find(req=>req.resource==='/contact-display-phone');

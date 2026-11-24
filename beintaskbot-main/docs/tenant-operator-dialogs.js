@@ -935,13 +935,13 @@
     const node=document.createElement('dialog');
     node.id='operatorDuplicateSearch';node.setAttribute('aria-labelledby','operatorDuplicateTitle');
     node.innerHTML=`<header><h2 id="operatorDuplicateTitle">${esc(duplicateCopy('title'))}</h2><button type="button" class="outline" data-dupe-close aria-label="${esc(duplicateCopy('close'))}">×</button></header>
-      <form data-dupe-form><select data-dupe-mode aria-label="${esc(duplicateCopy('search'))}"><option value="phone">${esc(duplicateCopy('phone'))}</option><option value="name">${esc(duplicateCopy('name'))}</option></select><input type="search" maxlength="100" autocomplete="off" placeholder="${esc(duplicateCopy('query'))}" aria-label="${esc(duplicateCopy('query'))}" required><button type="submit" class="primary">${esc(duplicateCopy('search'))}</button></form>
+      <form data-dupe-form><select data-dupe-mode aria-label="${esc(duplicateCopy('search'))}"><option value="phone">${esc(duplicateCopy('phone'))}</option><option value="name">${esc(duplicateCopy('name'))}</option></select><input type="search" maxlength="100" autocomplete="off" placeholder="${esc(duplicateCopy('query'))}" aria-label="${esc(duplicateCopy('query'))}"><button type="submit" class="primary">${esc(duplicateCopy('search'))}</button></form>
       <button type="button" class="outline" data-dupe-missing>${esc(duplicateCopy('missing'))}</button>
       <p role="status" data-dupe-status></p><section data-dupe-results></section>`;
     const state={node,owner:identity(member),epoch,rev:0,mode:'phone',query:'',offset:null,results:[],selected:new Set(),keep:0,stage:'results'};
     duplicateDialog=state;document.body.append(node);
     const form=node.querySelector('form'),input=form.querySelector('input');
-    form.onsubmit=event=>{event.preventDefault();const q=input.value.trim();if(q)void searchDuplicateDialogs(state,form.querySelector('select').value,q);};
+    form.onsubmit=event=>{event.preventDefault();const q=input.value.trim();void searchDuplicateDialogs(state,q?form.querySelector('select').value:'missing',q);};
     node.querySelector('[data-dupe-missing]').onclick=()=>void searchDuplicateDialogs(state,'missing','');
     node.querySelector('[data-dupe-close]').onclick=()=>closeDuplicateSearch();
     node.addEventListener('cancel',event=>{event.preventDefault();closeDuplicateSearch();});
