@@ -72,6 +72,28 @@ async function checkReplyControls(browser,width,role){
   assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.includes('/chat/send'))),false);
   await page.locator('#operatorDiagnosticsClose').click();
   assert.equal(await page.locator('#operatorMoreActions summary').evaluate(e=>e===document.activeElement),true,'closing diagnostics returns focus to the menu');
+  if(mobile&&role==='employee'){
+    await page.evaluate(async()=>{
+      const {member}=window.tenantProfileSnapshot,route=window.testRoute;
+      sessionStorage.setItem('tenant-chat-send:'+member.tenant_id+':'+member.telegram_id+':'+route.lead_id,JSON.stringify({
+        request_id:'00000000-0000-4000-8000-000000000099',
+        quote_message_id:'long',quote_channel_id:route.channel_id,quote_conversation_id:route.conversation_id,
+        text:'Old reply'
+      }));
+      window.testRoute={...route,lifecycle:{state:'accepted',revision:2}};
+      await window.tenantOperator.openDialog(window.testRoute,true);
+    });
+    const pending=page.locator('#operatorReplyQuote[data-reply-pending=true]');
+    await pending.locator('.operator-cancel-reply').click();
+    assert.equal(await pending.isVisible(),false,'an employee can dismiss a pending quote on a phone');
+    assert.equal(await page.locator('#chatText').inputValue(),'Keep this draft');
+    assert.equal(await page.evaluate(()=>{
+      const {member}=window.tenantProfileSnapshot;
+      const saved=JSON.parse(sessionStorage.getItem('tenant-chat-send:'+member.tenant_id+':'+member.telegram_id+':41'));
+      return saved?.quote_preview_dismissed===true;
+    }),true,'dismissing the preview retains the durable request');
+    assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.includes('/chat/send')&&r.method==='POST')),false);
+  }
  }finally{await page.close();}
 }
 (async()=>{const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined,args:['--no-sandbox']});try{for(const viewport of [{width:390,height:844},{width:1440,height:900}]){
