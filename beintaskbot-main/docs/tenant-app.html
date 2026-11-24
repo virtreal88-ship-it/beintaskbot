@@ -7,7 +7,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/app/pwa-icon-192.png">
   <link rel="apple-touch-icon" href="/app/apple-touch-icon.png">
   <title>CRM Smart Assistant</title>
-  <script type="module" src="/assets/tenant-chakra-ui.js"></script>
+  <link rel="modulepreload" href="/assets/tenant-chakra-ui.js">
   <script src="/assets/tenant-search-inputs.js"></script>
   <link rel="stylesheet" href="/assets/tenant-agent-library.css">
   <link rel="stylesheet" href="/assets/tenant-ai-testing.css">
@@ -23,13 +23,13 @@
     :root{--ink:#102621;--muted:#698079;--line:#e6eeea;--paper:#f7faf8;--brand:#0a926e;--brand-deep:#086e55;--danger:#b42318;--card:#fff}html[data-app-theme=dark]{--ink:#eceef1;--muted:#a1a5ad;--line:#30343a;--paper:#0b0c0e;--brand:#39b99a;--brand-deep:#55d0ae;--danger:#ff8d84;--card:#191b1e;color-scheme:dark}html[data-app-theme=dark] .support-case-detail .outline{background:#202328;color:#80dbc3;border-color:#476259}html[data-app-theme=dark] .support-case-detail .danger{color:#ffaaa3;border-color:#78443f}html[data-app-theme=dark] .support-case-detail .badge{background:#20372f;color:#8ae0c4}
     *{box-sizing:border-box} body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
     button,input,select{font:inherit} button{cursor:pointer;border:0}.shell{min-height:100vh;display:grid;grid-template-columns:248px minmax(0,1fr)}
-    .nav .nav-icon{box-sizing:border-box;display:grid;place-items:center;flex:none;width:20px;height:20px;line-height:1}.nav .nav-icon svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+    aside{padding:26px 14px;display:flex;flex-direction:column;gap:24px;position:sticky;top:0;height:100vh}.brand{font-size:20px;font-weight:500;letter-spacing:-.6px}.company{font-size:12px;margin:4px 0 0 41px}.nav{display:grid;gap:5px}.nav button{background:transparent;color:inherit;text-align:left;border-radius:10px;padding:11px 12px;display:flex;gap:11px;align-items:center}.nav .nav-icon{box-sizing:border-box;display:grid;place-items:center;flex:none;width:20px;height:20px;line-height:1}.nav .nav-icon svg{display:block;width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.nav-group{min-width:0}.nav-group>summary{display:flex;align-items:center;gap:11px;padding:11px 12px;cursor:pointer;list-style:none}.nav-group>summary::-webkit-details-marker{display:none}.nav-submenu{display:grid;gap:3px;padding:3px 0 4px 16px}.nav-submenu button{font-size:13px;padding:9px 10px}.nav-submenu button .nav-icon{width:20px}.nav .settings{margin-top:auto}
     main{min-width:0;padding:34px clamp(18px,4vw,54px) 70px}.top{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:25px}.eyebrow{color:var(--brand);font-size:13px;font-weight:700}.top h1{font-size:28px;letter-spacing:-1px;margin:2px 0}.top p{margin:0;color:var(--muted)}.refresh,.primary{background:var(--brand);color:#fff;border-radius:10px;padding:11px 14px;font-weight:650;white-space:nowrap}.refresh:disabled,.primary:disabled{opacity:.6;cursor:wait}.primary{background:var(--brand-deep)}
     .view{display:none}.view.active{display:block}.toolbar{display:flex;gap:10px;align-items:center;margin:14px 0}.search{flex:1;min-width:0;border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);padding:11px 13px;outline:none}.search:focus{border-color:#78b9a5;box-shadow:0 0 0 3px #dff5eb}.notice{display:none;background:#fff4e5;color:#8a4b08;border:1px solid #ffd9ad;padding:10px 13px;border-radius:10px;margin:10px 0}.notice.show{display:block}.table{background:var(--card);border:1px solid var(--line);border-radius:15px;overflow:hidden}.row{display:grid;grid-template-columns:minmax(220px,1.4fr) minmax(120px,.8fr) minmax(130px,.8fr) minmax(120px,.7fr);gap:18px;padding:16px 18px;border-bottom:1px solid var(--line);align-items:center}.row:last-child{border-bottom:0}.row:hover{background:color-mix(in srgb,var(--card) 92%,var(--ink))}.deal-title{font-weight:700}.sub{color:var(--muted);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.badge{display:inline-flex;width:max-content;max-width:100%;border-radius:99px;padding:4px 9px;background:#e8f7ef;color:#087956;font-size:12px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.empty{padding:42px 20px;text-align:center;color:var(--muted)}
     .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.panel{background:#fff;border:1px solid var(--line);border-radius:16px;padding:19px}.panel h2{font-size:17px;margin:0 0 6px}.panel p{margin:0 0 15px;color:var(--muted)}.panel label{display:grid;gap:6px;color:#3d544d;font-size:13px;font-weight:650;margin:12px 0}.panel input,.panel select{width:100%;border:1px solid var(--line);border-radius:9px;padding:10px;background:#fff}.member{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}.member:last-child{border:0}.member small{display:block;color:var(--muted)}.outline{border:1px solid #b7d7ca;background:#fff;color:var(--brand-deep);padding:8px 10px;border-radius:9px;font-weight:650}.request-actions{display:flex;gap:7px}.danger{color:var(--danger);border-color:#f0b7b1}.invite-link{display:none;margin-top:12px;background:#edf9f3;border-radius:10px;padding:10px;word-break:break-all;color:#075f48;font-size:13px}.invite-link.show{display:block}.spinner{display:none;width:16px;height:16px;border:2px solid #bfe7d9;border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;margin-right:7px}.refresh.loading .spinner{display:inline-block}@keyframes spin{to{transform:rotate(360deg)}}
     .modal{display:none;position:fixed;inset:0;background:#071d1677;z-index:10;padding:20px;place-items:center}.modal.show{display:grid}.modal-card{width:min(590px,100%);background:var(--card);color:var(--ink);border-radius:18px;padding:22px;box-shadow:0 24px 80px #00170d55}.modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.modal h2{margin:0;font-size:20px}.close{background:transparent;font-size:23px;color:#61746e}.crm-modal-card{width:min(820px,100%);max-height:90vh;overflow:auto}.crm-modal-card form{margin-top:14px}.crm-modal-card label{display:grid;gap:6px;margin:8px 0;color:var(--ink)}.crm-modal-card input,.crm-modal-card select{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:10px;width:100%}.crm-toolbar-actions{display:flex;gap:9px;align-items:center}.crm-modal-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}.crm-list-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:12px}.crm-list-head h2{margin:0}.crm-list-head .search{max-width:360px}html[data-app-theme=dark] .crm-modal-card input,html[data-app-theme=dark] .crm-modal-card select{background:var(--card);color:var(--ink)}html[data-app-theme=dark] .outline{background:var(--card);color:var(--brand);border-color:var(--line)}.chat-placeholder{margin-top:15px;padding:14px;border-radius:11px;background:var(--paper);color:var(--muted)}.meta{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:15px}.meta div{background:var(--paper);border-radius:10px;padding:10px}.meta b{display:block;font-size:12px;color:#71857e;margin-bottom:3px}
     html[data-chakra-ui=ready] body{background:var(--app-bg,var(--paper))}html[data-chakra-ui=ready] main{max-width:1680px;width:100%;margin:0 auto}html[data-chakra-ui=ready] [data-basic-settings]{display:none!important}html[data-chakra-ui=ready] #tasksList,html[data-chakra-ui=ready] #customersList,html[data-chakra-ui=ready] #dealsList{border:0;background:transparent;overflow:visible}html[data-chakra-ui=ready] #view-deals .workspace-controls{display:none!important}#chakra-settings-root:empty{display:none}.advanced-settings-title{margin:28px 0 12px;padding-top:24px;border-top:1px solid var(--line)}.advanced-settings-title h2{margin:0 0 4px;font-size:18px}.advanced-settings-title p{margin:0;color:var(--muted);font-size:13px}.integration-settings-host{min-height:180px}.integration-modal-panel.panel{margin:0!important;padding:0!important;border:0!important;box-shadow:none!important;background:transparent!important}.integration-modal-panel h2{font-size:18px;margin-bottom:6px}.integration-modal-panel h3{font-size:15px;margin:18px 0 8px}.integration-modal-panel label{display:block;margin:13px 0 5px;font-size:13px;font-weight:650}.integration-modal-panel input,.integration-modal-panel select,.integration-modal-panel textarea{width:100%;margin-top:6px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--card);color:var(--ink)}.integration-modal-panel button{margin:8px 6px 0 0}.integration-modal-panel details{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--paper);color:var(--ink)}.integration-modal-panel summary{font-weight:700;cursor:pointer}
-    @media(max-width:760px){.shell{display:block}main{padding:21px 14px 86px}.top h1{font-size:24px}.top{align-items:center;flex-wrap:wrap}.top p{display:none}.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}.row{grid-template-columns:1fr auto;gap:7px;padding:14px}.row .hide-mobile{display:none}.grid{grid-template-columns:1fr}.toolbar{flex-wrap:wrap}.search{min-width:100%}.refresh{padding:10px}.meta{grid-template-columns:1fr}}
+    @media(max-width:760px){.shell{display:block}aside{height:auto;position:sticky;z-index:2;padding:10px 11px;top:0;flex-direction:row;align-items:center;gap:10px}.company{display:none}.brand{font-size:16px}.nav{margin-left:auto;display:flex;gap:2px;overflow-x:auto}.nav button{font-size:0;padding:10px}.nav button span{font-size:19px}.nav-group>summary{font-size:0;padding:10px}.nav-group>summary span{font-size:19px}.nav-submenu{position:absolute;z-index:5;right:8px;top:58px;min-width:190px;padding:7px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 25px #0004}.nav-submenu button{font-size:13px;padding:10px}.nav-submenu button span{font-size:14px!important}.nav .settings{margin-top:0}main{padding:21px 14px 86px}.top h1{font-size:24px}.top{align-items:center;flex-wrap:wrap}.top p{display:none}.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}.row{grid-template-columns:1fr auto;gap:7px;padding:14px}.row .hide-mobile{display:none}.grid{grid-template-columns:1fr}.toolbar{flex-wrap:wrap}.search{min-width:100%}.refresh{padding:10px}.meta{grid-template-columns:1fr}}
 
     #supportCases .top{flex-wrap:wrap}#supportCases .top>div{min-width:0;flex:1 1 260px}#supportCases .primary{white-space:normal}
     .support-cases-filter{position:relative;margin:0 0 14px}.support-cases-filter>summary{display:inline-flex;align-items:center;gap:8px;cursor:pointer;list-style:none;padding:9px 14px;border:1px solid var(--line);border-radius:9px;background:var(--card);font-weight:700}.support-cases-filter>summary::-webkit-details-marker{display:none}.support-cases-filter>summary::after{content:'⌄';font-size:16px;line-height:1}.support-cases-filter-panel{margin-top:8px}.support-cases-controls{display:grid;grid-template-columns:minmax(260px,1.4fr) repeat(3,minmax(150px,.7fr)) auto;gap:10px;align-items:end;padding:14px}.support-cases-controls label{min-width:0;margin:0;font-size:13px;font-weight:650}.support-cases-controls input[type=checkbox]{width:auto;justify-self:start}.support-cases-controls .support-cases-advanced{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px;padding-top:2px}.support-cases-controls .support-cases-advanced label{min-width:160px;flex:1}.support-case-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:7px 0;color:var(--muted);font-size:13px}.support-case-clarification{margin:7px 0 0;color:var(--danger);font-size:13px}.support-case-solution{margin:7px 0 0;font-size:13px;color:var(--muted)}.support-pilot-compact{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;padding:12px 14px}.support-pilot-compact p{margin:3px 0 0;font-size:13px;color:var(--muted)}.support-pilot-actions{display:flex;gap:8px;flex-wrap:wrap}.support-pilot-actions button{white-space:nowrap}
@@ -243,7 +243,7 @@
 </style>
 <style>
   #appStartup{display:none}
-  html[data-app-startup] .shell{visibility:hidden}
+  html[data-app-startup] .shell{opacity:0;pointer-events:none;interactivity:inert}
   html[data-app-startup] #appStartup{position:fixed;inset:0;z-index:10000;display:grid;place-content:center;gap:10px;padding:24px;text-align:center;background:#f9fafb;color:#18181b}
   html[data-app-startup][data-app-theme="dark"] #appStartup{background:#09090b;color:#fafafa}
   #appStartup p{margin:0}
@@ -258,8 +258,7 @@
 </div>
 <script data-app-startup>
 (() => {
-  const uiModule = document.querySelector('script[type="module"][src="/assets/tenant-chakra-ui.js"]');
-  if (!uiModule) return;
+  const uiModulePath = '/assets/tenant-chakra-ui.js';
   const root = document.documentElement;
   const status = document.getElementById('appStartupStatus');
   const retry = document.getElementById('appStartupRetry');
@@ -290,16 +289,19 @@
   }
   const wait = setTimeout(() => showRetry(messages[1]), 12000);
   function reveal() {
-    if (!viewReady || !documentReady || root.dataset.chakraUi !== 'ready') return;
+    if (!viewReady || !documentReady) return;
+    const uiModule = document.querySelector('script[type="module"][src="' + uiModulePath + '"]');
+    if (uiModule && root.dataset.chakraUi !== 'ready') return;
     clearTimeout(wait);
     delete root.dataset.appStartup;
   }
   document.addEventListener('tenant-app-first-view', () => { viewReady = true; reveal(); }, {once:true});
   document.addEventListener('DOMContentLoaded', () => { documentReady = true; reveal(); }, {once:true});
-  uiModule.addEventListener('error', () => {
+  window.addEventListener('error', event => {
+    if (event.target.getAttribute?.('src') !== uiModulePath) return;
     clearTimeout(wait);
     showRetry(messages[2]);
-  }, {once:true});
+  }, true);
 })();
 </script>
 <div class="shell">
@@ -994,6 +996,7 @@ body[data-app-ui=kwid] .app-avatar-button[data-work-status]::after{content:'';po
  <script src="/assets/tenant-members-ui.js"></script>
 <script src="/assets/tenant-dialog-source-members.js"></script>
 <script src="/assets/tenant-telegram-binding.js"></script>
+<script type="module" src="/assets/tenant-chakra-ui.js"></script>
 <script src="/assets/tenant-pwa.js"></script>
 <script src="/assets/tenant-horizontal-scroll.js"></script>
 <script src="/assets/tenant-mobile-crm-toolbar.js"></script>
