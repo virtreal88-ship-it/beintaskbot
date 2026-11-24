@@ -287,7 +287,6 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
 
 /* Unified mobile page heading and account controls. */
 .app-mobile-account-extras{display:none}
-.app-avatar-unread[hidden]{display:none!important}
 .app-visually-hidden{position:absolute!important;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @media(max-width:1023px){
  body[data-app-ui="kwid"][data-mobile-page-header] main{padding-top:calc(12px + env(safe-area-inset-top,0px))!important}
@@ -295,21 +294,19 @@ body[data-app-ui="kwid"] .notification-channels label{min-width:0;white-space:no
  body[data-app-ui="kwid"] .app-mobile-original-title{display:none!important}
  body[data-app-ui="kwid"] .app-mobile-title-row{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-width:0;padding:0 12px 12px;box-sizing:border-box;flex-shrink:0}
  body[data-app-ui="kwid"] .app-mobile-title-row h1{flex:1;min-width:0;margin:0;overflow-wrap:anywhere;font-size:24px;line-height:32px;font-weight:700;letter-spacing:-.75px;color:var(--app-ink)}
- body[data-app-ui="kwid"][data-mobile-page-header="inline"] .app-topbar{position:relative;inset:auto;flex:0 0 40px;width:40px;height:40px;padding:0;border:0;background:transparent;z-index:40}
+ body[data-app-ui="kwid"][data-mobile-page-header="inline"] .app-topbar{position:relative;inset:auto;flex:0 0 40px;width:40px;height:44px;padding:0;border:0;background:transparent;z-index:40}
+ body[data-app-ui="kwid"] .app-mobile-title-row .app-topbar:has(#dialogConsultationBell:not([hidden])){flex-basis:88px;width:88px}
  body[data-app-ui="kwid"][data-mobile-page-header="fallback"] .app-topbar{position:relative;inset:auto;height:44px;padding:0 12px;grid-column:1;grid-row:1}
  body[data-app-ui="kwid"][data-mobile-page-header="inline"] .app-topbar-context{display:none}
- body[data-app-ui="kwid"] .app-mobile-title-row .app-topbar-actions{position:relative;gap:0;margin:0}
+ body[data-app-ui="kwid"] .app-mobile-title-row .app-topbar-actions{position:relative;gap:4px;margin:0}
+ body[data-app-ui="kwid"] .app-topbar-actions>#dialogConsultationBell{width:44px;height:44px}
  body[data-app-ui="kwid"] .app-avatar-button{width:40px;height:40px;flex:none}
- body[data-app-ui="kwid"] .app-avatar-unread{position:absolute;right:0;top:0;min-width:17px;height:17px;padding:0 4px;border-radius:12px;background:var(--app-accent);color:white;font-size:10px;line-height:17px;text-align:center;pointer-events:none}
  body[data-app-ui="kwid"] .app-user-menu{position:fixed;top:calc(60px + env(safe-area-inset-top,0px));right:max(8px,env(safe-area-inset-right,0px));width:280px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 80px - env(safe-area-inset-bottom,0px));overflow-y:auto;overscroll-behavior:contain;z-index:120}
  body[data-app-ui="kwid"] .app-mobile-account-extras{display:flex;flex-direction:column}
  body[data-app-ui="kwid"] .app-account-language{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0;padding:4px 10px;min-height:44px;font-size:13px}
  body[data-app-ui="kwid"] .app-account-language select{width:auto;min-height:36px;margin:0}
  body[data-app-ui="kwid"] .app-user-menu .app-instructions-link{display:flex;justify-content:flex-start;width:100%;height:auto;box-sizing:border-box;min-height:44px;border:0;margin:0;padding:9px 10px;font-size:13px;color:var(--app-ink)}
  body[data-app-ui="kwid"] .app-user-menu .app-instructions-link span{display:inline}
- body[data-app-ui="kwid"] .app-user-menu #dialogConsultationBell{width:100%;min-height:44px;justify-content:flex-start}
- body[data-app-ui="kwid"] .app-user-menu #dialogConsultationBell::after{content:attr(data-mobile-label);font-size:13px}
- body[data-app-ui="kwid"] .app-user-menu #dialogConsultationBell .notification-unread-badge{left:auto;right:10px;top:12px}
  body[data-app-ui="kwid"] .app-user-menu>button{min-height:44px}
 }
 @media(max-width:900px){

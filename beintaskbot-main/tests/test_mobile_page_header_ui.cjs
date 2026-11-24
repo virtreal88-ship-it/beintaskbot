@@ -14,10 +14,10 @@ const source=fs.readFileSync(__dirname+'/../ui/src/mobile-page-header.js','utf8'
  languageSelect.dispatchEvent(new w.Event('change'));assert.equal(changes,1);assert.equal(d.querySelector('[data-app-open=settings]').hidden,true,'permission retained');
  // Notifications can mount after initial shell layout.
  const bell=d.createElement('button');bell.id='dialogConsultationBell';bell.onclick=()=>notifications++;languageSelect.before(bell);bell.innerHTML='bell<span class="notification-unread-badge">7</span>';await wait();
- assert(userMenu.contains(bell));bell.click();assert.equal(notifications,1);assert.equal(d.querySelector('.app-avatar-unread').textContent,'7');assert.equal(d.querySelector('.app-avatar-unread').hidden,false);
- bell.querySelector('span').hidden=true;await wait();assert.equal(d.querySelector('.app-avatar-unread').hidden,true,'hidden source badge is not mirrored');bell.querySelector('span').hidden=false;await wait();bell.querySelector('span').textContent='0';await wait();assert.equal(d.querySelector('.app-avatar-unread').hidden,true,'zero is not an unread badge');bell.querySelector('span').textContent='7';await wait();
- avatar.textContent='AB';await wait();assert.equal(d.querySelector('.app-avatar-unread').textContent,'7','profile render keeps badge');
- bell.innerHTML='bell';await wait();assert.equal(d.querySelector('.app-avatar-unread').hidden,true,'no made up badge');
+ assert(topbar.querySelector('.app-topbar-actions').contains(bell));
+ assert(!userMenu.contains(bell));bell.click();assert.equal(notifications,1);
+ assert.equal(bell.querySelector('.notification-unread-badge').textContent,'7');
+ avatar.textContent='AB';await wait();assert.equal(bell.querySelector('.notification-unread-badge').textContent,'7');
  avatar.focus();assert.equal(d.activeElement,avatar);d.querySelector('#view-tasks').classList.remove('active');d.querySelector('#view-deals').classList.add('active');await wait();assert.equal(d.querySelectorAll('.app-mobile-title-row').length,1);assert.equal(d.querySelector('.app-mobile-title-row h1').textContent,'Сделки');assert(!heading.classList.contains('app-mobile-original-title'));assert.equal(d.activeElement,avatar,'route reparent preserves returned avatar focus');
  let mutations=0;const obs=new w.MutationObserver(()=>mutations++);obs.observe(d,{subtree:true,childList:true,attributes:true});await wait();assert.equal(mutations,0,'settled layout has no observer loop');
  mobile.matches=false;mobile.listener();await wait();assert.equal(topbar.parentElement.className,'shell');assert.equal(d.querySelectorAll('.app-mobile-title-row').length,0);assert.equal(languageSelect.parentElement.className,'app-topbar-actions');assert.equal(bell.parentElement.className,'app-topbar-actions');await wait();mutations=0;await wait();assert.equal(mutations,0,'desktop restoration settles');
