@@ -149,7 +149,7 @@ async function verifyCompanyCompletion(){
  let route={provider:'connect',lead_id:41,channel_id:'a',conversation_id:'client',customer_kind:'contact',customer_name:'Synthetic client',can_send:true,lifecycle_enabled:true,
   lifecycle:{id:'episode',state:'accepted',operator_id:33,revision:1,can_close:true,company_completion:{status:'missing',can_choose:true}}};
  const waiting={...route,lead_id:42,conversation_id:'waiting',lifecycle:{state:'waiting',revision:1,can_dismiss:true,last_inbound_id:'other-inbound',bulk_company_gate:'no_reply_separate'}};
- const calls=[];let allowClose=false,prelinked=false;
+ const calls=[];let allowClose=false,prelinked=false,heldSearch,failClose=null;
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.confirm=()=>{throw Error('company and waiting exclusions must not reach bulk confirmation');};
  w.fetch=async(url,opt={})=>{
@@ -158,6 +158,7 @@ async function verifyCompanyCompletion(){
    if(url.includes('/api/platform/crm/native/companies')){
      const query=new URL(url,w.location.origin).searchParams;
      assert.equal(query.get('expected_tenant_id'),'tenant');assert.equal(query.get('expected_user_id'),'33');
+     if(query.get('search')==='hold')await new Promise(resolve=>{heldSearch=resolve;});
      return{ok:true,json:async()=>({success:true,companies:[
       {id:'forbidden',name:'Not editable',actions:{update:false}},
       {id:'11111111-1111-4111-8111-111111111111',name:'Editable CRM company',actions:{update:true}}
@@ -169,6 +170,7 @@ async function verifyCompanyCompletion(){
    else if(url.endsWith('/dialogs_lifecycle')){
      if(prelinked&&body.action==='close'&&!body.company_id)return {ok:false,status:422,json:async()=>({success:false,error:'Unverified identity'})};
      if(!allowClose||body.action!=='close')throw Error('unexpected mutation');
+     if(failClose)return {ok:false,status:422,json:async()=>({success:false,error:failClose})};
      route={...route,can_send:false,lifecycle:{id:'episode',state:'closed',operator_id:33,revision:2,can_close:false}};
      result={lifecycle:route.lifecycle};
    }else if(url.includes('/dialogs/read'))result={updated:true};else throw Error('Unexpected '+url);
@@ -189,12 +191,34 @@ async function verifyCompanyCompletion(){
  assert.match(d.querySelector('#operatorBulkCompletionStatus').textContent,/Left open for company verification: 1/);
  assert.match(d.querySelector('#chatRows').textContent,/Synthetic history/);
  prelinked=false;calls.length=0;
- d.querySelector('[data-operator-lifecycle=close]').click();
- const dialog=d.querySelector('#operatorLifecycleModal');
- dialog.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();
- const selection=dialog.querySelector('select');assert.deepEqual([...selection.options].map(o=>o.value),['','11111111-1111-4111-8111-111111111111']);
- selection.value='11111111-1111-4111-8111-111111111111';selection.dispatchEvent(new w.Event('change'));
- assert(!calls.some(c=>c.body?.action),'search and choosing emit no writes');
+ const open=()=>{d.querySelector('[data-operator-lifecycle=close]').click();return d.querySelector('#operatorLifecycleModal');};
+ const finish=modal=>modal.querySelector('[data-company-complete]');
+ const keyboard=(target,key)=>target.dispatchEvent(new w.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true}));
+ const search=(modal,value)=>{
+   const field=modal.querySelector('[role=combobox]');
+   field.value=value;field.dispatchEvent(new w.Event('input',{bubbles:true}));keyboard(field,'Enter');return field;
+ };
+ const assertCompact=modal=>{
+   assert.equal(modal.querySelector('[role=dialog]').getAttribute('aria-label'),'Company for dialogue completion');
+   assert.equal(modal.querySelector('[role=dialog]').getAttribute('aria-modal'),'true');
+   assert.equal(modal.querySelectorAll('select,h2,form').length,0);
+   assert.deepEqual([...modal.querySelectorAll('button')].map(button=>button.textContent),['Complete','Cancel']);
+ };
+ let dialog=open();assertCompact(dialog);
+ assert(finish(dialog).disabled,'the genuinely mandatory route cannot close without a selection');
+ search(dialog,'hold');await tick();assert.equal(typeof heldSearch,'function');
+ dialog.querySelector('[data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));
+ assert(!calls.some(c=>c.body?.action),'Cancel aborts pending search without a write');
+ dialog=open();const field=search(dialog,'Editable');heldSearch();await tick();await tick();
+ assert.deepEqual([...dialog.querySelectorAll('[role=option]')].map(row=>row.textContent),['Editable CRM company']);
+ assert.equal(field.getAttribute('aria-expanded'),'true');
+ keyboard(field,'ArrowDown');assert(field.getAttribute('aria-activedescendant'));
+ keyboard(field,'Enter');assert.equal(field.value,'Editable CRM company');assert.equal(field.getAttribute('aria-expanded'),'false');
+ assert(!finish(dialog).disabled);assert(!calls.some(c=>c.body?.action),'search and keyboard selection are local only');
+ keyboard(field,'Escape');assert(!d.querySelector('#operatorLifecycleModal'));assert(!calls.some(c=>c.body?.action),'Escape after selecting does not write');
+ dialog=open();search(dialog,'Editable');await tick();await tick();
+ dialog.querySelector('[role=option]').click();
+ assert(!calls.some(c=>c.body?.action),'click selection is also a draft');
  allowClose=true;
  dialog.querySelector('[data-company-complete]').click();await tick();await tick();
  const mutations=calls.filter(c=>c.body?.action);
@@ -208,11 +232,11 @@ async function verifyCompanyCompletion(){
  await w.tenantOperator.openDialog(route);await tick();calls.length=0;
  d.querySelector('[data-operator-lifecycle=close]').click();
  const noCompany=d.querySelector('#operatorLifecycleModal');
- assert(noCompany.querySelector('form').hidden,'no independent company permissions means no picker');
- assert.equal(noCompany.querySelector('[data-company-skip]').textContent,'Without a company');
- assert.equal(noCompany.querySelector('[data-company-skip]').hidden,false);
- assert(!calls.some(c=>c.body?.action),'the choice is never assumed');
- noCompany.querySelector('[data-company-skip]').click();noCompany.querySelector('[data-company-skip]').click();
+ assertCompact(noCompany);
+ assert(noCompany.querySelector('[data-company-search]').hidden,'no independent company permissions means no picker');
+ assert(!finish(noCompany).disabled);
+ assert(!calls.some(c=>c.body?.action),'blank choice still waits for explicit Finish');
+ finish(noCompany).click();finish(noCompany).click();
  await tick();await tick();
  const skipped=calls.filter(c=>c.body?.action==='close');assert.equal(skipped.length,1);
  assert.equal(skipped[0].body.company_choice,'none');assert.equal('company_id' in skipped[0].body,false);
@@ -233,11 +257,16 @@ async function verifyCompanyCompletion(){
  route={...route,can_send:true,lifecycle:{state:'accepted',revision:6,can_close:true,company_completion:{status:'archived',required:false,can_choose:true,can_skip:true}}};
  await w.tenantOperator.openDialog(route);await tick();calls.length=0;
  d.querySelector('[data-operator-lifecycle=close]').click();
- const archived=d.querySelector('#operatorLifecycleModal');
- assert.match(archived.textContent,/keep the current link/);
- archived.querySelector('[data-company-skip]').click();await tick();await tick();
+ const archived=d.querySelector('#operatorLifecycleModal');assertCompact(archived);
+ assert(!archived.querySelector('[data-company-search]').hidden);
+ assert(!finish(archived).disabled,'optional archived route can finish without a replacement');
+ failClose='A company is required by the server';finish(archived).click();await tick();await tick();
+ assert(d.querySelector('#operatorLifecycleModal'),'server denial leaves the dialogue open');
+ assert.equal(archived.querySelector('[role=status]').textContent,failClose);
+ assert.equal(finish(archived).textContent,'Complete');
  const archiveClose=calls.find(c=>c.body?.action==='close');assert.equal(archiveClose.body.company_choice,'none');
- assert(!('company_id' in archiveClose.body));
+ assert(!('company_id' in archiveClose.body));assert(!calls.some(c=>c.url.includes('/operator/dialog-company')));
+ archived.querySelector('[data-cancel]').click();assert(!d.querySelector('#operatorLifecycleModal'));
  dom.window.close();
 }
 
