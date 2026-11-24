@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const {JSDOM}=require('jsdom');
 
 (async()=>{
-  const dom=new JSDOM(`<body><button data-app-language>Language</button><div id="view-dialogs">
+  const dom=new JSDOM(`<body><header><button class="app-avatar-button" type="button"></button><button data-app-language>Language</button></header><div id="view-dialogs">
       <div id="operatorWorkspace"><div class="operator-list-pane"><div class="operator-filters"></div></div></div>
       <div id="operatorRows"><button data-open-operator="0"><span class="operator-row-indicators"></span></button></div>
       <dialog id="operatorCompanyPanel" open><div id="operatorClientSharedReminderHost" hidden></div></dialog>
@@ -56,6 +56,7 @@ const {JSDOM}=require('jsdom');
     await tick();
     const bell=$('#dialogConsultationBell'),entry=()=>$('#dialogConsultationMenu [data-notification-focus=shared-reminders]'),
       badge=()=>$('#dialogConsultationBell .notification-reminder-badge');
+    assert.equal(bell.nextElementSibling?.classList.contains('app-avatar-button'),true,'bell stays in the app header beside the avatar');
     w.tenantSharedReminders.markRows([[actual]]);
     assert.equal($('#operatorSharedRemindersOpen'),null,'no duplicate dialogue toolbar');
     assert.equal($('#operatorClientSharedReminderHost').hidden,true,'cannot schedule on another page');
