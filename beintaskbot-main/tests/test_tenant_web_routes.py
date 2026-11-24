@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, AsyncMock
 from aiohttp import web
-from aiohttp.test_utils import make_mocked_request
+from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from test_tenant_hot_orders import load, ROOT
 from tenant_notice_transport import TelegramBot
 from tenant_web_assets import ASSETS, register_assets
@@ -47,7 +47,7 @@ EXPECTED_ASSETS += ['/assets/tenant-risk-alert-detail.js', '/assets/tenant-risk-
 EXPECTED_ASSETS += ['/assets/tenant-case-chat-media.js','/assets/tenant-summary-language.js','/assets/tenant-support-consultations.js','/assets/tenant-saved-only-copilot.js']
 EXPECTED_ASSETS += ['/assets/tenant-profile-work-status.js','/assets/tenant-dialog-source-members.js','/assets/tenant-members-ui.js','/assets/tenant-members-ui.css']
 EXPECTED_ASSETS += ['/assets/tenant-contacts-directory.js','/assets/tenant-crm-save-receipt.js','/assets/tenant-crm-sync-history.js']
-EXPECTED_ASSETS += ['/assets/tenant-task-flow.js']
+EXPECTED_ASSETS += ['/assets/tenant-task-flow.js', '/assets/tenant-telegram-binding.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-administrator-approvals.js','/assets/tenant-request-coordinator.js','/assets/tenant-view-demand.js']
 EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operator-copilot-voice.js']
 EXPECTED_ASSETS += ['/assets/tenant-copilot-voice-audio.js','/assets/tenant-copilot-voice-controller.js','/assets/tenant-copilot-voice-channel.js']
@@ -317,3 +317,16 @@ class Assets(unittest.IsolatedAsyncioTestCase):
         self.assertIn('"/api/platform/register"', tenant_text)
         self.assertIn('"/api/action", handle_api_action', legacy_text)
         self.assertIn("handle_search_contacts", functions)
+
+
+class PersonalTelegramAssetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_telegram_binding_asset_delivered_with_no_store(self):
+        app = web.Application()
+        register_assets(app)
+        expected = (Path(__file__).resolve().parents[1] / 'docs' / 'tenant-telegram-binding.js').read_bytes()
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get('/assets/tenant-telegram-binding.js')
+            self.assertEqual(200, response.status)
+            self.assertEqual('no-store', response.headers.get('Cache-Control'))
+            self.assertIn('javascript', response.headers.get('Content-Type', ''))
+            self.assertEqual(expected, await response.read())
