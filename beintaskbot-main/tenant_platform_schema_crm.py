@@ -17,6 +17,8 @@ def migrate_crm_schema(cur) -> None:
     migrate_scalar_schema(cur)
     migrate_history_indexes(cur)
     migrate_operator_identity_links(cur)
+    from tenant_dialog_quick_reply_schema import migrate as migrate_quick_reply_dismissals
+    migrate_quick_reply_dismissals(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS crm_linear_news (
             id UUID PRIMARY KEY,

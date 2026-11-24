@@ -4,13 +4,18 @@ on:
     paths:
       - 'beintaskbot-main/tenant_dialog_reply_templates.py'
       - 'beintaskbot-main/tenant_dialog_reply_templates_api.py'
+      - 'beintaskbot-main/tenant_dialog_quick_repl*.py'
+      - 'beintaskbot-main/tenant_operator_api.py'
       - 'beintaskbot-main/tenant_ai_agent_startup.py'
       - 'beintaskbot-main/tests/test_dialog_reply_template_startup_postgres.py'
       - 'beintaskbot-main/tenant_web_routes.py'
       - 'beintaskbot-main/tenant_web_assets.py'
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
+      - 'beintaskbot-main/docs/tenant-dialog-quick-replies.js'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
       - 'beintaskbot-main/tests/test_dialog_reply_templates.py'
+      - 'beintaskbot-main/tests/test_dialog_quick_replies*'
       - 'beintaskbot-main/tests/test_dialog_reply_templates_ui.cjs'
       - 'beintaskbot-main/tests/test_tenant_web_routes.py'
       - 'beintaskbot-main/tests/test_dialog_reply_templates_postgres.py'
@@ -51,9 +56,14 @@ jobs:
         run: python -m pip install -r requirements.txt pytest pytest-asyncio
       - name: Verify route catalogue and tenant permissions
         run: python -m pytest -q --tb=short tests/test_dialog_reply_templates.py tests/test_tenant_web_routes.py
-      - name: Install DOM test dependency
-        run: npm install --prefix .support-test-deps --no-save jsdom@26
+      - name: Install UI and isolated database test dependencies
+        run: npm install --prefix .support-test-deps --no-save jsdom@26.1.0 @electric-sql/pglite@0.5.11 playwright@1.62.1
       - name: Verify suggestions never send messages
         run: NODE_PATH=.support-test-deps/node_modules node tests/test_dialog_reply_templates_ui.cjs
+      - name: Verify history-based replies in the API and Chromium
+        run: |
+          python -m pytest -q --tb=short tests/test_dialog_quick_replies.py
+          .support-test-deps/node_modules/.bin/playwright install --with-deps chromium
+          node tests/test_dialog_quick_replies_browser.cjs
       - name: Verify migration and tenant isolation on disposable PostgreSQL
         run: python -m pytest -q --tb=short tests/test_dialog_reply_templates_postgres.py tests/test_dialog_reply_template_startup_postgres.py

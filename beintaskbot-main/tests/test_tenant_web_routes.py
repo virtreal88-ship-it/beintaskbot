@@ -54,6 +54,7 @@ EXPECTED_ASSETS += ['/assets/tenant-microphone-lease.js','/assets/tenant-operato
 EXPECTED_ASSETS += ['/assets/tenant-copilot-voice-audio.js','/assets/tenant-copilot-voice-controller.js','/assets/tenant-copilot-voice-channel.js']
 EXPECTED_ASSETS += ['/app/manifest.webmanifest','/app/pwa-sw.js','/app/pwa-icon-192.png','/app/pwa-icon-512.png','/app/apple-touch-icon.png','/assets/tenant-pwa.js']
 EXPECTED_ASSETS += ['/assets/tenant-voice-recorder.js','/assets/tenant-customer-voice-store.js','/assets/tenant-customer-voice-ui.js','/assets/tenant-dialog-composer.js','/assets/tenant-dialog-reply-templates.js','/assets/tenant-customer-media-ui.js']
+EXPECTED_ASSETS += ['/assets/tenant-dialog-quick-replies.js']
 EXPECTED_ASSETS += ['/assets/tenant-personal-dialog-reminders.js']
 EXPECTED_ASSETS += ['/assets/tenant-shared-dialog-reminders.js']
 EXPECTED_ASSETS += ['/assets/tenant-dialog-company.js']
@@ -80,6 +81,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/audio-transcription', ('GET', 'POST')),
     ('dialogs/read', ('POST',)),
     ('dialogs/reply-templates', ('GET','POST')),
+    ('dialogs/quick-replies', ('POST',)),
     ('dialogs/personal-reminders', ('GET','POST')),
     ('dialogs/shared-reminders', ('GET','POST')),
     ('dialogs/read-all', ('POST',)),

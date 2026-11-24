@@ -2934,6 +2934,7 @@
       finally{if(button.isConnected)button.disabled=false;}
     };
     restoreCaseDraft(route,composer);
+    if(route.provider==='connect'&&sendAllowed)window.tenantDialogQuickReplies?.attach(composer,route,same,updateComposerHeight);
     copilotPanel.dataset.helperType=interactionState?.helperType||'Helper';
     if(interactionState){
       $('operatorCopilotPrompt').value=interactionState.copilotPrompt;
