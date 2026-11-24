@@ -348,7 +348,10 @@
     const reconcile=route=>{
       rememberLifecycleListState(route,route.lifecycle);
       const state=lifecycleListStates.get(contextKey('lifecycle-list',route));
-      return route.lifecycle_enabled&&state&&state.revision>Number(route.lifecycle?.revision??-1)?{...route,lifecycle:{...route.lifecycle,...state}}:route;
+      if(!route.lifecycle_enabled||!state||state.revision<=Number(route.lifecycle?.revision??-1))return route;
+      // A successful acceptance/closure receipt can outrun an older list response.
+      return {...route,lifecycle:{...route.lifecycle,...state},
+        ...(['accepted','closed'].includes(state.state)?{missed_call_pending:false}:{})};
     };
     rows=rows.map(row=>row.group_sources?.length?{...reconcile(row),group_sources:row.group_sources.map(reconcile)}:reconcile(row));
     const mode=queueMode(),matches=route=>mode==='all'||(mode==='completed'?['closed','dismissed'].includes(route.lifecycle?.state):!['closed','dismissed'].includes(route.lifecycle?.state)&&!(route.lifecycle_enabled&&route.lifecycle?.state==='waiting'&&route.lifecycle.has_inbound===false));
@@ -701,7 +704,7 @@
       reason.textContent=companyCloseText(company.can_skip?(company.status==='archived'?'archivedSkip':company.can_choose?'chooseOrSkip':'skipOnly'):['missing','archived'].includes(company.status)&&!company.can_choose?'locked':company.status==='missing'?'choose':company.status);
       $('operatorAcceptAction').append(reason);
     }
-    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner')],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss&&queueMode()!=='completed'],['close',state.can_close&&(hasSelectedCompany||!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.can_dismiss&&queueMode()!=='completed'],['close',state.can_close&&(hasSelectedCompany||!company||company.required===false||company.status==='ready'||company.can_choose||company.can_skip)],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start','takeover'].includes(action)?'primary':'outline';button.textContent=action==='takeover'?({ru:'Забрать себе',az:'Üzərimə götür',en:'Take over'}[i18n.language]||'Take over'):lifecycleText(action);button.dataset.operatorLifecycle=action;if(action==='case')button.title=lifecycleText('caseBudget');
       button.onclick=()=>action==='close'&&!hasSelectedCompany&&company?.status!=='ready'&&(company?.can_choose||company?.can_skip)?openLifecycleCompanyClose(route):action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||(action==='dismiss'&&window.matchMedia?.('(min-width:901px)').matches))$('operatorAIReply').before(button);else host.append(button);
     }
@@ -798,7 +801,7 @@
     // Keep the mobile conversation header to one toolbar row; details stay in the existing menu/card.
     mobileStyle.textContent+=`@media(max-width:900px){#operatorConversationHeader{padding:4px;gap:2px;min-height:56px}#operatorConversationHeader .operator-back-to-list{width:32px;min-width:32px;min-height:44px;justify-content:center;padding:0}#operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;gap:4px}#operatorConversationHeader .operator-dialog-head-row{width:auto;flex:1;min-width:0}#operatorConversationHeader .operator-dialog-head-main{min-width:0;gap:0 4px}#operatorConversationHeader .operator-dialog-title{max-width:100%;min-width:0;min-height:0;font-size:14px;line-height:20px}#operatorConversationHeader .operator-dialog-title-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader #operatorClientCardOpen{width:44px;min-width:44px;height:44px;min-height:44px;margin:0 4px 0 0}#operatorConversationHeader #operatorClientCardOpen .operator-header-avatar{width:30px;height:30px}#operatorConversationHeader .operator-client-phone,#operatorConversationHeader .operator-channel-label{font-size:10px;line-height:12px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#operatorConversationHeader .operator-dialog-head-secondary{position:static;display:flex;flex:none;align-items:center;gap:2px;min-height:44px}#operatorConversationHeader #operatorCreateTicketHost button{width:auto;min-width:44px;height:44px;min-height:44px;padding:0 5px}#operatorConversationHeader .operator-more-actions{position:relative}#operatorConversationHeader .operator-action-menu{max-width:calc(100vw - 16px)}}`;
     document.head.appendChild(mobileStyle);
-    const missedCallPreviewStyle=document.createElement('style');missedCallPreviewStyle.textContent='.operator-row-preview-missed-unread{color:var(--danger,#b42318)!important;font-weight:600}';document.head.append(missedCallPreviewStyle);
+    const missedCallPreviewStyle=document.createElement('style');missedCallPreviewStyle.textContent='.operator-row-preview-missed-pending{color:var(--danger,#b42318)!important;font-weight:600}';document.head.append(missedCallPreviewStyle);
     bindFilterPopover();
     try{listScrollTop=Number(sessionStorage.getItem(`tenant.operator.list-scroll.${member?.tenant_id||''}.${member?.telegram_id||''}`))||0;}catch{listScrollTop=0;}
     [$('operatorRows'),$('operatorListScroll')].forEach(node=>node.addEventListener('scroll',()=>{listScrollTop=operatorListScroller().scrollTop;try{sessionStorage.setItem(`tenant.operator.list-scroll.${member?.tenant_id||''}.${member?.telegram_id||''}`,String(listScrollTop));}catch{}}));
@@ -1188,8 +1191,11 @@
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
       const unread=Math.max(0,Number(row.unread_count)||0);
       const identityText=dialogRowSubtitle(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
-      const unreadMissedCall=String(row.last_message_type||'').toLowerCase()==='call_missed'&&unread>0;
-      const lifecycle=cardLifecycleBadge(row),previewMarkup=preview?`<span class="operator-row-preview${unreadMissedCall?' operator-row-preview-missed-unread':''}" data-user-content>${esc(preview)}</span>`:'';
+      const pendingMissedCall=String(row.last_message_type||'').toLowerCase()==='call_missed'&&(
+        row.provider==='connect'&&row.lifecycle_enabled
+          ?row.lifecycle?.state!=='accepted'&&row.missed_call_pending===true
+          :unread>0);
+      const lifecycle=cardLifecycleBadge(row),previewMarkup=preview?`<span class="operator-row-preview${pendingMissedCall?' operator-row-preview-missed-pending':''}" data-user-content>${esc(preview)}</span>`:'';
       const shareSourceLine=!companyName&&Boolean(sourceName&&previewMarkup);
       return `<button type="button" role="option" class="operator-row" aria-selected="${selected?'true':'false'}" data-open-operator="${index}">
         <span class="operator-row-avatar" aria-hidden="true">${row.customer_kind==='group'?'◉':esc(name.slice(0,1).toLocaleUpperCase())}${avatarMarkup(row)}</span>
