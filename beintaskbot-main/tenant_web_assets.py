@@ -37,7 +37,6 @@ ASSETS = (
     ('/assets/tenant-night-report.css', 'tenant-night-report.css', 'no-store'),
     ('/app/push-sw.js', 'tenant-push-sw.js', 'no-store'),
     ('/assets/tenant-push.js', 'tenant-push.js', 'no-store'),
-    ('/assets/task-date-fields.js', 'task-date-fields.js', 'no-store'),
     ('/assets/tenant-finance.js', 'tenant-finance.js', 'no-cache'),
     ('/assets/tenant-chat-import.js', 'tenant-chat-import.js', 'no-cache'),
     ('/assets/tenant-chat-history.js', 'tenant-chat-history.js', 'no-cache'),

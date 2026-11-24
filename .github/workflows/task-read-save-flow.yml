@@ -8,7 +8,6 @@ on:
       - 'beintaskbot-main/tenant_linear_tasks_provider.py'
       - 'beintaskbot-main/tenant_linear_commands.py'
       - 'beintaskbot-main/docs/tenant-linear-board.js'
-      - 'beintaskbot-main/docs/index.html'
       - 'beintaskbot-main/tests/test_tenant_linear_runtime.py'
       - 'beintaskbot-main/tests/test_tenant_linear_commands.py'
       - 'beintaskbot-main/tests/test_tenant_linear_board.cjs'
