@@ -123,6 +123,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   const sidebarInfo=panel.locator('#operatorSidebarDialogInfo');
   assert.equal(await sidebarInfo.count(),1,'the structural Conversation container survives');
   assert(!await sidebarInfo.isVisible(),'no empty Conversation section is shown after removing the duplicate source');
+  assert.equal(await sidebarInfo.evaluate(el=>el.getBoundingClientRect().height),0,'the hidden section reserves no space');
   assert.equal(await panel.getByText('Synthetic source A',{exact:true}).count(),0,'the right panel does not repeat the source');
   const companyBox=await page.locator('[data-operator-dialog-company]').boundingBox();
   assert(companyBox.width>0&&companyBox.x>=-1&&companyBox.x+companyBox.width<=width+1,'company field is discoverable without horizontal overflow');

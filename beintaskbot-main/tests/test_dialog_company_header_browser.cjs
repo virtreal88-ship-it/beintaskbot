@@ -107,7 +107,19 @@ const beta='@demo';
   assert(await name.evaluate(n=>n.parentElement.matches('[data-header-meta]')),'company name stays in the compact metadata row');
   assert(await name.evaluate(n=>n.getBoundingClientRect().top>=document.querySelector('#operatorDialogTitleSlot').getBoundingClientRect().bottom),
     'company stays below the customer name');
-  assert(await name.evaluate(n=>n.scrollWidth>n.clientWidth&&getComputedStyle(n).textOverflow==='ellipsis'));
+  const longBadge=await name.evaluate(el=>{
+    const meta=el.parentElement,source=meta.querySelector('.operator-client-source');
+    const rect=el.getBoundingClientRect(),row=meta.getBoundingClientRect(),label=source.getBoundingClientRect();
+    const style=getComputedStyle(el);
+    return {
+      width:rect.width,cap:Math.min(180,row.width*.38),
+      fits:rect.left>=label.right-1&&rect.right<=row.right+1,
+      truncated:el.scrollWidth>el.clientWidth&&style.textOverflow==='ellipsis'&&style.whiteSpace==='nowrap',
+      sourceLegible:label.width>0&&source.scrollWidth<=source.clientWidth+1
+    };
+  });
+  assert(longBadge.width<=longBadge.cap+1&&longBadge.fits&&longBadge.truncated&&longBadge.sourceLegible,
+    'a long company badge is capped and truncated without clipping the header source: '+JSON.stringify(longBadge));
   assert.equal(await head.locator('.operator-channel-label').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.caseGets),[],'no case query while Information is closed');
   assert.deepEqual(await page.evaluate(()=>window.bindingGets),['a'],'header and side panel reuse one exact GET');

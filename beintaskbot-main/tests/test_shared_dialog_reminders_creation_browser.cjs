@@ -6,13 +6,15 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
 (async()=>{
   const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
   try{
-    for(const width of [360,1440]){
+    for(const width of [360,1440])for(const [locale,label] of [['ru','Создать напоминание'],['az','Xatırlatma yarat'],['en','Create reminder']]){
       const mobile=width===360;
       const page=await browser.newPage({viewport:{width,height:800},hasTouch:mobile});
       try{
         await page.route('**/*',request=>request.request().isNavigationRequest()
           ?request.fulfill({contentType:'text/html',body:html}):request.abort());
         await page.goto('https://example.test/app?view=dialogs');
+        // Same CSS the shipped Chakra shell injects, without booting other views.
+        await page.addStyleTag({path:path.resolve(docs,'../ui/src/app-theme.css')});
         await page.evaluate(()=>{
           document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-dialogs'));
           const member={tenant_id:'synthetic-test-only',telegram_id:11,role:'owner',active:true};
@@ -35,19 +37,33 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
         });
         for(const file of ['tenant-operator-i18n.js','tenant-operator-dialogs.js','tenant-dialog-company.js','tenant-shared-dialog-reminders.js'])
           await page.addScriptTag({path:path.join(docs,file)});
-        await page.evaluate(async()=>{window.tenantI18n.setLanguage('en');await window.tenantOperator.refresh();
-          if(!await window.tenantOperator.openDialog(window.testDialog))throw Error('Synthetic dialog did not open');});
+        await page.evaluate(async locale=>{window.tenantI18n.setLanguage(locale);await window.tenantOperator.refresh();
+          if(!await window.tenantOperator.openDialog(window.testDialog))throw Error('Synthetic dialog did not open');},locale);
         const panel=page.locator('#operatorCompanyPanel'),create=panel.locator('#operatorSharedReminderCreate');
         if(!await panel.isVisible()){
           const toggle=page.locator('#operatorCompanyPanelOpen');
           if(mobile)await toggle.tap();else await toggle.click();
         }
         await create.waitFor({state:'visible',timeout:10000});
-        assert.equal(await create.textContent(),'Create reminder');
-        assert.equal(await create.locator('svg[aria-hidden=true][focusable=false] + span').textContent(),'Create reminder');
+        for(const theme of ['light','dark']){
+          await page.evaluate(theme=>{document.documentElement.dataset.appTheme=theme;},theme);
+          const text=create.locator('svg[aria-hidden=true][focusable=false] + span');
+          assert.equal(await text.textContent(),label);
+          const actual=await create.evaluate(button=>{
+            const icon=button.querySelector('svg'),label=button.querySelector('span');
+            const br=button.getBoundingClientRect(), ir=icon.getBoundingClientRect();
+            const range=document.createRange();range.selectNodeContents(label);
+            const rects=[...range.getClientRects()], tr=range.getBoundingClientRect();
+            return {gap:tr.left-ir.right,centerGap:Math.abs((tr.top+tr.bottom-ir.top-ir.bottom)/2),
+              lines:rects.length,size:ir.width,minHeight:br.height,contained:ir.left>=br.left&&tr.right<=br.right};
+          });
+          assert(actual.gap>=4&&actual.gap<=12&&actual.centerGap<=2&&actual.lines===1&&actual.size>=12
+            &&actual.minHeight>=36&&actual.contained, `icon and text must share one row at ${width}/${theme}/${locale}: ${JSON.stringify(actual)}`);
+        }
         assert(await create.evaluate(button=>button.parentElement===document.querySelector('#operatorCompanyView-main').lastElementChild));
         assert.equal(await page.locator('#operatorClientCard #operatorSharedReminderCreate').count(),0);
         assert.deepEqual(await page.evaluate(()=>window.reminderRequests),[],'creation-only does not call the bell feed');
+        if(locale!=='en')continue;
         if(mobile)await create.tap();else await create.click();
         const modal=page.getByRole('dialog',{name:'Create reminder',exact:true});
         await modal.waitFor({state:'visible'});
@@ -73,5 +89,5 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
       }finally{await page.close();}
     }
   }finally{await browser.close();}
-  console.log('PASS owner closed-archive Company reminder at 360/1440, no bell, synthetic schedule');
+  console.log('PASS owner closed-archive Company reminder at 360/1440, inline icon in RU/AZ/EN and light/dark, no bell, synthetic schedule');
 })().catch(error=>{console.error(error);process.exitCode=1;});
