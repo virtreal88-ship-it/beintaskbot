@@ -102,7 +102,9 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
             cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
             return {'operator_events': []}
         lower,upper=window
-        cur.execute("""SELECT a.id::text AS id,a.action,a.created_at,m.display_name
+        cur.execute("""SELECT a.id::text AS id,a.created_at,m.display_name,
+            CASE WHEN a.action='dialog_transfer' AND a.payload->>'takeover'='true'
+                 THEN 'dialog_takeover' ELSE a.action END AS action
           FROM saas_tenant_audit_events a
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
             AND m.telegram_id::text=a.payload->>'operator_id'
@@ -116,7 +118,7 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
             (tenant,channel,conversation,lower,lower,upper,upper,_PAGE_LIMIT+1))
         rows=cur.fetchall()
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
-    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_no_reply":"no_reply","dialog_close":"close"}
+    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_takeover":"takeover","dialog_no_reply":"no_reply","dialog_close":"close"}
     shown=rows[:_PAGE_LIMIT]
     result={"operator_events": [{"id":row["id"],"kind":kinds[row["action"]],"at":row["created_at"].isoformat(),
                                 "employee_name":str(row["display_name"] or "").strip()[:120]}

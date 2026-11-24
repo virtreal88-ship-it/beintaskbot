@@ -849,6 +849,8 @@ def _mutate_once(profile, payload):
             audit_episode = current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']
             audit_payload = {'channel_id':channel,'conversation_id':conversation,
                              'operator_id':current['operator_id'],'revision':current['revision']}
+            if takeover:
+                audit_payload['takeover']=True
             if action=='dismiss':
                 audit_payload.update(message_id=payload['message_id'],counts_as_missed=False)
             if bound_on_close:
@@ -861,12 +863,13 @@ def _mutate_once(profile, payload):
             if action=='dismiss':
                 result['lifecycle']['no_reply_needed']=True
             if action in ('accept','start','dismiss','close','transfer'):
+                event_kind='takeover' if takeover else action
                 result['operator_event']={
-                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else action,
+                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else event_kind,
                     'at':cur.fetchone()['created_at'].isoformat()}
-                if action in ('accept','start'):
+                if takeover or action in ('accept','start'):
                     result['operator_event']['employee_name']=str(policy.profile.get('display_name') or '').strip()[:120]
-                if action=='transfer':
+                elif action=='transfer':
                     cur.execute('''SELECT display_name FROM saas_tenant_members
                       WHERE tenant_id=%s::uuid AND telegram_id=%s''',(tenant,current['operator_id']))
                     recipient=cur.fetchone() or {}
