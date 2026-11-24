@@ -134,7 +134,8 @@ def _incoming_copy(context: object) -> tuple[str, str]:
     return title[:120], body
 
 
-def payload_for(event: str | None, target_url: str = '', notification_context: object = None) -> dict[str, str]:
+def payload_for(event: str | None, target_url: str = '', notification_context: object = None,
+                notification_id: object = None) -> dict[str, str]:
     """Return an independent copy; unknown events retain the old default."""
     payload=dict(_PAYLOADS.get(event, _DEFAULT))
     if event=='proactive_risk':
@@ -144,7 +145,6 @@ def payload_for(event: str | None, target_url: str = '', notification_context: o
         safe_target=_safe_dialog_target(target_url)
         if safe_target:payload['url']=safe_target
         payload['title'],payload['body']=_incoming_copy(notification_context)
-        notification_id=(notification_context or {}).get('notification_id') if isinstance(notification_context,dict) else None
         if isinstance(notification_id,str) and re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',notification_id,re.I):
             payload['notification_id']=notification_id.lower()
     return payload
