@@ -22,6 +22,10 @@ on:
       - 'beintaskbot-main/tests/test_employee_access*'
       - 'beintaskbot-main/tenant_workflow_api.py'
       - 'beintaskbot-main/docs/tenant-workflow.js'
+      - 'beintaskbot-main/docs/tenant-workspace.js'
+      - 'beintaskbot-main/docs/tenant-diagnostics.js'
+      - 'beintaskbot-main/docs/tenant-telegram-binding.js'
+      - 'beintaskbot-main/tests/test_tenant_settings_tabs_ui.cjs'
       - 'beintaskbot-main/docs/tenant-linear-settings.js'
       - 'beintaskbot-main/tests/test_tenant_linear_employee_settings.cjs'
       - 'beintaskbot-main/tests/test_employee_settings*'
@@ -119,6 +123,7 @@ jobs:
           node tests/test_employee_auth_curtain_ui.cjs
           node tests/test_native_company_relation_ui.cjs
           node tests/test_tenant_workflow_ui.cjs
+          node tests/test_tenant_settings_tabs_ui.cjs
           node tests/test_tenant_linear_employee_settings.cjs
           node tests/test_tenant_linear_settings.cjs
           node tests/test_employee_account_assign_ui.cjs

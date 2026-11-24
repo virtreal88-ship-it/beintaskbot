@@ -4,7 +4,13 @@
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const roles = {owner:'Şirkət sahibi',admin:'Administrator',manager:'Vərəq istifadəçisi',worker:'İcraçı',master:'Usta'};
   const modules = {deals:'Sövdələşmələr',tasks:'Tapşırıqlar',customers:'Müştərilər',hot_orders:'İsti sifarişlər',finance:'Maliyyə',linear:'Linear',settings:'Tənzimləmələr',employees:'Əməkdaşlar',integrations:'İnteqrasiyalar'};
-  let session, config, catalog = {pipelines:[],users:[]}, loaded = false, loading = false;
+  let session, config, catalog = {pipelines:[],users:[]}, loaded = false, loading = false, epoch = 0;
+  const ownerScope = data => data?.member?.role === 'owner' && data.member.active !== false ?
+    JSON.stringify([data.member.tenant_id, data.member.telegram_id]) : '';
+  function reset() {
+    epoch++; session=null; config=null; catalog={pipelines:[],users:[]}; loaded=false; loading=false;
+    $('workflowPanel')?.remove();
+  }
   async function api(path, data) {
     const response = await fetch(path, {credentials:'same-origin',cache:'no-store',
       ...(data ? {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)} : {})});
@@ -19,8 +25,12 @@
     return `<label class="wf-check"><input type="checkbox" data-wf="${escape(name)}" ${on ? 'checked' : ''}>${escape(label)}</label>`;
   }
   function install(data) {
+    if(ownerScope(session) !== ownerScope(data)) reset();
+    if(!ownerScope(data)) return;
     session = data;
-    if(data.member.role !== 'owner' || $('workflowPanel')) return;
+    if($('workflowPanel')) return;
+    const host = $('profile-company-settings') || document.querySelector('#view-settings > .grid');
+    if(!host) return;
     document.head.insertAdjacentHTML('beforeend', `<style>
       .wf-wide{grid-column:1/-1}.wf-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
       .wf-tabs button[aria-selected=true]{background:#e6f6ed;border-color:#73b59e}
@@ -32,7 +42,7 @@
       .wf-notification-row{display:grid;grid-template-columns:minmax(0,1fr) 70px 50px;gap:8px;align-items:center;border-bottom:1px solid var(--line);padding:7px 0;font-size:13px}
       .wf-notification-row[hidden]{display:none}.panel .wf-notification-row label{display:flex;justify-content:center;margin:0}.panel .wf-notification-row input{width:auto}
     </style>`);
-    document.querySelector('#view-settings .grid').insertAdjacentHTML('beforeend', `<article class="panel owner-only wf-wide" id="workflowPanel">
+    host.insertAdjacentHTML('beforeend', `<article class="panel owner-only wf-wide" id="workflowPanel">
       <h2>İş qaydaları</h2><p>Vərəqləri və şirkət qaydalarını buradan idarə edin.</p>
       <button class="outline" id="wfLoad">Ayarları aç</button>
       <div id="wfEditor" hidden><div class="wf-tabs" role="tablist">
@@ -68,14 +78,16 @@
   }
   async function load() {
     if(loading) return;
+    const revision=epoch;
     loading=true; $('wfLoad').disabled=true; $('wfLoad').textContent='Yüklənir…'; $('wfResult').textContent='';
     try {
       const [me, workflow, choices] = await Promise.all([api('/api/platform/me'),api('/api/platform/workflow'),api('/api/platform/workflow/catalog')]);
+      if(revision!==epoch || ownerScope(me)!==ownerScope(session)) return;
       session=me; config=workflow; catalog=choices;
       render(); loaded=true; $('wfEditor').hidden=false; $('wfLoad').textContent='Kommo siyahısını yenilə';
       $('wfResult').textContent=(choices.warnings || []).join('\n');
-    } catch(error) { $('wfResult').textContent=error.message; $('wfLoad').textContent='Yenidən yoxla'; }
-    finally {loading=false; $('wfLoad').disabled=false;}
+    } catch(error) { if(revision===epoch){$('wfResult').textContent=error.message; $('wfLoad').textContent='Yenidən yoxla';} }
+    finally {if(revision===epoch){loading=false; $('wfLoad').disabled=false;}}
   }
   function render() {
     const rows=combinedPipelines(), rules=policies(), members=(session.members || []).filter(member => member.active);
@@ -122,6 +134,7 @@
   const flags = root => Object.fromEntries([...root.querySelectorAll('input[data-wf]')].map(input => [input.dataset.wf,input.checked]));
   async function save() {
     if(!loaded || loading) return;
+    const revision=epoch, scope=ownerScope(session);
     loading=true; $('wfSave').disabled=true; $('wfSave').textContent='Saxlanılır…'; $('wfResult').textContent='';
     try {
       const rows=combinedPipelines(), nextRules={...policies()}, nextPipelines=[], nextStages=[], memberPipelineChanges=[];
@@ -148,15 +161,21 @@
       nextRules.hot_orders=window.tenantHotOrderSettings.read($('wf-rules').querySelector('[data-hot-rules]'),nextRules.hot_orders || {});
       nextRules.finance={...(nextRules.finance || {}),currency:'AZN',...flags($('wf-rules').querySelector('[data-finance-rules]'))};
       nextRules.notifications=flags($('wf-rules').querySelector('[data-notifications]'));
-      config=await api('/api/platform/workflow',{pipelines:nextPipelines,stages:nextStages,policies:nextRules,member_pipeline_changes:memberPipelineChanges});
-      session=await api('/api/platform/me');
+      const saved=await api('/api/platform/workflow',{pipelines:nextPipelines,stages:nextStages,policies:nextRules,member_pipeline_changes:memberPipelineChanges});
+      if(revision!==epoch) return;
+      const me=await api('/api/platform/me');
+      if(revision!==epoch || ownerScope(me)!==scope) return;
+      config=saved; session=me;
       render();
       document.dispatchEvent(new CustomEvent('tenant-profile',{detail:session}));
       $('wfResult').textContent='Ayarlar saxlanıldı.';
-    } catch(error) { $('wfResult').textContent='Saxlama tamamlanmadı: '+error.message; }
-    finally {loading=false;$('wfSave').disabled=false;$('wfSave').textContent='Ayarları saxla';}
+    } catch(error) { if(revision===epoch) $('wfResult').textContent='Saxlama tamamlanmadı: '+error.message; }
+    finally {if(revision===epoch){loading=false;$('wfSave').disabled=false;$('wfSave').textContent='Ayarları saxla';}}
   }
-  document.addEventListener('tenant-profile',event=>install(event.detail));
-  // The editor may arrive after the app's first fast cached session response.
-  api('/api/platform/me').then(install).catch(()=>{});
+  let receivedProfile=false;
+  document.addEventListener('tenant-profile',event=>{receivedProfile=true;install(event.detail);});
+  for (const type of ['tenant-auth-invalid','tenant-auth-pending'])
+    document.addEventListener(type,()=>{receivedProfile=true;reset();});
+  if(window.tenantProfileSnapshot) install(window.tenantProfileSnapshot);
+  else api('/api/platform/me').then(data=>{if(!receivedProfile) install(data);}).catch(()=>{});
 })();

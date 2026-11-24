@@ -45,3 +45,61 @@ const settle=async()=>{for(let i=0;i<10;i++)await new Promise(resolve=>setImmedi
  assert.equal(profile.querySelector('#profile-company-settings'),general);
  dom.window.close();console.log('PASS: profile fields and preserved general settings relocalize RU/AZ/EN.');
 })().catch(error=>{console.error(error);process.exitCode=1});
+
+async function productionPanels(profileBeforeWorkspace){
+ const dom=new JSDOM(html,{url:'https://crm.test/app?view=profile',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const owner={success:true,member:{role:'owner',active:true,tenant_id:'company-a',telegram_id:7},capabilities:{pages:{settings:true}}};
+ const manager={...owner,member:{...owner.member,role:'manager',telegram_id:8}};
+ const calls=[];
+ let resolveBoot;
+ w.tenantI18n={language:'ru'};
+ w.tenantCanAccessCompanySettings=()=>true;
+ w.fetch=(url,options={})=>{
+  calls.push({url,method:options.method||'GET'});
+  if(url==='/api/platform/me')return new Promise(resolve=>{resolveBoot=()=>resolve({ok:true,json:async()=>owner});});
+  if(url==='/api/platform/telegram/binding')return Promise.resolve({ok:true,json:async()=>({success:true,bound:false})});
+  if(url==='/api/platform/workflow')return Promise.resolve({ok:true,json:async()=>({success:true,policies:[],pipelines:[],stages:[]})});
+  if(url==='/api/platform/workflow/catalog')return Promise.resolve({ok:true,json:async()=>({success:true,pipelines:[]})});
+  throw Error('Unexpected fetch '+url);
+ };
+ const emit=(type,detail)=>d.dispatchEvent(new w.CustomEvent(type,{detail}));
+ const evaluate=file=>w.eval(fs.readFileSync(path.join(root,'docs',file),'utf8'));
+ const profile=d.getElementById('view-profile');
+ d.querySelectorAll('.view').forEach(node=>node.classList.remove('active'));
+ d.getElementById('view-tasks').classList.add('active');
+ evaluate('tenant-hot-order-settings.js');evaluate('tenant-workflow.js');evaluate('tenant-diagnostics.js');
+ if(profileBeforeWorkspace){w.tenantProfileSnapshot=owner;emit('tenant-profile',owner);resolveBoot();await settle();}
+ evaluate('tenant-workspace.js');evaluate('tenant-telegram-binding.js');
+ if(!profileBeforeWorkspace){w.tenantProfileSnapshot=owner;emit('tenant-profile',owner);resolveBoot();}
+ await settle();
+ const byId=id=>d.getElementById(id), tab=key=>d.querySelector('[data-settings-tab='+key+']');
+ const telegramCalls=()=>calls.filter(x=>x.url==='/api/platform/telegram/binding');
+ assert.equal(telegramCalls().length,0,'No personal Telegram request while outside Profile');
+ for(const id of ['workflowPanel','tenantDiagnostics','telegramBinding'])assert.equal(byId(id).parentElement.id,'profile-company-settings',id+' must not mount in legacy route or unrelated support modal');
+ assert.equal(tab('workflow').hidden,false);
+ tab('workflow').click();assert.equal(byId('workflowPanel').hidden,false);
+ d.getElementById('view-tasks').classList.remove('active');
+ profile.classList.add('active');emit('tenant-view','profile');await settle();
+ assert.equal(telegramCalls().length,0,'No Telegram request from other profile tabs');
+ byId('wfLoad').click();assert.ok(calls.some(x=>x.url==='/api/platform/workflow'));resolveBoot();await settle();
+ assert.equal(byId('wfEditor').hidden,false,'Real workflow form can load after relocation');
+ tab('advanced').click();assert.equal(byId('tenantDiagnostics').hidden,false);assert.equal(byId('workflowPanel').hidden,true);
+ tab('notifications').click();await settle();
+ assert.equal(byId('telegramBinding').hidden,false);assert.equal(byId('telegramBinding').querySelector('[data-bind]').disabled,false);
+ assert.deepEqual(telegramCalls().map(x=>x.method),['GET'],'Personal Telegram action must not post automatically');
+ emit('tenant-profile',owner);await settle();
+ assert.equal(d.querySelectorAll('#tenantDiagnostics').length,1,'Owner refresh must not duplicate the card');
+ assert.equal(d.querySelectorAll('#workflowPanel').length,1,'Owner refresh preserves editor');
+ assert.equal(telegramCalls().length,1,'Same-session refresh does not repeat personal read');
+ emit('tenant-auth-pending');assert.equal(byId('telegramBinding'),null);assert.equal(byId('tenantDiagnostics'),null);assert.equal(byId('workflowPanel'),null);
+ emit('tenant-profile',manager);await settle();
+ assert.equal(byId('workflowPanel'),null);assert.equal(byId('tenantDiagnostics'),null);assert.equal(tab('workflow').hidden,true);
+ assert.equal(byId('telegramBinding').hidden,false,'An active Manager retains their own Telegram binding');
+ assert.deepEqual(telegramCalls().map(x=>x.method),['GET','GET']);
+ emit('tenant-profile',{...manager,member:{...manager.member,active:false}});await settle();
+ assert.equal(byId('telegramBinding'),null);assert.equal(telegramCalls().length,2);
+ w.close();
+}
+productionPanels(true).then(()=>productionPanels(false)).then(()=>{
+ console.log('PASS: production profile restores owner panels under both arrival orders and reads personal Telegram only in Notifications.');
+}).catch(error=>{console.error(error);process.exitCode=1});
