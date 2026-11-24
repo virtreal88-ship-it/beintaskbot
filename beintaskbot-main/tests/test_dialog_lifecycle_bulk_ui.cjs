@@ -27,8 +27,8 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
  w.fetch=async(url,options={})=>{
   url=String(url);const body=options.body?JSON.parse(options.body):null;calls.push({url,body});let result;
   if(url.endsWith('dialogs_lifecycle')){
-   if(fail&&body.lead_id===1){if(fail==='network')throw Error('Network interrupted');return{ok:false,status:fail,json:async()=>({success:false,error:'Changed'})};}
-   result={lifecycle:{state:body.action==='dismiss'?'dismissed':'closed',revision:5}};
+   if(fail&&body.lead_id===2){if(fail==='network')throw Error('Network interrupted');return{ok:false,status:fail,json:async()=>({success:false,error:'Changed'})};}
+   result={lifecycle:{state:'closed',revision:5}};
    // The bulk mutation receipt intentionally lacks action capabilities.
    if(selected&&body.lead_id===2){
     routes.set('2',{...b,lifecycle:{...b.lifecycle,...result.lifecycle,can_start:true,can_close:false,can_transfer:true,
@@ -46,7 +46,7 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
   }else if(url.includes('/dialogs?')){
    const offset=new URL(url,'https://example.test').searchParams.get('offset');
    const preview=new URL(url,'https://example.test').searchParams.get('completion_preview')==='1';
-   result={completion_preview:preview&&!oldServer,dialogs:large&&preview?Array.from({length:50},(_,i)=>route(Number(offset)+i+10)):offset==='10'?(onlyIneligible?[closed]:[a,closed]):[group],channels:[],agents:[],unread_count:17,next_offset:large&&preview?(Number(offset)<450?Number(offset)+50:null):bulk?(cycle?0:offset==='10'?null:10):null};
+   result={completion_preview:preview&&!oldServer,dialogs:large&&preview?Array.from({length:50},(_,i)=>route(Number(offset)+i+10,'accepted')):offset==='10'?(onlyIneligible?[closed]:[a,closed]):[group],channels:[],agents:[],unread_count:17,next_offset:large&&preview?(Number(offset)<450?Number(offset)+50:null):bulk?(cycle?0:offset==='10'?null:10):null};
    if(scopeChange&&preview){w.document.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:{...profile,member:{...profile.member,telegram_id:99}}}));}
   }else throw Error('Unexpected request '+url);
   return{ok:true,status:200,json:async()=>({success:true,result})};
@@ -77,21 +77,20 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
   assert.match(notice,/нет входящего сообщения: 1/);assert.match(notice,/принято другим сотрудником: 1/);assert.match(notice,/действие недоступно: 1/);
  }
  else{
-  assert.equal(prompts.length,1,'double clicks get one confirmation');assert.match(prompts[0],large?/500/:/2/,'exact eligible source count');
+  assert.equal(prompts.length,1,'double clicks get one confirmation');assert.match(prompts[0],large?/500/:/1/,'exact eligible source count');
   assert(calls.filter(c=>c.url.includes('/dialogs?')).every(c=>!c.url.includes('filter')));
-  assert.match(prompts[0],new RegExp('Не включено в операцию: '+(large?0:ineligible?3:1)));
+  assert.match(prompts[0],new RegExp('Не включено в операцию: '+(large?0:ineligible?4:2)));
   if(ineligible){assert.match(prompts[0],new RegExp('нет входящего сообщения: '+(unknownInbound?0:1)));assert.match(prompts[0],new RegExp('действие недоступно: '+(unknownInbound?2:1)));}
   if(!confirm){assert.equal(mutations.length,0,'cancel is read-only');if(large)assert.equal(calls.length,10,'500 routes require 10 paged previews, not 500 histories');}
   else{
-   assert.equal(mutations.length,fail==='network'||fail===403?1:2,notice);
-   assert.equal(mutations[0].body.action,'dismiss');assert.equal(mutations[0].body.message_id,'inbound-1');assert.equal(mutations[0].body.expected_revision,4);
+   assert.equal(mutations.length,1,notice);
+   assert.equal(mutations[0].body.action,'close');assert(!('message_id' in mutations[0].body));assert.equal(mutations[0].body.expected_revision,4);
    assert.equal(mutations[0].body.expected_tenant_id,'tenant');assert.equal(mutations[0].body.expected_user_id,33);
-   if(mutations[1])assert.equal(mutations[1].body.action,'close');
-   assert(mutations.every(c=>[1,2].includes(c.body.lead_id)),'never closes another employee dialogue');
-   if(fail!==403)assert.match(notice,new RegExp('Не включено в операцию: '+(ineligible?3:1)));
+   assert.equal(mutations[0].body.lead_id,2,'only owned accepted routes close; waiting routes are never marked no-reply in bulk');
+   if(fail!==403)assert.match(notice,new RegExp('Не включено в операцию: '+(ineligible?4:2)));
    if(fail===409)assert.match(notice,/Пропущено из-за изменений или доступа: 1/,'conflicts remain separate from exclusions');
    if(!fail)assert.match(notice,/Пропущено из-за изменений или доступа: 0/);
-   if(ineligible&&!fail){assert.match(notice,/Завершено: 2/);assert.match(notice,new RegExp('нет входящего сообщения: '+(unknownInbound?0:1)));assert.match(notice,/принято другим сотрудником: 1/);assert.match(notice,new RegExp('действие недоступно: '+(unknownInbound?2:1)));}
+   if(ineligible&&!fail){assert.match(notice,/Завершено: 1/);assert.match(notice,new RegExp('нет входящего сообщения: '+(unknownInbound?0:1)));assert.match(notice,/принято другим сотрудником: 1/);assert.match(notice,new RegExp('действие недоступно: '+(unknownInbound?2:1)));}
 
    if(fail==='network')assert.match(notice,/1/,'network ambiguity and unprocessed remainder shown');
   }

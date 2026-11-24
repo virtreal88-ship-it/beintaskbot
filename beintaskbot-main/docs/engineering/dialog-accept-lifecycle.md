@@ -22,7 +22,7 @@ closed. This revision therefore requires the additive schema before deployment.
   episode or receive a transfer. An unset status is not eligible. The server
   rechecks under the membership lock; stale targets are rejected. Lunch or Away
   does not revoke an already assigned episode. Other workspaces and an
-  opt-out retain their existing eligibility. Dismissing a rhetorical question
+  opt-out retain their existing eligibility. Marking a rhetorical question
   does not create or assign an active episode.
 - Transfer still requires current source view/update access and continues the same episode; once transfer commits, the previous operator immediately loses access.
 - Close records its end, removes it from the active queue, and keeps a readonly
@@ -37,9 +37,13 @@ closed. This revision therefore requires the additive schema before deployment.
   later than close returns the route to the waiting queue. Echoes, webhook retries,
   historical events, unknown timestamps and events preceding close do not reopen.
 - **Does not require a reply** is a manual decision on a specific latest waiting
-  incoming message. It dismisses that queue item without creating an episode,
-  sending a message or creating a case. A newer incoming reopens it. A stale
-  message id/revision is rejected instead of silently dismissing another question.
+  incoming message. It records an exact audited no-reply decision
+  (`dialog_no_reply`, `counts_as_missed: false`) without changing the waiting
+  workflow, assigning an operator, or closing the dialogue. The active list
+  shows the marker only for that inbound; a newer incoming is a new request.
+  A stale message id/revision is rejected without dismissing the dialogue.
+  Bulk completion only closes accepted, eligible items and never marks no reply.
+  Previously dismissed terminal workflows remain available in history.
 - AI is gated at admission and final dispatch for the managed route. Accept does
   not change the existing independent AI human/paused setting or another source.
   Future waiting episodes respect the original AI configuration.

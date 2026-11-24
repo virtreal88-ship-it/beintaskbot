@@ -44,6 +44,16 @@ def payload(action='accept', revision=0, **extra):
                 action=action, expected_revision=revision, request_id=str(uuid.uuid4()), **extra)
 
 
+def seed_legacy_dismissed(db, incoming):
+    """Fixture representing old persisted terminal state, not a new action."""
+    ident=str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_dialog_workflows
+      (tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at,last_inbound_id)
+      VALUES(%s::uuid,%s::uuid,'client',%s::uuid,'dismissed',11,1,clock_timestamp(),%s)""",(A,CA,ident,str(incoming)))
+    db.commit()
+    return {'id':ident,'state':'dismissed','operator_id':11,'revision':1}
+
+
 def state(db, channel=CA):
     result=db.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s', (A,channel,'client'))
     db.commit()
@@ -182,7 +192,7 @@ def test_manual_restart_remains_for_own_closed_history_after_operator_routing(ep
 
 def test_owner_can_start_new_cycle_from_dismissed_dialog(episodes):
     inbound=insert_message(episodes,'for-dismiss-start',created_at='2099-01-01T00:00:00Z')
-    command('dismiss',0,message_id=inbound)
+    seed_legacy_dismissed(episodes,inbound)
     start=payload('start',1)
     result=lifecycle.mutate(PROFILE,start)
     assert result['lifecycle']['state']=='accepted' and result['lifecycle']['revision']==2
@@ -200,7 +210,7 @@ def test_transfer_completed_dialogue_preserves_episode_and_history(episodes,monk
         return tenant_operator_dialogs.history(profile,'connect',41,CA,'client')
     if state_before=='dismissed':
         inbound=insert_message(episodes,'for-completed-transfer',created_at='2099-01-01T00:00:00Z')
-        command('dismiss',0,message_id=inbound)
+        seed_legacy_dismissed(episodes,inbound)
     else:
         command()
         assert read(PROFILE)['dialog']['lifecycle']['accepted_by_name']=='Owner'
@@ -454,26 +464,75 @@ def test_delayed_old_send_stays_in_original_episode_after_new_acceptance(episode
     assert not episodes.execute('SELECT * FROM saas_support_tickets')
 
 
-def test_dismiss_requires_current_incoming_and_creates_no_episode_or_case(episodes):
-    message=episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id']
+def test_legacy_dismiss_receipt_replays_audited_alias_but_new_marks_require_exact_route(episodes):
+    import hashlib
+    import json
+    from tenant_connect_direct_reconcile import ensure_schema
+    ensure_schema(episodes)
+    message=str(episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'])
+    historical=seed_legacy_dismissed(episodes,message)
+    alias={'conversation_id':'historical-alias','lead_id':99}
+    episodes.execute("""INSERT INTO saas_connect_direct_merge_backups
+      (id,tenant_id,channel_id,pair_id,canonical_conversation_id,split_conversation_id,snapshot,state,created_by)
+      VALUES(%s::uuid,%s::uuid,%s::uuid,'fixture-pair','client',%s,%s::jsonb,'merged',11)""",
+      (str(uuid.uuid4()),A,CA,alias['conversation_id'],json.dumps({'version':2,'leads':[41,99]})))
+    old=payload('dismiss',0,message_id=message)
+    old.update(alias)
+    result={'lifecycle':historical}
+    digest=hashlib.sha256(json.dumps(old,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    episodes.execute("""INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
+      VALUES(%s::uuid,%s::uuid,11,%s,%s::jsonb)""",(A,old['request_id'],digest,json.dumps(result)))
     episodes.commit()
-    with pytest.raises(TenantLinearError):
-        command('dismiss',0,message_id=str(uuid.uuid4()))
-    request=payload('dismiss',0,message_id=str(message))
+    assert lifecycle.mutate(PROFILE,old)==result
+    for changes in (alias,{'channel_id':''},{'conversation_id':''}):
+        forged=payload('dismiss',1,message_id=message,individual_no_reply=True)
+        forged.update(changes)
+        with pytest.raises(TenantLinearError) as not_exact:
+            lifecycle.mutate(PROFILE,forged)
+        assert not_exact.value.status==409
+        assert 'Обновите диалог' in str(not_exact.value)
+    assert not episodes.execute("SELECT 1 FROM saas_tenant_audit_events WHERE action='dialog_no_reply'")
+    assert state(episodes)['state']=='dismissed'
+
+
+def test_no_reply_marks_only_latest_inbound_without_terminal_side_effects(episodes,monkeypatch):
+    import tenant_operator_dialogs as dialogs
+    monkeypatch.setattr(dialogs,'_connect',lambda:episodes)
+    message=str(episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'])
+    episodes.commit()
+    with pytest.raises(TenantLinearError) as bulk:
+        command('dismiss',0,message_id=message)
+    assert bulk.value.status==422
+    with pytest.raises(TenantLinearError) as stale:
+        command('dismiss',0,message_id=str(uuid.uuid4()),individual_no_reply=True)
+    assert stale.value.status==409
+    request=payload('dismiss',0,message_id=message,individual_no_reply=True)
     result=lifecycle.mutate(PROFILE,request)
-    assert result['lifecycle']['state']=='dismissed'
+    status=result['lifecycle']
+    assert status['state']=='waiting' and status['operator_id'] is None and status['no_reply_needed'] is True
+    assert state(episodes)['closed_at'] is None
     assert lifecycle.mutate(PROFILE,request)==result
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
     assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+    events=episodes.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_no_reply'",(A,))
+    assert len(events)==1 and events[0]['payload']['message_id']==message and events[0]['payload']['counts_as_missed'] is False
     episodes.commit()
-    with episodes.cursor() as cur:
-        with pytest.raises(TenantLinearError):lifecycle.require_access(cur,A,33,'connect',CA,'client')
-        with pytest.raises(TenantLinearError):lifecycle.require_access(cur,A,11,'connect',CA,'client','update')
+    staff={'tenant_id':A,'telegram_id':33}
+    for profile in (PROFILE,staff):
+        item=next(row for row in dialogs.listing(profile,lifecycle='active')['dialogs'] if row['lead_id']==41)
+        assert item['lifecycle']['no_reply_needed'] is True
+        details=dialogs.history(profile,'connect',41,CA,'client')['dialog']
+        assert details['lifecycle']['no_reply_needed'] is True and not details['can_send']
+        assert not details['lifecycle']['can_close'] and not details['lifecycle']['can_dismiss']
+    assert not [r for r in dialogs.listing(PROFILE,lifecycle='completed')['dialogs'] if r['lead_id']==41]
+    with pytest.raises(TenantLinearError):command('close',1)
+    newer=insert_message(episodes,'real-new-inbound',created_at='2099-01-01T00:00:00Z')
+    with episodes.cursor() as cur:lifecycle.note_inbound(cur,A,CA,'client',newer,'2099-01-01T00:00:00Z')
     episodes.commit()
-    with pytest.raises(TenantLinearError):command('case',1)
-    with episodes.cursor() as cur:lifecycle.note_inbound(cur,A,CA,'client','fresh','2099-01-01T00:00:00Z')
-    episodes.commit();assert state(episodes)['state']=='waiting'
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
+    fresh=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']
+    assert fresh['state']=='waiting' and not fresh['no_reply_needed'] and fresh['can_dismiss']
+    assert command('accept',fresh['revision'])['lifecycle']['state']=='accepted'
+    assert command('close',fresh['revision']+1)['lifecycle']['state']=='closed'
 
 
 @pytest.mark.parametrize('episodes',['legacy','shadow'],indirect=True)

@@ -1153,6 +1153,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             list_access=ListAccess(cur,tenant,policy,rows,rollout) if rollout.enforced or policy.has_scoped_access('dialogs') else None
             inbound=_completion_inbound_snapshot(cur,tenant,rows,presence_only=not completion_preview) if rollout.enforced else {}
             workflows={}
+            marked_inbound={}
             company_prelinked_for_bulk=None
             presence_online=False
             presence_sources=frozenset()
@@ -1161,6 +1162,16 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 # Only entries matching already-authorized rows are projected.
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
+                from tenant_dialog_lifecycle import no_reply_marks
+                visible_routes={(str(r['channel_id']),r['conversation_id']) for r in rows if r['provider']=='connect'}
+                marked=no_reply_marks(cur,tenant,[(channel,conversation,workflow.get('last_inbound_id'))
+                    for (channel,conversation),workflow in workflows.items()
+                    if workflow['state']=='waiting' and (channel,conversation) in visible_routes])
+                if marked:
+                    exact_routes={(channel,conversation) for channel,conversation,_ in marked}
+                    latest=_completion_inbound_snapshot(cur,tenant,[r for r in rows
+                        if (str(r['channel_id']),r['conversation_id']) in exact_routes])
+                    marked_inbound={key:message for key,message in latest.items() if (*key[:2],message) in marked}
                 from tenant_dialog_presence import is_online, work_status_routing_sources
                 presence_online=is_online(cur,tenant,int(profile['telegram_id']))
                 presence_sources=work_status_routing_sources(tenant)
@@ -1184,6 +1195,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         search_observer=search_observer,
                         _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflow,
                         _online=online,
+                        _no_reply_marked=(str(r['channel_id']),r['conversation_id'],int(r['lead_id'])) in marked_inbound,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
                     if company_prelinked_for_bulk is not None and r.get('lifecycle_enabled'):
@@ -1244,9 +1256,20 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
 
                 # A card may keep the workflow under a private WhatsApp ID.
                 # Search its phone route only if both routes passed visibility.
-                rows=[r for r in rows if matches(r) or (r['provider']=='connect'
-                    and (companion:=history_companions.get((r['channel_id'],r['conversation_id'],int(r['lead_id']))))
-                    and matches(companion))]
+                def matches_text(r):
+                    if matches(r):
+                        return True
+                    companion=history_companions.get((r['channel_id'],r['conversation_id'],int(r['lead_id'])))
+                    return bool(r['provider']=='connect' and companion and matches(companion))
+
+                # Match the company on an authorized physical route before
+                # folding groups and paginating. Never borrow a different
+                # source's company name from a paired history or a group.
+                from tenant_dialog_company_binding import list_route_key, matching_list_company_routes
+                search_rows=[(r,matches_text(r)) for r in rows]
+                company_matches=matching_list_company_routes(cur,tenant,policy,
+                    [r for r,match in search_rows if not match],query_text) if interactive else set()
+                rows=[r for r,match in search_rows if match or (company_matches and list_route_key(r) in company_matches)]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
             if owner_overview and (agent or state):
                 # Agent metadata is intentionally redacted on passive rows.

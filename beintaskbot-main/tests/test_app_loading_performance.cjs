@@ -117,7 +117,7 @@ async function dialogReloadTests(){
  const tick=async()=>{await new Promise(resolve=>setTimeout(resolve,10));await settle();};
  for(const view of ['dialogs','tasks','linear']){
   const b=setup(view);try{await tick();assert.equal(b.histories().length,0,`stale session dialog never restores on ${view}`);assert.doesNotMatch(b.w.document.getElementById('operatorConversationHeader').textContent,/Synthetic 3/);
-   const search=b.w.document.getElementById('operatorSearch');assert.equal(search.value,'');assert.equal(search.readOnly,true);search.focus();assert.equal(search.readOnly,false);search.value='typed filter';search.dispatchEvent(new b.w.Event('input'));assert.equal(search.value,'typed filter');
+   const search=b.w.document.getElementById('operatorSearch');assert.equal(search.value,'');assert.equal(search.readOnly,true);search.focus();assert.equal(search.readOnly,false);search.value='typed filter';search.dispatchEvent(new b.w.InputEvent('input',{inputType:'insertText'}));assert.equal(search.value,'typed filter');
   }finally{b.w.close();}
  }
  const foreign=setup();try{await tick();for(const operatorDialogOwner of [undefined,'other-tenant:99']){foreign.w.dispatchEvent(new foreign.w.PopStateEvent('popstate',{state:{view:'dialogs',operatorDialog:row(9),operatorDialogOwner}}));await tick();assert.equal(foreign.histories().length,0,'Back/Forward rejects ownerless or another identity route');}}finally{foreign.w.close();}

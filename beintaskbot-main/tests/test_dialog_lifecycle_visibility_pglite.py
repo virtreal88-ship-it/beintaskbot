@@ -3,7 +3,7 @@ import uuid
 import pytest
 from unittest.mock import patch
 from test_tenant_support_inbox import database,db,A,CA,PROFILE
-from test_dialog_lifecycle_pglite import episodes,command,payload
+from test_dialog_lifecycle_pglite import episodes,command,payload,seed_legacy_dismissed
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
 import tenant_dialog_lifecycle as lifecycle
@@ -137,7 +137,7 @@ def test_other_employee_can_read_exact_archive_and_must_start_before_work(reader
         inbound=readers.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41",
                                 (A,))[0]['id']
         readers.commit()
-        archived=command('dismiss',0,message_id=inbound)['lifecycle']
+        archived=seed_legacy_dismissed(readers,inbound)
     with pytest.raises(TenantLinearError):
         dialogs.history(recipient,'connect',41,CA,'client')
     readers.execute("""INSERT INTO saas_dialog_source_members(tenant_id,source_id,employee_id,updated_by)

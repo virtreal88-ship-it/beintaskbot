@@ -5,7 +5,7 @@
 (()=>{
   'use strict';
   const selector='input[type="search"],input[data-search-input]';
-  const managed=new WeakSet(),armed=new WeakSet();
+  const managed=new WeakSet(),armed=new WeakSet(),confirmed=new WeakMap();
   const credentialTokens=/\b(username|current-password|new-password|one-time-code)\b/;
   function eligible(input){
     if(!(input instanceof HTMLInputElement)||!input.matches(selector))return false;
@@ -34,6 +34,40 @@
       input.readOnly=document.activeElement!==input;
     }
   }
+  // Some browsers ignore the hints and insert a saved login into an ordinary
+  // search. Opted-in queries retain the last actual editing event, never the
+  // field's live value at the time a background request runs.
+  function protect(input){
+    if(confirmed.has(input)||!eligible(input))return;
+    prepare(input);
+    input.dataset.confirmedSearch='';
+    confirmed.set(input,input.defaultValue);
+    read(input);
+    input.addEventListener('animationstart',event=>{if(event.animationName==='tenantSearchAutofill')read(input);});
+    input.addEventListener('input',event=>{
+      const edited=!input.readOnly&&document.activeElement===input&&
+        (/^(?:insert(?:Text|CompositionText|FromComposition|FromPaste|FromDrop|FromYank)|delete[A-Za-z]+|history(?:Undo|Redo))$/.test(event.inputType||'')||
+          (event.isTrusted&&!input.value&&event.inputType==null));
+      if(edited)confirmed.set(input,input.value);
+      else {read(input);event.stopImmediatePropagation();}
+    },true);
+    input.addEventListener('change',()=>read(input),true);
+  }
+  function read(input){
+    if(!input)return '';
+    if(!confirmed.has(input))return input.value;
+    const value=confirmed.get(input);
+    if(input.value!==value)input.value=value;
+    return value;
+  }
+  function write(input,value){
+    if(confirmed.has(input))confirmed.set(input,value);
+    input.value=value;
+  }
+  const guardStyle=document.createElement('style');
+  guardStyle.textContent='@keyframes tenantSearchAutofill{from{opacity:1}to{opacity:1}}input[data-confirmed-search]:-webkit-autofill{animation:tenantSearchAutofill .01s}input[data-confirmed-search]:autofill{animation:tenantSearchAutofill .01s}';
+  document.head.append(guardStyle);
+  window.tenantSearchInputs={protect,read,write};
   function scan(root){
     if(root.nodeType!==1&&root.nodeType!==9)return;
     if(root.matches?.(selector))prepare(root);
@@ -41,7 +75,7 @@
   }
   function release(event){
     const input=event.target.closest?.('label')?.control||event.target;
-    if(eligible(input)){prepare(input);if(armed.has(input))input.readOnly=false;}
+    if(eligible(input)){prepare(input);if(confirmed.has(input))read(input);if(armed.has(input))input.readOnly=false;}
   }
   document.addEventListener('pointerdown',release,true);
   document.addEventListener('focusin',release,true);

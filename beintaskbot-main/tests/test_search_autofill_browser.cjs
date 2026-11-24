@@ -54,10 +54,34 @@ assert.doesNotMatch(operatorCard,/<input[^>]*\bdata-search(?:[\s=>])/, 'retired 
    await page.evaluate(()=>{const field=document.createElement('input');field.id='lateType';document.querySelector('#dynamic').append(field);field.type='search';});
    await page.waitForFunction(()=>document.getElementById('lateType').readOnly);
    await page.locator('#optIn').click();await page.keyboard.type('12345');assert.equal(await page.locator('#optIn').inputValue(),'12345');
+   await page.evaluate(()=>{
+    const search=document.querySelector('#added');
+    window.protectedSearchEdits=0;
+    window.tenantSearchInputs.protect(search);
+    search.addEventListener('input',()=>window.protectedSearchEdits++);
+   });
+   const guarded=page.locator('#added');
+   await guarded.click();await guarded.fill('regular company query');
+   const baselineEdits=await page.evaluate(()=>window.protectedSearchEdits);
+   await guarded.evaluate(el=>{
+    el.value='saved.login@example.test';
+    el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertReplacementText'}));
+   });
+   assert.equal(await guarded.inputValue(),'regular company query','manager replacement restores typed text');
+   assert.equal(await page.evaluate(()=>window.protectedSearchEdits),baselineEdits,'credential replacement does not notify application search');
+   await guarded.evaluate(el=>{el.value='silent.saved.login@example.test';el.dispatchEvent(new AnimationEvent('animationstart',{animationName:'tenantSearchAutofill'}));});
+   assert.equal(await guarded.inputValue(),'regular company query','native autofill animation also purges the login');
+   assert.equal(await guarded.evaluate(el=>{el.value='silent.focus.login@example.test';return window.tenantSearchInputs.read(el);}), 'regular company query','background refresh cannot read a silent credential fill');
+   await guarded.evaluate(el=>{
+    el.value='貼り付け';el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertFromPaste'}));
+    el.value+='入力';el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertCompositionText',isComposing:true}));
+   });
+   assert.equal(await guarded.evaluate(el=>window.tenantSearchInputs.read(el)),'貼り付け入力','paste and IME remain accepted');
+   assert.equal(await guarded.evaluate(el=>{window.tenantSearchInputs.write(el,'Selected Company');return window.tenantSearchInputs.read(el);}), 'Selected Company','explicit selected company remains authoritative');
    assert.equal(requests,0,'guard does not send data');await page.close();
   }
   const html=fs.readFileSync('docs/tenant-app.html','utf8');assert(html.indexOf('tenant-search-inputs.js')<html.indexOf('<input'),'guard loads before static fields');
   for(const [file,pattern] of [['docs/tenant-app.html',/<input type="search" id="companySearch"/],['docs/tenant-linear-board.js',/<input type="search" class="search" id="tlSearch"/],['docs/deal-tags.js',/<input type="search" data-query/],['docs/tenant-operator-dialogs.js',/<input type="search" id="operatorSearch"/]])assert.match(fs.readFileSync(file,'utf8'),pattern);
-  console.log('PASS Chromium desktop/mobile: static/dynamic search hints, mouse/label/Tab editing, readonly preservation, login exclusions, zero requests. Saved-login autofill not exercised.');
+  console.log('PASS Chromium desktop/mobile: static/dynamic search hints, mouse/label/Tab editing, readonly preservation, login exclusions, zero requests. Synthetic login replacement and silent autofill tested; native password-manager prompt not automated.');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

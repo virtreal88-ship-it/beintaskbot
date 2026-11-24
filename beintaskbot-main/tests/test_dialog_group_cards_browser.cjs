@@ -14,7 +14,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
    const member={tenant_id:'synthetic',telegram_id:11,role:'owner',active:true};
    window.tenantProfileSnapshot={member,capabilities:{modules:{dialogs:true,support:true},dialog_company_binding:true}};
    const source=(name,id)=>({provider:'connect',channel_id:id,channel_name:name,lead_id:id==='a'?41:42,conversation_id:'120363432608782851@g.us',customer_name:'Synthetic group',customer_kind:'group',can_send:false,lifecycle_enabled:true,lifecycle:{state:'waiting',revision:0,can_accept:true}});
-   const sources=[source('Synthetic source A','a'),source('Synthetic source B','b')];window.historyReads=[];window.companyReads=[];window.accountCalls=[];
+   const sources=[source('Synthetic source A','a'),source('Synthetic source B','b')];window.historyReads=[];window.companyReads=[];window.accountCalls=[];window.listSearches=[];
    sources[1].lifecycle={...sources[1].lifecycle,id:'episode',revision:2};
    window.fetch=async (target,opt={})=>{const url=String(target);let result={};
     if(url.includes('/api/platform/me'))return{ok:true,json:async()=>window.tenantProfileSnapshot};
@@ -44,15 +44,26 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
       result={transfer:channel==='b'?{from_name:'Synthetic sender',to_name:'Synthetic recipient',at:'2026-11-16T09:11:22Z'}:null};
     }
     else if(url.includes('/dialogs/group-participants'))result={status:'available',phones:[],total:0};
-    else if(url.includes('/dialogs?'))result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},dialog_company_name:i===0?'Long <b>stored</b> company name '.repeat(10):undefined,unread_count:7,last_message_preview:'Latest message',last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};
+    else if(url.includes('/dialogs?')){window.listSearches.push(new URL(url,'https://example.test').searchParams.get('search')||'');result={dialogs:[{...sources[0],group_sources:sources,unread_count:4,last_message_at:'2026-11-16T09:11:22Z'},...['waiting','accepted','closed'].map((state,i)=>({...source('Single','single'+i),customer_kind:'contact',customer_name:state,conversation_id:'single'+i,lifecycle:{state},dialog_company_name:i===0?'Long <b>stored</b> company name '.repeat(10):undefined,unread_count:7,last_message_preview:'Latest message',last_message_at:'2026-11-16T09:11:22Z'}))],channels:[],agents:[],total_count:4,next_offset:null};}
     else if(!url.includes('/dialogs/read'))throw Error('Unexpected request '+url);
     return{ok:true,status:200,json:async()=>({success:true,result})};};
   });
+  await page.addScriptTag({path:path.join(docs,'tenant-search-inputs.js')});
   await page.addScriptTag({path:path.join(docs,'tenant-operator-i18n.js')});
   await page.addScriptTag({path:path.join(docs,'tenant-dialog-company.js')});
   await page.addScriptTag({path:path.join(docs,'tenant-operator-dialogs.js')});
   await page.evaluate(()=>window.tenantOperator.refresh());
   await page.locator('.operator-row').first().waitFor();
+  const listSearch=page.locator('#operatorSearch');
+  await listSearch.click();await listSearch.fill('Synthetic');
+  await page.waitForFunction(()=>window.listSearches.includes('Synthetic'));
+  await listSearch.evaluate(input=>{input.value='saved.login@example.test';input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertReplacementText'}));});
+  assert.equal(await listSearch.inputValue(),'Synthetic');
+  await listSearch.evaluate(input=>{input.value='silent.saved.login@example.test';return window.tenantOperator.refresh();});
+  assert.equal(await listSearch.inputValue(),'Synthetic');
+  assert(!await page.evaluate(()=>window.listSearches.some(query=>query.includes('example.test'))),'list API never receives the synthetic saved login');
+  await listSearch.fill('');
+  await page.waitForFunction(()=>window.listSearches.at(-1)==='');
   assert.equal(await page.locator('.operator-row').count(),4);
   for(const row of await page.locator('.operator-row').all()){
    const g=await row.evaluate(el=>{const rect=n=>{const r=n.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}};return {row:rect(el),copy:rect(el.querySelector('.operator-row-copy')),meta:rect(el.querySelector('.operator-row-meta')),unread:rect(el.querySelector('.operator-unread-count')),badge:el.querySelector('.operator-row-indicators .operator-lifecycle-badge')?rect(el.querySelector('.operator-row-indicators .operator-lifecycle-badge')):null,children:el.children.length};});
@@ -190,7 +201,12 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
   await result.waitFor();
   assert.equal(await result.locator('strong').textContent(),'@synthetic_a');
   assert.equal(await page.evaluate(()=>window.accountCalls.filter(cmd=>cmd.operator_account).length),0);
+  assert.equal(await input.evaluate(el=>el.form),null,'binding search is not associated with a login form');
+  assert.equal(await input.evaluate(el=>el.closest('[role=search]')?.dataset.formType),'other','dialogue company chooser is classified as search, not authentication');
+  assert.equal(await result.evaluate(el=>el.form),null,'binding action never submits a native form');
+  await page.evaluate(()=>{window.companyNativeSubmits=0;document.addEventListener('submit',()=>window.companyNativeSubmits++,true);});
   await result.click();
+  assert.equal(await page.evaluate(()=>window.companyNativeSubmits),0,'actual company binding does not trigger native password-save heuristics from a form submit');
   await page.waitForFunction(()=>document.querySelector('[data-company-value]')?.textContent==='Selected Operator account');
   assert.equal(await input.inputValue(),'Selected Operator account');
   const calls=await page.evaluate(()=>window.accountCalls.map(({operator_search,operator_account,channel_id,lead_id})=>[operator_search??null,operator_account??null,channel_id,lead_id]));
