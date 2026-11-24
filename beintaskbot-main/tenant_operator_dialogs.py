@@ -1019,6 +1019,42 @@ def _fold_group_routes(rows, *, prefer_actionable=False):
     return result
 
 
+def _attach_missed_call_attention(cur, tenant, cards):
+    """Keep the latest Connect missed-call preview distinct from read cursors."""
+    routes = {}
+    for card in cards:
+        for row in (card, *card.get('group_sources', ())):
+            if (row.get('provider') != 'connect' or not row.get('lifecycle_enabled')
+                    or row.get('archive_read_only') or row.get('search_overview_read_only')
+                    or row.get('last_message_type') != 'call_missed'
+                    or row.get('last_message_direction') != 'system'):
+                continue
+            row['missed_call_pending'] = row['lifecycle']['state'] != 'accepted'
+            if row['missed_call_pending'] and row.get('last_message_at'):
+                key = (row['channel_id'], row['conversation_id'], row['lead_id'])
+                routes.setdefault(key, []).append(row)
+    if not routes:
+        return
+    # Only for displayed, authorized exact routes. During a live accepted
+    # episode the dialogue is already in work; a completed episode covers
+    # calls at or before its close, even if the route has gone back to waiting.
+    cur.execute("""SELECT r.channel::text AS channel_id,r.conversation,r.lead
+      FROM jsonb_to_recordset(%s::jsonb) AS r(channel uuid,conversation text,lead bigint,call_at timestamptz)
+      JOIN LATERAL (
+        SELECT e.closed_at FROM saas_dialog_episodes e
+        WHERE e.tenant_id=%s::uuid AND e.channel_id=r.channel
+          AND e.conversation_id=r.conversation AND e.lead_id=r.lead
+          AND e.closed_at IS NOT NULL
+        ORDER BY e.accepted_at DESC LIMIT 1
+      ) latest ON latest.closed_at >= r.call_at""",
+      (json.dumps([dict(channel=channel, conversation=conversation, lead=lead,
+                       call_at=rows[0]['last_message_at'])
+                   for (channel, conversation, lead), rows in routes.items()]), tenant))
+    for row in cur.fetchall():
+        for target in routes[(row['channel_id'], row['conversation'], row['lead'])]:
+            target['missed_call_pending'] = False
+
+
 def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
     """Read-only optimistic tokens for already-authorized physical Connect routes.
 
@@ -1234,6 +1270,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=_fold_group_routes(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
+            if interactive and rollout.enforced:
+                _attach_missed_call_attention(cur,tenant,rows[:50])
             if not all_rows and not completion_preview:
                 from tenant_dialog_company_binding import attach_list_company_names
                 company_cards = rows[:50]

@@ -82,6 +82,8 @@ const {JSDOM}=require('jsdom');
     const create=$('#operatorSharedReminderCreate');
     assert.equal(create.hidden,false);
     assert.equal(create.textContent,'Create reminder');
+    assert.equal(create.firstElementChild?.matches('svg[aria-hidden="true"][focusable="false"]'),true);
+    assert.equal(create.lastElementChild?.textContent,'Create reminder','the decorative plus precedes the localized action label');
     assert.equal($('#operatorMoreActions #operatorSharedReminderCreate'),null,'creation is not in the ellipsis');
     create.click();assert($('#sharedDialogReminderModal form'),'company control opens the existing schedule form');
     $('#sharedDialogReminderModal header button').click();
