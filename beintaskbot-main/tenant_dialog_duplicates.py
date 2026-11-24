@@ -42,6 +42,7 @@ def discover(profile, params):
         archive_join="""LEFT JOIN saas_dialog_workflows w ON w.tenant_id=%s::uuid AND w.channel_id=v.channel_id::uuid
               AND w.conversation_id=v.conversation_id""" if archive else ''
         archive_value="COALESCE(w.state IN ('closed','dismissed') AND w.operator_id IS DISTINCT FROM actor.id,FALSE)" if archive else 'FALSE'
+        phone_writable="COALESCE(w.state IN ('waiting','accepted'),TRUE)" if archive else 'TRUE'
         if archive:args.extend((tenant,actor))
         sql+=""" , direct AS (
            SELECT v.provider,v.channel_id,v.conversation_id,v.lead_id,v.channel_name,v.last_message_at,
@@ -49,6 +50,7 @@ def discover(profile, params):
                 OR v.customer_name ~* '@(lid|g[.]us|s[.]whatsapp[.]net|c[.]us)$' THEN '' ELSE v.customer_name END AS customer_name,
              """+manual_value+""" AS manual_display_phone,
              """+archive_value+""" AS archive_read_only,
+             (NOT identity_conflict AND NOT p.ambiguous AND """+phone_writable+""") AS display_phone_editable,
              CASE WHEN identity_conflict OR (p.ambiguous AND v.conversation_id LIKE '%%@lid') THEN '' ELSE COALESCE(
                 CASE WHEN v.phone ~ '^\\+?[0-9(). -]+$' AND length(regexp_replace(v.phone,'[^0-9]','','g')) BETWEEN 7 AND 15
                    AND NOT (v.conversation_id LIKE '%%@lid' AND split_part(v.conversation_id,'@',1)=regexp_replace(v.phone,'[^0-9]','','g'))
@@ -74,7 +76,7 @@ def discover(profile, params):
                  ELSE lower(regexp_replace(btrim(customer_name),'[[:space:]]+',' ','g')) END AS normalized_name
           FROM direct d
         ) """
-        columns="provider,channel_id,conversation_id,lead_id,customer_name,phone,manual_display_phone,archive_read_only,channel_name"
+        columns="provider,channel_id,conversation_id,lead_id,customer_name,phone,manual_display_phone,archive_read_only,display_phone_editable,channel_name"
         if mode=='missing':
             sql+="SELECT "+columns+" FROM hints WHERE phone='' AND manual_display_phone='' ORDER BY last_message_at DESC NULLS LAST,channel_id,lead_id"
         else:

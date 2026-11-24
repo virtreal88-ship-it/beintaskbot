@@ -8,8 +8,11 @@ const channel='00000000-0000-0000-0000-000000000201';
 const row=(n,extra={})=>({provider:'connect',channel_id:channel,lead_id:n,conversation_id:`10000000000${n}@lid`,customer_kind:'contact',customer_name:`Synthetic ${n}`,phone:'',channel_name:'Private workspace',avatar_status:'unavailable',...extra});
 const first=row(1,{candidate_group:1,customer_name:'<img src=x onerror=alert(1)>',phone:'+994500000001'});
 const second=row(2,{candidate_group:1,phone:'+994500000001'});
-const more=[row(4,{candidate_group:2,customer_name:'Other A'}),row(5,{candidate_group:2,customer_name:'Other B'})];
-const missing=row(3,{customer_name:'100000000003@lid'});
+const more=[row(4,{candidate_group:2,customer_name:'Other A',archive_read_only:true,lifecycle:{state:'closed'}}),row(5,{candidate_group:2,customer_name:'Other B'})];
+const missing=row(3,{customer_name:'100000000003@lid',display_phone_editable:true});
+const closed=row(6,{customer_name:'Closed without phone',display_phone_editable:false,lifecycle:{state:'closed'}});
+const conflict=row(7,{display_phone_editable:true,contact_identity_conflict:true});
+const noPermission=row(8,{display_phone_editable:false});
 let profile=worker,pending;
 const seen=[];
 w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
@@ -21,7 +24,7 @@ w.fetch=async (target,options)=>{
  if(resource==='/duplicates'){
    seen.push({resource,method:options.method,body,search:url.search});
    if(body.mode==='name')return new Promise(resolve=>pending=()=>resolve(response({dialogs:[row(9)],next_offset:null})));
-   return response({dialogs:body.mode==='missing'?[missing]:[first,second,...more],next_offset:null});
+   return response({dialogs:body.mode==='missing'?[missing,closed,conflict,noPermission]:[first,second,...more],next_offset:null});
  }
  if(resource==='/duplicates/preview'){
    seen.push({resource,body});return response({eligible:true,pair_id:'synthetic-pair',precondition:'synthetic-precondition',
@@ -34,7 +37,7 @@ w.fetch=async (target,options)=>{
    seen.push({resource,body});return response({display_phone:'+994500000009'});
  }
  if(resource==='/history'){
-   seen.push({resource,lead:url.searchParams.get('lead_id')});return response({dialog:missing,messages:[],next_before:null});
+   seen.push({resource,lead:url.searchParams.get('lead_id')});return response({dialog:[missing,closed,conflict].find(row=>String(row.lead_id)===url.searchParams.get('lead_id'))||missing,messages:[],next_before:null});
  }
  if(resource==='')return response({dialogs:[],channels:[],agents:[],total_count:0,unread_count:0,next_offset:null});
  return {ok:true,json:async()=>({...profile,success:true})};
@@ -59,6 +62,9 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  $('[data-dupe-next]').click();assert.match($('[data-dupe-count]').textContent,/2.*2/);
  assert.match($('[data-dupe-results]').textContent,/Other A/);
  assert.equal(w.document.querySelectorAll('[data-dupe-open]').length,2,'only one candidate group is shown');
+ $('[data-dupe-preview]').click();await settle();
+ assert(seen.some(req=>req.resource==='/duplicates/preview'&&req.body.left.lead_id===4),'archived candidate can be checked in preview');
+ assert.equal($('[data-dupe-confirm]'),null,'client never offers merge for an archive even if server says eligible');
  $('[data-dupe-prev]').click();assert.match($('[data-dupe-count]').textContent,/1.*2/);
  $('[data-dupe-preview]').click();await settle();
  assert.equal(seen.filter(req=>req.resource==='/duplicates/merge').length,0,'preview must not merge');
@@ -73,6 +79,7 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  $('#operatorFindDuplicates').click();$('[data-dupe-mode="phone"]').checked=false;submit($('[data-dupe-form]'));await settle();
  assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'missing');
  assert.equal($('[data-dupe-pick]'),null,'missing mode never selects merge pairs');
+ assert.equal(w.document.querySelectorAll('[data-dupe-phone-form]').length,1,'only server-editable, non-conflicted missing row may edit');
  const phoneForm=$('[data-dupe-phone-form]');submit(phoneForm,'+994500000009');await settle();
  const manual=seen.find(req=>req.resource==='/contact-display-phone');
  assert.equal(manual.body.phone,'+994500000009');assert.equal(manual.body.lead_id,3);
@@ -84,6 +91,10 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  submit(edit,'+994500000009');await settle();
  assert.equal(seen.filter(req=>req.resource==='/contact-display-phone').length,2);
  assert.equal($('[data-panel-phone]').textContent,'+994500000009');
+ await w.tenantOperator.openDialog(closed,true);await settle();
+ assert.equal($('#operatorManualDisplayPhone'),null,'closed history contact card is not editable');
+ await w.tenantOperator.openDialog(conflict,true);await settle();
+ assert.equal($('#operatorManualDisplayPhone'),null,'conflicted history contact card is not editable');
  $('#operatorFindDuplicates').click();$('[data-dupe-mode="name"]').checked=true;submit($('[data-dupe-form]'));await settle();
  assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'both');
  $('[data-dupe-mode="phone"]').checked=false;submit($('[data-dupe-form]'));await settle();

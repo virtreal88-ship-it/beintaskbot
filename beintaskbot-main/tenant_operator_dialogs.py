@@ -515,7 +515,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
       ) linked_contact ON TRUE
 '''
     manual_phone,phone_join="''::text",''
-    if include_contact_names and schema_ready(cur, {
+    if include_contact_names and policy.profile.get('role')=='owner' and schema_ready(cur, {
         'saas_connect_dialog_display_phones': ('tenant_id','channel_id','conversation_id','lead_id','phone'),
     }, []):
         manual_phone="COALESCE(CASE WHEN "+canonical_direct+" THEN mdp.phone END,'')"

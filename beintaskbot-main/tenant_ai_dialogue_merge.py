@@ -27,28 +27,33 @@ def ensure_schema(conn):
     with conn.cursor() as cur:
         from tenant_connect_owner_identity import schema as owner_identity_schema
         owner_identity_schema(cur)
-        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
-          id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-          pair_id TEXT NOT NULL, channel_id UUID NOT NULL,
-          canonical_conversation_id TEXT NOT NULL, split_conversation_id TEXT NOT NULL,
-          canonical_lead_id BIGINT NOT NULL, split_lead_id BIGINT NOT NULL,
-          identity_digest TEXT NOT NULL, snapshot JSONB NOT NULL,
-          state TEXT NOT NULL CHECK(state IN ('merged','rolled_back')),
-          merged_by BIGINT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          rolled_back_by BIGINT NULL, rolled_back_at TIMESTAMPTZ NULL,
-          UNIQUE(tenant_id,pair_id),
-          CHECK(canonical_conversation_id<>split_conversation_id),
-          FOREIGN KEY(tenant_id,merged_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
-          FOREIGN KEY(tenant_id,rolled_back_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
-        )''')
-        cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merge_requests(
-          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-          request_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('merge','rollback')),
-          pair_id TEXT NOT NULL, precondition TEXT NOT NULL, result JSONB NOT NULL,
-          created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-          PRIMARY KEY(tenant_id,request_id),
-          FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
-        )''')
+        provision_tables(cur)
+
+
+def provision_tables(cur):
+    """Only logical merge bookkeeping; Connect's base schema is already installed."""
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merges(
+      id UUID PRIMARY KEY, tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      pair_id TEXT NOT NULL, channel_id UUID NOT NULL,
+      canonical_conversation_id TEXT NOT NULL, split_conversation_id TEXT NOT NULL,
+      canonical_lead_id BIGINT NOT NULL, split_lead_id BIGINT NOT NULL,
+      identity_digest TEXT NOT NULL, snapshot JSONB NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('merged','rolled_back')),
+      merged_by BIGINT NOT NULL, merged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      rolled_back_by BIGINT NULL, rolled_back_at TIMESTAMPTZ NULL,
+      UNIQUE(tenant_id,pair_id),
+      CHECK(canonical_conversation_id<>split_conversation_id),
+      FOREIGN KEY(tenant_id,merged_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT,
+      FOREIGN KEY(tenant_id,rolled_back_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+    )''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS saas_ai_dialogue_merge_requests(
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      request_id UUID NOT NULL, operation TEXT NOT NULL CHECK(operation IN ('merge','rollback')),
+      pair_id TEXT NOT NULL, precondition TEXT NOT NULL, result JSONB NOT NULL,
+      created_by BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY(tenant_id,request_id),
+      FOREIGN KEY(tenant_id,created_by) REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE RESTRICT
+    )''')
 
 
 def _secret(cfg):
@@ -74,7 +79,7 @@ def _owner(cur,cfg):
     return tenant,actor
 
 
-def _pairs(cur,cfg):
+def _pairs(cur,cfg,*,exact_leads=None,selected_pair_id=None):
     """Return only same-channel, non-group pairs proven by signed Connect data."""
     tenant,actor=_owner(cur,cfg); channel=str(uuid.UUID(str(cfg['AI_LEARNING_MCP_CHANNEL_ID'])))
     from tenant_connect_identity import inventory
@@ -87,10 +92,14 @@ def _pairs(cur,cfg):
     for proof in proofs:
         jid,lid=proof['canonical_id'],proof['split_id'];receipts=proof['receipts']
         left,right=routes.get(jid),routes.get(lid)
+        if exact_leads is not None and (not left or not right or {left['lead_id'],right['lead_id']}!=exact_leads):
+            continue
+        pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
+        if selected_pair_id is not None and not hmac.compare_digest(pair_id,selected_pair_id):
+            continue
         reasons=list(proof['conflicts'])
         if proof.get('reviewable_conflicts')==['historical_route_split']:
             reasons=[r for r in reasons if r!='provider_identity_conflict']
-        pair_id=_token(cfg,'dialogue-pair',tenant,channel,jid,lid)
         canonical={'n':0,'incoming':0,'outgoing':0};split={'n':0,'incoming':0,'outgoing':0}
         if left:
             cur.execute('''SELECT count(*) AS n,count(*) FILTER(WHERE direction='incoming') AS incoming,
@@ -233,7 +242,7 @@ def execute(cur,cfg,args, *, display_selection=None):
               AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s::text[])
               ORDER BY conversation_id FOR UPDATE''',(tenant,channel,ids))
             locked_routes=cur.fetchall()
-    tenant,actor,channel,items=_pairs(cur,cfg)
+    tenant,actor,channel,items=_pairs(cur,cfg,selected_pair_id=pair_id)
     request_precondition=(_token(cfg,'browser-display-request',precondition,*display_selection)
                           if display_selection is not None else precondition)
     replay=_request(cur,tenant,request_id,operation,pair_id,request_precondition)

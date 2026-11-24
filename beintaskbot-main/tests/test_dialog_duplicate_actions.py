@@ -19,6 +19,20 @@ def setup(db, monkeypatch):
     monkeypatch.setattr(dialogs, '_connect', lambda: db)
     monkeypatch.setenv('TENANT_ENCRYPTION_KEY', 'synthetic-merge-key')
     monkeypatch.delenv('AI_LEARNING_MCP_CURSOR_SECRET', raising=False)
+    actions.prepare_schema(db)
+    db.commit()
+    def no_request_ddl(*_args):
+        pytest.fail('browser endpoint attempted startup-only schema initialization')
+    monkeypatch.setattr(actions,'provision_tables',no_request_ddl)
+
+
+def activate_lifecycle(db):
+    from tenant_dialog_lifecycle import migrate
+    from tenant_dialog_rollout import transition
+    with db.cursor() as cur:
+        migrate(cur)
+        transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
+    db.commit()
 
 
 def preview_command():
@@ -36,6 +50,7 @@ def test_browser_reuses_provider_merge_and_exact_rollback(db, monkeypatch):
     db.execute("UPDATE saas_connect_conversations SET manual_display_name='Prior name' WHERE tenant_id=%s AND lead_id=8101", (A,))
     db.execute("UPDATE saas_connect_conversations SET display_name='Chosen name' WHERE tenant_id=%s AND lead_id=8102", (A,))
     db.commit()
+    activate_lifecycle(db)
     stale = actions.preview(PROFILE, preview_command())
     assert stale['eligible'] and stale['phone'] == '+' + JID.split('@')[0]
     db.execute("UPDATE saas_connect_conversations SET display_name='Updated name' WHERE tenant_id=%s AND lead_id=8102", (A,))
@@ -74,7 +89,11 @@ def test_manual_phone_never_changes_route_or_merge_evidence(db, monkeypatch):
                                                     (B, CB, 9903, lid, 'contact')):
         db.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,%s,%s)",
                    (tenant, channel, identity, lead_id, kind))
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+       VALUES(%s,%s,%s,'synthetic-manual-phone',%s,'incoming','Synthetic')""",
+       (str(uuid.uuid4()), A, lead, 'connect:'+CA))
     db.commit()
+    activate_lifecycle(db)
     command = route(lead, lid)
     with pytest.raises(TenantLinearError):
         actions.save_phone(PROFILE, {**command, 'phone': '+992001234567'})
@@ -87,17 +106,32 @@ def test_manual_phone_never_changes_route_or_merge_evidence(db, monkeypatch):
     assert listed['manual_display_phone'] == '+994700000009' and not listed['phone']
     opened = dialogs.history(PROFILE, 'connect', lead, CA, lid)['dialog']
     assert opened['manual_display_phone'] == '+994700000009' and not opened['phone']
+    db.execute("""INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions)
+        VALUES(%s,33,'operator','Synthetic operator','["dialogs"]')""",(A,))
+    db.commit()
+    member = {'tenant_id': A, 'telegram_id': 33}
+    staff_dialog = next(r for r in dialogs.listing(member)['dialogs'] if r['lead_id'] == lead)
+    assert not staff_dialog.get('manual_display_phone')
+    with pytest.raises(TenantLinearError) as error:
+        actions.save_phone(member, {**command, 'phone': '+994700000099'})
+    assert error.value.status == 403
     with db.cursor() as cur:
         assert not actions.collect(cur, A, CA, [lid])['phones_by_identity'].get(lid)
     assert actions.save_phone(PROFILE, {**command, 'phone': ''}) == {'display_phone': ''}
 
 
+    db.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id)
+        VALUES(%s,%s,%s,%s,'closed',%s)""",(A,CA,lid,str(uuid.uuid4()),PROFILE['telegram_id']))
+    db.commit()
+    with pytest.raises(TenantLinearError) as error:
+        actions.save_phone(PROFILE, {**command, 'phone': '+994700000009'})
+    assert error.value.status == 409
+
+
 def test_preflight_and_execute_respect_closed_lifecycle_fence(db,monkeypatch):
     setup(db,monkeypatch)
     seed(db,monkeypatch)
-    from tenant_dialog_lifecycle import migrate
-    with db.cursor() as cur:migrate(cur)
-    db.commit()
+    activate_lifecycle(db)
     before=actions.preview(PROFILE,preview_command())
     assert before['eligible']
     db.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id)

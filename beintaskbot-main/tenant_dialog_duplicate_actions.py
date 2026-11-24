@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 
-from tenant_ai_dialogue_merge import _pairs, _token, ensure_schema, execute
+from tenant_ai_dialogue_merge import _pairs, _token, execute, provision_tables
 from tenant_ai_agents_store import _audit
 from tenant_connect_direct_identity import direct_identity
 from tenant_connect_direct_reconcile import _owner
@@ -18,6 +18,38 @@ _ROUTE = {'provider', 'channel_id', 'conversation_id', 'lead_id'}
 PHONE_SCHEMA = {'saas_connect_dialog_display_phones': ('tenant_id', 'channel_id', 'conversation_id', 'lead_id', 'phone')}
 
 
+_MERGE_SCHEMA = {
+    'saas_ai_dialogue_merges': ('tenant_id','pair_id','state','snapshot'),
+    'saas_ai_dialogue_merge_requests': ('tenant_id','request_id','operation','pair_id','precondition','result'),
+}
+
+
+def prepare_schema(conn):
+    """Startup-only, on the existing bounded migration connection."""
+    from tenant_schema_preflight import ready
+    with conn.cursor() as cur:
+        merge_ready = ready(cur, _MERGE_SCHEMA, [])
+        phone_ready = ready(cur, PHONE_SCHEMA, [])
+        if not merge_ready:
+            provision_tables(cur)
+    if phone_ready:
+        return
+    with conn.cursor() as cur:
+        cur.execute("""CREATE TABLE IF NOT EXISTS saas_connect_dialog_display_phones (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, lead_id BIGINT NOT NULL,
+          phone TEXT NOT NULL CHECK (phone ~ '^[+][1-9][0-9]{6,14}$'),
+          PRIMARY KEY(tenant_id,channel_id,conversation_id,lead_id),
+          FOREIGN KEY (tenant_id,channel_id,conversation_id)
+            REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE)""")
+
+
+def _require_schema(cur, columns):
+    from tenant_schema_preflight import ready
+    if not ready(cur, columns, []):
+        raise TenantLinearError('Настройки диалогов временно недоступны.', 503)
+
+
 def _route(value):
     if (not isinstance(value, dict) or set(value) != _ROUTE or value['provider'] != 'connect'
             or not isinstance(value['conversation_id'], str)
@@ -29,7 +61,7 @@ def _route(value):
 
 def _config(tenant, actor, channel):
     # Keep pair tokens compatible with established MCP tooling where enabled.
-    secret = os.environ.get('AI_LEARNING_MCP_CURSOR_SECRET') or os.environ.get('TENANT_ENCRYPTION_KEY')
+    secret = (os.environ.get('AI_LEARNING_MCP_CURSOR_SECRET') or '').strip() or (os.environ.get('TENANT_ENCRYPTION_KEY') or '').strip()
     return {'AI_LEARNING_MCP_TENANT_ID': tenant, 'actor_id': actor,
             'AI_LEARNING_MCP_CHANNEL_ID': channel, 'AI_LEARNING_MCP_CURSOR_SECRET': secret}
 
@@ -68,16 +100,24 @@ def preview(profile, payload):
         raise TenantLinearError('Выберите разные диалоги одного канала.', 400)
     channel = a[0]
     with _connect() as conn:
-        ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _owner(cur, profile)
             _, _, policy = access(cur, profile, 'dialogs', action='update')
-            rows = [assert_route(cur, tenant, policy, 'connect', conv, ch, lead, action='update')
-                    for ch, conv, lead in (a, b)]
+            cur.execute("SET LOCAL statement_timeout='5s'")
+            cur.execute("SET LOCAL lock_timeout='2s'")
+            # Preview grants no write capability. Waiting dialogues have no
+            # episode to accept; archived routes may be examined but the
+            # independent lifecycle fence below never allows merging them.
+            _, _, view_policy = access(cur, profile, 'dialogs')
+            rows = [assert_route(cur, tenant, view_policy, 'connect', conv, ch, lead, allow_closed_archive=True)
+                    for ch, conv, lead in sorted((a, b))]
+            from tenant_dialog_access import require_source
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+            _require_schema(cur, _MERGE_SCHEMA)
             if any(r.get('conversation_kind') not in ('contact', '') for r in rows):
                 raise TenantLinearError('Групповые диалоги нельзя объединять.', 400)
             cfg = _config(tenant, actor, channel)
-            _, _, _, items = _pairs(cur, cfg)
+            _, _, _, items = _pairs(cur, cfg, exact_leads={a[2], b[2]})
             item = next((x for x in items if {x['canonical_lead_id'], x['split_lead_id']} == {a[2], b[2]}), {})
             phone = _phone(next((r['conversation_id'] for r in rows
                                 if r['lead_id'] == item.get('canonical_lead_id')), '')) if item.get('eligible') else ''
@@ -122,10 +162,14 @@ def merge(profile, payload):
         raise TenantLinearError('Выберите имя и номер.', 400)
     choices = (channel, name, phone)
     with _connect() as conn:
-        ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _owner(cur, profile)
-            access(cur, profile, 'dialogs', action='update')
+            _, _, policy = access(cur, profile, 'dialogs', action='update')
+            cur.execute("SET LOCAL statement_timeout='5s'")
+            cur.execute("SET LOCAL lock_timeout='2s'")
+            from tenant_dialog_access import require_source
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+            _require_schema(cur, _MERGE_SCHEMA)
             result = execute(cur, _config(tenant, actor, channel),
                 {k: payload[k] for k in ('pair_id', 'precondition', 'request_id')} | {'operation': 'merge'},
                 display_selection=choices)
@@ -145,29 +189,28 @@ def save_phone(profile, payload):
     if value and (not value.startswith('+') or not digits or len(digits) < 7 or digits == conversation.split('@')[0]):
         raise TenantLinearError('Укажите номер в международном формате.', 400)
     phone = '+' + digits if digits else ''
-    from tenant_connect_transport import _schema
     from tenant_connect_dialog_equivalence import canonical
     with _connect() as conn:
-        _schema(conn)
         with conn.cursor() as cur:
             tenant, actor = _owner(cur, profile)
             _, _, policy = access(cur, profile, 'dialogs', action='update')
-            route = assert_route(cur, tenant, policy, 'connect', conversation, channel, lead, action='update')
+            from tenant_dialog_access import require_source
+            from tenant_dialog_lifecycle import _row as lifecycle_row, enabled
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+            _, _, view_policy = access(cur, profile, 'dialogs')
+            route = assert_route(cur, tenant, view_policy, 'connect', conversation, channel, lead)
+            # The exact protected view holds the lifecycle lock through commit.
+            # Waiting has no owner to override; closed/dismissed stay read-only.
+            if enabled(cur, tenant):
+                workflow = lifecycle_row(cur, tenant, channel, conversation)
+                if workflow and workflow['state'] not in {'waiting','accepted'}:
+                    raise TenantLinearError('Закрытый диалог доступен только для чтения.', 409)
             if route.get('conversation_kind') not in ('contact', '') or canonical(cur, tenant, channel, conversation) != conversation:
                 raise TenantLinearError('Доступен только основной личный диалог.', 409)
             if phone and (normalize_phone(route.get('phone')) or
                           collect(cur, tenant, channel, [conversation])['phones_by_identity'].get(conversation)):
                 raise TenantLinearError('Подтверждённый номер нельзя заменить.', 409)
-            from tenant_schema_preflight import ready
-            if not ready(cur, PHONE_SCHEMA, []):
-                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended('dialog-display-phone-schema',0))")
-                cur.execute("""CREATE TABLE IF NOT EXISTS saas_connect_dialog_display_phones (
-                  tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-                  channel_id UUID NOT NULL, conversation_id TEXT NOT NULL, lead_id BIGINT NOT NULL,
-                  phone TEXT NOT NULL CHECK (phone ~ '^[+][1-9][0-9]{6,14}$'),
-                  PRIMARY KEY(tenant_id,channel_id,conversation_id,lead_id),
-                  FOREIGN KEY (tenant_id,channel_id,conversation_id)
-                    REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id) ON DELETE CASCADE)""")
+            _require_schema(cur, PHONE_SCHEMA)
             if phone:
                 cur.execute("""INSERT INTO saas_connect_dialog_display_phones
                   (tenant_id,channel_id,conversation_id,lead_id,phone) VALUES(%s::uuid,%s::uuid,%s,%s,%s)

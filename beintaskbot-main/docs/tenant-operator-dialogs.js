@@ -786,13 +786,16 @@
     }
     return [...groups.values()].filter(group=>group.length>=2);
   }
+  const completedDuplicateRoute=row=>Boolean(row.archive_read_only||['closed','dismissed'].includes(row.lifecycle?.state));
+  const duplicateDisplayPhoneEditable=row=>row.display_phone_editable===true&&!completedDuplicateRoute(row)
+    &&!row.contact_identity_conflict&&!row.identity_conflict&&!verifiedDialogPhone(row)&&!contactDetails(row)?.phone;
   function duplicateSelection(state){
-    const pair=(duplicateGroups(state)[state.groupIndex]||[]).filter(row=>!row.archive_read_only&&state.selected.has(dialogKey(row)));
+    const pair=(duplicateGroups(state)[state.groupIndex]||[]).filter(row=>state.selected.has(dialogKey(row)));
     return pair.length===2?pair:null;
   }
   function pickDuplicateGroup(state,index){
     state.groupIndex=index;state.selected.clear();state.keep=0;
-    const pair=(duplicateGroups(state)[index]||[]).filter(row=>!row.archive_read_only).slice(0,2);
+    const pair=(duplicateGroups(state)[index]||[]).slice(0,2);
     for(const row of pair)state.selected.add(dialogKey(row));
   }
   const duplicateCardDetails=row=>[verifiedDialogPhone(row)||verifiedDialogPhone({phone:row.manual_display_phone}),row.channel_name].filter(Boolean).join(' · ');
@@ -829,11 +832,11 @@
     const visible=state.mode==='missing'?state.results:group;
     const cards=visible.map(row=>{
       const index=state.results.indexOf(row);
-      const key=dialogKey(row),checked=state.selected.has(key),selectable=state.mode!=='missing'&&group.length>2&&!row.archive_read_only;
+      const key=dialogKey(row),checked=state.selected.has(key),selectable=state.mode!=='missing'&&group.length>2;
       // No internal route identifiers ever enter displayed HTML or attributes.
       return `<div class="operator-dupe-row"><button type="button" class="outline operator-dupe-open" data-dupe-open="${index}"><strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><small>${esc(duplicateCopy('open'))}</small></button>
       ${selectable?`<label><input type="checkbox" data-dupe-pick="${index}" ${checked?'checked':''} ${busy||!checked&&state.selected.size>=2?'disabled':''}> ${esc(duplicateCopy('pair'))}</label>`:''}
-      ${state.mode==='missing'&&!row.archive_read_only?`<form data-dupe-phone-form="${index}"><input type="tel" maxlength="32" aria-label="${esc(duplicateCopy('manual'))}" placeholder="${esc(duplicateCopy('manual'))}" required ${busy?'disabled':''}><button type="submit" class="outline" ${busy?'disabled':''}>${esc(duplicateCopy('save'))}</button></form>`:''}</div>`;
+      ${state.mode==='missing'&&duplicateDisplayPhoneEditable(row)?`<form data-dupe-phone-form="${index}"><input type="tel" maxlength="32" aria-label="${esc(duplicateCopy('manual'))}" placeholder="${esc(duplicateCopy('manual'))}" required ${busy?'disabled':''}><button type="submit" class="outline" ${busy?'disabled':''}>${esc(duplicateCopy('save'))}</button></form>`:''}</div>`;
     }).join('');
     panel.innerHTML=cards?(state.mode==='missing'?cards:`<div class="operator-dupe-pair">${cards}</div>`):((state.searched&&!busy&&!state.error)?`<p>${esc(duplicateCopy('empty'))}</p>`:'');
     if(groups.length&&state.mode!=='missing'){
@@ -917,7 +920,7 @@
     try{
       const result=await api('dialogs/duplicates/preview','POST',{left:duplicateRoute(pair[state.keep]),right:duplicateRoute(pair[1-state.keep])});
       if(!duplicateCurrent(state)||rev!==state.rev)return;
-      if(result?.eligible!==true){
+      if(result?.eligible!==true||pair.some(completedDuplicateRoute)){
         state.error=duplicateBlocked(result?.conflicts);
         state.stage='results';renderDuplicateResults(state);return;
       }
@@ -940,7 +943,7 @@
   }
   async function mergeDuplicateDialogs(state){
     const pair=duplicateSelection(state),preview=state.preview;
-    if(!duplicateCurrent(state)||state.stage!=='review'||!pair||!preview)return;
+    if(!duplicateCurrent(state)||state.stage!=='review'||!pair||pair.some(completedDuplicateRoute)||!preview)return;
     state.stage='merging';state.error='';renderDuplicateResults(state);
     try{
       await api('dialogs/duplicates/merge','POST',{channel_id:pair[0].channel_id,pair_id:preview.pair_id,precondition:preview.precondition,
@@ -958,7 +961,7 @@
   }
   async function saveDuplicateDisplayPhone(state,index,value){
     const row=state.results[index],phone=String(value).trim();
-    if(!duplicateCurrent(state)||!row||state.stage!=='results'||!verifiedDialogPhone({phone})||row.archive_read_only)return;
+    if(!duplicateCurrent(state)||!row||state.stage!=='results'||!verifiedDialogPhone({phone})||!duplicateDisplayPhoneEditable(row))return;
     state.stage='saving';state.error='';renderDuplicateResults(state);
     try{
       const result=await api('dialogs/contact-display-phone','POST',{...duplicateRoute(row),phone});
@@ -1237,7 +1240,7 @@
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
-  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||verifiedDialogPhone({phone:route.manual_display_phone})||'';
+  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
   const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
   const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
   const phoneUnavailable=()=>dialogPhoneLabel(currentDialog);
@@ -1990,7 +1993,8 @@
   }
   const pendingManualPhones=new Set();
   const canEditManualPhone=route=>canUseDuplicateSearch()&&route?.provider==='connect'&&!isDialogGroup(route)
-    &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.case_attachment
+    &&!completedDuplicateRoute(route)&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.case_attachment
+    &&(!route.lifecycle_enabled||route.lifecycle?.state==='waiting'||route.lifecycle?.state==='accepted'&&String(route.lifecycle.operator_id)===String(member?.telegram_id))
     &&!route.contact_identity_conflict&&!route.identity_conflict&&!verifiedDialogPhone(route)&&!contactDetails(route)?.phone;
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');

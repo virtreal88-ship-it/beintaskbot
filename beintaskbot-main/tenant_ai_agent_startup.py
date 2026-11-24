@@ -72,6 +72,7 @@ def prepare_database() -> None:
         from tenant_dialog_consultations import require_schema
         require_schema(conn)
         conn.commit()
+        _provision_dialog_duplicates(conn)
         # Opt-in only, on the dedicated startup connection. This fresh
         # transaction inherits the existing startup lock and timeout budget.
         # Closing the connection rolls back any partial template DDL.
@@ -88,6 +89,16 @@ def prepare_database() -> None:
         from tenant_dialog_presence import STATUS_PROVISION_ENV
         if os.environ.get(STATUS_PROVISION_ENV, '').strip().lower() == 'true':
             _provision_employee_status(conn)
+
+
+def _provision_dialog_duplicates(conn):
+    """Optional UI schema under the bounded startup lock; never blocks boot."""
+    from tenant_dialog_duplicate_actions import prepare_schema
+    try:
+        with conn.transaction():
+            prepare_schema(conn)
+    except Exception:
+        logging.getLogger(__name__).warning('Dialogue duplicates schema preflight: unverified')
 
 
 def _provision_reply_template_schema(conn):
