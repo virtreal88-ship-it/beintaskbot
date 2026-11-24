@@ -107,6 +107,7 @@ jobs:
           node tests/test_dialog_group_cards_browser.cjs
           node tests/test_dialog_tab_return_browser.cjs
           node tests/test_dialog_company_header_browser.cjs
+          node tests/test_shared_dialog_reminders_creation_browser.cjs
           node tests/test_contacts_directory_ui.cjs
           node tests/test_tenant_crm_sync_ui.cjs
       - uses: actions/upload-artifact@v4
