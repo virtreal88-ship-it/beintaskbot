@@ -249,7 +249,9 @@ def record_login(*, tenant_id: str, actor_id: int) -> None:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             cur.execute('UPDATE saas_auth_users SET last_login_at=now(),updated_at=now() WHERE actor_id=%s AND disabled_at IS NULL AND status=\'active\'',(int(actor_id),))
-            cur.execute('UPDATE saas_tenant_members SET last_login_at=now(),updated_at=now() WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE',(tenant_id,int(actor_id)))
+            # Login telemetry is not a membership edit: updated_at is the
+            # employee card's compare-and-swap version.
+            cur.execute('UPDATE saas_tenant_members SET last_login_at=now() WHERE tenant_id=%s::uuid AND telegram_id=%s AND active=TRUE',(tenant_id,int(actor_id)))
         conn.commit()
 
 
