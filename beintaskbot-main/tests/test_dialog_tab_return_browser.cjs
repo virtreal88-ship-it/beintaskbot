@@ -69,11 +69,9 @@ function gate(){
     const templates=page.locator('#operatorReplyTemplatesOpen');
     const input=page.locator('#operatorConversationContent #chatText');
     const companyPanel=page.locator('#operatorCompanyPanelOpen');
-    const saved=page.waitForResponse(res=>res.url().endsWith('/dialogs/company-panel/preferences')&&res.request().method()==='POST');
-    await companyPanel.click();assert.equal((await saved).status(),200);
     await company.waitFor();await templates.waitFor();await input.fill('Unsaved reply');
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true');
-    assert.deepEqual(preferenceWrites,[true]);
+    assert.deepEqual(preferenceWrites,[],'desktop opens the details panel automatically without a saved preference');
     await page.evaluate(()=>{
       window.initialNodes=['#operatorDialogs','#chatRows','#chatText','.operator-company-unlink','#operatorReplyTemplatesOpen']
         .map(selector=>document.querySelector(selector));
@@ -105,7 +103,7 @@ function gate(){
     await page.evaluate(()=>window.tenantAppNavigate('tasks',false));
     await page.evaluate(()=>window.tenantAppNavigate('dialogs',false));
     await company.waitFor();await templates.waitFor();
-    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','saved open panel reappears on return');
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','desktop details panel stays open on return');
     assert.equal(await input.inputValue(),'Unsaved reply');
     historyGate.release();historyGate=null;
     await page.waitForFunction(()=>document.getElementById('operatorConversationContent').getAttribute('aria-busy')!=='true');
@@ -124,16 +122,16 @@ function gate(){
     await page.locator('.operator-row').first().click();
     await input.waitFor();await company.waitFor();await templates.waitFor();
     assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','panel is already restored after authorized reopening');
-    assert.deepEqual(preferenceWrites,[true],'access loss and recovery are not preference writes');
-    // A fresh document must read the saved value from the server, not reuse
-    // in-memory UI state or perform an unsolicited write.
+    assert.deepEqual(preferenceWrites,[],'desktop access loss and recovery are not preference writes');
+    // Desktop visibility is determined by the viewport and does not require
+    // a saved open preference.
     const readsBeforeReload=preferenceReads;
     await page.reload();
     await page.locator('.operator-row').first().click();
     await company.waitFor();await templates.waitFor();await input.waitFor();
-    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','server preference restores open after reload');
-    assert(preferenceReads>readsBeforeReload);
-    assert.deepEqual(preferenceWrites,[true]);
+    assert.equal(await companyPanel.getAttribute('aria-expanded'),'true','desktop details panel opens after reload');
+    assert.equal(preferenceReads,readsBeforeReload);
+    assert.deepEqual(preferenceWrites,[]);
     // A revoked browser session clears the actual chat because old data is no longer authorized.
     sessionDenied=true;
     await tab(true);await tab(false);
