@@ -15,29 +15,30 @@ import (
 // only the encrypted journal/inbox may retain it, never CRM raw JSON or logs.
 // The chat allowlist/source binding is checked by the caller BEFORE extraction.
 type Envelope struct {
-	Kind         string          `json:"kind"`
-	Chat         string          `json:"chat"`
-	Sender       string          `json:"sender,omitempty"`
-	SenderAlt    string          `json:"sender_alt,omitempty"`
-	RecipientAlt string          `json:"recipient_alt,omitempty"`
-	ProviderID   string          `json:"provider_id"`
-	FromMe       bool            `json:"from_me"`
-	AppDispatch  bool            `json:"app_dispatch,omitempty"`
-	Timestamp    int64           `json:"timestamp"`
-	Text         string          `json:"text,omitempty"`
-	Status       string          `json:"status,omitempty"`
-	Proto        []byte          `json:"proto,omitempty"`
-	MediaKind    string          `json:"media_kind,omitempty"`
-	MediaMime    string          `json:"media_mime,omitempty"`
-	MediaSize    uint64          `json:"media_size,omitempty"`
-	FileName     string          `json:"file_name,omitempty"`
-	MessageType  string          `json:"message_type,omitempty"`
-	PushName     string          `json:"push_name,omitempty"`
-	QuoteID      string          `json:"quote_id,omitempty"`
-	QuoteChat    string          `json:"quote_chat,omitempty"`
-	QuoteSender  string          `json:"quote_sender,omitempty"`
-	Variant      string          `json:"variant,omitempty"`
-	Reaction     *ReactionTarget `json:"reaction,omitempty"`
+	Kind                   string          `json:"kind"`
+	Chat                   string          `json:"chat"`
+	Sender                 string          `json:"sender,omitempty"`
+	SenderAlt              string          `json:"sender_alt,omitempty"`
+	RecipientAlt           string          `json:"recipient_alt,omitempty"`
+	ProviderID             string          `json:"provider_id"`
+	FromMe                 bool            `json:"from_me"`
+	AppDispatch            bool            `json:"app_dispatch,omitempty"`
+	Timestamp              int64           `json:"timestamp"`
+	Text                   string          `json:"text,omitempty"`
+	Status                 string          `json:"status,omitempty"`
+	Proto                  []byte          `json:"proto,omitempty"`
+	MediaKind              string          `json:"media_kind,omitempty"`
+	MediaMime              string          `json:"media_mime,omitempty"`
+	MediaSize              uint64          `json:"media_size,omitempty"`
+	FileName               string          `json:"file_name,omitempty"`
+	MessageType            string          `json:"message_type,omitempty"`
+	PushName               string          `json:"push_name,omitempty"`
+	QuoteID                string          `json:"quote_id,omitempty"`
+	QuoteChat              string          `json:"quote_chat,omitempty"`
+	QuoteSender            string          `json:"quote_sender,omitempty"`
+	Variant                string          `json:"variant,omitempty"`
+	Reaction               *ReactionTarget `json:"reaction,omitempty"`
+	ReactionParticipantAlt string          `json:"reaction_participant_alt,omitempty"`
 }
 
 // MessageEnvelope retains the original lab event identity across rollout. New
