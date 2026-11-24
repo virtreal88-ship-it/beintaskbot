@@ -217,19 +217,15 @@ def _read(cur, tenant, actor, route, can_manage):
     return {**empty,'company_id':binding['company_id'],'company_name':visible['name']} if visible else empty
 
 
-def attach_list_company_names(cur, tenant, cards):
-    """Read only linked company names for the already authorized dialogue page."""
-    if not cards or not is_operator_workspace(tenant):
-        return
+def list_route_key(row):
+    try:
+        return _key(row.get('provider'), row.get('lead_id'), row.get('channel_id'), row.get('conversation_id'))
+    except OperatorError:
+        return None
 
-    def route_key(row):
-        try:
-            return _key(row.get('provider'), row.get('lead_id'), row.get('channel_id'), row.get('conversation_id'))
-        except OperatorError:
-            return None
 
-    keys_by_card = [[route_key(row) for row in card.get('group_sources', [card])] for card in cards]
-    keys = {key for routes in keys_by_card for key in routes if key is not None}
+def _listed_companies(cur, tenant, keys):
+    """Only names already allowed in the context of an exact, visible route."""
     companies = {}
     for provider, table, match in (
         ('connect', CONNECT, 'b.channel_id=r.channel_id::uuid'),
@@ -249,7 +245,30 @@ def attach_list_company_names(cur, tenant, cards):
             (list(lead_ids), list(channels), list(peers), tenant))
         for row in cur.fetchall():
             companies[(provider, row['lead_id'], row['channel_id'], row['conversation_id'])] = (row['company_id'], row['name'])
+    return companies
 
+
+def matching_list_company_routes(cur, tenant, policy, rows, query):
+    """Return matching keys, never company metadata or an extra directory grant."""
+    if (not rows or not query.strip() or not is_operator_workspace(tenant)
+            or policy.profile.get('tenant_status') != 'active'):
+        return set()
+    owner = policy.profile.get('role') == 'owner'
+    keys = {key for row in rows
+            if (owner or not (row.get('archive_read_only') or row.get('search_overview_read_only')))
+            if (key := list_route_key(row)) is not None}
+    return {key for key, (_, name) in _listed_companies(cur, tenant, keys).items()
+            if query in name.casefold()}
+
+
+def attach_list_company_names(cur, tenant, cards):
+    """Read only linked company names for the already authorized dialogue page."""
+    if not cards or not is_operator_workspace(tenant):
+        return
+
+    keys_by_card = [[list_route_key(row) for row in card.get('group_sources', [card])] for card in cards]
+    keys = {key for routes in keys_by_card for key in routes if key is not None}
+    companies = _listed_companies(cur, tenant, keys)
     for card, routes in zip(cards, keys_by_card):
         # A folded group shows a name only when its visible routes agree on one company.
         linked = {companies.get(key) for key in routes}

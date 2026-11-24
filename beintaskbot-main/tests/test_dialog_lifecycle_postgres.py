@@ -10,7 +10,7 @@ import psycopg
 from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
 from test_tenant_support_inbox import db, A, CA, PROFILE
-from test_dialog_lifecycle_pglite import episodes, payload
+from test_dialog_lifecycle_pglite import episodes, payload, seed_legacy_dismissed
 
 
 def worker(dsn, actor, request, barrier, output, operation='mutate'):
@@ -138,8 +138,11 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
         inbound=episodes.execute("""SELECT id::text AS id FROM saas_crm_messages
             WHERE tenant_id=%s::uuid AND kommo_lead_id=41 AND direction='incoming'""",(A,))[0]['id']
         episodes.commit()
-        archived=lifecycle.mutate(PROFILE,payload('dismiss',0,message_id=inbound))['lifecycle']
+        archived=seed_legacy_dismissed(episodes,inbound)
     old=episodes.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))
+    receipt_sql='SELECT request_id::text,actor_id,result FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid'
+    previous_receipts={r['request_id']:r for r in episodes.execute(receipt_sql,(A,))}
+    assert len(previous_receipts)==(2 if outcome=='closed' else 0)
     episodes.commit()
     revision=archived['revision']
     start_a,start_b=payload('start',revision),payload('start',revision)
@@ -154,7 +157,12 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
     assert pair[:-1]==old and len(pair)==(2 if outcome=='closed' else 1)
     assert not old or old[0]['closed_at'] is not None
     assert pair[-1]['accepted_by']==pair[-1]['operator_id']==winner and pair[-1]['closed_at'] is None
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid',(A,))[0]['n']==revision+1
+    receipts={r['request_id']:r for r in episodes.execute(receipt_sql,(A,))}
+    assert len(receipts)==len(previous_receipts)+1
+    assert {rid:receipts[rid] for rid in previous_receipts}==previous_receipts
+    won,lost=(start_a,start_b) if winner==11 else (start_b,start_a)
+    assert lost['request_id'] not in receipts
+    assert receipts[won['request_id']]=={'request_id':won['request_id'],'actor_id':winner,'result':{'lifecycle':winners[0]}}
     assert episodes.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_start'",(A,))[0]['n']==1
     episodes.commit()
     loser=11 if winner==33 else 33
@@ -236,12 +244,15 @@ def test_native_close_racing_fresh_inbound_never_hides_the_new_message(episodes)
 
 def test_native_dismiss_racing_newer_inbound_never_dismisses_the_new_message(episodes):
     latest=episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'];episodes.commit()
-    values=race(episodes,[(11,payload('dismiss',0,message_id=str(latest)),'mutate'),(11,payload(),'incoming')])
+    values=race(episodes,[(11,payload('dismiss',0,message_id=str(latest),individual_no_reply=True),'mutate'),(11,payload(),'incoming')])
     incoming=next(value[1]['incoming_id'] for value in values if value[0]=='ok' and 'incoming_id' in value[1])
     rows=episodes.execute('SELECT state,last_inbound_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))
     assert not rows or rows[0]['state']=='waiting',values
     if rows:assert rows[0]['last_inbound_id']==incoming
-    else:assert ('denied',409) in values, 'new message ID invalidates dismissal before a workflow exists'
+    else:assert ('denied',409) in values, 'new message ID invalidates marking before a workflow exists'
+    marks=episodes.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_no_reply'",(A,))
+    assert len(marks)<=1
+    assert all(row['payload']['message_id']==str(latest) and row['payload']['counts_as_missed'] is False for row in marks)
     assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
     assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
     episodes.commit()

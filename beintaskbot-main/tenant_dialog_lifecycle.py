@@ -142,6 +142,25 @@ def _row(cur, tenant, channel, conversation):
     return cur.fetchone()
 
 
+_NO_REPLY_NAMESPACE=uuid.UUID('97ac4912-8f12-45cb-83e8-249a098b222a')
+
+
+def _no_reply_id(tenant, channel, conversation, message_id):
+    return str(uuid.uuid5(_NO_REPLY_NAMESPACE,json.dumps(
+        list(map(str,(tenant,channel,conversation,message_id))),separators=(',',':'))))
+
+
+def no_reply_marks(cur, tenant, keys):
+    """Indexed durable markers for exact inbounds; no historical state migration."""
+    routes={_no_reply_id(tenant,*key):key for key in keys if key[-1]}
+    if not routes:return set()
+    cur.execute("""SELECT id::text AS id FROM saas_tenant_audit_events
+      WHERE id=ANY(%s::uuid[]) AND tenant_id=%s::uuid AND action='dialog_no_reply'""",
+      (list(routes),tenant))
+    return {routes[item['id']] for item in cur.fetchall()}
+
+
+
 def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False, search_overview=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     # The caller's independent tenant/source policy still gates every row.
@@ -416,7 +435,7 @@ def _manual_start_exempt_from_operator_routing(tenant, channel, policy):
     return bool(role and role != 'operator' and work_status_routing_requested(tenant, channel))
 
 
-def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, owner_observer=False, search_observer=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None):
+def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=False, owner_observer=False, search_observer=False, _rollout=None, _workflow=_UNSET_WORKFLOW, _last_inbound=None, _can_update=False, _has_inbound=None, _online=None, _policy=None, _no_reply_marked=False):
     # Internal projection snapshot only, never authorization for a mutation.
     # Listing passes state read under its retained shared transaction barrier.
     from tenant_dialog_rollout import guard
@@ -444,6 +463,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
           AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
           ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+str(dialog['channel_id']),dialog['lead_id']))
         last=cur.fetchone() or {}
+    no_reply=state=='waiting' and (_no_reply_marked or bool(details and last.get('id') and no_reply_marks(
+        cur,tenant,[(str(dialog['channel_id']),dialog['conversation_id'],last['id'])])))
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
@@ -452,7 +473,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
             and _can_update is True and (own or dialog.get('can_send') is True)
             and dialog.get('channel_active') is True
             and (online or (own and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
-        'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last),
+        'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last) and not no_reply,
+        'no_reply_needed':no_reply,
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
         'can_close':state=='accepted' and own,
@@ -581,7 +603,7 @@ def _mutate_once(profile, payload):
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
             if online_only and not all(payload.get(key) for key in ('channel_id','conversation_id','lead_id')):
                 raise TenantLinearError('Выберите источник Connect.',400)
-            route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action!="takeover")
+            route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action != "takeover")
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
             from tenant_dialog_presence import is_online, is_sidebar_transfer_online, work_status_routing_requested
             target = None
@@ -638,7 +660,7 @@ def _mutate_once(profile, payload):
                     AND ch.active""",(tenant,channel))
                 start_source_ready = bool(cur.fetchone())
             lock_dialog(cur,tenant,'connect',channel,conversation)
-            fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action!="takeover")
+            fresh_route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action != "takeover")
             if (str(fresh_route['connect_channel_id']),fresh_route['conversation_id'],int(fresh_route['lead_id'])) != (channel,conversation,int(route['lead_id'])):
                 raise TenantLinearError('Адрес диалога изменился. Обновите диалог.',409)
             cur.execute('SELECT * FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid AND request_id=%s::uuid',(tenant,request_id))
@@ -647,6 +669,10 @@ def _mutate_once(profile, payload):
                 if receipt['actor_id']!=actor or receipt['input_hash']!=digest: raise TenantLinearError('Запрос уже использован.',409)
                 require_access(cur,tenant,actor,'connect',channel,conversation,'view',owner=policy.profile.get('role')=='owner')
                 return receipt['result']
+            # An audited alias may resolve an identical historical receipt, but
+            # new no-reply marks require the full canonical route proof.
+            if action=='dismiss' and (payload.get('channel_id'),payload.get('conversation_id'),int(payload['lead_id'])) != (channel,conversation,int(fresh_route['lead_id'])):
+                raise TenantLinearError('Обновите диалог.',409)
             # Keep membership/presence locks acquired BEFORE the route lock,
             # but only new mutations require Online. A retry still needs the
             # same actor, identical payload and current view authorization.
@@ -661,24 +687,24 @@ def _mutate_once(profile, payload):
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             if action=='dismiss':
                 if row and row['state']!='waiting': raise TenantLinearError('Диалог уже принят или закрыт.',409)
-                from tenant_dialog_company_completion import enabled as company_completion_enabled
-                # Old bulk clients emit the same dismiss action as the old
-                # individual control. A fresh action from the updated individual
-                # control opts in explicitly; committed receipts replay above.
-                if company_completion_enabled(tenant) and payload.get('individual_no_reply') is not True:
-                    raise TenantLinearError('Обновите страницу и отметьте этот диалог отдельно как «Не требует ответа».',422)
+                # Old bulk clients must not silently mark messages.
+                if payload.get('individual_no_reply') is not True:
+                    raise TenantLinearError('Отметьте этот диалог отдельно как «Не требует ответа».',422)
                 cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
                   AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
                   ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+channel,route['lead_id']))
                 last=cur.fetchone() or {}
                 if not last.get('id') or payload.get('message_id')!=last['id']:
                     raise TenantLinearError('Появилось новое сообщение. Обновите диалог.',409)
-                cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision,closed_at,last_inbound_id)
-                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'dismissed',%s,1,clock_timestamp(),%s)
-                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET state='dismissed',
-                  operator_id=EXCLUDED.operator_id,revision=saas_dialog_workflows.revision+1,
-                  closed_at=clock_timestamp(),last_inbound_id=EXCLUDED.last_inbound_id,updated_at=clock_timestamp()""",
-                  (tenant,channel,conversation,str(uuid.uuid4()),actor,last['id']))
+                marker=_no_reply_id(tenant,channel,conversation,last['id'])
+                if no_reply_marks(cur,tenant,[(channel,conversation,last['id'])]):
+                    raise TenantLinearError('Это сообщение уже не требует ответа.',409)
+                cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,revision,last_inbound_id)
+                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'waiting',1,%s)
+                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET
+                  revision=saas_dialog_workflows.revision+1,
+                  last_inbound_id=EXCLUDED.last_inbound_id,updated_at=clock_timestamp()""",
+                  (tenant,channel,conversation,str(uuid.uuid4()),last['id']))
             elif action in {'accept','start'}:
                 if action=='start':
                     require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True,
@@ -735,10 +761,11 @@ def _mutate_once(profile, payload):
                     cur.execute('UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(closed_at,tenant,row['id']))
             current=_row(cur,tenant,channel,conversation)
             result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
+            if action=='dismiss':result['lifecycle']['no_reply_needed']=True
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(str(uuid.uuid4()),tenant,actor,'dialog_'+action,str(current['id'] if online_only else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id']} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(marker if action=='dismiss' else str(uuid.uuid4()),tenant,actor,'dialog_no_reply' if action=='dismiss' else 'dialog_'+action,str(current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id'],'counts_as_missed':False} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
         conn.commit()
     return result
 

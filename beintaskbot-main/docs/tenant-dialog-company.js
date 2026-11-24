@@ -600,6 +600,8 @@
   function mountEditor(s){
     const panel=node('div'),label=node('label',t('label')),field=node('span'),input=node('input'),results=node('div');
     panel.id='operatorDialogueCompanyPicker';
+    panel.setAttribute('role','search');panel.setAttribute('aria-labelledby','operatorDialogueCompanySearchLabel');
+    panel.setAttribute('data-form-type','other');label.id='operatorDialogueCompanySearchLabel';
     label.htmlFor=input.id='operatorDialogueCompanySearch';field.className='operator-company-link-row';
     input.type='search';input.maxLength=180;input.autocomplete='off';input.readOnly=true;
     input.setAttribute('data-search-input','');input.setAttribute('data-lpignore','true');input.setAttribute('data-1p-ignore','true');
@@ -616,6 +618,7 @@
     input.addEventListener('pointerdown',primeInput);
     input.addEventListener('focus',primeInput);
     input.addEventListener('blur',()=>{input.readOnly=true;restoreTypedValue();});
+    input.addEventListener('change',restoreTypedValue);
     input.addEventListener('animationstart',event=>{if(event.animationName==='operatorCompanyAutofill')restoreTypedValue();});
     const unlink=button('×',()=>{
       if(!active()||s.writing||s.binding?.can_manage!==true)return;

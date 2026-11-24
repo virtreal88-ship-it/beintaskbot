@@ -136,8 +136,8 @@ def test_missing_tables_no_reply_and_manual_start_unchanged(companies,monkeypatc
     assert state(database) is None
     request=payload('dismiss',0,message_id=inbound,individual_no_reply=True)
     result=lifecycle.mutate(PROFILE,request)
-    assert result['lifecycle']['state']=='dismissed' and lifecycle.mutate(PROFILE,request)==result
-    assert command('start',1)['lifecycle']['state']=='accepted'
+    assert result['lifecycle']['state']=='waiting' and result['lifecycle']['no_reply_needed'] and lifecycle.mutate(PROFILE,request)==result
+    assert command('accept',1)['lifecycle']['state']=='accepted'
     with pytest.raises(TenantLinearError) as unavailable:
         command('close',2)
     assert unavailable.value.status==422 and state(database)['state']=='accepted'
@@ -279,9 +279,54 @@ def test_old_dismiss_receipt_replays_after_opt_in(companies, monkeypatch):
     database, *_=companies
     inbound=database.execute("SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s AND direction='incoming'",(A,'connect:'+CA))[0]['id']
     database.commit()
+    import hashlib
+    import json
+    from test_dialog_lifecycle_pglite import seed_legacy_dismissed
     old_request=payload('dismiss',0,message_id=inbound)
-    monkeypatch.delenv(completion.ENV)
-    result=lifecycle.mutate(PROFILE,old_request)
-    assert result['lifecycle']['state']=='dismissed'
-    monkeypatch.setenv(completion.ENV,'true')
+    result={'lifecycle':seed_legacy_dismissed(database,inbound)}
+    digest=hashlib.sha256(json.dumps(old_request,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+    database.execute("""INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
+       VALUES(%s::uuid,%s::uuid,11,%s,%s::jsonb)""",(A,old_request['request_id'],digest,json.dumps(result)))
+    database.commit()
     assert lifecycle.mutate(PROFILE,old_request)==result
+
+
+def test_scoped_current_operator_reuses_existing_exact_history_binding(companies,monkeypatch):
+    import tenant_operator_dialogs
+    database, _, _, _, owner_company=companies
+    command(actor=33)
+    grant(database,monkeypatch,view='none',update='none')
+    monkeypatch.delenv(completion.ENV)
+    monkeypatch.setattr(tenant_operator_dialogs,'_connect',lambda:database)
+    database.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+      (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+      VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,owner_company))
+    database.commit()
+
+    def read():
+        return tenant_operator_dialogs.history(STAFF,'connect',41,CA,'client')['dialog']
+
+    accepted=read()
+    assert accepted['lifecycle']['operator_id']==33 and accepted['lifecycle']['can_close'] is True
+    assert accepted['lifecycle']['company_completion']=={
+        'status':'choice_available','required':False,'can_choose':False,'can_skip':True}
+    assert accepted['company_binding']['company_id']==owner_company
+    assert accepted['channel_id']==CA and accepted['conversation_id']=='client'
+    with pytest.raises(TenantLinearError) as sibling:
+        tenant_operator_dialogs.history(STAFF,'connect',41,CB,'client')
+    assert sibling.value.status in {403,404}
+
+    database.execute('UPDATE saas_crm_native_companies SET archived_at=now() WHERE id=%s::uuid',(owner_company,))
+    database.commit()
+    assert read()['company_binding']['company_id'] is None
+    database.execute('UPDATE saas_crm_native_companies SET archived_at=NULL WHERE id=%s::uuid',(owner_company,))
+    database.execute('DELETE FROM saas_beinsystems_operator_dialog_company_bindings WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s',(A,CA,'client'))
+    database.commit()
+    assert read()['company_binding']['company_id'] is None
+
+    database.execute("""INSERT INTO saas_beinsystems_operator_dialog_company_bindings
+      (tenant_id,channel_id,conversation_id,company_id,created_by,updated_by)
+      VALUES(%s::uuid,%s::uuid,'client',%s::uuid,11,11)""", (A,CA,owner_company))
+    database.commit()
+    assert command('close',1,actor=33)['lifecycle']['state']=='closed'
+    assert bindings(database)==[{'tenant_id':A,'channel_id':CA,'conversation_id':'client','company_id':owner_company,'created_by':11}]

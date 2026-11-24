@@ -8,6 +8,7 @@ import pytest
 from aiohttp.test_utils import make_mocked_request
 from test_operator_list_performance import (fixture, operator_db, database, db,
     PROFILE, A, B, CA, CB, add_rows, measured)
+from test_dialog_lifecycle_pglite import seed_legacy_dismissed
 import tenant_operator_dialogs as dialogs
 import tenant_dialog_lifecycle as lifecycle
 from tenant_dialog_rollout import transition
@@ -234,7 +235,7 @@ def test_new_inbound_after_preview_is_not_dismissed(active):
     message(active,8)
     with pytest.raises(TenantLinearError) as denied:
         lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',
-            lead_id=41,action='dismiss',expected_revision=row['lifecycle']['revision'],
+            lead_id=41,action='dismiss',individual_no_reply=True,expected_revision=row['lifecycle']['revision'],
             message_id=prior,request_id=str(uuid.uuid4())))
     assert denied.value.status==409
     assert active.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts')[0]['n']==0
@@ -284,9 +285,9 @@ def test_dismiss_permission_is_independent_of_transport(active,offline):
         assert row['can_send'] is False
         assert 'update' not in row and '_action_capabilities' not in row
     result=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,
-        action='dismiss',expected_revision=0,request_id=str(uuid.uuid4()),message_id=incoming))
-    assert result['lifecycle']['state']=='dismissed'
-    assert not any(r['lead_id']==41 for r in dialogs.listing(PROFILE)['dialogs'])
+        action='dismiss',individual_no_reply=True,expected_revision=0,request_id=str(uuid.uuid4()),message_id=incoming))
+    assert result['lifecycle']['state']=='waiting' and result['lifecycle']['no_reply_needed']
+    assert any(r['lead_id']==41 for r in dialogs.listing(PROFILE)['dialogs'])
 
 
 def test_regular_list_distinguishes_no_incoming_without_read_side_effect(active):
@@ -335,8 +336,7 @@ def test_regular_inbound_presence_uses_one_unsorted_query(active):
 @pytest.mark.parametrize('direction,raw',[('incoming',{'verified_employee_id':11,'fromMe':False}),('outgoing',{'fromMe':True,'source':'linked_phone'})])
 def test_completed_view_keeps_history_order_and_does_not_reopen(active,direction,raw):
     prior=message(active,80)
-    lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',
-        lead_id=41,action='dismiss',expected_revision=0,message_id=prior,request_id=str(uuid.uuid4())))
+    seed_legacy_dismissed(active,prior)
     latest=message(active,81,direction=direction)
     active.execute('UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid',(json.dumps(raw),latest))
     add_rows(active,3)
@@ -457,13 +457,13 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
     active.commit()
 
     dismissed=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,
-        conversation_id='client',lead_id=41,action='dismiss',expected_revision=0,
+        conversation_id='client',lead_id=41,action='dismiss',individual_no_reply=True,expected_revision=0,
         message_id=str(uuid.UUID(int=1000150)),request_id=str(uuid.uuid4())))
-    assert dismissed['lifecycle']['state']=='dismissed'
-    no_reply_view=dialogs.listing(PROFILE,lifecycle='completed')
+    assert dismissed['lifecycle']['state']=='waiting' and dismissed['lifecycle']['no_reply_needed']
+    no_reply_view=dialogs.listing(PROFILE,lifecycle='active')
     assert no_reply_view['unread_count']==150
-    assert no_reply_view['dialogs'][0]['lifecycle']['state']=='dismissed'
-    assert dialogs.listing(PROFILE,lifecycle='active')['dialogs']==[]
+    assert no_reply_view['dialogs'][0]['lifecycle']['no_reply_needed']
+    assert dialogs.listing(PROFILE,lifecycle='completed')['dialogs']==[]
 
     anchor_page=dialogs.history(PROFILE,'connect',41,CA,'client',anchor=target)
     anchor_ids={str(row['id']) for row in anchor_page['messages']}
@@ -481,7 +481,7 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
                                    conversation_id='client',message_id=target))
     after_target=dialogs.listing(PROFILE,lifecycle='all')
     assert after_target['unread_count']==75
-    assert after_target['dialogs'][0]['lifecycle']['state']=='dismissed'
+    assert after_target['dialogs'][0]['lifecycle']['no_reply_needed']
 
     original_mark_read=dialogs.mark_read
     arrived=[]
@@ -501,15 +501,18 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
     after_all=dialogs.listing(PROFILE,lifecycle='all')
     assert after_all['unread_count']==1
     assert after_all['dialogs'][0]['unread_count']==1
-    assert after_all['dialogs'][0]['lifecycle']['state']=='dismissed'
+    assert after_all['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert not after_all['dialogs'][0]['lifecycle']['no_reply_needed']
     # A fresh server listing (the state after reload) retains both lifecycle and read cursor.
     reloaded=dialogs.listing(PROFILE,lifecycle='all')
     assert reloaded['unread_count']==1
     assert reloaded['dialogs'][0]['unread_count']==1
-    assert reloaded['dialogs'][0]['lifecycle']['state']=='dismissed'
+    assert reloaded['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert not reloaded['dialogs'][0]['lifecycle']['no_reply_needed']
     repeated=dialogs.mark_all_read(PROFILE)
     assert repeated['updated_dialogs']==1
     after_repeat=dialogs.listing(PROFILE,lifecycle='all')
     assert after_repeat['unread_count']==0
     assert after_repeat['dialogs'][0]['unread_count']==0
-    assert after_repeat['dialogs'][0]['lifecycle']['state']=='dismissed'
+    assert after_repeat['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert not after_repeat['dialogs'][0]['lifecycle']['no_reply_needed']
