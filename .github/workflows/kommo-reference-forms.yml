@@ -15,6 +15,8 @@ on:
       - 'beintaskbot-main/docs/tenant-app.html'
       - 'beintaskbot-main/docs/tenant-deal-chat.js'
       - 'beintaskbot-main/docs/tenant-chat-history.js'
+      - 'beintaskbot-main/docs/tenant-chat-send.js'
+      - 'beintaskbot-main/tests/test_tenant_chat_send_ui.cjs'
       - 'beintaskbot-main/tenant_chat_*.py'
       - 'beintaskbot-main/tenant_deal_completion_provider.py'
       - 'beintaskbot-main/tests/test_deal_chat*'
