@@ -263,14 +263,18 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                 return _json_response({"company_profile": result})
             if set(data) in (exact | {"operator_search"}, exact | {"operator_account"},
                              exact | {"operator_account", "expected_company_id"},
-                             exact | {"operator_account", "expected_company_id","confirm_existing"}):
+                             exact | {"operator_account", "expected_company_id","confirm_existing"},
+                             exact | {"operator_account", "expected_company_id","confirm_existing","confirmed_company_id"}):
                 from tenant_dialog_company_operator import chooser
                 choice = "operator_account" in data
                 if "confirm_existing" in data and data["confirm_existing"] is not True:
                     raise operator.OperatorError("Invalid confirmation.")
+                if "confirmed_company_id" in data and not isinstance(data["confirmed_company_id"],str):
+                    raise operator.OperatorError("Invalid company confirmation.")
                 term = data["operator_account" if choice else "operator_search"]
                 result = await asyncio.to_thread(chooser,profile,**{key:data[key] for key in exact},
-                                                 term=term,choice=choice,**({"confirm_existing":True} if "confirm_existing" in data else {}),**({"expected_company_id":data["expected_company_id"]}
+                                                 term=term,choice=choice,**({"confirm_existing":True} if "confirm_existing" in data else {}),
+                                                 **({"confirmed_company_id":data["confirmed_company_id"]} if "confirmed_company_id" in data else {}),**({"expected_company_id":data["expected_company_id"]}
                                                      if "expected_company_id" in data else {}))
                 return _json_response(result)
             if set(data) == exact | {"company_id", "expected_company_id"} and data["company_id"] is None:

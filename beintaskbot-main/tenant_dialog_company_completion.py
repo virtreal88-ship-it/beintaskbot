@@ -85,6 +85,10 @@ def require_on_close(cur, tenant, actor, channel, conversation, payload, *, poli
     """
     supplied = 'company_id' in payload
     skip = 'company_choice' in payload
+    # The individual Finish button closes the episode without touching CRM.
+    # Legacy clients and bulk completion keep their existing company policy.
+    if not supplied and payload.get('company_choice') == 'unchanged':
+        return None
     # Old clients and all other tenants keep their ordinary close behavior.
     if not available(tenant):
         if supplied or skip:

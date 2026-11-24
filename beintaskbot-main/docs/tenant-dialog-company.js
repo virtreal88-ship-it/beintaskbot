@@ -576,12 +576,14 @@
       const selection={...s.route,...fields,expected_company_id};
       let response=await request(endpoint,s.member,selection,true);
       if(response.confirm_existing_company&&current(s)){
-        const pair=companyName(s.binding)+' ↔ @'+fields.operator_account;
+        const candidate=response.existing_company;
+        const pair=(candidate?.name||companyName(s.binding))+' ↔ @'+fields.operator_account;
         const prompt={az:'CRM şirkətini Operator hesabına bağlamaq istəyirsiniz?',ru:'Связать компанию CRM с аккаунтом Operator?',en:'Link this CRM company to this Operator account?'};
         if(!window.confirm((prompt[window.tenantI18n?.language]||prompt.az)+'\n'+pair)){
           s.reset();s.status.textContent='';return;
         }
-        response=await request(endpoint,s.member,{...selection,confirm_existing:true},true);
+        response=await request(endpoint,s.member,{...selection,confirm_existing:true,
+          ...(candidate?{confirmed_company_id:candidate.id}:{})},true);
       }
       const {binding}=response;
       if(!current(s))return;

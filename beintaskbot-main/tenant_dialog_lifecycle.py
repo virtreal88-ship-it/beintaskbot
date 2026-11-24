@@ -20,6 +20,18 @@ def acceptance_enabled(cur, tenant):
     return state.enforced and state.admission_enabled
 
 
+def _accepted_composer_ready(cur, tenant, channel):
+    cur.execute("""SELECT EXISTS(SELECT 1 FROM saas_tenant_integrations i
+      WHERE i.tenant_id=t.id AND i.provider='connect' AND i.status='connected') AS connected
+      FROM saas_connect_channels ch JOIN saas_tenants t ON t.id=ch.tenant_id AND t.status='active'
+      WHERE ch.tenant_id=%s::uuid AND ch.connect_channel_id=%s::uuid AND ch.active""", (tenant,channel))
+    source = cur.fetchone()
+    if not source or source['connected']:
+        return bool(source)
+    from tenant_whatsapp_native_rollout import modes
+    return bool(modes(cur,tenant).get(channel,{}).get('enabled'))
+
+
 def migrate(cur):
     """Explicit deployment preflight only. No automatic DDL or business-row backfill."""
     from tenant_dialog_rollout import migrate as migrate_rollout
@@ -761,11 +773,13 @@ def _mutate_once(profile, payload):
                     cur.execute('UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid',(closed_at,tenant,row['id']))
             current=_row(cur,tenant,channel,conversation)
             result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
+            if action=='accept':
+                result['can_send']=_accepted_composer_ready(cur,tenant,channel)
             if action=='dismiss':result['lifecycle']['no_reply_needed']=True
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
             cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(marker if action=='dismiss' else str(uuid.uuid4()),tenant,actor,'dialog_no_reply' if action=='dismiss' else 'dialog_'+action,str(current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id'],'counts_as_missed':False} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':'none'} if action=='close' and payload.get('company_choice')=='none' else {})})))
+              VALUES(%s::uuid,%s::uuid,%s,%s,'dialog_episode',%s,%s::jsonb)''',(marker if action=='dismiss' else str(uuid.uuid4()),tenant,actor,'dialog_no_reply' if action=='dismiss' else 'dialog_'+action,str(current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']),json.dumps({'channel_id':channel,'conversation_id':conversation,'operator_id':current['operator_id'],'revision':current['revision'],**({'message_id':payload['message_id'],'counts_as_missed':False} if action=='dismiss' else {}),**({'company_bound_on_close':bound_on_close} if bound_on_close else {}),**({'company_choice':payload['company_choice']} if action=='close' and payload.get('company_choice') in ('none','unchanged') else {})})))
         conn.commit()
     return result
 

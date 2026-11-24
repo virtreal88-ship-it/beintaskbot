@@ -9,7 +9,7 @@ from tenant_beinsystems_operator_access import dialogue_chooser_enabled
 from tenant_crm_native_access import CRMAccessError, authorize_create, current_access, locked_resource
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
-from tenant_operator_company_name_guard import lock_name_writes
+from tenant_operator_company_name_guard import lock_name_writes, require_unreserved_account_pair
 
 
 _LIMIT = 5
@@ -158,15 +158,53 @@ def _bind_once(cur,route,table,pred,key,company,actor):
         raise operator.OperatorError('Компания диалога изменилась. Обновите диалог.',409)
 
 
-def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_confirm=False,confirm=False,accepted_policy=None):
+def _matching_company(cur, tenant, actor, account):
+    # The caller holds the shared company-name lock. Include archived rows in
+    # the ambiguity check, and authorize the one candidate before revealing it.
+    cur.execute("""SELECT id::text AS id FROM saas_crm_native_companies
+      WHERE tenant_id=%s::uuid AND lower(name)=lower(%s) LIMIT 2""", (tenant,account))
+    candidates=cur.fetchall()
+    if len(candidates)!=1:
+        return None
+    company=candidates[0]['id']
+    view=current_access(cur,tenant,actor,'companies','view')
+    update=current_access(cur,tenant,actor,'companies','update')
+    if not locked_resource(cur,view,'companies','view',dialogue.COMPANIES,tenant,company):
+        raise CRMAccessError()
+    row=locked_resource(cur,update,'companies','update',dialogue.COMPANIES,tenant,company)
+    if not row:
+        raise CRMAccessError()
+    try:
+        require_unreserved_account_pair(cur,tenant,account,company)
+    except CRMAccessError:
+        raise operator.OperatorError(_CONFLICT,409) from None
+    return {'id':company,'name':row['name']}
+
+
+def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_confirm=False,
+            owner_can_link=False,confirm=False,confirmed_company_id=None,accepted_policy=None):
     table,pred,key=dialogue._pred(tenant,route)
     bound=_current_binding(cur,table,pred,key)
     dialogue.assert_expected_company(bound,expected)
     company=_resolve(cur,tenant,account,credentials)
     if expected is dialogue._UNCHECKED and bound and bound!=company:
         raise operator.OperatorError('У диалога уже есть компания. Текущая привязка не изменена.',409)
-    if confirm and (not can_confirm or not bound or expected != bound or (company and company != bound)):
+    if confirmed_company_id is not None:
+        if not owner_can_link or not confirm or expected is not None or bound:
+            raise operator.OperatorError(_CONFLICT,409)
+        candidate=_matching_company(cur,tenant,actor,account)
+        if not candidate or candidate['id']!=confirmed_company_id or (company and company!=confirmed_company_id):
+            raise operator.OperatorError(_CONFLICT,409)
+        if not company and not imports._put_mapping(cur,tenant,account,confirmed_company_id,actor,credentials):
+            raise operator.OperatorError(_CONFLICT,409)
+        company=confirmed_company_id
+    elif confirm and (not can_confirm or not bound or expected != bound or (company and company != bound)):
         raise operator.OperatorError(_CONFLICT,409)
+    elif not company and owner_can_link and expected is None and not bound:
+        candidate=_matching_company(cur,tenant,actor,account)
+        if candidate:
+            _assert_fresh(cur,tenant,actor,source,credentials)
+            return {'confirm_existing_company':True,'existing_company':candidate}
     if not company and can_confirm and bound and expected == bound:
         # Offer only the selected, writable CRM record. A matching label alone never writes a mapping.
         grant=None if accepted_policy else current_access(cur,tenant,actor,'companies','update')
@@ -229,7 +267,7 @@ def _choose(cur,route,tenant,actor,source,credentials,account,expected,*,can_con
 
 
 def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, choice=False,
-            expected_company_id=dialogue._UNCHECKED,confirm_existing=False):
+            expected_company_id=dialogue._UNCHECKED,confirm_existing=False,confirmed_company_id=None):
     tenant=operator._tenant(profile)
     if not dialogue_chooser_enabled(tenant):
         raise operator.OperatorError('Выбор аккаунта Operator пока недоступен.',404)
@@ -247,11 +285,12 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
                 if choice:
                     if policy.profile.get('role')!='owner' and expected_company_id is dialogue._UNCHECKED:
                         raise operator.OperatorError('Обновите диалог перед выбором компании.',409)
-                    can_confirm=(source=='active' and policy.profile.get('role')=='owner'
-                                 and policy.allows_action('operator_data','link'))
+                    owner_can_link=(policy.profile.get('role')=='owner' and policy.allows_action('operator_data','link'))
                     accepted=dialogue.accepted_api_operator(cur,tenant,actor,policy,route)
                     bound=_choose(cur,route,tenant,actor,source,credentials,term,expected_company_id,
-                                  can_confirm=can_confirm or (accepted and source=="active"),confirm=confirm_existing,
+                                  can_confirm=owner_can_link or (accepted and source=='active'),
+                                  owner_can_link=owner_can_link,confirm=confirm_existing,
+                                  confirmed_company_id=confirmed_company_id,
                                   accepted_policy=policy if accepted else None)
                     if bound.get('confirm_existing_company'):
                         return bound
