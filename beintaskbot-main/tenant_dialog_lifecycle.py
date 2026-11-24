@@ -856,10 +856,12 @@ def _mutate_once(profile, payload):
               (audit_id,tenant,actor,audit_action,str(audit_episode),json.dumps(audit_payload)))
             if action=='dismiss':
                 result['lifecycle']['no_reply_needed']=True
-            if action in ('dismiss','close'):
+            if action in ('accept','dismiss','close'):
                 result['operator_event']={
-                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else 'close',
+                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else action,
                     'at':cur.fetchone()['created_at'].isoformat()}
+                if action=='accept':
+                    result['operator_event']['employee_name']=str(policy.profile.get('display_name') or '').strip()[:120]
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
         conn.commit()

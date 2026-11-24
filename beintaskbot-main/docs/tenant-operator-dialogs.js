@@ -540,6 +540,7 @@
        state.revision!==Number(route.lifecycle?.revision)+1||
        String(state.operator_id)!==String(member.telegram_id)||
        state.state!==(action==='accept'?'accepted':'closed'))return;
+    showLifecycleTimelineEvent(result.operator_event,action);
     const previous=currentDialog.lifecycle;
     if(Number(previous?.revision)>=state.revision)return;
     const {company_completion,...prior}=previous||{};
@@ -580,7 +581,6 @@
       // A successful receipt is authoritative even while history is refreshing.
       if(['accept','takeover','start','close'].includes(action))button.remove();
       if(action==='accept'||action==='close'){
-        if(action==='close'&&result.lifecycle?.state==='closed')showLifecycleTimelineEvent(result.operator_event,'close');
         applyLifecycleReceipt(route,action,result);
         return;
       }
