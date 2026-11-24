@@ -41,7 +41,10 @@
     '.operator-reply-template-suggestion .operator-reply-template-replace{display:block;flex:0 0 auto;width:auto;min-width:44px;font-size:12px;color:var(--brand-deep,#14523c);white-space:nowrap}',
     '.operator-reply-template-suggestions small{overflow:hidden;color:var(--muted,#64776f);text-overflow:ellipsis;white-space:nowrap}',
   ].join('')+`
-    #operatorReplyTemplatesOpen,
+    #operatorReplyTemplatesOpen {
+      display:flex; align-items:center; gap:8px;
+    }
+    #operatorReplyTemplatesOpen svg { flex:none }
     .operator-reply-template-card .operator-reply-template-icon {
       display:inline-grid; place-items:center; width:44px; height:44px;
       min-width:44px; min-height:44px; padding:0; border:0; border-radius:10px;
@@ -247,7 +250,8 @@
   function openManager(state){
     if(state!==mounted)return;
     modalClose?.();
-    const restore=document.activeElement,modal=document.createElement('div'),card=document.createElement('section');
+    const restore=state.menu.closest('details')?.querySelector('summary')||document.activeElement;
+    const modal=document.createElement('div'),card=document.createElement('section');
     modal.className='operator-reply-template-modal';modal.id='operatorReplyTemplateModal';
     card.className='operator-reply-template-card';card.setAttribute('role','dialog');card.setAttribute('aria-modal','true');card.setAttribute('aria-labelledby','operatorReplyTemplateTitle');
     const header=document.createElement('div');header.className='operator-reply-template-head';
@@ -382,16 +386,20 @@
     mounted=null;modalClose?.();
   }
   async function attach(){
-    const root=composerRoot(),actions=root?.querySelector('.operator-composer-actions'),input=root?.querySelector('#chatText[data-operator-composer]'),owner=identity();
-    if(!actions||!input||!owner||window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates!==true){teardown();return;}
-    if(mounted?.actions===actions&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
+    const root=composerRoot(),input=root?.querySelector('#chatText[data-operator-composer]'),owner=identity();
+    const menu=document.querySelector('#view-dialogs.active #operatorConversationHeader #operatorMenuExtra');
+    if(!menu||!input||!owner||window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates!==true){teardown();return;}
+    if(mounted?.root===root&&mounted.menu===menu&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
     root.classList.add('operator-reply-template-root');
     const button=iconButton('templates',copy('button'));
     button.hidden=true;button.id='operatorReplyTemplatesOpen';
     button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
+    button.setAttribute('role','menuitem');
+    const label=document.createElement('span');label.textContent=copy('button');
+    button.append(label);
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
-    const state={actions,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
+    const state={menu,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
     state.onInput=()=>renderSuggestions(state);
     state.inputObserver=new MutationObserver(()=>{
       if(state!==mounted)return;
@@ -400,8 +408,12 @@
     });
     state.inputObserver.observe(input,{attributes:true,attributeFilter:['disabled','readonly']});
     state.input.addEventListener('input',state.onInput);
-    button.addEventListener('click',()=>openManager(state));
-    actions.insertBefore(button,actions.firstChild);root.append(suggestions);mounted=state;
+    button.addEventListener('click',()=>{
+      const details=menu.closest('details');
+      if(details)details.open=false;
+      openManager(state);
+    });
+    menu.append(button);root.append(suggestions);mounted=state;
     renderSuggestions(state);void loadTemplates(state);
   }
   document.addEventListener('tenant-chat-attachments-ready',()=>{void attach();});
