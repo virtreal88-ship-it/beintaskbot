@@ -21,6 +21,7 @@ const assert=require('node:assert/strict');
  await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready')));
  assert.equal(await page.locator('#dialogConsultationMobileBell').count(),0);
  await page.locator('[data-operator-back]').click();
+ assert.equal(await page.locator('.app-avatar-button').evaluate(el=>el.previousElementSibling?.id==='dialogConsultationBell'),true,'desktop notification bell sits beside the profile avatar');
  await (await revealAccountControl(page,'#dialogConsultationBell')).click();
  await page.locator('#dialogConsultationMenu').getByText('Synthetic developer reply',{exact:true}).waitFor();
  assert.equal(await page.locator('.app-topbar').isVisible(),true);

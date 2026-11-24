@@ -553,7 +553,7 @@ def test_actual_browser_ui_real_http_services_isolated_db(ready,monkeypatch):
             return web.Response(content_type='text/html',text='''<!doctype html><meta charset="utf-8">
               <style>@media(max-width:900px){body[data-dialog-open=true] .app-topbar{display:none}}</style>
               <body data-dialog-open="true"><button type="button" data-operator-back onclick="document.body.dataset.dialogOpen='false'">Назад к списку</button>
-              <div class="app-topbar"><select data-app-language></select></div>
+              <div class="app-topbar"><button class="app-avatar-button" type="button" aria-label="Профиль"></button><select data-app-language></select></div>
               <details id="operatorMoreActions"><summary>⋯</summary><div id="operatorMenuExtra"></div></details>
               <aside id="operatorCopilot"></aside><script>
               window.tenantI18n={language:'ru'};window.tenantOperator={member:MEMBER,hasRight:()=>true,
