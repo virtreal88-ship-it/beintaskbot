@@ -473,7 +473,7 @@ def test_device_confirmation_cannot_link_conflicts_or_other_sources(active, monk
         assert 'device_display_phone' not in another
     db.commit()
 
-def test_approved_conflict_shows_device_phone_without_routing_change(active, monkeypatch):
+def test_exact_split_conflict_shows_device_phone_without_routing_change(active, monkeypatch):
     import asyncio
     import tenant_whatsapp_contact_refresh as refresh
     import tenant_operator_dialogs as dialogs
@@ -488,17 +488,21 @@ def test_approved_conflict_shows_device_phone_without_routing_change(active, mon
     phone = '+15550000003'
     with db.cursor() as cur:
         lead = _upsert_conversation(cur, *scope, lid, {'kind': 'contact'})
-        older_lead = _upsert_conversation(cur, *scope, pn, {'kind': 'contact'})
+        _upsert_conversation(cur, *scope, pn, {'kind': 'contact'})
         record_conflict(cur, *scope, lid, lid, {'directIdentity': {'lid': lid, 'jid': pn}}, 'synthetic')
         record_conflict(cur, *scope, lid, lid, {}, 'synthetic-no-alt')
     db.commit()
     binding, rows = refresh.candidates(*scope, 0)
-    assert rows == []
     candidate = {'lead_id': lead, 'conversation_id': lid}
-    assert not refresh.save_confirmation(*scope, binding, candidate, phone)
-    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONFLICT_DISPLAY', f'{A}:{channel}:{lead}:{older_lead+1}')
-    assert not refresh.save_confirmation(*scope, binding, candidate, phone)
-    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONFLICT_DISPLAY', f'{A}:{channel}:{lead}:{older_lead}')
+    assert rows == [candidate]
+
+    async def no_device_proof(_):
+        return {}
+
+    monkeypatch.setattr(refresh, 'fetch_contact', no_device_proof)
+    assert asyncio.run(refresh.refresh_batch(*scope)) == (0, 1, 0, 0)
+    assert not db.execute('SELECT 1 FROM saas_whatsapp_device_display_phones')
+    db.commit()
 
     async def confirmed(route):
         assert route['conversation_id'] == lid and route['native'] == binding
