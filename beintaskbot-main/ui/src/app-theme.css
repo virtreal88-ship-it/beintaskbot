@@ -378,3 +378,5 @@ body[data-app-ui=kwid] button.connect-number-add,.connect-number-add{background:
 #operatorConnectionStatusHost .operator-connection-badge[data-connected="true"] { color:var(--app-success, #168247); }
 #operatorIntegrationSettings :is(input, select) { max-width:100%; min-width:0; }
 #operatorIntegrationSettings [data-connected-login] { overflow-wrap:anywhere; }
+
+@media(min-width:901px){body[data-app-ui="kwid"] main:has(#view-dialogs.active){padding-left:8px!important;padding-right:8px!important}}

@@ -757,6 +757,10 @@
     #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
     #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:13px;white-space:nowrap;overflow-wrap:normal}
     #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
+    dialog#operatorCompanyPanel>.operator-client-panel-header{box-sizing:border-box;height:60px;min-height:60px;padding:0 8px}
+    #operatorCompanyPanel .operator-company-tabs{height:100%;align-items:stretch}
+    #operatorCompanyPanel .operator-company-tabs button{height:100%;min-height:0}
+    @media(max-width:900px){dialog#operatorCompanyPanel>.operator-client-panel-header{height:56px;min-height:56px;padding:0 4px}}
     #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
     #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:14px;line-height:1.35;overflow-wrap:anywhere}
     #operatorCompanyPanel .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
