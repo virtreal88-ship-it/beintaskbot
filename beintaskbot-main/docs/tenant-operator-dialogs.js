@@ -1175,7 +1175,7 @@
     const date=new Date(value);
     if(!Number.isFinite(date.getTime()))return '';
     const two=n=>String(n).padStart(2,'0');
-    const day=[two(date.getDate()),two(date.getMonth()+1),String(date.getFullYear()).padStart(4,'0')].join('-');
+    const day=[two(date.getDate()),two(date.getMonth()+1),String(date.getFullYear()).padStart(4,'0')].join('.');
     const time=[date.getHours(),date.getMinutes(),date.getSeconds()].map(two).join(':');
     return day+' '+time;
   }
