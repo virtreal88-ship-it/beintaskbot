@@ -19,11 +19,11 @@ def test_timeline_is_actual_exact_and_does_not_change_message_pages(episodes, mo
     worker = {"tenant_id":A,"telegram_id":33}
     accept=payload("accept",0)
     first=payload("transfer",1,target_employee_id=33)
-    second=payload("transfer",2,target_employee_id=11)
+    takeover=payload("takeover",2)
     repeated=lifecycle.mutate(PROFILE,accept)
     assert lifecycle.mutate(PROFILE,accept)==repeated
     repeated=lifecycle.mutate(PROFILE,first)
-    lifecycle.mutate(worker,second)
+    takeover_event=lifecycle.mutate(PROFILE,takeover)["operator_event"]
     assert lifecycle.mutate(PROFILE,first)==repeated
     lifecycle.mutate(PROFILE,payload("close",3))
     lifecycle.mutate(PROFILE,payload("start",4))
@@ -63,7 +63,8 @@ def test_timeline_is_actual_exact_and_does_not_change_message_pages(episodes, mo
     assert latest["read_through_message_id"]==ordinary["read_through_message_id"]
     assert latest["operator_events_revision"]==5
     assert [event["id"] for event in latest["operator_events"]]==[audit_ids["dialog_transfer","3"],audit_ids["dialog_close","4"],audit_ids["dialog_start","5"]]
-    assert [event["kind"] for event in latest["operator_events"]]==["transfer","close","start"]
+    assert [event["kind"] for event in latest["operator_events"]]==["takeover","close","start"]
+    assert latest["operator_events"][0]["id"]==takeover_event["id"]
     assert all(event["employee_name"]=="Owner" for event in latest["operator_events"])
     assert len(latest["messages"])==50
     older=read(include_operator_events=True,before=latest["next_before"])
