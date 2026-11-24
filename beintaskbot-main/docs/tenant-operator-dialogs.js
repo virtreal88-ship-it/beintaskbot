@@ -1736,7 +1736,7 @@
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
     const hasCompany=()=>capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
-    const hasReminder=dialog=>capabilities.shared_dialog_reminders===true&&dialog?.shared_reminder?.can_schedule===true;
+    const hasReminder=dialog=>(capabilities.shared_dialog_reminder_creation===true||capabilities.shared_dialog_reminders===true)&&dialog?.shared_reminder?.can_schedule===true;
     const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route);
     const panelTitle=hasCompany()||(!hasTransfer&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';

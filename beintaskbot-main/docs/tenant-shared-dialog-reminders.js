@@ -23,16 +23,19 @@
   const current=()=>window.tenantOperator?.currentDialog;
   const routeKey=r=>JSON.stringify([r?.provider,String(r?.channel_id),r?.conversation_id,Number(r?.lead_id)]);
   let createControl,modal,feed=null,request=null,epoch=0,rows=[],paused=false,lastBellState='',feedStatus='loading';
-  const scope=()=>{
+  const scope=(capability='shared_dialog_reminders')=>{
     const p=window.tenantProfileSnapshot;
     const m=window.tenantOperator?.member;
-    if(p?.capabilities?.shared_dialog_reminders!==true||m?.active!==true||!window.tenantOperator?.hasRight('dialogs'))return null;
+    if(p?.capabilities?.[capability]!==true||m?.active!==true||!window.tenantOperator?.hasRight('dialogs'))return null;
     if(String(m.tenant_id)!==String(p.member?.tenant_id)||String(m.telegram_id)!==String(p.member?.telegram_id))return null;
     return {expected_tenant_id:String(m.tenant_id),expected_user_id:String(m.telegram_id)};
   };
   const active=()=>!paused&&!document.hidden;
   const dialogueActive=()=>active()&&!!$('view-dialogs')?.classList.contains('active');
   const canOpenList=()=>!paused&&!!scope()&&feedStatus!=='denied';
+  // The receiver capability still implies creation for older replies/assets.
+  const createScope=()=>scope('shared_dialog_reminder_creation')||scope();
+  const canSchedule=()=>dialogueActive()&&!!createScope()&&current()?.shared_reminder?.can_schedule===true;
   const notificationCount=()=>canOpenList()&&feed?(feed.reminders||[]).filter(row=>row.due).length:null;
   const notificationLabel=count=>t('list')+(count?' ('+count+')':'');
   function notificationEntry(bell,beforeOpen){
@@ -45,7 +48,7 @@
     control.dataset.notificationFocus='shared-reminders';control.setAttribute('aria-haspopup','dialog');
     return control;
   }
-  const valid=(stamp,expected)=>active()&&stamp===epoch&&JSON.stringify(scope())===JSON.stringify(expected);
+  const valid=(stamp,expected,identity=scope)=>active()&&stamp===epoch&&JSON.stringify(identity())===JSON.stringify(expected);
   async function api(expected,data){
     const response=await fetch(endpoint+(data?'':'?'+new URLSearchParams(expected)),{
       method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',
@@ -92,7 +95,7 @@
       lastBellState=next;document.dispatchEvent(new CustomEvent('tenant-shared-reminders-changed'));
     }
     if(createControl?.isConnected){
-      createControl.hidden=!dialogueActive()||!canOpenList()||current()?.shared_reminder?.can_schedule!==true;
+      createControl.hidden=!canSchedule();
       createControl.textContent=t('schedule');
       const host=createControl.closest('#operatorClientSharedReminderHost');if(host)host.hidden=createControl.hidden;
     }
@@ -109,7 +112,7 @@
     },error=>{
       if(valid(stamp,expected)&&request===token){
         feed=null;
-        if([401,403,404].includes(error.status)){feedStatus='denied';close();}
+        if([401,403,404].includes(error.status)){feedStatus='denied';if(modal?.type==='list')close();}
         else feedStatus='error';
       }
     }).finally(()=>{
@@ -174,8 +177,10 @@
     }catch{if(valid(stamp,expected))void refresh();}
   }
   function schedule(source){
-    const expected=scope(),stamp=epoch,route=current();
-    if(!expected||!dialogueActive()||!canOpenList()||route?.shared_reminder?.can_schedule!==true)return;
+    const expected=createScope(),stamp=epoch,route=current();
+    if(!expected||!canSchedule())return;
+    const history=route.shared_reminder.schedule_view==='owner'?{history_view:'owner'}:
+      route.shared_reminder.schedule_view==='search'?{history_view:'search',search:String(route.search_overview_query||'').trim().slice(0,200)}:{};
     const view=box(source,'schedule',t('schedule')),form=node('form'),date=node('input'),note=node('textarea');
     view.route=routeKey(route);
     date.type='datetime-local';date.required=true;note.maxLength=280;note.rows=2;
@@ -185,7 +190,7 @@
     let id,signature;
     form.onsubmit=async event=>{
       event.preventDefault();
-      if(view!==modal||!valid(stamp,expected)||!dialogueActive()||!canOpenList()||routeKey(current())!==view.route||submit.disabled)return;
+      if(view!==modal||!valid(stamp,expected,createScope)||!canSchedule()||routeKey(current())!==view.route||submit.disabled)return;
       const due=new Date(date.value);
       if(!Number.isFinite(+due)||+due<=Date.now()){view.status.textContent=t('error');return;}
       const due_at=due.toISOString(),text=note.value.trim(),next=JSON.stringify([due_at,text]);
@@ -193,17 +198,17 @@
       submit.disabled=true;view.status.textContent=t('loading');
       try{
         await api(expected,{action:'schedule',id,note:text,due_at,provider:route.provider,
-          channel_id:String(route.channel_id),conversation_id:route.conversation_id,lead_id:Number(route.lead_id)});
-        if(view===modal&&valid(stamp,expected)){
+          channel_id:String(route.channel_id),conversation_id:route.conversation_id,lead_id:Number(route.lead_id),...history});
+        if(view===modal&&valid(stamp,expected,createScope)){
           view.status.textContent=t('saved');form.remove();request=null;void refresh();
         }
-      }catch(error){if(view===modal&&valid(stamp,expected))view.status.textContent=error.message;}
+      }catch(error){if(view===modal&&valid(stamp,expected,createScope))view.status.textContent=error.message;}
       finally{submit.disabled=false;}
     };
   }
   function attach(){
-    const host=$('operatorClientSharedReminderHost'),route=current();
-    if(dialogueActive()&&canOpenList()&&host&&route?.shared_reminder?.can_schedule===true&&
+    const host=$('operatorClientSharedReminderHost');
+    if(canSchedule()&&host&&
         (!createControl?.isConnected||!host.contains(createControl))){
       createControl=button(t('schedule'),()=>schedule(createControl));
       createControl.id='operatorSharedReminderCreate';createControl.setAttribute('aria-haspopup','dialog');

@@ -1578,8 +1578,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if before is None and not shared_archive:
                 from tenant_dialog_company_binding import read_dialogue_binding
                 dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)
+            if before is None:
                 from tenant_shared_dialog_reminders import dialogue_marker
-                reminder=dialogue_marker(cur,tenant,actor,policy,dialog)
+                reminder=dialogue_marker(cur,tenant,actor,policy,dialog,workflow=workflow,
+                    source_active=row.get('channel_active') is True,
+                    exact_history=requested_route==history_scope['canonical_route'],
+                    view='owner' if owner_observer else 'search' if search_observer else '',
+                    include_delivery=not shared_archive)
                 if reminder is not None:
                     dialog['shared_reminder']=reminder
             if restricted_ai:
