@@ -61,6 +61,7 @@ ASSETS = (
     ('/assets/tenant-task-completion.js', 'tenant-task-completion.js', 'no-store'),
     ('/assets/tenant-deal-completion.js', 'tenant-deal-completion.js', 'no-store'),
     ('/assets/tenant-diagnostics.js', 'tenant-diagnostics.js', 'no-store'),
+    ('/assets/tenant-telegram-binding.js', 'tenant-telegram-binding.js', 'no-store'),
     ('/assets/tenant-chat-send.js', 'tenant-chat-send.js', 'no-store'),
     ('/assets/tenant-operator-i18n.js', 'tenant-operator-i18n.js', 'no-store'),
     ('/assets/tenant-request-coordinator.js', 'tenant-request-coordinator.js', 'no-store'),
