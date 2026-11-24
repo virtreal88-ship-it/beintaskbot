@@ -46,7 +46,7 @@ function setup(role='owner',storage={},storedHistory=null){
    return{ok:true,status:200,json:async()=>structuredClone(payload)};
  };
  w.eval(read('docs/tenant-operator-i18n.js'));
- const inline=[...w.document.querySelectorAll('script:not([src])')][0];w.eval(inline.textContent);
+ const inline=w.document.querySelector('script:not([src]):not([data-app-startup])');w.eval(inline.textContent);
  for(const file of ['tenant-chat-send.js','tenant-ai-state.js','tenant-ai-agents.js','tenant-ai-testing.js','tenant-operator-dialogs.js','tenant-support-inbox.js'])w.eval(read('docs/'+file));
  w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.requestAnimationFrame=fn=>w.setTimeout(fn,0);w.eval(read('ui/src/app-shell.js').replace("import { installMobilePageHeader } from './mobile-page-header.js'", read('ui/src/mobile-page-header.js').replace('export function','function')).replace("import themeCss from './app-theme.css?inline'","const themeCss=''"));
  return{dom,w,calls,alerts,errors,member,modules,dialog,ticket,setDisplayNameFailure:value=>displayNameFailure=value,setSettings(value){settings={...settings,...value}},get agent(){return agent},get agents(){return[agent,secondAgent]},get binding(){return binding}};
