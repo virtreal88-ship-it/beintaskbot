@@ -1584,6 +1584,7 @@
     :is(#operatorClientCard,#operatorCompanyPanel) .operator-client-panel-header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--card)}
     :is(#operatorClientCard,#operatorCompanyPanel) h2{margin:0;font-size:1.05rem;line-height:1.3}
     #operatorCompanyPanel h2{font-size:.94rem}
+    #operatorCompanyPanel #operatorCompanyPanelClose{display:none}
     #operatorCompanyPanel .operator-client-panel-content:has(#operatorCompanyView-main[hidden]) #operatorSidebarTransfer,
     #operatorClientCompanyHost:empty,#operatorSidebarTransfer [data-transfer-retry][hidden],#operatorSidebarTransfer [role=status]:empty{display:none!important}
     #operatorSidebarTransfer{display:grid;gap:6px;border-block-start:1px solid var(--line);padding-block-start:8px;font-size:.8rem}
@@ -1623,7 +1624,9 @@
     #operatorClientCard [data-client-card-error]{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--danger,#ad2831)}
     @media(max-width:900px){
       .operator-history-tools #operatorCompanyPanelOpen{width:44px;min-width:44px;height:44px;min-height:44px;margin-block:0}
-      #operatorCompanyPanel{position:absolute;z-index:15;inset:var(--operator-company-mobile-top,0px) 0 0 auto;width:min(100%,380px);max-height:var(--operator-client-available-height,100dvh);box-shadow:-8px 0 22px #0002}
+      #operatorCompanyPanel{position:fixed;z-index:30;inset:var(--operator-company-mobile-top,0px) auto auto var(--operator-company-mobile-left,0px);width:var(--operator-company-mobile-width,100%);height:var(--operator-company-mobile-height,100dvh);max-height:none;border:0;border-radius:0;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+      #operatorCompanyPanel #operatorCompanyPanelClose{display:grid;place-items:center;flex:none;order:1;margin-inline-start:auto;width:44px;height:44px;min-height:44px;padding:0;font-size:22px}
+      #operatorCompanyPanel .operator-client-panel-content{scrollbar-gutter:auto}
       #operatorConversationHeader .operator-conversation-head-copy{flex-direction:row;align-items:center;min-width:0}
       #operatorConversationHeader .operator-dialog-head-row{flex:1;min-width:0}
       #operatorConversationHeader .operator-dialog-head-main{flex:1;min-width:0}
@@ -1783,7 +1786,7 @@
     const companyPanel=companyTrigger?document.createElement('dialog'):null;
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
-      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}</header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:''}${reminder}</div>`;
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:''}${reminder}</div>`;
       layout.append(companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
       status.setAttribute('role','status');head.append(status);
@@ -1836,11 +1839,11 @@
     const mobileCompany=()=>companyPanel?.open===true&&companyPanelViewport?.matches===true;
     const inertBefore=new Map();
     const syncChatInteraction=()=>{
-      const chat=$('operatorConversationContent'),behind=new Set();
-      // The toggle occupies its original history slot. Keep its ancestor
-      // chain active and isolate only the other branches underneath the panel.
-      if(mobileCompany()&&chat?.contains(companyTrigger)){
-        for(let node=companyTrigger;node!==chat;node=node.parentElement)
+      const chat=$('operatorDialogs'),behind=new Set();
+      // Isolate the chat, never the panel itself. Its in-panel close control
+      // stays reachable while the full mobile viewport is covered.
+      if(mobileCompany()&&chat?.contains(companyPanel)){
+        for(let node=companyPanel;node!==chat;node=node.parentElement)
           for(const sibling of node.parentElement.children)if(sibling!==node)behind.add(sibling);
       }
       for(const [node,value] of inertBefore)if(!behind.has(node)){
@@ -1864,6 +1867,7 @@
       if(!preservePublicLink)window.tenantDialogueCompany?.hidePublicLink?.();
       if(restore)window.tenantDialogueCompany?.closePicker?.();
       companyPanel.removeAttribute('open');companyTrigger.setAttribute('aria-expanded','false');
+      if(companyPanel.parentElement!==layout)layout.append(companyPanel);
       syncChatInteraction();
       if(restore&&companyTrigger.isConnected)companyTrigger.focus({preventScroll:true});
     };
@@ -1877,9 +1881,18 @@
       }
       if(companyPanel?.open){
         const layoutTop=layout.getBoundingClientRect().top;
-        const offset=mobileCompany()?Math.max(0,Math.ceil((historyToolbar?.getBoundingClientRect().bottom??layoutTop)-layoutTop)):0;
-        companyPanel.style.setProperty('--operator-company-mobile-top',offset+'px');
-        companyPanel.style.setProperty('--operator-client-available-height',Math.max(1,top+height-Math.max(top,layoutTop+offset))+'px');
+        if(mobileCompany()){
+          // The animated conversation pane establishes a fixed-position containing
+          // block and clips its children. Keep the mobile sheet above that pane.
+          const root=$('operatorDialogs');if(root&&companyPanel.parentElement!==root)root.append(companyPanel);
+          companyPanel.style.setProperty('--operator-company-mobile-top',top+'px');
+          companyPanel.style.setProperty('--operator-company-mobile-left',(viewport?.offsetLeft||0)+'px');
+          companyPanel.style.setProperty('--operator-company-mobile-width',(viewport?.width||window.innerWidth)+'px');
+          companyPanel.style.setProperty('--operator-company-mobile-height',height+'px');
+        }else{
+          if(companyPanel.parentElement!==layout)layout.append(companyPanel);
+          companyPanel.style.setProperty('--operator-client-available-height',Math.max(1,top+height-Math.max(top,layoutTop))+'px');
+        }
         syncChatInteraction();
       }
     };
@@ -1899,7 +1912,7 @@
       if(!companyAllowed()||!companyPanel||companyPanel.open)return;
       companyPanel.setAttribute('open','');companyTrigger.setAttribute('aria-expanded','true');resizePanel();
       window.tenantDialogueCompany?.refreshPublicLink?.();
-      if(!restore)($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary')||$('operatorSharedReminderCreate'))?.focus({preventScroll:true});
+      if(!restore)(mobileCompany()?$('operatorCompanyPanelClose'):($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary')||$('operatorSharedReminderCreate')))?.focus({preventScroll:true});
     };
     if(companyPanelViewport?.addEventListener){
       const onCompanyPanelViewportChange=event=>{
@@ -1907,29 +1920,33 @@
         if(mobile&&!companyPanelWasMobile)closeCompany(false);
         else if(!mobile&&companyPanelWasMobile&&companyPanel&&shouldRestoreCompanyPanel())openCompany(true);
         companyPanelWasMobile=mobile;
+        resizePanel();
       };
       companyPanelViewport.addEventListener('change',onCompanyPanelViewportChange);
       listeners.push(()=>companyPanelViewport.removeEventListener('change',onCompanyPanelViewportChange));
     }
+    const dismissCompany=()=>{if(companyAllowed()){savePanelPreference(false);closeCompany();}};
     if(companyPanel){
       companyTrigger.onclick=()=>{
         if(!companyAllowed())return;
-        const open=!companyPanel.open;
-        savePanelPreference(open);
-        if(open)openCompany();else closeCompany();
+        if(companyPanel.open){dismissCompany();return;}
+        savePanelPreference(true);openCompany();
       };
+      $('operatorCompanyPanelClose').onclick=dismissCompany;
       void loadPanelPreference()?.then(()=>{if(current()&&companyPanel.isConnected&&shouldRestoreCompanyPanel())openCompany(true);});
     }
     for(const target of [window,window.visualViewport])if(target?.addEventListener){
       target.addEventListener('resize',resizePanel);
       listeners.push(()=>target.removeEventListener?.('resize',resizePanel));
     }
+    window.visualViewport?.addEventListener?.('scroll',resizePanel);
+    listeners.push(()=>window.visualViewport?.removeEventListener?.('scroll',resizePanel));
     const listen=(type,fn,capture=false)=>{document.addEventListener(type,fn,capture);listeners.push(()=>document.removeEventListener(type,fn,capture));};
     listen('keydown',event=>{
       if(event.key!=='Escape'||(!card.open&&!companyPanel?.open)||event.defaultPrevented||
          document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
       event.preventDefault();event.stopImmediatePropagation();
-      if(card.open)close();else if(companyAllowed()){savePanelPreference(false);closeCompany();}
+      if(card.open)close();else dismissCompany();
     },true);
     const destroy=()=>{clientCardDispose();card.remove();};
     listen('tenant-chat-close',destroy);

@@ -7,8 +7,8 @@ const alpha='<b>Company A & Partners</b> '+ 'very long stored name '.repeat(10);
 const beta='@verified_account';
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
- try{for(const width of [360,1440]){
-  const page=await browser.newPage({viewport:{width,height:800}});
+ try{for(const width of [360,430,1440]){
+  const page=await browser.newPage({viewport:{width,height:800},hasTouch:width<=900});
   await page.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort());
   await page.goto('https://example.test/app?view=dialogs');
   await page.evaluate(({alpha,beta})=>{
@@ -27,7 +27,7 @@ const beta='@verified_account';
       b:{company_id:'beta',company_name:beta,can_manage:false}};
    window.mode={a:'delayed',b:'masked'};window.releases={};window.bindingGets=[];
    window.cases={a:{status:'resolved',responsible_name:'Actual & <em>case</em> worker'},b:null};
-   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.reminderWrites=0;window.savedOpen=false;
+   window.caseGets=[];window.caseWaiters=[];window.profilePosts=[];window.reminderWrites=0;window.transferReads=0;window.savedOpen=false;
    window.fetch=async(target,opt={})=>{
     const u=new URL(target,'https://example.test'),api=u.pathname,q=u.searchParams;
     const ok=result=>({ok:true,json:async()=>({success:true,result})});
@@ -65,6 +65,11 @@ const beta='@verified_account';
      const binding=mode==='masked'?{company_id:null,company_name:null,can_manage:false}:fixtures[channel];
      return {ok:true,json:async()=>({success:true,binding})};
     }
+    if(api.endsWith('/dialogs/transfer-candidates')){
+     if(opt.method||q.get('channel_id')!=='a'||q.get('lead_id')!=='41'||q.get('expected_revision')!=='3')throw Error('Inexact transfer candidate read');
+     window.transferReads++;
+     return ok({targets:[{employee_id:22,name:'Synthetic online operator'}]});
+    }
     if(api.endsWith('/dialogs/history')){
      const channel=q.get('channel_id'),source=sources.find(r=>r.channel_id===channel);
      if(q.get('support_case_only')==='1'){
@@ -76,7 +81,7 @@ const beta='@verified_account';
       if(window.holdCaseRead)await new Promise(release=>window.caseWaiters.push(release));
       return ok({dialog:{provider,lead_id,channel_id,conversation_id,support_case}});
      }
-     return ok({dialog:{...source,...(channel==='a'?{lifecycle:{state:'accepted',accepted_by_name:'Actual & <b>accepting</b> employee'}}:{})},messages:[],next_before:null});
+     return ok({dialog:{...source,...(channel==='a'?{lifecycle:{state:'accepted',revision:3,can_transfer:true,accepted_by_name:'Actual & <b>accepting</b> employee'}}:{})},messages:[],next_before:null});
     }
     if(api.endsWith('/dialogs'))return ok({dialogs:[{...sources[0],group_sources:sources}],channels:[],agents:[],next_offset:null});
     if(api.endsWith('/dialogs/group-participants'))return ok({status:'available',phones:[],total:0});
@@ -129,7 +134,8 @@ const beta='@verified_account';
   assert(!await card.isVisible());
   const companyHeader=panel.locator('.operator-client-panel-header');
   assert.deepEqual(await companyHeader.getByRole('tab').allTextContents(),['Main','Tasks','Modules','Payments']);
-  assert.equal(await panel.locator('#operatorCompanyPanelClose').count(),0);
+  const panelClose=panel.locator('#operatorCompanyPanelClose');
+  assert.equal(await panelClose.isVisible(),width<=900,'only mobile has a visible in-panel close');
   assert.equal(await panel.getAttribute('aria-label'),'Company details');
   assert.equal(await companyHeader.getByRole('tablist',{name:'Company',exact:true}).count(),1);
   assert.equal(await companyHeader.getByRole('heading').count(),0,'remove only the visual company title');
@@ -139,21 +145,33 @@ const beta='@verified_account';
     return {height:h.height,tabHeight:tabs.height,contained:tabs.top>=h.top&&tabs.bottom<=h.bottom&&tabs.right<=h.right,
       paddingStart:style.paddingBlockStart,paddingEnd:style.paddingBlockEnd};
   });
-  assert(compactHeader.contained&&compactHeader.height<=42,'four tabs fit a header no taller than 42px: '+JSON.stringify(compactHeader));
+  assert(compactHeader.contained&&compactHeader.height<=(width<=900?54:42),'four tabs fit the compact header: '+JSON.stringify(compactHeader));
   assert.deepEqual([compactHeader.paddingStart,compactHeader.paddingEnd],['4px','4px'],'company-specific padding wins when shared styles load last');
   for(const tab of await companyHeader.getByRole('tab').all()){
     assert.deepEqual(await tab.evaluate(corners),['0px','0px','0px','0px'],'tab edges and the active underline are square');
     assert((await tab.boundingBox()).height>=32,'compact tabs retain a usable click target');
   }
   assert.deepEqual((await panel.evaluate(corners)).slice(2),['0px','0px']);
-  assert.deepEqual(await pane.evaluate(corners),[...originalPaneCorners.slice(0,3),'0px'],'the pane must not clip the lower right corner');
-  assert(await toggle.evaluate(el=>!el.closest('[inert]')),'the original-slot toggle remains active');
-  assert(await toggle.evaluate(hitTarget),'the open panel does not intercept the toggle');
+  assert.deepEqual(await pane.evaluate(corners),width<=900?originalPaneCorners:[...originalPaneCorners.slice(0,3),'0px'],'only the desktop sidebar shares the lower right corner');
   if(width<=900){
-    assert(await panel.evaluate(el=>el.getBoundingClientRect().top>=document.querySelector('.operator-history-tools').getBoundingClientRect().bottom));
-    assert(await page.locator('#chatRows').evaluate(el=>el.inert),'only the content behind the mobile panel becomes inert');
+    const box=await panel.boundingBox();
+    assert.deepEqual(box,{x:0,y:0,width,height:800},'mobile panel covers the viewport including both edges');
+    assert(await panel.evaluate(el=>!el.closest('[inert]')),'the mobile panel itself is interactive');
+    assert(await panelClose.evaluate(hitTarget),'the mobile close control receives a real touch');
+    assert(await toggle.evaluate(el=>!!el.closest('[inert]')),'the covered toolbar is not keyboard-accessible');
+    assert(await page.locator('#chatRows').evaluate(el=>!!el.closest('[inert]')),'behind the panel the chat is inert');
+  }else{
+    assert(await toggle.evaluate(el=>!el.closest('[inert]')),'the desktop original-slot toggle remains active');
+    assert(await toggle.evaluate(hitTarget),'the desktop panel does not intercept the toggle');
   }
   await page.waitForFunction(()=>window.savedOpen===true);
+  if(width<=900){
+    const transfer=panel.locator('#operatorSidebarTransfer summary');
+    await transfer.tap();
+    await panel.getByRole('button',{name:'Synthetic online operator',exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>window.transferReads),1,'tapping Transfer reads exact authorized recipients without writing');
+    await transfer.tap();
+  }
   assert.equal(await panel.locator('#operatorConversationNameInput,[data-client-case-field],[data-panel-agent-status]').count(),0);
   assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a']);
   assert.equal(await panel.locator('#operatorCompanyView-main [data-company-action]').count(),0);
@@ -231,7 +249,9 @@ const beta='@verified_account';
   await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   const search=panel.locator('#operatorDialogueCompanySearch');
   assert(!await search.isEditable(),'idle search resists autofill');
-  await search.focus();
+  assert(await search.evaluate(el=>{const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===el;}),'visible search field receives its actual pointer event');
+  if(width<=900)await search.tap();else await search.click();
+  assert(await search.evaluate(el=>el===document.activeElement),'the actual pointer opens the keyboard focus target');
   assert(await search.isEditable(),'authorized user can type after focusing the company picker');
   await search.press('ControlOrMeta+a');
   await search.pressSequentially('Test company');
@@ -239,11 +259,31 @@ const beta='@verified_account';
   await panel.getByRole('button',{name:'@Test company',exact:true}).waitFor();
   await companyHeader.getByRole('tab',{name:'Main',exact:true}).click();
   assert.equal(await search.inputValue(),alpha,'leaving an unsubmitted search restores the bound company');
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<=900){
+    // Simulate the real visual viewport shrinking and scrolling under the mobile keyboard.
+    await page.evaluate(()=>{
+      const viewport=window.visualViewport;
+      for(const [name,value] of [['height',280],['offsetTop',90]])
+        Object.defineProperty(viewport,name,{configurable:true,value});
+      viewport.dispatchEvent(new Event('resize'));viewport.dispatchEvent(new Event('scroll'));
+      const panelBody=document.querySelector('#operatorCompanyPanel .operator-client-panel-content');
+      const extra=document.createElement('div');extra.style.height='550px';extra.dataset.testOverflow='true';panelBody.append(extra);
+    });
+    assert.deepEqual(await panel.boundingBox(),{x:0,y:90,width,height:280},'panel tracks the remaining visual viewport under the keyboard');
+    assert(await panelClose.evaluate(hitTarget),'close stays reachable under keyboard sizing');
+    const scroll=panel.locator('.operator-client-panel-content');
+    assert(await scroll.evaluate(el=>{el.scrollTop=200;return el.scrollTop>0;}),'the panel body can scroll internally without moving the header');
+    await panelClose.tap();
+    await page.evaluate(()=>{
+      const viewport=window.visualViewport;delete viewport.height;delete viewport.offsetTop;
+      viewport.dispatchEvent(new Event('resize'));
+    });
+    await page.waitForFunction(()=>document.activeElement?.id==='operatorCompanyPanelOpen');
+  }else await toggle.click();
   await page.waitForFunction(()=>window.savedOpen===false);
   await panel.waitFor({state:'hidden'});
   assert.deepEqual(await pane.evaluate(corners),originalPaneCorners,'closing restores the pane corners');
-  assert(!await page.locator('#chatRows').evaluate(el=>el.inert),'closing makes history interactive again');
+  assert(!await page.locator('#chatRows').evaluate(el=>!!el.closest('[inert]')),'closing makes history interactive again');
   await page.locator('#operatorClientCardOpen').click();
   assert.equal(await card.locator('#operatorSharedReminderCreate').count(),0,'the avatar modal has no reminder action');
   const caseField=key=>card.locator('[data-client-case-field="'+key+'"]');
@@ -312,7 +352,8 @@ const beta='@verified_account';
   await page.locator('#operatorCompanyPanelOpen').click();
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
-  await page.locator('#operatorCompanyPanelOpen').click();
+  if(width<=900)await panelClose.tap();else await toggle.click();
+  await panel.waitFor({state:'hidden'});
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'tasks'}})));
   assert(!await name.isVisible()&&!(await name.textContent()),'leaving Dialogs clears company name');
   await page.evaluate(()=>{window.mode.b='denied';document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'dialogs'}}));});
@@ -331,6 +372,6 @@ const beta='@verified_account';
   assert(!await name.isVisible()&&!(await name.textContent()),'identity transition clears company name');
   await page.close();
  }
- console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/1440px');
+ console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/430/1440px');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
