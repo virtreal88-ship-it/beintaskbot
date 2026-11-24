@@ -53,6 +53,37 @@ def send_status_handler(member_from_request, logger):
     return handle
 
 
+def close_unsubmitted_handler(member_from_request, canonical_origin, logger):
+    import asyncio
+    from tenant_chat_send_store import close_unsubmitted_send
+
+    async def handle(request):
+        headers = {'Cache-Control': 'no-store'}
+        try:
+            session = member_from_request(request)
+            if not session:
+                raise TenantLinearError('İcazə yoxdur.', 403)
+            require_json_post(request, canonical_origin)
+            data = await request.json()
+            if not isinstance(data, dict):
+                raise ValueError('Invalid body')
+            if ((str(data.get('expected_tenant_id')), str(data.get('expected_user_id')))
+                    != (str(session['tenant_id']), str(session['telegram_id']))):
+                raise TenantLinearError('Kabinet dəyişib. Yeniləyin.', 409)
+            result = await asyncio.to_thread(close_unsubmitted_send, session, data.get('lead_id'),
+                                             data.get('request_id'))
+            return web.json_response({'success': True, **result}, headers=headers)
+        except TenantLinearError as error:
+            return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)
+        except (ValueError, TypeError, KeyError):
+            return web.json_response({'success': False, 'error': 'Sorğu düzgün deyil.'}, status=400, headers=headers)
+        except Exception:
+            logger.warning('Unsubmitted chat send could not be closed')
+            return web.json_response({'success': False, 'error': 'Göndərmə vəziyyəti əlçatan deyil.'},
+                                     status=503, headers=headers)
+    return handle
+
+
 def receipt_handler(member_from_request,logger):
     """GET status never dispatches, records customer history or marks handling."""
     import asyncio

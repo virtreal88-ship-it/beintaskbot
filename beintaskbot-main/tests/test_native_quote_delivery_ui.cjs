@@ -28,11 +28,22 @@ const settle=async()=>{for(let i=0;i<12;i++)await new Promise(r=>setImmediate(r)
   const requestId='00000000-0000-4000-8000-000000009999';
   w.sessionStorage.setItem(key,JSON.stringify({request_id:requestId,text:'Previous answer'}));
   const calls=[];
-  w.tenantChatSend.bind({...ordinary,api:async(url,opt)=>{calls.push(opt.method);assert.match(url,/send-status\?/);assert.equal(new URL(url,w.location.origin).searchParams.get('request_id'),requestId);return {state};}});
+  w.tenantChatSend.bind({...ordinary,api:async(url,opt)=>{
+   calls.push(opt.method);
+   if(opt.method==='POST'){
+    assert.equal(state,'unavailable');
+    assert.equal(url,'/api/platform/crm/chat/send-status/close-unsubmitted');
+    assert.deepEqual(JSON.parse(opt.body),{lead_id:41,request_id:requestId,expected_tenant_id:'tenant',expected_user_id:33});
+    return {state:'blocked'};
+   }
+   assert.match(url,/send-status\?/);assert.equal(new URL(url,w.location.origin).searchParams.get('request_id'),requestId);
+   return {state};
+  }});
   input.value='A new draft';
   button.click();await settle();
-  assert.deepEqual(calls,['GET']);assert.equal(input.value,'A new draft');
-  assert.equal(w.sessionStorage.getItem(key)===null,['accepted','blocked'].includes(state));
+  assert.deepEqual(calls,state==='unavailable'?['GET','POST']:['GET']);
+  assert.equal(input.value,'A new draft');
+  assert.equal(w.sessionStorage.getItem(key)===null,['accepted','blocked','unavailable'].includes(state));
  }
  dom.window.close();console.log('PASS: quoted queued/unknown/failed/sent/delivered states, same-UUID read checks and no automatic retry');
 })().catch(error=>{console.error(error);process.exitCode=1;});

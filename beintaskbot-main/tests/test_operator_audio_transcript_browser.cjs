@@ -28,7 +28,8 @@ async function checkReplyControls(browser,width,role){
       }
       if(url.includes('/state/technical?'))return reply({technical:{}});
       if(url.includes('/quote-receipt?'))return reply(null,404,'No previous reply');
-      if(url.includes('/chat/send-status?'))return {ok:true,status:200,json:async()=>({success:true,state:'accepted'})};
+      if(url.includes('/chat/send-status?'))return {ok:true,status:200,json:async()=>({success:true,state:'unavailable'})};
+      if(url.endsWith('/chat/send-status/close-unsubmitted'))return {ok:true,status:200,json:async()=>({success:true,state:'blocked'})};
       return reply({});
     };
   },{role,mobile});
@@ -93,7 +94,7 @@ async function checkReplyControls(browser,width,role){
       const saved=JSON.parse(sessionStorage.getItem('tenant-chat-send:'+member.tenant_id+':'+member.telegram_id+':41'));
       return saved?.quote_preview_dismissed===true;
     }),true,'dismissing the preview retains the durable request');
-    assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.includes('/chat/send')&&r.method==='POST')),false);
+    assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.endsWith('/chat/send')&&r.method==='POST')),false);
     const article=page.locator('[data-message-id="long"]');
     await article.focus();
     await page.keyboard.press('Shift+F10');
@@ -101,10 +102,12 @@ async function checkReplyControls(browser,width,role){
     const newQuote=page.locator('#operatorReplyQuote[data-reply-pending=false]');
     assert.equal(await newQuote.getAttribute('data-quote-message-id'),'long');
     await page.locator('#operatorComposerPrimary').click();
-    await page.waitForFunction(()=>window.requests.some(r=>r.url.includes('/chat/send-status?')&&r.method==='GET'));
-    assert.equal(await newQuote.isVisible(),true,'checking the older send keeps the new quote');
+    await page.waitForFunction(()=>window.requests.some(r=>r.url.endsWith('/chat/send-status/close-unsubmitted')&&r.method==='POST'));
+    await page.waitForFunction(()=>document.querySelector('#sendChat').textContent===window.tenantI18n.t('send'));
+    assert.equal(await page.evaluate(()=>window.requests.filter(r=>r.url.includes('/chat/send-status?')&&r.method==='GET').length),1);
+    assert.equal(await newQuote.isVisible(),true,'closing an unsubmitted request keeps the new quote');
     assert.equal(await page.locator('#chatText').inputValue(),'Keep this draft');
-    assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.includes('/chat/send')&&r.method==='POST')),false);
+    assert.equal(await page.evaluate(()=>window.requests.some(r=>r.url.endsWith('/chat/send')&&r.method==='POST')),false);
   }
  }finally{await page.close();}
 }

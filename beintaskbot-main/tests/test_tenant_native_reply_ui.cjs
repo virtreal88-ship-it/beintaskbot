@@ -10,7 +10,8 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(resolve=>setTimeout
  const nextMessageId='00000000-0000-4000-8000-000000000006';
  let failSend=true,hideSource=false,uuid=10;const calls=[];w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};w.crypto.randomUUID=()=> '00000000-0000-4000-8000-'+String(uuid++).padStart(12,'0');
  w.fetch=async(url,options={})=>{url=String(url);calls.push({url,options});let result;
- if(url.includes('/chat/send-status?'))return {ok:true,json:async()=>({success:true,state:'accepted'})};
+ if(url.includes('/chat/send-status?'))return {ok:true,json:async()=>({success:true,state:'unavailable'})};
+ if(url.endsWith('/chat/send-status/close-unsubmitted'))return {ok:true,json:async()=>({success:true,state:'blocked'})};
  if(url.endsWith('/chat/send')){if(failSend){failSend=false;throw new Error('network lost');}result={state:'accepted'};}
  else if(url.includes('/dialogs/history'))result={dialog:route,messages:[...(hideSource?[]:[msg]),{...msg,id:'00000000-0000-4000-8000-000000000005',provider_message_id:undefined,body:'Older message'},{...msg,id:nextMessageId,provider_message_id:'PROVIDER456',body:'New message to quote'}],next_before:null};
  else if(url.includes('/dialogs?'))result={dialogs:[route],channels:[],agents:[],attention_count:0,next_offset:null};
@@ -45,7 +46,11 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(resolve=>setTimeout
  const data=JSON.parse(sent[0].options.body);
  const [status]=calls.filter(x=>x.url.includes('/chat/send-status?'));
  assert.equal(status.options.method,'GET');
- assert.equal(new URL(status.url,w.location.origin).searchParams.get('request_id'),data.request_id);assert.equal(data.quote_message_id,id);assert.equal(data.quote_channel_id,channel);assert.equal(data.quote_conversation_id,'client');
+ assert.equal(new URL(status.url,w.location.origin).searchParams.get('request_id'),data.request_id);
+ const [close]=calls.filter(x=>x.url.endsWith('/chat/send-status/close-unsubmitted'));
+ assert.equal(close.options.method,'POST');
+ assert.deepEqual(JSON.parse(close.options.body),{lead_id:41,request_id:data.request_id,expected_tenant_id:tenant,expected_user_id:33});
+ assert.equal(data.quote_message_id,id);assert.equal(data.quote_channel_id,channel);assert.equal(data.quote_conversation_id,'client');
  d.getElementById('sendChat').click();await tick();await tick();
  const posts=calls.filter(x=>x.url.endsWith('/chat/send'));
  assert.equal(posts.length,2,'only a fresh send click submits the second reply');
