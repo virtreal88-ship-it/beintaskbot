@@ -29,7 +29,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/app/pwa-icon-512.png') return send(200, 'image/png', fs.readFileSync(path.join(docs, 'icon-512.png')));
   if (url.pathname === '/assets/tenant-pwa.js') return send(200, 'text/javascript', source('tenant-pwa.js'), {'cache-control':'no-store'});
   if (url.pathname === '/assets/pwa-probe.js') { assetRequests++; return send(200, 'text/javascript', 'window.__pwaProbeLoaded=(window.__pwaProbeLoaded||0)+1;', {'cache-control':'no-store'}); }
-  if (url.pathname === '/sw.js') return send(200, 'text/javascript', source('sw.js'), {'cache-control':'no-store'});
+  if (url.pathname === '/sw.js') return send(200, 'text/javascript', source('retired-sw.js'), {'cache-control':'no-store'});
   if (url.pathname.startsWith('/api/')) {
     apiRequests++;
     if (url.pathname === '/api/platform/me') return send(200, 'application/json', JSON.stringify({success:true,member:{tenant_id:'fixture-tenant',telegram_id:123,role:'owner',display_name:'PWA fixture',active:true},capabilities:{modules:{}}}), {'cache-control':'no-store'});
