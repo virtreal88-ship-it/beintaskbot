@@ -44,6 +44,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
         }
         await create.waitFor({state:'visible',timeout:10000});
         assert.equal(await create.textContent(),'Create reminder');
+        assert.equal(await create.locator('svg[aria-hidden=true][focusable=false] + span').textContent(),'Create reminder');
         assert(await create.evaluate(button=>button.parentElement===document.querySelector('#operatorCompanyView-main').lastElementChild));
         assert.equal(await page.locator('#operatorClientCard #operatorSharedReminderCreate').count(),0);
         assert.deepEqual(await page.evaluate(()=>window.reminderRequests),[],'creation-only does not call the bell feed');

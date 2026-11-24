@@ -96,7 +96,7 @@
     }
     if(createControl?.isConnected){
       createControl.hidden=!canSchedule();
-      createControl.textContent=t('schedule');
+      createControl.lastElementChild.textContent=t('schedule');
       const host=createControl.closest('#operatorClientSharedReminderHost');if(host)host.hidden=createControl.hidden;
     }
     markRows(rows);
@@ -210,8 +210,14 @@
     const host=$('operatorClientSharedReminderHost');
     if(canSchedule()&&host&&
         (!createControl?.isConnected||!host.contains(createControl))){
-      createControl=button(t('schedule'),()=>schedule(createControl));
+      createControl=button(null,()=>schedule(createControl));
       createControl.id='operatorSharedReminderCreate';createControl.setAttribute('aria-haspopup','dialog');
+      const icon=document.createElementNS('http://www.w3.org/2000/svg','svg');
+      for(const [key,value] of Object.entries({'aria-hidden':'true',focusable:'false',width:'14',height:'14',viewBox:'0 0 24 24'}))icon.setAttribute(key,value);
+      icon.style.cssText='flex:none;vertical-align:-2px;margin-inline-end:6px';
+      const line=document.createElementNS(icon.namespaceURI,'path');
+      for(const [key,value] of Object.entries({d:'M12 5v14M5 12h14',fill:'none',stroke:'currentColor','stroke-width':'2','stroke-linecap':'round'}))line.setAttribute(key,value);
+      icon.append(line);createControl.append(icon,node('span',t('schedule')));
       host.replaceChildren(createControl);host.hidden=false;
     }
     if(host&&!(createControl?.isConnected&&host.contains(createControl)))host.hidden=true;
