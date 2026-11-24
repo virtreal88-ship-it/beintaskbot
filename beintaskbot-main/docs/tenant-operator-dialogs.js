@@ -2614,36 +2614,59 @@
     $('operatorAIReply').onclick=()=>{if(copilotBusy)return;submitCopilot('reply');};
     $('operatorCopilotVoiceToggle').onclick=()=>{if(copilotBusy||!dialogAiAllowed)return;void voiceSection?.startVoice?.();};
     $('operatorCopilotClear').onclick=async()=>{if(copilotBusy)return;const button=$('operatorCopilotClear');button.disabled=true;try{await api('dialogs/copilot','POST',{provider:'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id,mode:'clear'});if(!same())return;copilotAnswer='';copilotResult.hidden=true;copilotInsert.hidden=true;copilotInsert.dataset.contextSignature='';copilotStatus.textContent=copilotText('cleared');}catch(error){if(same())copilotStatus.textContent=error.message;}finally{if(button.isConnected)button.disabled=false;}};
-    let replyTarget=null,replyPending=false;const replyBox=$('operatorReplyQuote');
-    function clearReply(){replyPending=false;replyTarget=null;replyBox.replaceChildren();replyBox.hidden=true;delete replyBox.dataset.quoteMessageId;delete replyBox.dataset.quoteChannelId;delete replyBox.dataset.quoteConversationId;delete replyBox.dataset.replyPending;}
-    function showReplyQuote(target,pending=false,dismiss){
-      if(pending&&target.quote_preview_dismissed){clearReply();replyPending=true;return;}
-      replyPending=pending;
-      replyTarget={quote_message_id:String(target.quote_message_id||''),quote_channel_id:String(target.quote_channel_id||route.channel_id),quote_conversation_id:String(target.quote_conversation_id||route.conversation_id)};
-      replyBox.dataset.quoteMessageId=replyTarget.quote_message_id;
-      replyBox.dataset.quoteChannelId=replyTarget.quote_channel_id;
-      replyBox.dataset.quoteConversationId=replyTarget.quote_conversation_id;
-      replyBox.dataset.replyPending=String(pending);
+    let draftQuote=null,pendingReply=null;const replyBox=$('operatorReplyQuote');
+    function hidePendingQuote(){
+      pendingReply?.dismiss?.();
+      pendingReply=null;
+    }
+    function drawReplyQuote(){
+      const pending=!draftQuote&&Boolean(pendingReply?.data.quote_message_id);
+      const target=draftQuote||(pending?pendingReply.data:null);
       replyBox.replaceChildren();
-      if(!replyTarget.quote_message_id){replyTarget=null;replyBox.hidden=true;return;}
-      const source=page.messages.find(row=>String(row.id)===replyTarget.quote_message_id);
+      replyBox.hidden=!target;
+      if(!target){
+        delete replyBox.dataset.quoteMessageId;
+        delete replyBox.dataset.quoteChannelId;
+        delete replyBox.dataset.quoteConversationId;
+        delete replyBox.dataset.replyPending;
+        return;
+      }
+      replyBox.dataset.quoteMessageId=target.quote_message_id;
+      replyBox.dataset.quoteChannelId=target.quote_channel_id;
+      replyBox.dataset.quoteConversationId=target.quote_conversation_id;
+      replyBox.dataset.replyPending=String(pending);
+      const source=page.messages.find(row=>String(row.id)===target.quote_message_id);
       const label=document.createElement('span');
       label.textContent=pending?replyText('pending'):source?messageAuthor(source)+': '+String(quotedMessagePreview(source)||t('attachment')).slice(0,160):replyText('preview');
       label.title=label.textContent;
-      replyBox.append(label);
       const cancel=document.createElement('button');
       const caption=replyText('remove');
       cancel.type='button';cancel.className='operator-cancel-reply';cancel.textContent='×';
       cancel.title=caption;cancel.setAttribute('aria-label',caption);
       cancel.onclick=()=>{
-        if(pending)dismiss?.();
-        clearReply();replyPending=pending;
+        if(pending)hidePendingQuote();
+        else draftQuote=null;
+        drawReplyQuote();
         $('chatText').focus();
       };
-      replyBox.append(cancel);
-      replyBox.hidden=false;
+      replyBox.append(label,cancel);
     }
-    function selectReplyMessage(messageId,{focus=true}={}){if(!same()||!sendAllowed||replyPending)return false;const message=page.messages.find(row=>String(row.id)===String(messageId));if(!message)return false;if(!message.provider_message_id){$('operatorChatError').textContent=replyText('unavailable');return false;}if(String(message.source_channel_id||route.channel_id)!==String(route.channel_id)||String(message.source_conversation_id||route.conversation_id)!==String(route.conversation_id))return false;$('operatorChatError').textContent='';showReplyQuote({quote_message_id:String(message.id),quote_channel_id:route.channel_id,quote_conversation_id:route.conversation_id});if(focus)$('chatText').focus();return true;}
+    function selectReplyMessage(messageId,{focus=true}={}){
+      if(!same()||!sendAllowed)return false;
+      const message=page.messages.find(row=>String(row.id)===String(messageId));
+      if(!message)return false;
+      if(!message.provider_message_id||String(message.source_channel_id||route.channel_id)!==String(route.channel_id)
+        ||String(message.source_conversation_id||route.conversation_id)!==String(route.conversation_id)){
+        $('operatorChatError').textContent=replyText('unavailable');
+        return false;
+      }
+      $('operatorChatError').textContent='';
+      hidePendingQuote();
+      draftQuote={quote_message_id:String(message.id),quote_channel_id:route.channel_id,quote_conversation_id:route.conversation_id};
+      drawReplyQuote();
+      if(focus)$('chatText').focus();
+      return true;
+    }
     const chatRowsHost=$('chatRows'),swipeBlocked='button,a,input,select,textarea,audio,video,img,summary,[contenteditable=true],[data-quote-jump],[data-media-open],[data-media-download],[data-participant-menu],.operator-message-meta,.operator-media-preview,details[data-audio-transcript]';let replySwipe=null,replySwipeFeedbackTimer=null,replyLongPress=null,replyContextMenu=null;
     const audioScopeCurrent=()=>same()&&currentPage===page&&chatRowsHost.isConnected&&$('chatRows')===chatRowsHost;
     const audioMenuCopy=key=>t(key),audioResultSourceMatches=(result,message)=>result?.source&&String(result.source.channel_id)===String(route.channel_id)&&String(result.source.conversation_id)===String(route.conversation_id)&&String(result.source.message_id)===String(message.external_id)&&String(result.source.message_row_id)===String(message.id)&&(!result.message||(String(result.message.id)===String(message.id)&&String(result.message.external_id)===String(message.external_id))),audioRequestStorageKey=message=>`tenant.operator.audio-transcription-request.${identity(member)}.${route.channel_id}.${encodeURIComponent(route.conversation_id)}.${encodeURIComponent(message.id)}`;
@@ -2715,7 +2738,7 @@
       const valid=()=>same()&&currentPage===page&&article.isConnected&&chatRowsHost.contains(article)&&article.dataset.messageId===String(messageId);
       const node=document.createElement('div');node.className='operator-reply-context-menu';node.tabIndex=-1;node.setAttribute('role','menu');node.setAttribute('aria-label',({ru:'Действия с сообщением',az:'Mesaj əməliyyatları',en:'Message actions'}[i18n.language]||'Message actions'));
       const addButton=(host,label,action)=>{const button=document.createElement('button');button.type='button';button.setAttribute('role','menuitem');button.textContent=label;button.onclick=()=>{if(valid())action(button);else closeReplyContextMenu();};host.append(button);return button;};
-      const reply=addButton(node,replyText('action'),()=>{if(selectReplyMessage(messageId,{focus:false}))closeReplyContextMenu(true);});reply.dataset.replyContextAction='reply';reply.disabled=!sendAllowed||replyPending||!message.provider_message_id;reply.title=reply.disabled?replyText('unavailable'):'';
+      const reply=addButton(node,replyText('action'),()=>{if(selectReplyMessage(messageId,{focus:false}))closeReplyContextMenu(true);});reply.dataset.replyContextAction='reply';reply.disabled=!sendAllowed||!message.provider_message_id;reply.title=reply.disabled?replyText('unavailable'):'';
       const controllers=[],preflights=[],mirrors=[],hosts=[...article.querySelectorAll('[data-chat-attachment]')],selected=touchedHost&&hosts.includes(touchedHost)?[touchedHost]:hosts;
       for(const file of selected){
         const sourceKey=()=>['chatAttachment','messageRowId','attachmentLeadId','channelId','conversationId','mediaVersion','mediaKind'].map(key=>file.dataset[key]||'').join('|'),source=sourceKey();
@@ -2764,15 +2787,24 @@
     chatRowsHost.addEventListener('contextmenu',event=>{const article=event.target.closest('.operator-message');if(!article||!chatRowsHost.contains(article)||menuGestureBlocked(event,article))return;const rect=article.getBoundingClientRect();if(replyContextMenu?.article===article||openReplyContextMenu(article,article.dataset.messageId,event.clientX||rect.x+rect.width/2,event.clientY||rect.y+rect.height/2,event.target.closest('[data-chat-attachment]'))){event.preventDefault();event.stopPropagation();if(replyLongPress){replyLongPress.opened=true;clearTimeout(replyLongPress.timer);}}});
     chatRowsHost.addEventListener('keydown',event=>{if(event.key!=='ContextMenu'&&!(event.shiftKey&&event.key==='F10'))return;const article=event.target.closest('.operator-message');if(!article||event.target.closest(menuBlocked))return;const rect=article.getBoundingClientRect();if(openReplyContextMenu(article,article.dataset.messageId,rect.x+rect.width/2,rect.y+rect.height/2)){event.preventDefault();event.stopPropagation();}});
     function clearSwipeFeedback(article){if(article)delete article.dataset.swipeReplyFeedback;if(replySwipeFeedbackTimer){clearTimeout(replySwipeFeedbackTimer);replySwipeFeedbackTimer=null;}}
-    chatRowsHost.addEventListener('pointerdown',event=>{if(event.pointerType!=='touch'||!event.isPrimary||!same()||!sendAllowed||replyPending)return;const article=event.target.closest('.operator-message');if(!article||!chatRowsHost.contains(article)||(event.target.closest(swipeBlocked)||menuGestureBlocked(event,article))||window.getSelection?.()?.toString())return;if(event.clientX<24||event.clientX>window.innerWidth-24)return;replySwipe={pointerId:event.pointerId,article,messageId:article.dataset.messageId,startX:event.clientX,startY:event.clientY,startedAt:performance.now(),ready:false};});
+    chatRowsHost.addEventListener('pointerdown',event=>{if(event.pointerType!=='touch'||!event.isPrimary||!same()||!sendAllowed)return;const article=event.target.closest('.operator-message');if(!article||!chatRowsHost.contains(article)||(event.target.closest(swipeBlocked)||menuGestureBlocked(event,article))||window.getSelection?.()?.toString())return;if(event.clientX<24||event.clientX>window.innerWidth-24)return;replySwipe={pointerId:event.pointerId,article,messageId:article.dataset.messageId,startX:event.clientX,startY:event.clientY,startedAt:performance.now(),ready:false};});
     chatRowsHost.addEventListener('pointermove',event=>{const swipe=replySwipe;if(!swipe||event.pointerId!==swipe.pointerId)return;const dx=event.clientX-swipe.startX,dy=event.clientY-swipe.startY;if(window.getSelection?.()?.toString()||Math.abs(dy)>28||dx>0){clearSwipeFeedback(swipe.article);replySwipe=null;return;}if(dx<=-56){swipe.ready=true;swipe.article.dataset.swipeReplyFeedback='true';}});
     chatRowsHost.addEventListener('pointerup',event=>{const swipe=replySwipe;if(!swipe||event.pointerId!==swipe.pointerId)return;replySwipe=null;if(!swipe.ready||performance.now()-swipe.startedAt>650||window.getSelection?.()?.toString()){clearSwipeFeedback(swipe.article);return;}event.preventDefault();selectReplyMessage(swipe.messageId,{focus:false});clearTimeout(replySwipeFeedbackTimer);replySwipeFeedbackTimer=setTimeout(()=>clearSwipeFeedback(swipe.article),360);});
     chatRowsHost.addEventListener('pointercancel',event=>{if(!replySwipe||event.pointerId!==replySwipe.pointerId)return;clearSwipeFeedback(replySwipe.article);replySwipe=null;});
     chatRowsHost.addEventListener('click',async event=>{const button=event.target.closest('[data-copy-message]');if(!button)return;event.preventDefault();event.stopPropagation();const message=page.messages.find(row=>String(row.id||row.external_id)===button.dataset.copyMessage),text=messageCopyText(message),status=button.parentElement.querySelector('[data-copy-status]');if(!text||!same()||currentPage!==page||!chatRowsHost.contains(button))return;let copied=false;try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);copied=true;}else if(document.execCommand){const input=document.createElement('textarea');input.value=text;input.style.cssText='position:fixed;opacity:0;pointer-events:none';document.body.append(input);input.select();copied=document.execCommand('copy');input.remove();}}catch{}if(button.isConnected&&same()&&currentPage===page)status.textContent=replyText(copied?'copied':'copyFailed');});
     chatRowsHost.addEventListener('click',event=>{const jump=event.target.closest('[data-quote-jump]');if(jump){const target=[...chatRowsHost.querySelectorAll('[data-provider-message-id]')].find(node=>node.dataset.providerMessageId===jump.dataset.quoteJump);if(target){const behavior=window.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth';target.scrollIntoView({block:'center',behavior});}else $('operatorChatError').textContent=({ru:'Исходное сообщение не загружено.',az:'Orijinal mesaj yüklənməyib.',en:'Original message is not loaded.'}[i18n.language]||'Original message is not loaded.');return;}const button=event.target.closest('[data-reply-message]');if(button)selectReplyMessage(button.dataset.replyMessage,{focus:true});});
-    function restorePendingReply(pending,dismiss){showReplyQuote(pending,true,dismiss);}
-    if(interactionState?.quote){if(interactionState.quote.pending)restorePendingReply(interactionState.quote);else showReplyQuote(interactionState.quote);}
-    window.tenantChatSend?.clearDiagnostics?.();if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,getQuote:()=>replyTarget,onPending:restorePendingReply,onDiscard:clearReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:text=>{clearReply();if((sessionStorage.getItem(sendDraftKey)||'').trim()===text)sessionStorage.removeItem(sendDraftKey);},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
+    function restorePendingReply(pending,dismiss,started){
+      if(started)draftQuote=null;
+      pendingReply=pending.quote_preview_dismissed?null:{data:pending,dismiss};
+      drawReplyQuote();
+    }
+    function settlePendingReply(){pendingReply=null;drawReplyQuote();}
+    if(interactionState?.quote&&!interactionState.quote.pending){
+      const {quote_message_id,quote_channel_id,quote_conversation_id}=interactionState.quote;
+      draftQuote={quote_message_id,quote_channel_id,quote_conversation_id};
+      drawReplyQuote();
+    }
+    window.tenantChatSend?.clearDiagnostics?.();if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:text=>{settlePendingReply();if(draftQuote)return true;if((sessionStorage.getItem(sendDraftKey)||'').trim()===text)sessionStorage.removeItem(sendDraftKey);},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     const replyDiagnostics=$('operatorReplyDiagnostics');
     if(replyDiagnostics){replyDiagnostics.replaceChildren();window.tenantChatSend?.renderDiagnostics?.(replyDiagnostics);}
     renderComposerSourcePicker();
