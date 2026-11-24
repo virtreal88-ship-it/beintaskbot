@@ -1170,6 +1170,15 @@
     const route=['waiting','accepted','closed','dismissed'].map(state=>sources.find(source=>source.lifecycle_enabled&&source.lifecycle?.state===state&&!(state==='waiting'&&source.lifecycle.has_inbound===false))).find(Boolean);
     return lifecycleBadge(route);
   }
+  function formatDialogListTime(value){
+    if(!value)return '';
+    const date=new Date(value);
+    if(!Number.isFinite(date.getTime()))return '';
+    const two=n=>String(n).padStart(2,'0');
+    const day=[two(date.getDate()),two(date.getMonth()+1),String(date.getFullYear()).padStart(4,'0')].join('-');
+    const time=[date.getHours(),date.getMinutes(),date.getSeconds()].map(two).join(':');
+    return day+' '+time;
+  }
   function renderRows(){
     $('operatorRows').innerHTML=rows.map((row,index)=>{
       const companyName=(member?.role==='owner'||capabilities.dialog_company_binding===true)?row.dialog_company_name:'';
@@ -1177,7 +1186,7 @@
       const selected=(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
       const unread=Math.max(0,Number(row.unread_count)||0);
-      const identityText=dialogRowSubtitle(row),timeText=row.last_message_at?i18n.date(row.last_message_at):'';
+      const identityText=dialogRowSubtitle(row),timeText=formatDialogListTime(row.last_message_at);
       const pendingMissedCall=String(row.last_message_type||'').toLowerCase()==='call_missed'&&(
         row.provider==='connect'&&row.lifecycle_enabled
           ?row.lifecycle?.state!=='accepted'&&row.missed_call_pending===true
