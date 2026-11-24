@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tomllib
 from types import SimpleNamespace
+from contextlib import nullcontext
 from unittest.mock import patch
 
 from tenant_ai_agent_startup import _prepare_database_with_retry,prepare_database,start_worker
@@ -39,6 +40,7 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         class Connection:
             info=SimpleNamespace(server_version=server_version)
             def cursor(self):return Cursor()
+            def transaction(self):return nullcontext()
             def commit(self):events.append('commit')
             def rollback(self):raise AssertionError('Cleanup must not send SQL on a dead session')
             def close(self):events.append('close')
@@ -51,6 +53,7 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         modules={'tenant_platform_core':SimpleNamespace(_connect=Connection,_fernet=lambda:None),
           'tenant_ai_agents_schema':SimpleNamespace(ensure_schema=migrate('core')),
           'tenant_connect_health':SimpleNamespace(prepare_database=migrate('connect_health')),
+          'tenant_dialog_duplicate_actions':SimpleNamespace(prepare_schema=lambda _conn:events.append('dialogue_duplicates')),
           'tenant_dialog_consultations':SimpleNamespace(schema=migrate('unified'),require_schema=lambda _conn:events.append('verified'))}
         for module,name in [('tenant_chat_ai_schema','chat'),('tenant_ai_simulation_schema','simulation'),
           ('tenant_ai_administrator_drafts','drafts'),('tenant_ai_administrator_approvals','approvals'),
@@ -64,11 +67,22 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         self.assertLess(events.index('lock'),events.index('core'))
         self.assertLess(events.index('unified'),events.index('chat'))
         self.assertLess(events.index('apply'),events.index('verified'))
-        self.assertLess(events.index('verified'),events.index('close'))
+        self.assertLess(events.index('verified'),events.index('dialogue_duplicates'))
+        self.assertLess(events.index('dialogue_duplicates'),events.index('close'))
         self.assertGreater(events.count('commit'),3)
         self.assertEqual(events.count('close'),1)
         self.assertEqual(events[:3],["SET transaction_timeout='5000ms'","SET lock_timeout='2000ms'",'lock'])
         self.assertNotIn('unlock',events)
+
+
+    def test_optional_duplicate_import_failure_cannot_stop_base_boot(self):
+        events=[]
+        modules=self._bootstrap_modules(events)
+        modules['tenant_dialog_duplicate_actions']=None
+        with patch.dict('sys.modules',modules), self.assertLogs('tenant_ai_agent_startup',level='WARNING'):
+            prepare_database()
+        self.assertIn('verified',events)
+        self.assertEqual(events[-1],'close')
 
     def test_bootstrap_failure_closes_session_without_masking_original_error(self):
         events=[]

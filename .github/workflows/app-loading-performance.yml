@@ -49,6 +49,7 @@ jobs:
           node tests/test_deal_pagination_ui.cjs
           node tests/test_tenant_dialog_avatar_queue.cjs
           node tests/test_tenant_dialog_contact_identity_ui.cjs
+          node tests/test_dialog_duplicate_owner_ui.cjs
           node tests/test_tenant_operator_auto_refresh_ui.cjs
           node tests/test_case_attachment_download_ui.cjs
           node tests/test_support_cases_modal_ui.cjs
@@ -69,6 +70,9 @@ jobs:
           tests/test_tenant_crm_queries.py
           tests/test_operator_list_performance.py
           tests/test_dialog_contact_display_name_pglite.py
+          tests/test_dialog_duplicate_discovery.py
+          tests/test_dialog_duplicate_actions.py
+          tests/test_tenant_ai_agent_startup.py
           tests/test_tenant_chat_attachments.py
           tests/test_connect_channel_isolation.py::test_read_snapshot_uses_insertion_order_and_keeps_later_arrivals_unread
           tests/test_connect_group_history.py::test_read_snapshot_selects_the_captured_copy_on_the_open_channel

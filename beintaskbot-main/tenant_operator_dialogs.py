@@ -514,9 +514,17 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
           AND contact.archived_at IS NULL AND position('@' in contact.display_name)=0
       ) linked_contact ON TRUE
 '''
+    manual_phone,phone_join="''::text",''
+    if include_contact_names and policy.profile.get('role')=='owner' and schema_ready(cur, {
+        'saas_connect_dialog_display_phones': ('tenant_id','channel_id','conversation_id','lead_id','phone'),
+    }, []):
+        manual_phone="COALESCE(CASE WHEN "+canonical_direct+" THEN mdp.phone END,'')"
+        phone_join='''LEFT JOIN saas_connect_dialog_display_phones mdp ON mdp.tenant_id=c.tenant_id
+          AND mdp.channel_id=c.connect_channel_id AND mdp.conversation_id=c.conversation_id AND mdp.lead_id=c.lead_id'''
     sql='''WITH routes AS (
       SELECT 'connect'::text AS provider,c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
         COALESCE(meaningful_name.dialog_name,NULLIF(c.manual_display_name,''),NULLIF(CASE WHEN c.conversation_kind='group' THEN c.display_name ELSE c.contact_name END,''),NULLIF(c.display_name,''),NULLIF(names.customer_name,''),NULLIF(c.phone,''),c.conversation_id) AS customer_name,c.manual_display_name,c.phone,c.conversation_kind,
+        '''+manual_phone+''' AS manual_display_phone,
         CASE WHEN (c.avatar_checked_at IS NULL AND c.avatar_status IN ('unavailable','loading'))
           OR c.avatar_checked_at<now()-interval '7 days'
           OR (c.avatar_status='loading' AND c.avatar_checked_at<now()-interval '3 minutes') THEN '' ELSE c.avatar_status END AS avatar_status,
@@ -533,6 +541,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         h.source AS handoff_source,h.reason AS handoff_reason,h.created_at AS handoff_at,h.event_key AS handoff_event_id,h.assigned_name AS handoff_assignee_name,
         NULL::text AS pipeline_id,NULL::text AS stage_id
       FROM saas_connect_conversations c
+      '''+phone_join+'''
       JOIN saas_connect_channels ch ON ch.tenant_id=c.tenant_id AND ch.connect_channel_id=c.connect_channel_id
       JOIN saas_tenants t ON t.id=c.tenant_id
       LEFT JOIN saas_ai_group_coordination gc ON gc.tenant_id=c.tenant_id AND gc.provider='connect' AND gc.group_jid=c.conversation_id
@@ -583,7 +592,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
         WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.source_id=c.conversation_id AND dl.active)
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
-        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,''::text AS avatar_status,
+        COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,''::text AS manual_display_phone,''::text AS avatar_status,
         COALESCE(NULLIF(lm.channel,''),'Kommo'),TRUE,COALESCE(lm.channel,''),j.agent_id,a.name,a.enabled,a.mode,a.scopes,a.schedule,
         COALESCE(cs.state,'active'),COALESCE(cs.reason,''),cs.updated_at,cs.tenant_id IS NOT NULL,
         s.enabled,s.emergency_stop,s.auto_send_enabled,t.status,j.state,COALESCE(j.error_code,''),lm.last_message_at,

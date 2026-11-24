@@ -760,9 +760,144 @@
     return payload;
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;
+  const duplicateCopy=(key)=>({
+    ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',open:'Открыть',prev:'Предыдущая',next:'Следующая',count:'{index} из {total}',more:'Ещё',empty:'Диалоги не найдены.',unavailable:'Объединение пока недоступно',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',busy:'Загрузка…',manual:'Указать номер для отображения',save:'Сохранить'},
+    az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',open:'Aç',prev:'Əvvəlki',next:'Növbəti',count:'{index} / {total}',more:'Daha çox',empty:'Dialoq tapılmadı.',unavailable:'Birləşdirmə hələ mümkün deyil',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',busy:'Yüklənir…',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
+    en:{title:'Find duplicates',phone:'By phone',name:'By name',missing:'Dialogs without a phone',search:'Search',query:'Name or last 7 digits',close:'Close',open:'Open',prev:'Previous',next:'Next',count:'{index} of {total}',more:'More',empty:'No dialogs found.',unavailable:'Merging is not available yet',noPhone:'No verified phone',noName:'No name',failed:'Could not complete the action. Refresh the search and try again.',busy:'Loading…',manual:'Set display phone',save:'Save'}
+  }[i18n.language]||{})[key]||({title:'Find duplicates',close:'Close'}[key]||key);
+  const canUseDuplicateSearch=()=>member?.role==='owner'&&hasRight('dialogs');
+  let duplicateDialog=null;
+  const duplicateRoute=row=>({provider:'connect',channel_id:row.channel_id,conversation_id:row.conversation_id,lead_id:row.lead_id});
+  const duplicateCardName=row=>{const name=dialogTitle(row);return name===t('whatsappContact')?duplicateCopy('noName'):name;};
+  function syncDuplicateButton(){
+    const button=$('operatorFindDuplicates');
+    if(button){button.hidden=!canUseDuplicateSearch();button.textContent=duplicateCopy('title');}
+  }
+  function closeDuplicateSearch(force=false){
+    const state=duplicateDialog;if(!state||state.stage==='saving'&&!force)return;
+    duplicateDialog=null;
+    if(state.node.open&&typeof state.node.close==='function')state.node.close();
+    state.node.remove();
+    if(!force&&canUseDuplicateSearch())$('operatorToolsMenu')?.querySelector('summary')?.focus();
+  }
+  const duplicateCurrent=state=>state===duplicateDialog&&state.epoch===epoch&&state.owner===identity(member)&&canUseDuplicateSearch();
+  function duplicateGroups(state){
+    const groups=new Map();
+    for(const row of state.results){
+      if(!Number.isSafeInteger(row.candidate_group))continue;
+      // Defense-in-depth: a server group cannot authorize a cross-source pair.
+      const key=JSON.stringify([row.candidate_group,row.channel_id]);
+      if(!groups.has(key))groups.set(key,[]);
+      groups.get(key).push(row);
+    }
+    return [...groups.values()].filter(group=>group.length>=2);
+  }
+  const completedDuplicateRoute=row=>Boolean(row.archive_read_only||['closed','dismissed'].includes(row.lifecycle?.state));
+  const duplicateDisplayPhoneEditable=row=>row.display_phone_editable===true&&!completedDuplicateRoute(row)
+    &&!row.contact_identity_conflict&&!row.identity_conflict&&!verifiedDialogPhone(row)&&!contactDetails(row)?.phone;
+  const duplicateCardDetails=row=>[verifiedDialogPhone(row)||verifiedDialogPhone({phone:row.manual_display_phone}),row.channel_name].filter(Boolean).join(' · ');
+  function renderDuplicateResults(state){
+    if(!duplicateCurrent(state))return;
+    const panel=state.node.querySelector('[data-dupe-results]');
+    const groups=duplicateGroups(state),group=groups[state.groupIndex]||[],busy=['searching','saving'].includes(state.stage);
+    const status=state.node.querySelector('[data-dupe-status]');
+    status.textContent=state.error||((busy)?duplicateCopy('busy'):'');
+    state.node.querySelectorAll('[data-dupe-form] input,[data-dupe-form] button').forEach(el=>el.disabled=state.stage==='saving');
+    state.node.querySelector('[data-dupe-close]').disabled=state.stage==='saving';
+    const visible=state.mode==='missing'?state.results:group;
+    const cards=visible.map(row=>{
+      const index=state.results.indexOf(row);
+      // No internal route identifiers ever enter displayed HTML or attributes.
+      return `<div class="operator-dupe-row"><button type="button" class="outline operator-dupe-open" data-dupe-open="${index}"><strong data-user-content>${esc(duplicateCardName(row))}</strong><span data-user-content>${esc(duplicateCardDetails(row))}</span><small>${esc(duplicateCopy('open'))}</small></button>
+      ${state.mode==='missing'&&duplicateDisplayPhoneEditable(row)?`<form data-dupe-phone-form="${index}"><input type="tel" maxlength="32" aria-label="${esc(duplicateCopy('manual'))}" placeholder="${esc(duplicateCopy('manual'))}" required ${busy?'disabled':''}><button type="submit" class="outline" ${busy?'disabled':''}>${esc(duplicateCopy('save'))}</button></form>`:''}</div>`;
+    }).join('');
+    panel.innerHTML=cards?(state.mode==='missing'?cards:`<div class="operator-dupe-pair">${cards}</div>`):((state.searched&&!busy&&!state.error)?`<p>${esc(duplicateCopy('empty'))}</p>`:'');
+    if(groups.length&&state.mode!=='missing'){
+      const count=duplicateCopy('count').replace('{index}',String(state.groupIndex+1)).replace('{total}',String(groups.length));
+      panel.insertAdjacentHTML('afterbegin',`<nav class="operator-dupe-actions"><button type="button" class="outline" data-dupe-prev ${busy||!state.groupIndex?'disabled':''}>← <span>${esc(duplicateCopy('prev'))}</span></button><span aria-live="polite" data-dupe-count>${esc(count)}</span><button type="button" class="outline" data-dupe-next ${busy||state.groupIndex>=groups.length-1?'disabled':''}><span>${esc(duplicateCopy('next'))}</span> →</button></nav>`);
+      panel.querySelector('[data-dupe-prev]').onclick=()=>move(-1);
+      panel.querySelector('[data-dupe-next]').onclick=()=>move(1);
+      function move(increment){
+        const next=state.groupIndex+increment;
+        if(!duplicateCurrent(state)||busy||next<0||next>=groups.length)return;
+        state.error='';state.groupIndex=next;renderDuplicateResults(state);
+        panel.querySelector(increment>0?'[data-dupe-next]:not(:disabled)':'[data-dupe-prev]:not(:disabled)')?.focus();
+      }
+    }
+    if(state.mode!=='missing'&&group.length)panel.insertAdjacentHTML('beforeend',`<p data-dupe-merge-unavailable>${esc(duplicateCopy('unavailable'))}</p>`);
+    if(state.offset!=null)panel.insertAdjacentHTML('beforeend',`<button type="button" class="outline" data-dupe-more ${busy?'disabled':''}>${esc(duplicateCopy('more'))}</button>`);
+    panel.querySelectorAll('[data-dupe-open]').forEach(button=>button.onclick=()=>{
+      const row=state.results[Number(button.dataset.dupeOpen)];
+      if(!duplicateCurrent(state)||!row||state.stage==='saving')return;
+      closeDuplicateSearch();void openDialog(row,false,'',{userOpened:true});
+    });
+    panel.querySelectorAll('[data-dupe-phone-form]').forEach(form=>form.onsubmit=event=>{
+      event.preventDefault();
+      const input=form.querySelector('input');
+      if(!verifiedDialogPhone({phone:input.value})){
+        input.setCustomValidity(duplicateCopy('noPhone'));input.reportValidity();input.oninput=()=>input.setCustomValidity('');return;
+      }
+      void saveDuplicateDisplayPhone(state,Number(form.dataset.dupePhoneForm),input.value);
+    });
+    const more=panel.querySelector('[data-dupe-more]');
+    if(more)more.onclick=()=>void searchDuplicateDialogs(state,state.mode,true);
+  }
+  async function searchDuplicateDialogs(state,mode,append=false){
+    if(!duplicateCurrent(state)||state.stage==='saving')return;
+    const rev=++state.rev;
+    state.error='';state.stage='searching';state.searched=true;
+    if(!append){state.results=[];state.offset=null;state.groupIndex=0;}
+    state.mode=mode;
+    renderDuplicateResults(state);
+    try{
+      const result=await api('dialogs/duplicates','POST',{mode,offset:append?state.offset:0});
+      if(!duplicateCurrent(state)||rev!==state.rev)return;
+      const incoming=Array.isArray(result?.dialogs)?result.dialogs.filter(row=>row?.provider==='connect'&&row.channel_id&&row.conversation_id&&row.lead_id):[];
+      const rowsByKey=new Map(state.results.map(row=>[dialogKey(row),row]));
+      for(const row of incoming)rowsByKey.set(dialogKey(row),row);
+      state.results=[...rowsByKey.values()];
+      state.offset=Number.isSafeInteger(result?.next_offset)?result.next_offset:null;
+    }catch{if(duplicateCurrent(state)&&rev===state.rev)state.error=duplicateCopy('failed');}
+    if(duplicateCurrent(state)&&rev===state.rev){state.stage='results';renderDuplicateResults(state);}
+  }
+  async function saveDuplicateDisplayPhone(state,index,value){
+    const row=state.results[index],phone=String(value).trim();
+    if(!duplicateCurrent(state)||!row||state.stage!=='results'||!verifiedDialogPhone({phone})||!duplicateDisplayPhoneEditable(row))return;
+    state.stage='saving';state.error='';renderDuplicateResults(state);
+    try{
+      const result=await api('dialogs/contact-display-phone','POST',{...duplicateRoute(row),phone});
+      if(!duplicateCurrent(state))return;
+      const saved=verifiedDialogPhone({phone:result?.display_phone});
+      if(!saved)throw new Error('no display phone');
+      state.results=state.results.filter(item=>!sameDialog(item,row));
+      void refresh(false,false);
+    }catch{if(duplicateCurrent(state))state.error=duplicateCopy('failed');}
+    if(duplicateCurrent(state)){state.stage='results';renderDuplicateResults(state);}
+  }
+  function openDuplicateSearch(){
+    if(!canUseDuplicateSearch()||duplicateDialog)return;
+    $('operatorToolsMenu').open=false;
+    const node=document.createElement('dialog');
+    node.id='operatorDuplicateSearch';node.setAttribute('aria-labelledby','operatorDuplicateTitle');
+    node.innerHTML=`<header><h2 id="operatorDuplicateTitle">${esc(duplicateCopy('title'))}</h2><button type="button" class="outline" data-dupe-close aria-label="${esc(duplicateCopy('close'))}">×</button></header>
+      <form data-dupe-form>
+        <label><input type="checkbox" data-dupe-mode="phone" checked> ${esc(duplicateCopy('phone'))}</label>
+        <label><input type="checkbox" data-dupe-mode="name"> ${esc(duplicateCopy('name'))}</label>
+        <button type="submit" class="primary">${esc(duplicateCopy('search'))}</button>
+      </form>
+      <p role="status" data-dupe-status></p><section data-dupe-results></section>`;
+    const state={node,owner:identity(member),epoch,rev:0,mode:'phone',offset:null,results:[],groupIndex:0,stage:'results'};
+    duplicateDialog=state;document.body.append(node);
+    const form=node.querySelector('form'),phone=form.querySelector('[data-dupe-mode="phone"]'),name=form.querySelector('[data-dupe-mode="name"]');
+    form.onsubmit=event=>{event.preventDefault();void searchDuplicateDialogs(state,phone.checked?(name.checked?'both':'phone'):(name.checked?'name':'missing'));};
+    node.querySelector('[data-dupe-close]').onclick=()=>closeDuplicateSearch();
+    node.addEventListener('cancel',event=>{event.preventDefault();closeDuplicateSearch();});
+    if(typeof node.showModal==='function')node.showModal();else node.setAttribute('open','');
+    phone.focus();
+  }
   function install(){
     const host=$('operatorDialogs');if(!host||$('operatorRows'))return;
-    host.innerHTML=`<div class="operator-workspace" id="operatorWorkspace"><section class="operator-list-pane" aria-label="${esc(t('dialogs'))}"><div class="operator-filters"><label class="operator-search"><span class="operator-search-label" data-i18n="search">${t('search')}</span><input type="search" id="operatorSearch" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-i18n-placeholder="searchShort" placeholder="${esc(t('searchShort'))}" aria-label="${esc(t('search'))}"></label><details class="operator-tools-menu" id="operatorToolsMenu"><summary aria-label="${esc(toolsLabel())}" title="${esc(toolsLabel())}" aria-haspopup="menu" aria-controls="operatorToolsPopover" aria-expanded="false"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></summary><div id="operatorToolsPopover" role="menu" aria-label="${esc(toolsLabel())}"><button type="button" class="outline" role="menuitem" id="operatorSoundToggle" aria-pressed="true"></button><span id="operatorSoundStatus" role="status" aria-live="polite"></span><button type="button" class="outline" role="menuitem" id="operatorNotificationToggle" aria-pressed="false"></button><span id="operatorNotificationStatus" role="status" aria-live="polite"></span><button type="button" class="outline" role="menuitem" id="operatorBulkAssignment" hidden>${bulkText('preview')}</button><button type="button" class="outline" role="menuitem" id="operatorCompleteAll">${esc(completeAllCopy('title'))}</button><button type="button" class="outline" role="menuitem" id="operatorMarkAllRead">${esc(t('markAllRead'))}</button></div></details><button type="button" class="outline operator-filter-toggle" id="operatorFiltersToggle" aria-expanded="false" aria-controls="operatorAdvanced" aria-label="${esc(t('filters'))}" title="${esc(t('filters'))}"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6.5 7.5V19l-3 1v-7.5z"/></svg></button><div class="operator-advanced" id="operatorAdvanced" role="group" aria-label="${esc(t('filters'))}" data-open="false"><label><span data-i18n="channel">${t('channel')}</span><select id="operatorChannel"></select></label><label><span data-i18n="agent">${t('agent')}</span><select id="operatorAgent"></select></label><label><span data-i18n="status">${t('status')}</span><select id="operatorState"></select></label><label><span id="operatorFilterScopeLabel">${esc(filterCopy('scope'))}</span><select id="operatorLifecycle"></select></label><p id="operatorFilterSaveStatus" role="status" aria-live="polite"></p></div></div><section id="operatorBulkPreview" class="operator-bulk-preview" hidden></section><p id="operatorResultsCount" class="operator-results-count" aria-live="polite"></p><p id="operatorNotice" role="status" aria-live="polite"></p><p id="operatorBulkCompletionStatus" role="status" aria-live="polite" hidden></p><p id="operatorPullStatus" class="operator-pull-status" role="status" aria-live="polite" hidden></p><div id="operatorListScroll"><div id="operatorRows" role="listbox" aria-label="${esc(t('dialogs'))}"></div><button type="button" class="outline" id="operatorMore" hidden>${t('more')}</button></div></section><section class="operator-conversation-pane" id="operatorConversationPane" data-selected="false"><header id="operatorConversationHeader" class="operator-conversation-header"><div class="operator-conversation-empty">${t('chooseDialog')}</div></header><div id="operatorConversationLayout"><div id="operatorConversationContent" class="operator-conversation-content"><div class="operator-conversation-placeholder">${t('chooseDialog')}</div></div></div></section></div>`;
+    host.innerHTML=`<div class="operator-workspace" id="operatorWorkspace"><section class="operator-list-pane" aria-label="${esc(t('dialogs'))}"><div class="operator-filters"><label class="operator-search"><span class="operator-search-label" data-i18n="search">${t('search')}</span><input type="search" id="operatorSearch" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-i18n-placeholder="searchShort" placeholder="${esc(t('searchShort'))}" aria-label="${esc(t('search'))}"></label><details class="operator-tools-menu" id="operatorToolsMenu"><summary aria-label="${esc(toolsLabel())}" title="${esc(toolsLabel())}" aria-haspopup="menu" aria-controls="operatorToolsPopover" aria-expanded="false"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></summary><div id="operatorToolsPopover" role="menu" aria-label="${esc(toolsLabel())}"><button type="button" class="outline" role="menuitem" id="operatorSoundToggle" aria-pressed="true"></button><span id="operatorSoundStatus" role="status" aria-live="polite"></span><button type="button" class="outline" role="menuitem" id="operatorNotificationToggle" aria-pressed="false"></button><span id="operatorNotificationStatus" role="status" aria-live="polite"></span><button type="button" class="outline" role="menuitem" id="operatorFindDuplicates" hidden></button><button type="button" class="outline" role="menuitem" id="operatorBulkAssignment" hidden>${bulkText('preview')}</button><button type="button" class="outline" role="menuitem" id="operatorCompleteAll">${esc(completeAllCopy('title'))}</button><button type="button" class="outline" role="menuitem" id="operatorMarkAllRead">${esc(t('markAllRead'))}</button></div></details><button type="button" class="outline operator-filter-toggle" id="operatorFiltersToggle" aria-expanded="false" aria-controls="operatorAdvanced" aria-label="${esc(t('filters'))}" title="${esc(t('filters'))}"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16l-6.5 7.5V19l-3 1v-7.5z"/></svg></button><div class="operator-advanced" id="operatorAdvanced" role="group" aria-label="${esc(t('filters'))}" data-open="false"><label><span data-i18n="channel">${t('channel')}</span><select id="operatorChannel"></select></label><label><span data-i18n="agent">${t('agent')}</span><select id="operatorAgent"></select></label><label><span data-i18n="status">${t('status')}</span><select id="operatorState"></select></label><label><span id="operatorFilterScopeLabel">${esc(filterCopy('scope'))}</span><select id="operatorLifecycle"></select></label><p id="operatorFilterSaveStatus" role="status" aria-live="polite"></p></div></div><section id="operatorBulkPreview" class="operator-bulk-preview" hidden></section><p id="operatorResultsCount" class="operator-results-count" aria-live="polite"></p><p id="operatorNotice" role="status" aria-live="polite"></p><p id="operatorBulkCompletionStatus" role="status" aria-live="polite" hidden></p><p id="operatorPullStatus" class="operator-pull-status" role="status" aria-live="polite" hidden></p><div id="operatorListScroll"><div id="operatorRows" role="listbox" aria-label="${esc(t('dialogs'))}"></div><button type="button" class="outline" id="operatorMore" hidden>${t('more')}</button></div></section><section class="operator-conversation-pane" id="operatorConversationPane" data-selected="false"><header id="operatorConversationHeader" class="operator-conversation-header"><div class="operator-conversation-empty">${t('chooseDialog')}</div></header><div id="operatorConversationLayout"><div id="operatorConversationContent" class="operator-conversation-content"><div class="operator-conversation-placeholder">${t('chooseDialog')}</div></div></div></section></div>`;
     const style=document.createElement('style');style.textContent=`.operator-panel{background:var(--card);color:var(--ink)}.operator-copilot-header{display:none}.operator-filters{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;margin:0 0 7px}.operator-filters label{min-width:0;margin:0}.operator-advanced{grid-column:1/-1;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}.operator-tools-menu{position:relative;align-self:center}.operator-tools-menu summary{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--card);font-size:22px;line-height:1;cursor:pointer;list-style:none}.operator-tools-menu summary::-webkit-details-marker{display:none}.operator-tools-menu[open] summary{border-color:var(--brand)}.operator-tools-menu>button{position:absolute;z-index:5;right:0;top:calc(100% + 4px);width:max-content;max-width:min(260px,80vw);background:var(--card);color:var(--ink);box-shadow:0 8px 24px #0002}.operator-tools-menu>button[hidden]{display:none!important}.operator-tools-menu[open]{z-index:8}.operator-tools-menu[open]>button:not([hidden]){position:relative;inset:auto;display:block;width:100%;max-width:min(260px,80vw);text-align:left}.operator-tools-menu[open] #operatorSoundStatus:not(:empty){position:relative;max-width:min(260px,80vw);padding:4px 8px;background:var(--card);border:1px solid var(--line);border-radius:6px;box-shadow:0 8px 24px #0002}.operator-filters input,.operator-filters select{min-width:0;width:100%;color:var(--ink);background:var(--card)}.operator-row{display:grid;grid-template-columns:minmax(160px,1.4fr) minmax(120px,1fr) minmax(160px,1fr) auto;align-items:center;gap:16px;padding:17px 0;border-bottom:1px solid var(--line)}.operator-row small{display:block;color:var(--muted);overflow-wrap:anywhere}.operator-state{display:inline-flex;border-radius:20px;background:var(--paper);padding:4px 9px;font-size:12px;font-weight:650}.operator-state[data-state=automatic]{color:var(--app-success-ink,#11865b);background:color-mix(in srgb,var(--app-success-ink,#11865b) 10%,var(--card))}.operator-state[data-state=manual],.operator-state.operator-row-company{color:var(--brand);background:color-mix(in srgb,var(--brand) 11%,var(--card))}.operator-state[data-state=needs_assignment],.operator-state[data-state=attention],.operator-state[data-state=human],.operator-state[data-state=paused]{color:var(--app-warning-ink,#8a5a00);background:var(--app-warning-bg,#fff2d9)}.operator-state[data-state=no_agent]{color:var(--muted);background:var(--paper)}.operator-state[data-state=blocked],.operator-state[data-state=error]{color:var(--danger,#b42318);background:color-mix(in srgb,var(--danger,#b42318) 9%,var(--card))}.operator-chat-meta{display:flex;flex-wrap:wrap;gap:14px;padding:14px 0}.operator-chat-meta>div{min-width:100px;overflow-wrap:anywhere}.operator-chat-meta small{display:block;color:var(--muted)}.operator-chat-actions{display:flex;gap:8px;flex-wrap:wrap}.operator-chat-notice{color:var(--app-warning-ink,#8a5a00);background:var(--app-warning-bg,#fff2d9);border-radius:10px;padding:11px;margin:12px 0}.operator-chat-history{max-height:45vh;overflow:auto;overscroll-behavior:contain;padding:8px 0}.operator-message{max-width:88%;margin:10px 0;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:var(--paper);white-space:pre-wrap;overflow-wrap:anywhere}.operator-message[data-direction=outgoing]{margin-left:auto;background:color-mix(in srgb,var(--brand) 10%,var(--card))}.operator-message[data-direction=system]{max-width:100%;text-align:center;background:transparent;border-style:dashed}.operator-message small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.operator-composer{display:flex;flex-direction:column;gap:8px;margin:12px 0;padding:9px;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);min-width:0}.operator-composer textarea{display:block;width:100%;box-sizing:border-box;min-width:0;resize:none;overflow-y:hidden;min-height:54px;max-height:180px;background:transparent;color:var(--ink);padding:7px;border:0;outline:none}.operator-composer-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.operator-composer-actions button{min-height:36px;padding:7px 11px}.operator-composer-actions #sendChat{margin-left:auto}.operator-chat-actions button:disabled{opacity:.55;cursor:not-allowed}.operator-error{color:var(--danger,#b42318);overflow-wrap:anywhere}.operator-results-count{margin:2px 2px 6px;color:var(--muted);font-size:11px}.operator-pull-status{margin:2px;color:var(--muted);font-size:12px}.operator-pull-status[hidden]{display:none!important}.operator-results-count:empty{display:none}#dialogsAttentionCount,#supportUnresolvedCount{margin-left:auto;font-size:11px;flex:none}@media(max-width:850px){.operator-filters{grid-template-columns:1fr 1fr}.operator-search{grid-column:1/-1}.operator-row{grid-template-columns:1fr auto}.operator-row>div:nth-child(2){grid-column:1}.operator-row>button{grid-column:2;grid-row:1/4}.operator-chat-history{max-height:42dvh}}@media(max-width:440px){.operator-filters{grid-template-columns:1fr}.operator-search{grid-column:auto}.operator-composer{flex-direction:column;align-items:stretch}.operator-chat-actions button{flex:1;white-space:normal}.operator-row{gap:10px}.operator-message{max-width:96%}}`;
     style.textContent+=`.operator-filter-toggle{display:none}.operator-display-name{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:12px 0}.operator-display-name label{flex:1;min-width:190px}.operator-display-name input{width:100%;box-sizing:border-box;color:var(--ink);background:var(--card)}@media(max-width:600px){.operator-filter-toggle{display:block}.operator-advanced{display:none}.operator-advanced[data-open=true]{display:grid;grid-template-columns:1fr;gap:8px;grid-column:1/-1}}`;
     style.textContent+=`@media(prefers-reduced-motion:no-preference){.operator-message-enter{animation:operator-message-appear 150ms ease-out both}}@keyframes operator-message-appear{from{opacity:.55;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}@media(prefers-reduced-motion:reduce){.operator-message-enter{animation:none!important}}`;
@@ -799,6 +934,11 @@
     $('operatorMore').onclick=()=>refresh(true);
     const rowsNode=$('operatorRows');rowsNode.addEventListener('touchstart',event=>{pullStartY=operatorListScroller().scrollTop===0?(event.touches[0]?.clientY??null):null;},{passive:true});rowsNode.addEventListener('touchend',async event=>{const startY=pullStartY,endY=event.changedTouches[0]?.clientY??0;pullStartY=null;if(startY===null||endY-startY<72||operatorListScroller().scrollTop!==0||pullRefreshBusy||autoRefreshBusy)return;pullRefreshBusy=true;rowsNode.dataset.refreshing='true';rowsNode.setAttribute('aria-busy','true');const status=$('operatorPullStatus');if(status){status.textContent=pullRefreshLabel();status.hidden=false;}try{await refresh();}finally{pullRefreshBusy=false;delete rowsNode.dataset.refreshing;rowsNode.removeAttribute('aria-busy');if(status)status.hidden=true;}},{passive:true});
     bindToolsPopover($('operatorToolsMenu'));
+    $('operatorFindDuplicates').onclick=openDuplicateSearch;
+    syncDuplicateButton();
+    const dupeStyle=document.createElement('style');
+    dupeStyle.textContent=`#operatorDuplicateSearch{width:min(470px,calc(100% - 24px));max-height:85dvh;overflow:auto;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--card);color:var(--ink)}#operatorDuplicateSearch::backdrop{background:#071d1677}#operatorDuplicateSearch header,#operatorDuplicateSearch form,.operator-dupe-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}#operatorDuplicateSearch header{justify-content:space-between}#operatorDuplicateSearch h2{font-size:18px;margin:0}#operatorDuplicateSearch form{margin:12px 0 8px}#operatorDuplicateSearch [data-dupe-phone-form] input{flex:1;min-width:135px}#operatorDuplicateSearch .operator-dupe-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}#operatorDuplicateSearch .operator-dupe-pair>*{min-width:0;overflow-wrap:anywhere}#operatorDuplicateSearch .operator-dupe-row input[type=checkbox]{width:auto}#operatorDuplicateSearch [data-dupe-results]{display:grid;gap:7px}#operatorDuplicateSearch .operator-dupe-row{display:grid;gap:4px;padding:6px;border:1px solid var(--line);border-radius:8px}#operatorDuplicateSearch .operator-dupe-open{display:grid;gap:2px;text-align:start;overflow-wrap:anywhere}#operatorDuplicateSearch .operator-dupe-open span{color:var(--muted);font-size:12px}#operatorDuplicateSearch label select{display:block;max-width:100%}#operatorDuplicateSearch [hidden],#operatorFindDuplicates[hidden]{display:none!important}`;
+    document.head.append(dupeStyle);
     $('operatorBulkAssignment').onclick=()=>openBulkAssignmentPreview();
     $('operatorCompleteAll').onclick=completeAllDialogs;
     $('operatorMarkAllRead').onclick=async()=>{const button=$('operatorMarkAllRead');if(markAllReadBusy||!hasRight('dialogs'))return;if(!window.confirm(t('markAllReadConfirm')))return;markAllReadBusy=true;button.disabled=true;$('operatorToolsMenu').open=false;try{const result=await api('dialogs/read-all','POST',{});listFlight=null;lastListAt=0;const refreshed=await refresh(false,false,{suppressRead:true});const remaining=Number(refreshed?.unread_count);notice(Number.isFinite(remaining)?t('markAllReadDone').replace('{count}',String(result.updated_dialogs||0)).replace('{remaining}',String(remaining)):t('markAllReadProcessed').replace('{count}',String(result.updated_dialogs||0)));}catch(error){notice(error.message||t('error'));}finally{markAllReadBusy=false;if(button.isConnected)button.disabled=false;};};
@@ -1001,7 +1141,7 @@
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
-  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
+  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
   const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
   const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
   const phoneUnavailable=()=>dialogPhoneLabel(currentDialog);
@@ -1130,6 +1270,7 @@
       const phone=dialogPhoneLabel(currentDialog);
       for(const label of [head.querySelector('[data-header-phone]'),$('operatorClientCard')?.querySelector('[data-panel-phone]')])if(label)label.textContent=phone;
       const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
+      const manualForm=$('operatorManualDisplayPhone');if(manualForm)manualForm.hidden=!canEditManualPhone(currentDialog);
       const panelName=$('operatorClientCard')?.querySelector('[data-panel-name]');if(panelName)panelName.textContent=dialogTitle(currentDialog);
       updateRowContact(route);
     });
@@ -1752,6 +1893,11 @@
     previous.customer_name=route.customer_name;
     currentDialog.customer_name=route.customer_name;
   }
+  const pendingManualPhones=new Set();
+  const canEditManualPhone=route=>canUseDuplicateSearch()&&route?.provider==='connect'&&!isDialogGroup(route)
+    &&!completedDuplicateRoute(route)&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.case_attachment
+    &&(!route.lifecycle_enabled||route.lifecycle?.state==='waiting'||route.lifecycle?.state==='accepted'&&String(route.lifecycle.operator_id)===String(member?.telegram_id))
+    &&!route.contact_identity_conflict&&!route.identity_conflict&&!verifiedDialogPhone(route)&&!contactDetails(route)?.phone;
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
@@ -1787,7 +1933,8 @@
     const block=(label,content,expanded=true)=>`<details${expanded?' open':''} class="operator-client-panel-block"><summary>${esc(label)}</summary>${content}</details>`;
     const roster=group&&!route.archive_read_only?block(clientCardText('group'),'<section class="operator-client-panel-row" data-group-participants aria-live="polite"></section>',false):'';
     const display=editable?'' : `<div class="operator-client-panel-row"><small>${esc(t('displayName'))}</small><span data-panel-name data-user-content>${esc(name)}</span></div>`;
-    const phoneRow=group?'':`<div class="operator-client-panel-row"><small>${esc(clientCardText('phone'))}</small><span data-panel-phone data-user-content>${esc(phone||phoneUnavailable())}</span></div>`;
+    const phoneRow=group?'':`<div class="operator-client-panel-row"><small>${esc(clientCardText('phone'))}</small><span data-panel-phone data-user-content>${esc(phone||phoneUnavailable())}</span></div>
+      ${canEditManualPhone(route)?`<form id="operatorManualDisplayPhone" class="operator-client-panel-row"><label for="operatorManualDisplayPhoneInput">${esc(duplicateCopy('manual'))}</label><input id="operatorManualDisplayPhoneInput" type="tel" maxlength="32" autocomplete="off" value="${esc(verifiedDialogPhone({phone:route.manual_display_phone}))}" required><button type="submit" class="outline">${esc(duplicateCopy('save'))}</button><p data-manual-phone-status role="status"></p></form>`:''}`;
     const nameForm=editable?`<form id="operatorConversationName" class="operator-client-panel-row"><label for="operatorConversationNameInput">${esc(t('displayName'))}<span class="operator-display-name-field"><input id="operatorConversationNameInput" maxlength="180" autocomplete="off"><span data-client-name-saved role="status" aria-label="${esc(clientCardText('saved'))}" title="${esc(clientCardText('saved'))}" hidden>✓</span></span></label><p data-client-card-error role="alert"></p></form>`:'';
     const handoff=route.handoff_active?[route.handoff_source==='ai_handoff'?'AI':'',route.handoff_assignee_name||''].filter(Boolean).join(' → '):'';
     const reminder=canScheduleReminder?
@@ -2048,6 +2195,38 @@
         const field=activeCard()?.querySelector('#operatorConversationNameInput');
         if(field)field.readOnly=false;
       }
+    }
+    const phoneForm=card.querySelector('#operatorManualDisplayPhone');
+    if(phoneForm){
+      const phoneInput=phoneForm.querySelector('input'),phoneButton=phoneForm.querySelector('button');
+      phoneInput.disabled=phoneButton.disabled=pendingManualPhones.has(scope);
+      phoneForm.onsubmit=async event=>{
+        event.preventDefault();
+        if(!current()||!canEditManualPhone(currentDialog)||pendingManualPhones.has(scope))return;
+        const phone=verifiedDialogPhone({phone:phoneInput.value});
+        const status=node=>node?.querySelector('[data-manual-phone-status]');
+        if(!phone){status(card).textContent=duplicateCopy('noPhone');return;}
+        const version=epoch;
+        pendingManualPhones.add(scope);phoneInput.disabled=phoneButton.disabled=true;status(card).textContent='';
+        try{
+          const result=await api('dialogs/contact-display-phone','POST',{...duplicateRoute(route),phone});
+          const stored=verifiedDialogPhone({phone:result?.display_phone});
+          if(!stored)throw new Error('no display phone');
+          if(version!==epoch||owner!==identity(member)||!sameDialog(currentDialog,route)||!canUseDuplicateSearch())return;
+          currentDialog.manual_display_phone=stored;
+          if(sameDialog(currentPage?.dialog,route))currentPage.dialog.manual_display_phone=stored;
+          for(const row of rows)if(sameDialog(row,route))row.manual_display_phone=stored;
+          const active=activeCard(),field=active?.querySelector('#operatorManualDisplayPhoneInput');
+          if(field)field.value=stored;
+          if(status(active))status(active).textContent=clientCardText('saved');
+          for(const label of [active?.querySelector('[data-panel-phone]'),head.querySelector('[data-header-phone]')])if(label)label.textContent=dialogPhoneLabel(currentDialog);
+          renderRows();
+        }catch{if(version===epoch&&status(activeCard()))status(activeCard()).textContent=duplicateCopy('failed');}
+        finally{
+          pendingManualPhones.delete(scope);
+          activeCard()?.querySelectorAll('#operatorManualDisplayPhone input,#operatorManualDisplayPhone button').forEach(field=>field.disabled=false);
+        }
+      };
     }
     if(form){
       form.onsubmit=event=>{event.preventDefault();void persistName();};
@@ -2679,17 +2858,18 @@
     const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||next?.department_id!==member?.department_id||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
+    if(changed)closeDuplicateSearch(true);syncDuplicateButton();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
 if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();clearContactLookups();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
-  document.addEventListener('tenant-auth-pending',stopRowContacts);
+  document.addEventListener('tenant-auth-pending',()=>{stopRowContacts();closeDuplicateSearch(true);});
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{closeDialogDiagnostics(false);stopRowContacts();if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{closeDuplicateSearch(true);closeDialogDiagnostics(false);stopRowContacts();if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute)closeDialog(false,true);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{
     // A list issued before the fresh profile may still be in flight.
     listFlight=null;
@@ -2706,7 +2886,7 @@ if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPref
   window.addEventListener('focus',()=>{updateBrowserNoticeButton();if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute)closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
-  document.addEventListener('tenant-language',()=>{updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
+  document.addEventListener('tenant-language',()=>{syncDuplicateButton();closeDuplicateSearch(true);updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
   document.addEventListener('keydown',event=>{if(event.key==='Tab'&&$('operatorCopilot')&&!$('operatorCopilot').hidden&&window.matchMedia?.('(max-width: 900px)').matches){const nodes=[...$('operatorCopilot').querySelectorAll('button,input,select,textarea,summary,a[href]')].filter(node=>!node.disabled&&node.getClientRects().length);if(nodes.length){const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}}if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending)closeDialog();});
   let caseLinkKey='';
   const caseLinkText=key=>({opening:{ru:'Открываем исходный диалог кейса…',az:'Halın ilkin dialoqu açılır…',en:'Opening the case conversation…'},invalid:{ru:'Ссылка на кейс неполная или некорректна.',az:'Hal keçidi natamam və ya yanlışdır.',en:'The case link is incomplete or invalid.'},unavailable:{ru:'Исходное сообщение кейса недоступно или у вас нет доступа к нему.',az:'Halın ilkin mesajı əlçatan deyil və ya ona girişiniz yoxdur.',en:'The original case message is unavailable or you do not have access to it.'}}[key]?.[i18n.language]||'The case conversation is unavailable.');
