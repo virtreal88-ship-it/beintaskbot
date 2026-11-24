@@ -1,17 +1,72 @@
 /* Compact controls delegate to existing AI/send/voice handlers; no new sends. */
 (()=>{
-  const labels={ru:{ai:'Действия AI',voice:'Записать голосовое',unavailable:'Голосовая отправка недоступна',send:'Отправить',check:'Проверить отправку'},az:{ai:'AI əməliyyatları',voice:'Səsli mesaj yaz',unavailable:'Səsli göndərmə əlçatan deyil',send:'Göndər',check:'Göndərməni yoxla'},en:{ai:'AI actions',voice:'Record voice message',unavailable:'Voice sending unavailable',send:'Send',check:'Check send'}};
+  const labels={ru:{ai:'Действия AI',voice:'Записать голосовое',unavailable:'Голосовая отправка недоступна',send:'Отправить',check:'Проверить отправку',emoji:'Эмодзи'},az:{ai:'AI əməliyyatları',voice:'Səsli mesaj yaz',unavailable:'Səsli göndərmə əlçatan deyil',send:'Göndər',check:'Göndərməni yoxla',emoji:'Emojilər'},en:{ai:'AI actions',voice:'Record voice message',unavailable:'Voice sending unavailable',send:'Send',check:'Check send',emoji:'Emoji'}};
   const copy=key=>(labels[window.tenantI18n?.language]||labels.az)[key];
   const icons={
     send:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m3.6 3.8 17.6 7.3a1 1 0 0 1 0 1.8L3.6 20.2a.9.9 0 0 1-1.2-1l1.3-5.4 9-1.8-9-1.8-1.3-5.4a.9.9 0 0 1 1.2-1Z"/></svg>',
+    emoji:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 14a4.5 4.5 0 0 0 8 0M9 9h.01M15 9h.01" stroke-width="2.2"/></svg>',
     voice:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21m-2.5 0h5"/></svg>',
   };
+  const emojiGroups=[
+    ['😀','Лица','Üzlər','Smileys','😀 😃 😄 😁 😆 😅 😂 🤣 🙂 🙃 😉 😊 😇 🥰 😍 🤩 😘 😗 ☺️ 😚 😙 🥲 😋 😛 😜 🤪 😝 🤑 🤗 🤭 🫢 🫣 🤫 🤔 🫡 🤐 🤨 😐 😑 😶 😏 😒 🙄 😬 😮‍💨 🤥 😌 😔 😪 🤤 😴 😷 🤒 🤕 🤢 🤮 🤧 🥵 🥶 🥴 😵 🤯 🤠 🥳 😎 🤓 🧐 😕 🫤 😟 🙁 ☹️ 😮 😯 😲 😳 🥺 🥹 😦 😧 😨 😰 😥 😢 😭 😱 😖 😣 😞 😓 😩 😫 😤 😡 😠 🤬 💀 👻 🤖'],
+    ['👋','Жесты','Jestlər','Gestures','👋 🤚 🖐️ ✋ 🖖 🫱 🫲 👌 🤌 🤏 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 🖕 👇 ☝️ 🫵 👍 👎 ✊ 👊 🤛 🤜 👏 🙌 🫶 👐 🤲 🤝 🙏 💪'],
+    ['🌿','Природа','Təbiət','Nature','🌿 🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🐔 🐦 🐣 🐺 🦋 🐝 🐢 🐬 🐟 🦜 🌵 🌴 🌳 🌱 🍀 🍁 🌷 🌹 🌻 🌸 💐 ⭐ 🌙 ☀️ 🌈 ☁️ ❄️ 🔥 💧'],
+    ['🍕','Еда и напитки','Yemək və içkilər','Food and drink','🍎 🍐 🍊 🍋 🍌 🍉 🍇 🍓 🍒 🍑 🥭 🍍 🥑 🍅 🥕 🌽 🥐 🍞 🧀 🍳 🥞 🥗 🍔 🍟 🍕 🌮 🍝 🍜 🍱 🍣 🍦 🍰 🎂 🍫 🍿 🍪 🥤 ☕ 🍵 🧃 🍷 🍻 🥂'],
+    ['⚽','Спорт и отдых','İdman və istirahət','Activities','⚽ 🏀 🏈 ⚾ 🎾 🏐 🏓 🏸 🥊 🏋️ 🏃 🚴 🧘 🏊 🏆 🥇 🎮 🎲 🎯 🎳 🎸 🎹 🎤 🎧 🎨 🎬 🎭 🎪 🎉 🎊 🎁 🎈'],
+    ['🚗','Поездки и предметы','Səyahət və əşyalar','Travel and objects','🚗 🚕 🚌 🚎 🚓 🚑 🚒 🚚 🚲 🛴 🚆 🚇 🚀 ✈️ 🚁 🚢 🏖️ 🗻 🏠 🏢 🗺️ 🧳 ⏰ ⌚ 📱 💻 📷 💡 🔑 🔒 📚 📝 📎 💸 💳 🔔 📦'],
+    ['❤️','Символы','Simvollar','Symbols','❤️ 🩷 🧡 💛 💚 💙 🩵 💜 🤎 🖤 🤍 💔 ❤️‍🔥 ❤️‍🩹 💖 💗 💓 💞 💕 💟 💯 ✅ ❌ ⚠️ ❗ ❓ ➕ ➖ ♻️ 🔁 🔝 🆗 🆕 ☮️ ✨ 💬 💤'],
+  ];
+  function createEmojiPicker(input,onOpen){
+    const trigger=document.createElement('button');
+    trigger.type='button';trigger.id='operatorComposerEmoji';trigger.className='outline operator-icon-action';
+    trigger.innerHTML=icons.emoji;trigger.title=copy('emoji');trigger.setAttribute('aria-label',copy('emoji'));
+    trigger.setAttribute('aria-expanded','false');trigger.setAttribute('aria-controls','operatorComposerEmojiPanel');
+    const panel=document.createElement('div');panel.id='operatorComposerEmojiPanel';panel.hidden=true;
+    panel.className='operator-emoji-panel';panel.setAttribute('role','group');panel.setAttribute('aria-label',copy('emoji'));
+    const grid=document.createElement('div');grid.className='operator-emoji-grid';
+    const categories=document.createElement('div');categories.className='operator-emoji-categories';
+    panel.append(grid,categories);
+    const close=focus=>{
+      panel.hidden=true;trigger.setAttribute('aria-expanded','false');
+      if(focus)trigger.focus({preventScroll:true});
+    };
+    const tabs=emojiGroups.map(([symbol,ru,az,en],index)=>{
+      const tab=document.createElement('button');tab.type='button';tab.textContent=symbol;
+      tab.title=({ru,az,en})[window.tenantI18n?.language]||az;
+      tab.setAttribute('aria-label',tab.title);tab.onclick=()=>showCategory(index);
+      categories.append(tab);
+      return tab;
+    });
+    function showCategory(index){
+      for(const [position,tab] of tabs.entries())tab.setAttribute('aria-pressed',String(position===index));
+      grid.replaceChildren(...emojiGroups[index][4].split(' ').map(value=>{
+        const button=document.createElement('button');button.type='button';button.textContent=value;
+        button.onclick=()=>{
+          if(input.disabled||input.readOnly||!input.isConnected)return close(false);
+          const start=input.selectionStart,end=input.selectionEnd;
+          if(input.maxLength>=0&&input.value.length-end+start+value.length>input.maxLength)return;
+          input.setRangeText(value,start,end,'end');
+          input.dispatchEvent(new Event('input',{bubbles:true}));
+          close(false);input.focus({preventScroll:true});
+        };
+        return button;
+      }));
+      grid.scrollTop=0;
+    }
+    showCategory(0);
+    trigger.onclick=event=>{
+      if(!panel.hidden)return close(false);
+      onOpen();panel.hidden=false;trigger.setAttribute('aria-expanded','true');
+      if(event.detail===0)grid.firstElementChild?.focus({preventScroll:true});
+    };
+    return {trigger,panel,close};
+  }
   let active=null;
   // The existing send control owns recovery. Preserve its visible check action;
   // never inspect, mutate, or reimplement its durable receipt state.
   const hasPending=send=>send.textContent.trim()===(window.tenantI18n?.t?.('checkSend')||'Vəziyyəti yoxla');
   const close=focus=>{if(!active)return;active.menu.hidden=true;active.ai.setAttribute('aria-expanded','false');if(focus)active.ai.focus();};
-  function clear(){close(false);active?.observer.disconnect();active=null;}
+  function clear(){close(false);active?.emoji.close(false);active?.observer.disconnect();active=null;}
   function attach(){
     const actions=document.querySelector('.operator-composer-actions'),input=document.getElementById('chatText'),send=document.getElementById('sendChat');
     if(!actions||!input||!send){clear();return;}
@@ -26,6 +81,9 @@
     }
     actions.prepend(ai);actions.append(menu);
     const primary=document.createElement('button');primary.type='button';primary.id='operatorComposerPrimary';primary.className='primary';actions.append(primary);
+    const emoji=createEmojiPicker(input,()=>close(false));
+    primary.before(emoji.trigger);
+    actions.append(emoji.panel);
     function setPrimary(action,label,disabled){
       const icon=action==='voice'?'voice':'send';
       if(primary.dataset.icon!==icon){primary.dataset.icon=icon;primary.innerHTML=icons[icon];}
@@ -35,6 +93,9 @@
     send.dataset.composerDelegate='true';
     const refresh=()=>{
       if(!active||active.actions!==actions||!actions.isConnected)return;
+      const emojiDisabled=input.disabled||input.readOnly;
+      if(emoji.trigger.disabled!==emojiDisabled)emoji.trigger.disabled=emojiDisabled;
+      if(emojiDisabled&&!emoji.panel.hidden)emoji.close(false);
       const mic=actions.querySelector('.operator-voice-mic');if(mic&&mic.dataset.composerDelegate!=='true')mic.dataset.composerDelegate='true';
       const media=!hasPending(send)&&window.tenantCustomerMedia?.action();
       if(media){setPrimary('media',media.label,media.disabled);return;}
@@ -51,9 +112,9 @@
       if(panel){const open=!panel.hidden;if(panelWasOpen&&!open)ai.focus({preventScroll:true});panelWasOpen=open;}
       if(records.some(r=>r.target===send||r.target===input||menu.contains(r.target)&&r.attributeName==='disabled'||r.target.classList?.contains('operator-voice-mic')||r.type==='childList'&&r.target===actions))refresh();
     });
-    active={actions,input,send,primary,menu,ai,observer,refresh};
+    active={actions,input,send,primary,menu,ai,emoji,observer,refresh};
     observer.observe(actions,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','hidden','class']});
-    observer.observe(input,{attributes:true,attributeFilter:['disabled']});
+    observer.observe(input,{attributes:true,attributeFilter:['disabled','readonly']});
     if(panel)observer.observe(panel,{attributes:true,attributeFilter:['hidden']});
     input.addEventListener('input',refresh);
     input.setAttribute('enterkeyhint','send');
@@ -65,7 +126,7 @@
       if(primary.dataset.action==='send'&&!primary.disabled)primary.click();
     });
     primary.onclick=()=>{refresh();if(primary.disabled)return;if(primary.dataset.action==='media'){window.tenantCustomerMedia?.action()?.run();return;}const target=primary.dataset.action==='send'?send:actions.querySelector('.operator-voice-mic');target?.click();refresh();};
-    ai.onclick=()=>{if(ai.disabled)return;const opening=menu.hidden;menu.hidden=!opening;ai.setAttribute('aria-expanded',String(opening));if(opening)menu.querySelector('button:not(:disabled)')?.focus();};
+    ai.onclick=()=>{if(ai.disabled)return;emoji.close(false);const opening=menu.hidden;menu.hidden=!opening;ai.setAttribute('aria-expanded',String(opening));if(opening)menu.querySelector('button:not(:disabled)')?.focus();};
     refresh();
   }
   const style=document.createElement('style');style.textContent=`
@@ -85,12 +146,35 @@
 .operator-composer-actions #operatorComposerPrimary[data-action=voice]{background:transparent;color:var(--ink,#132621)}
 .operator-composer-actions #operatorComposerPrimary[data-action=voice]:is(:hover,:focus-visible){background:var(--paper)}
 .operator-composer-actions #operatorComposerPrimary svg{width:22px;height:22px;pointer-events:none}
-.operator-composer-actions #operatorComposerPrimary:focus-visible{outline:2px solid var(--brand);outline-offset:2px}.operator-composer-actions #operatorAIActionMenu{min-width:44px;min-height:44px;font-weight:700}.operator-composer-ai-menu{position:absolute;z-index:25;left:8px;bottom:calc(100% + 6px);max-width:calc(100% - 16px);padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}.operator-composer-ai-menu[hidden]{display:none!important}.operator-composer-actions .operator-composer-ai-menu button.operator-icon-action{display:flex;width:auto;max-width:100%;min-height:44px;height:auto;text-align:left;gap:9px;padding:9px 12px;white-space:normal}.operator-composer-ai-menu svg,.operator-composer-ai-menu .operator-voice-wave{flex:none}.operator-ai-action-caption{font-size:14px}.operator-composer-actions #operatorComposerPrimary:disabled{opacity:.5}`;document.head.append(style);
+.operator-composer-actions #operatorComposerPrimary:focus-visible{outline:2px solid var(--brand);outline-offset:2px}.operator-composer-actions #operatorAIActionMenu{min-width:44px;min-height:44px;font-weight:700}.operator-composer-ai-menu{position:absolute;z-index:25;left:8px;bottom:calc(100% + 6px);max-width:calc(100% - 16px);padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}.operator-composer-ai-menu[hidden]{display:none!important}.operator-composer-actions .operator-composer-ai-menu button.operator-icon-action{display:flex;width:auto;max-width:100%;min-height:44px;height:auto;text-align:left;gap:9px;padding:9px 12px;white-space:normal}.operator-composer-ai-menu svg,.operator-composer-ai-menu .operator-voice-wave{flex:none}.operator-ai-action-caption{font-size:14px}.operator-composer-actions #operatorComposerPrimary:disabled{opacity:.5}
+.operator-composer-actions #operatorComposerEmoji{margin-left:auto}
+.operator-composer-actions #operatorComposerEmoji + #operatorComposerPrimary{margin-left:0}
+.operator-emoji-panel{position:absolute;right:6px;bottom:calc(100% + 6px);z-index:25;display:grid;width:min(410px,calc(100% - 12px));box-sizing:border-box;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);box-shadow:0 8px 24px #0003}
+.operator-emoji-panel[hidden]{display:none!important}
+.operator-emoji-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(30px,1fr));align-content:start;gap:2px;max-height:min(248px,34dvh);overflow-y:auto;overscroll-behavior:contain;padding:7px}
+.operator-emoji-categories{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:4px;border-top:1px solid var(--line)}
+.operator-composer-actions .operator-emoji-panel button{display:grid;place-items:center;margin:0;padding:0;min-width:0;min-height:34px;border-radius:6px;line-height:1}
+.operator-emoji-grid button{font-size:21px!important}
+.operator-emoji-categories button{font-size:16px!important}
+.operator-emoji-categories button[aria-pressed=true]{background:var(--paper);box-shadow:inset 0 -2px var(--brand)!important}
+.operator-emoji-panel button:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}`;document.head.append(style);
   document.addEventListener('tenant-chat-attachments-ready',attach);
   document.addEventListener('tenant-composer-media',()=>active?.refresh());
   document.addEventListener('tenant-chat-close',clear);
   document.addEventListener('tenant-auth-invalid',clear);
-  document.addEventListener('pointerdown',event=>{if(active&&!active.menu.contains(event.target)&&!active.ai.contains(event.target))close(false);});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&active&&!active.menu.hidden){event.preventDefault();event.stopImmediatePropagation();close(true);}},true);
+  document.addEventListener('pointerdown',event=>{
+    if(!active)return;
+    if(!active.menu.contains(event.target)&&!active.ai.contains(event.target))close(false);
+    const {emoji}=active;
+    if(!emoji.panel.contains(event.target)&&!emoji.trigger.contains(event.target))emoji.close(false);
+  });
+  document.addEventListener('keydown',event=>{
+    if(event.key!=='Escape'||!active)return;
+    if(!active.emoji.panel.hidden){
+      event.preventDefault();event.stopImmediatePropagation();active.emoji.close(true);
+    }else if(!active.menu.hidden){
+      event.preventDefault();event.stopImmediatePropagation();close(true);
+    }
+  },true);
   attach();
 })();
