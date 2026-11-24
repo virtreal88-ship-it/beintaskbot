@@ -98,6 +98,49 @@ def test_queue_activation_is_lazy_idempotent_and_reversible_with_large_histories
     db.commit()
 
 
+def test_duplicate_search_omits_effective_completed_pairs_and_restores_undone(merge_case,monkeypatch):
+    import tenant_dialog_duplicates as discovery
+    database,channel=merge_case
+    monkeypatch.setattr(discovery,'_connect',lambda:database)
+    monkeypatch.setenv('DIALOG_HISTORY_MERGE_LIFECYCLE_ENABLED','1')
+    phone='+'+PN.split('@')[0]
+    with database as conn:
+        conn.execute("UPDATE saas_connect_conversations SET contact_name='Fixture Pair', phone=%s "
+                     'WHERE tenant_id=%s AND connect_channel_id=%s AND lead_id IN (41,50)',(phone,A,channel))
+
+    def matches(mode):
+        return discovery.discover(PROFILE,{'mode':mode})['dialogs']
+
+    job=jobs.action(PROFILE,command(channel))
+    assert job['state']=='queued'
+    assert {row['lead_id'] for row in matches('phone')}=={41,50}
+    async def fetch(_):
+        return {'phone':phone}
+    asyncio.run(jobs.tick(fetch))
+    asyncio.run(jobs.tick(fetch))
+    assert jobs.action(PROFILE,{'operation':'status','job_id':job['id']})['state']=='completed'
+    for mode in ('phone','name','both'):
+        assert matches(mode)==[]
+
+    with database as conn:
+        conn.execute("INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,lead_id,conversation_id,"
+                     "conversation_kind,contact_name,phone) VALUES(%s,%s,51,'995551234567@lid','contact','Fixture Pair',%s)",
+                     (A,channel,phone))
+    for mode in ('phone','name','both'):
+        rows=matches(mode)
+        assert {row['lead_id'] for row in rows}=={41,51}
+        assert {row['group_size'] for row in rows}=={2}
+
+    # When only the alternate matches another contact by name, do not hide
+    # the independent duplicate or label the primary with the alternate name.
+    with database as conn:
+        conn.execute("UPDATE saas_connect_conversations SET contact_name='Different name' "
+                     'WHERE tenant_id=%s AND connect_channel_id=%s AND lead_id=41',(A,channel))
+    assert {row['lead_id'] for row in matches('name')}=={50,51}
+    assert jobs.action(PROFILE,{'operation':'undo','job_id':job['id']})['state']=='undone'
+    assert {row['lead_id'] for row in matches('phone')}=={41,50,51}
+
+
 @pytest.mark.parametrize('change',['cancel','wrong_phone','gateway','lifecycle','role'])
 def test_no_publication_on_cancel_staleness_or_unproven(merge_case,change):
     db,channel=merge_case
