@@ -106,7 +106,7 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
             AND m.telegram_id::text=a.payload->>'operator_id'
           WHERE a.tenant_id=%s::uuid AND a.entity_type='dialog_episode'
-            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply')
+            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply','dialog_close')
             AND a.payload->>'channel_id'=%s AND a.payload->>'conversation_id'=%s
             AND (a.action='dialog_transfer' OR a.actor_telegram_id::text=a.payload->>'operator_id')
             AND (%s::timestamptz IS NULL OR a.created_at>=%s::timestamptz)
@@ -115,7 +115,7 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
             (tenant,channel,conversation,lower,lower,upper,upper,_PAGE_LIMIT+1))
         rows=cur.fetchall()
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
-    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_no_reply":"no_reply"}
+    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_no_reply":"no_reply","dialog_close":"close"}
     shown=rows[:_PAGE_LIMIT]
     result={"operator_events": [{"id":row["id"],"kind":kinds[row["action"]],"at":row["created_at"].isoformat(),
                                 "employee_name":str(row["display_name"] or "").strip()[:120]}

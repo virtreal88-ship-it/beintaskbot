@@ -856,7 +856,10 @@ def _mutate_once(profile, payload):
               (audit_id,tenant,actor,audit_action,str(audit_episode),json.dumps(audit_payload)))
             if action=='dismiss':
                 result['lifecycle']['no_reply_needed']=True
-                result['operator_event']={'id':audit_id,'kind':'no_reply','at':cur.fetchone()['created_at'].isoformat()}
+            if action in ('dismiss','close'):
+                result['operator_event']={
+                    'id':audit_id,'kind':'no_reply' if action=='dismiss' else 'close',
+                    'at':cur.fetchone()['created_at'].isoformat()}
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
         conn.commit()
