@@ -13,6 +13,46 @@ from test_tenant_support_inbox import A, B, CA, db
 from tenant_policy import TenantPolicy
 
 
+@pytest.mark.parametrize('owner_status', [None, 'away'])
+def test_incoming_replies_keep_owner_episode_on_routed_channel(episodes, monkeypatch, owner_status):
+    db = episodes
+    monkeypatch.setenv(presence.STATUS_ENABLED_ENV, 'true')
+    monkeypatch.setenv(presence.ROUTING_SOURCES_ENV, CA)
+    group = '120363000000000001@g.us'
+    with db.cursor() as cur:
+        presence.provision_status_schema(cur)
+    db.execute("""INSERT INTO saas_connect_conversations
+        (tenant_id,connect_channel_id,conversation_id,lead_id,conversation_kind)
+        VALUES (%s,%s,%s,89,'group')""", (A, CA, group))
+    if owner_status is None:
+        db.execute("DELETE FROM saas_dialog_employee_presence WHERE tenant_id=%s AND employee_id=11", (A,))
+    db.commit()
+    owner = {'tenant_id': A, 'telegram_id': 11}
+    if owner_status is not None:
+        presence.set_status(owner, {'status': owner_status})
+    accepted = lifecycle.mutate(owner, dict(payload(), conversation_id=group, lead_id=89))['lifecycle']
+
+    with db.cursor() as cur:
+        assert not presence.is_online(cur, A, 11, source_channel=CA)
+        for offset, raw in enumerate(('{"quotedExternalMessageId":"linked-phone-message"}', '{}'), start=1):
+            message_id = str(uuid.uuid4())
+            occurred_at = datetime.now(timezone.utc) + timedelta(seconds=offset)
+            cur.execute("""INSERT INTO saas_crm_messages
+                (id,tenant_id,kommo_lead_id,external_id,direction,channel,body,happened_at,raw)
+                VALUES (%s,%s,89,%s,'incoming',%s,'Customer reply',%s,%s::jsonb)""",
+                (message_id, A, message_id, 'connect:'+CA, occurred_at, raw))
+            lifecycle.note_inbound(cur, A, CA, group, message_id, occurred_at)
+            current = lifecycle._row(cur, A, CA, group)
+            assert current['state'] == 'accepted'
+            assert current['operator_id'] == 11 and str(current['id']) == accepted['id']
+            assert current['revision'] == accepted['revision'] + offset
+            assert str(current['last_inbound_id']) == message_id
+            lifecycle.require_access(cur, A, 11, 'connect', CA, group, 'update', owner=True)
+    db.commit()
+    assert db.execute("""SELECT closed_at FROM saas_dialog_episodes WHERE tenant_id=%s AND id=%s""",
+                      (A, accepted['id'])) == [{'closed_at': None}]
+
+
 def test_four_state_routing_keeps_an_open_dialogue_until_the_next_inbound(episodes, monkeypatch):
     db = episodes
     monkeypatch.setenv(presence.STATUS_ENABLED_ENV, 'true')

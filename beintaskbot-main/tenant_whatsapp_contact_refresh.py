@@ -40,26 +40,16 @@ def enabled_for(tenant, channel):
     return enabled_source() == (str(tenant), str(channel))
 
 
-def approved_conflict_leads(tenant, channel):
-    """An explicit presentation approval for two lead IDs on one source."""
-    value = os.environ.get('BEINTASKBOT_NATIVE_CONFLICT_DISPLAY', '')
-    try:
-        company, source, lid_lead, phone_lead = value.split(':')
-        if (str(uuid.UUID(company)), str(uuid.UUID(source))) != (str(tenant), str(channel)):
-            return None
-        lid_lead, phone_lead = int(lid_lead), int(phone_lead)
-        if lid_lead != phone_lead and all(0 < lead < 2**63 for lead in (lid_lead, phone_lead)):
-            return lid_lead, phone_lead
-    except ValueError:
-        return None
-
-
-def approved_conflict_evidence(cur, tenant, channel, lid, phone, leads):
-    """A routing conflict may contain one exact pair, or competing evidence."""
+def split_conflict_evidence(cur, tenant, channel, lid, phone):
+    """Recognize two separate direct routes with one exact provider pair."""
     pn = phone[1:] + '@s.whatsapp.net'
     legacy = phone[1:] + '@c.us'
     keys = [lid, pn, legacy]
-    cur.execute("""WITH observations AS (
+    cur.execute("""WITH phones AS (
+        SELECT conversation_id FROM saas_connect_conversations
+        WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
+          AND conversation_kind IS DISTINCT FROM 'group' AND conversation_id IN (%s,%s)
+      ), observations AS (
         SELECT evidence FROM saas_connect_identity_conflicts
         WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=ANY(%s)
         UNION ALL
@@ -78,13 +68,20 @@ def approved_conflict_evidence(cur, tenant, channel, lid, phone, leads):
       )
       SELECT EXISTS(SELECT 1 FROM facts WHERE same_routes AND exact_pair)
         AND NOT EXISTS(SELECT 1 FROM facts WHERE (same_routes AND (exact_pair OR no_pair)) IS NOT TRUE)
-        AND (SELECT count(*) FROM saas_connect_conversations
-             WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
-               AND conversation_kind IS DISTINCT FROM 'group'
-               AND ((lead_id=%s AND conversation_id=%s)
-                 OR (lead_id=%s AND conversation_id IN (%s,%s))))=2 AS approved""", (
+        AND (SELECT count(*) FROM phones)=1
+        AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links
+          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND active
+            AND (source_id=ANY(%s) OR canonical_id=ANY(%s)))
+        AND NOT EXISTS(SELECT 1 FROM saas_connect_direct_identities
+          WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
+            AND (identity_key=ANY(%s) OR canonical_conversation_id=ANY(%s))
+            AND NOT ((identity_key=%s AND canonical_conversation_id=%s)
+              OR (identity_key IN (%s,%s) AND canonical_conversation_id IN (SELECT conversation_id FROM phones))))
+          AS approved""", (
+        tenant, channel, pn, legacy,
         tenant, channel, keys, tenant, channel, keys, lid, pn, legacy, keys, keys,
-        tenant, channel, leads[0], lid, leads[1], pn, legacy))
+        tenant, channel, keys, keys,
+        tenant, channel, keys, keys, lid, lid, pn, legacy))
     return bool(cur.fetchone()['approved'])
 
 
@@ -111,12 +108,11 @@ def candidates(tenant, channel, after):
         binding = _binding(cur, tenant, channel)
         if not binding:
             return None, []
-        approved = approved_conflict_leads(tenant, channel)
         cur.execute("""SELECT c.lead_id,c.conversation_id FROM saas_connect_conversations c
           WHERE c.tenant_id=%s::uuid AND c.connect_channel_id=%s::uuid AND c.lead_id>%s
             AND c.conversation_kind IS DISTINCT FROM 'group'
-            AND c.conversation_id ~ '^[1-9][0-9]{5,21}@lid$' AND COALESCE(c.phone,'')=''
-            AND (c.lead_id=%s OR NOT EXISTS (SELECT 1 FROM saas_connect_identity_conflicts f
+            AND c.conversation_id ~ '^[1-9][0-9]{5,21}@lid$'
+            AND (COALESCE(c.phone,'')='' OR EXISTS (SELECT 1 FROM saas_connect_identity_conflicts f
               WHERE (f.tenant_id,f.connect_channel_id,f.conversation_id)=
                     (c.tenant_id,c.connect_channel_id,c.conversation_id)))
             AND NOT EXISTS (SELECT 1 FROM saas_connect_direct_identities i
@@ -128,8 +124,7 @@ def candidates(tenant, channel, after):
                     (c.tenant_id,c.connect_channel_id,c.conversation_id)
                 AND (d.generation,d.gateway_id,d.account_jid)=(%s,%s::uuid,%s))
           ORDER BY c.lead_id LIMIT %s""", (
-            tenant, channel, after, approved[0] if approved else None,
-            binding['scope']['generation'], binding['gateway_id'],
+            tenant, channel, after, binding['scope']['generation'], binding['gateway_id'],
             binding['scope']['account'], BATCH_SIZE))
         return binding, cur.fetchall()
 
@@ -157,7 +152,7 @@ def save_confirmation(tenant, channel, binding, candidate, phone):
         routes = {row['conversation_id']: row for row in cur.fetchall()}
         target = routes.get(lid)
         phone_routes = set(routes) - {lid}
-        if (not target or target['lead_id'] != candidate['lead_id'] or target['phone']
+        if (not target or target['lead_id'] != candidate['lead_id']
                 or target['conversation_kind'] == 'group' or len(phone_routes) > 1):
             return False
         phone_route = next(iter(phone_routes), '')
@@ -175,13 +170,11 @@ def save_confirmation(tenant, channel, binding, candidate, phone):
             AND (source_id=ANY(%s) OR canonical_id=ANY(%s))""",
             (tenant, channel, keys, tenant, channel, keys, keys))
         reasons = {row['reason'] for row in cur.fetchall()}
-        approved = approved_conflict_leads(tenant, channel)
+        conflict = 'conflict' in reasons
         if 'link' in reasons:
             return False
-        if 'conflict' in reasons and (
-            not phone_route or approved != (target['lead_id'], routes[phone_route]['lead_id'])
-            or not approved_conflict_evidence(cur, tenant, channel, lid, phone, approved)
-        ):
+        if (target['phone'] and (not conflict or target['phone'].lstrip('+') != phone[1:])
+                or conflict and (not phone_route or not split_conflict_evidence(cur, tenant, channel, lid, phone))):
             return False
         if phone_route:
             # The phone route may already be associated with a different LID in CRM.
@@ -216,7 +209,7 @@ def save_confirmation(tenant, channel, binding, candidate, phone):
             uuid.uuid4(), tenant, AUDIT_ACTION, str(candidate['lead_id']),
             json.dumps({'source': channel, 'generation': binding['scope']['generation'],
                         'source_revision': revision, 'display_only': bool(phone_route),
-                        'conflict_display_approved': 'conflict' in reasons})))
+                        'conflict_display_verified': 'conflict' in reasons})))
         return True
 
 
@@ -224,15 +217,15 @@ def attach_display_phones(cur, tenant, dialogs):
     source = enabled_source()
     if not source or source[0] != str(tenant):
         return
-    approved = approved_conflict_leads(*source)
     rows = {row['conversation_id']: row for row in dialogs
             if str(row['channel_id']) == source[1] and row['conversation_id'].endswith('@lid')
-            and not row.get('phone') and (not row.get('contact_identity_conflict')
-                or approved and row.get('lead_id') == approved[0])}
+            and not row.get('phone')}
     if not rows:
         return
-    approved_lid = next((lid for lid, row in rows.items() if approved and row.get('lead_id') == approved[0]), '')
-    cur.execute("""SELECT d.conversation_id,d.phone
+    cur.execute("""SELECT d.conversation_id,d.phone,EXISTS(SELECT 1 FROM saas_connect_identity_conflicts f
+          WHERE f.tenant_id=d.tenant_id AND f.connect_channel_id=d.channel_id
+            AND f.conversation_id IN (d.conversation_id,substring(d.phone from 2)||'@s.whatsapp.net',
+                                      substring(d.phone from 2)||'@c.us')) AS has_conflict
         FROM saas_whatsapp_device_display_phones d
         JOIN saas_whatsapp_native_routes r USING(tenant_id,channel_id,generation)
         JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
@@ -241,14 +234,13 @@ def attach_display_phones(cur, tenant, dialogs):
         JOIN saas_connect_channels c ON c.tenant_id=g.tenant_id AND c.connect_channel_id=g.channel_id
         WHERE d.tenant_id=%s::uuid AND d.channel_id=%s::uuid AND d.conversation_id=ANY(%s)
           AND (d.gateway_id,d.account_jid)=(g.gateway_id,g.account_jid)
-          AND r.enabled AND NOT r.paused AND g.enabled AND g.projection_enabled AND s.enabled AND c.active
-          AND (d.conversation_id=%s OR NOT EXISTS(SELECT 1 FROM saas_connect_identity_conflicts f
-            WHERE f.tenant_id=d.tenant_id AND f.connect_channel_id=d.channel_id
-              AND f.conversation_id IN (d.conversation_id,substring(d.phone from 2)||'@s.whatsapp.net',
-                                        substring(d.phone from 2)||'@c.us')))""", (*source, list(rows), approved_lid))
+          AND r.enabled AND NOT r.paused AND g.enabled AND g.projection_enabled AND s.enabled AND c.active""",
+        (*source, list(rows)))
     for fact in cur.fetchall():
         lid, phone = fact['conversation_id'], fact['phone']
-        if lid == approved_lid and not approved_conflict_evidence(cur, *source, lid, phone, approved):
+        if (fact['has_conflict'] or rows[lid].get('contact_identity_conflict')) and not split_conflict_evidence(
+            cur, *source, lid, phone
+        ):
             continue
         rows[lid]['device_display_phone'] = phone
 
