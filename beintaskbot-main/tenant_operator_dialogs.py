@@ -1501,6 +1501,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 support=_linked_support_case(cur,tenant,policy,channel,history_members) if provider=='connect' else None
                 return {'dialog':{**public(row),'support_case':support}}
             dialog=decorate(row)
+            if provider=='connect':
+                from tenant_whatsapp_native_rollout import modes as native_modes
+                dialog['wecall']=bool(native_modes(cur,tenant).get(channel,{}).get('enabled'))
             if paired_history:
                 dialog['history_pair_id']=paired_history['id']
             restricted_ai = _scoped_ai_documents(policy)
