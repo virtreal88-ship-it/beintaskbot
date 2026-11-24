@@ -52,19 +52,23 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.locator('.operator-conversation-pane').evaluate(async node=>{await Promise.all(node.getAnimations({subtree:true}).filter(a=>Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a=>a.finished.catch(()=>{})))});
     const geometry=await avatar.boundingBox();assert.ok(geometry.width>=43.95&&geometry.height>=43.95,JSON.stringify(geometry));assert.equal(await page.locator('[data-operator-create-ticket]').count(),1,'task creation stays available');
     assert.equal(await page.locator('#operatorConversationHeader .operator-channel-label').count(),0);
-    const number=avatar.locator('.operator-client-phone');
+    const number=page.locator('#operatorConversationHeader [data-header-phone]');
     assert.match(await number.innerText(),/994501234567/);
+    assert.equal(await page.locator('#operatorConversationHeader .operator-client-source').innerText(),'WhatsApp');
+    assert.equal(await avatar.locator('.operator-client-phone').count(),0,'number is beside the name, not under the avatar');
+    const avatarFallback=avatar.locator('.operator-header-avatar');
+    assert.equal((await avatarFallback.textContent()).trim(),'V','the customer initial remains visible when no photo is available');
+    assert.equal(await avatarFallback.evaluate(node=>getComputedStyle(node).display),'grid','the initial is centered in the avatar circle');
     const avatarPicture=await avatar.locator('.operator-header-avatar').boundingBox();
-    const phoneBox=await number.boundingBox(),titleBox=await page.locator('#operatorDialogTitleText').boundingBox();
-    assert(phoneBox.y>=avatarPicture.y+avatarPicture.height+2,'the phone has a gap below the avatar');
-    assert(Math.abs((titleBox.y+titleBox.height/2)-(avatarPicture.y+avatarPicture.height/2))<=2,JSON.stringify({width, titleBox, avatarPicture, titleLayout: await page.locator('#operatorDialogTitleSlot').evaluate(e=>({height:e.offsetHeight, minHeight:getComputedStyle(e).minHeight, alignItems:getComputedStyle(e).alignItems}))}));
+    const phoneBox=await number.boundingBox(),titleBox=await page.locator('#operatorDialogTitleText').boundingBox(),identityBox=await page.locator('.operator-dialog-head-identity').boundingBox();
+    assert(phoneBox.y>=titleBox.y+titleBox.height-1,'phone and source sit on the metadata row below the customer name');
+    assert(Math.abs((identityBox.y+identityBox.height/2)-(avatarPicture.y+avatarPicture.height/2))<=2,JSON.stringify({width, identityBox, avatarPicture}));
     if(withCompany){
       const badge=page.locator('#operatorDialogCompanyName');await badge.waitFor();
       const companyBox=await badge.boundingBox();
-      assert(companyBox.y>=titleBox.y+titleBox.height,'company is below the customer name');
       assert(Math.abs((companyBox.y+companyBox.height/2)-(phoneBox.y+phoneBox.height/2))<=1,
-        'company and phone share the same line');
-      assert(Math.abs(companyBox.x-titleBox.x)<=1,'company starts beneath the name');
+        'company, phone, and source share the metadata line');
+      assert(companyBox.x>phoneBox.x,'company chip follows the number and source');
     }
     if(language==='az')assert.match(await page.locator('[data-operator-create-ticket]').innerText(),/\+\s*sorğu/);
     const pdfLabel={ru:'Документ PDF',az:'PDF sənədi',en:'PDF document'}[language];
@@ -118,9 +122,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     assert.equal(await card.locator('[data-panel-phone]').textContent(),dialog.phone);
     assert.equal(await card.locator('#operatorBeinContext,[data-operator-dialog-company]').count(),0);
     assert.equal(await card.evaluate(n=>n.matches(':modal')),true);
-    const source=page.locator('#operatorRows .operator-row-source').first();
-    assert.equal(await source.textContent(),'WhatsApp');
-    assert.deepEqual(await source.evaluate(n=>[n===n.parentElement.lastElementChild,getComputedStyle(n).fontWeight]),[true,'400']);
+    assert.equal(await page.locator('#operatorRows .operator-row-source').count(),0,'source is removed from the dialog list');
     assert.equal(calls.some(c=>c.method==='POST'&&(c.path.endsWith('/display-name')||(c.path.endsWith('/developer-marker')&&typeof JSON.parse(c.body).enabled==='boolean'))),false,'opening card never saves or toggles anything');
     await field.fill('Unsaved / Несохранённое имя');await field.evaluate(n=>n.setSelectionRange(3,9));await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-language')));await card.waitFor();assert.equal(await field.inputValue(),'Unsaved / Несохранённое имя');assert.equal(await field.evaluate(n=>n.selectionStart),3,'same-source background rendering preserves typed name and selection');
     const saveMark=card.locator('[data-client-name-saved]');

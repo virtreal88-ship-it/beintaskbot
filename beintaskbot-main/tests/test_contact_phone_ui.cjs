@@ -20,7 +20,7 @@ w.fetch=async target=>{
  return result({});
 };
 const answer=(id,value={})=>pending.get(id)({...routes.find(r=>r.lead_id===id),display_only:true,status:'available',phone:'+99410000000'+id,...value});
-const label=()=>w.document.querySelector('.operator-client-phone')?.textContent||'';
+const label=()=>w.document.querySelector('#operatorConversationHeader [data-header-phone]')?.textContent||'';
 (async()=>{
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
  await w.tenantOperator.openDialog(routes[0]);await settle();
