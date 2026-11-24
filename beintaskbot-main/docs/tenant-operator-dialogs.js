@@ -694,7 +694,7 @@
   }[key]?.[i18n.language]||key);
   function renderLifecycleActions(route,host,only=null){
     const state=route.lifecycle||{};
-    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['close',state.can_close===true],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
+    for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['close',state.can_close===true],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start','takeover'].includes(action)?'primary':'outline';button.textContent=action==='takeover'?({ru:'Забрать себе',az:'Üzərimə götür',en:'Take over'}[i18n.language]||'Take over'):lifecycleText(action);button.dataset.operatorLifecycle=action;
       if(action==='dismiss'){const marked=state.no_reply_needed===true;button.setAttribute('aria-pressed',String(marked));button.disabled=marked;}
       if(action==='case')button.title=lifecycleText('caseBudget');
@@ -1361,7 +1361,8 @@
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
-  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
+  const deviceDisplayPhone=route=>!route.contact_identity_conflict&&verifiedDialogPhone({phone:route.device_display_phone});
+  const displayDialogPhone=route=>verifiedDialogPhone(route)||deviceDisplayPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
   const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
   const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
   const phoneUnavailable=()=>dialogPhoneLabel(currentDialog);
@@ -1372,7 +1373,7 @@
   };
   const canLookupContact=route=>route?.provider==='connect'&&!isDialogGroup(route)
     &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment&&!route.contact_identity_conflict
-    &&!(verifiedDialogPhone(route)&&hasContactName(route))
+    &&!((verifiedDialogPhone(route)||deviceDisplayPhone(route))&&hasContactName(route))
     &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
   const canLookupRowContact=route=>canLookupContact(route)&&/^[a-f0-9]{64}$/.test(route.contact_source_revision||'');
   const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');
@@ -1528,11 +1529,9 @@
   const dialogPreview=row=>{const kind=String(row.last_message_type||'').toLowerCase();if(kind&&kind!=='text'){if(kind==='call_missed')return missedCallLabel(false);if(kind==='call_rejected')return rejectedCallLabel(false);if(kind==='call_invalidated')return invalidatedCallLabel(false);if(kind==='call_observed')return observedCallLabel(false);if(kind==='image')return t('photo');if(['audio','voice','ptt','voice_message'].includes(kind))return t('voiceMessage');if(kind==='video')return t('video');return t('file');}return String(row.last_message_preview||row.last_message_text||row.last_message||'').replace(/\s+/g,' ').trim().slice(0,160);};
   function lifecycleBadge(route){
     if(!route?.lifecycle_enabled||(route.lifecycle?.state==='waiting'&&route.lifecycle.has_inbound===false))return '';
-    const state=route.lifecycle?.state==='waiting'&&route.lifecycle.no_reply_needed?'no-reply':route.lifecycle?.state,labels={'no-reply':{ru:'Риторический вопрос',az:'Ritorik sual',en:'Rhetorical question'},waiting:{ru:'Новый',az:'Yeni',en:'New'},accepted:{ru:'Принят',az:'Qəbul edilib',en:'Accepted'},closed:{ru:'Завершён',az:'Tamamlanıb',en:'Completed'},dismissed:{ru:'Не требует ответа',az:'Cavab tələb etmir',en:'No reply needed'}};
+    const state=route.lifecycle?.state,labels={waiting:{ru:'Новый',az:'Yeni',en:'New'},accepted:{ru:'Принят',az:'Qəbul edilib',en:'Accepted'},closed:{ru:'Завершён',az:'Tamamlanıb',en:'Completed'},dismissed:{ru:'Не требует ответа',az:'Cavab tələb etmir',en:'No reply needed'}};
     const label=labels[state]?.[i18n.language]||labels[state]?.en;
-    const marked=state==='accepted'&&route.lifecycle.no_reply_needed?
-      `<span class="operator-lifecycle-badge" data-lifecycle-state="no-reply">${esc(lifecycleText('dismiss'))}</span>`:'';
-    return label?`<span class="operator-lifecycle-badge" data-lifecycle-state="${esc(state)}">${esc(label)}</span>${marked}`:'';
+    return label?`<span class="operator-lifecycle-badge" data-lifecycle-state="${esc(state)}">${esc(label)}</span>`:'';
   }
   // Presentation only: retain all authorized history routes, but never offer a
   // disabled channel as a reply source. Lifecycle actions stay route-scoped.
@@ -1625,7 +1624,7 @@
     return query;
   }
   const timelineStamp=value=>Date.parse(value||'');
-  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
+  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','no_reply'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
   const operatorEventOrder=(a,b)=>timelineStamp(a.at)-timelineStamp(b.at)||a.at.localeCompare(b.at)||a.id.localeCompare(b.id);
   const OPERATOR_TIMELINE_LIMIT=180;
   function noteOperatorEventOmission(page,at){
@@ -1730,8 +1729,9 @@
       if(!node.isConnected){node.className='operator-timeline-event';node.dataset.operatorTimelineEvent=event.id;node.setAttribute('role','note');node.append(document.createElement('span'),document.createElement('time'));}
       const name=typeof event.employee_name==='string'?event.employee_name.trim():'';
       const reminderLabel=({ru:'Напоминание',az:'Xatırlatma',en:'Reminder'})[i18n.language]||'Reminder';
+      const rhetoricalLabel=({ru:'Ответ риторический',az:'Cavab ritorikdir',en:'Rhetorical reply'})[i18n.language]||'Rhetorical reply';
       node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
-        name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
+        event.kind==='no_reply'?rhetoricalLabel:name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
       if(next)next.before(node);else chat.append(node);

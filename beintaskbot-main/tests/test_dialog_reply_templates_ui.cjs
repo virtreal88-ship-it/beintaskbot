@@ -10,6 +10,9 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  w.tenantProfileSnapshot=profile(tenantA);w.tenantI18n={language:'en'};
  const view=w.document.getElementById('view-dialogs');view.classList.add('active');
  const host=w.document.createElement('div');host.id='operatorConversationContent';view.append(host);
+ const header=w.document.createElement('header');header.id='operatorConversationHeader';
+ header.innerHTML='<details id="operatorMoreActions"><summary>Actions</summary><div id="operatorMenuExtra"></div></details>';
+ host.append(header);
  const shell=w.document.createElement('section');shell.dataset.operatorDialog='';host.append(shell);
  const composer=w.document.createElement('div');composer.className='operator-composer';
  const chat=w.document.createElement('textarea');chat.id='chatText';chat.dataset.operatorComposer='';composer.append(chat);
@@ -60,8 +63,8 @@ const tick=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediat
  assert.equal(w.document.querySelector('#operatorReplyTemplatesOpen')?.hidden,true,'pilot control stays hidden until the server confirms workspace eligibility');
  await tick();
  const input=w.document.getElementById('chatText'),button=w.document.getElementById('operatorReplyTemplatesOpen');
- assert.ok(button,'template control is attached to the existing composer');
- assert.equal(button.textContent,'','the template launcher uses an icon');
+ assert.ok(w.document.querySelector('#operatorMenuExtra').contains(button),'template control is in the header menu');
+ assert.equal(button.textContent,'Templates','the header menu shows the launcher label');
  assert.equal(button.getAttribute('aria-label'),'Templates');
  assert.equal(button.querySelector('svg').getAttribute('aria-hidden'),'true');
  assert.equal(dealActions.querySelector('#operatorReplyTemplatesOpen'),null,'decoy deal composer with overlapping IDs is not mounted');
@@ -240,7 +243,7 @@ async function verifyRealDialogComposers(){
   for(const route of routes){
    assert(await w.tenantOperator.openDialog(route));await tick();
    const composer=d.querySelector('#operatorConversationContent [data-operator-dialog] .operator-composer');
-   const input=composer.querySelector('[data-operator-composer]'),button=composer.querySelector('#operatorReplyTemplatesOpen');
+   const input=composer.querySelector('[data-operator-composer]'),button=d.querySelector('#operatorMenuExtra #operatorReplyTemplatesOpen');
    assert(button&&!button.hidden,route.provider+' '+route.customer_kind+' real rendered composer has Templates');
    assert.equal(input.disabled,!route.can_send);
    input.value='welcome - draft';input.dispatchEvent(new w.Event('input',{bubbles:true}));await tick();

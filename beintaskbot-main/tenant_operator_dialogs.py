@@ -726,10 +726,13 @@ def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
             if match:pending[key]['phone']='+'+match[1]
         elif check_conflicts and len(candidates)>1 and key[1].endswith('@lid'):
             pending[key]['contact_identity_conflict']=True
+    from tenant_whatsapp_contact_refresh import attach_display_phones
+    attach_display_phones(cur, tenant, pending.values())
 
 
 def _attach_verified_phone(cur,tenant,dialog):
-    _attach_verified_phones(cur,tenant,[dialog])
+    from tenant_whatsapp_contact_refresh import enabled_for
+    _attach_verified_phones(cur, tenant, [dialog], check_conflicts=enabled_for(tenant, dialog.get('channel_id')))
 
 
 def decorate(row):
