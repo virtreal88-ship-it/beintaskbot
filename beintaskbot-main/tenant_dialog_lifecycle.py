@@ -534,13 +534,15 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
     if shared_archive or owner_observer:
         dialog.update(archive_read_only=True, can_use_copilot=False, can_edit_display_name=False,
                       controls_allowed=False, available_actions=[], resume_allowed=False,
-                      unread_count=0, handoff_active=False)
+                      unread_count=0, handoff_active=False, can_send=False)
         for key in ('group_coordination','agent_assignment','group_assignment_preview','handoff_assignee_name',
                     'handoff_reason','handoff_event_id','handoff_source','assignee_name','assigned_to',
                     'agent_id','agent_name','agent_scopes','agent_schedule','latest_job_error','latest_job_state',
                     'last_message_id','last_message_direction','last_message_type','last_message_text',
-                    'last_message_preview','last_message_at','read_through_message_id','avatar_status'):
+                    'last_message_preview','read_through_message_id','avatar_status'):
             dialog.pop(key,None)
+        if details or not shared_archive:
+            dialog.pop('last_message_at',None)
     if details:
         if row and state in {'accepted', 'closed'}:
             # Transfer changes the owner, not the original acceptance actor.

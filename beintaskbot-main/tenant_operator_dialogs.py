@@ -1105,7 +1105,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             owner_search_overview=bool(str(search or '').strip() and interactive and policy.profile.get('role')=='owner')
             owner_overview=bool(((owner_overview and lifecycle=='all') or owner_search_overview)
                                 and interactive and policy.profile.get('role')=='owner')
-            allow_closed_archive=interactive and (lifecycle=='completed' or owner_overview or search_overview)
+            # Employee All includes the same source-scoped archive as Completed.
+            employee_all=lifecycle=='all' and policy.profile.get('role')!='owner'
+            allow_closed_archive=interactive and (lifecycle=='completed' or employee_all or owner_overview or search_overview)
             sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,
                 allow_closed_archive=allow_closed_archive,owner_overview=owner_overview,
                 search_overview=search_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
@@ -1285,7 +1287,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     [r for r,match in search_rows if not match],query_text) if interactive else set()
                 rows=[r for r,match in search_rows if match or (company_matches and list_route_key(r) in company_matches)]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
-            if owner_overview and (agent or state):
+            if agent or state:
                 # Agent metadata is intentionally redacted on passive rows.
                 # Do not misclassify those dialogs as unassigned or infer
                 # their private AI state from a filter match.
@@ -1299,24 +1301,30 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=[r for r in rows if str(r.get('agent_id') or '')==selected_agent]
             rows=[r for r in rows if not state or r.get('agent_status')==state]
             agents.sort(key=lambda item:str(item.get('name') or '').casefold())
-            if owner_overview:
-                # A currently actionable route should remain the group card's
-                # primary route; all eligible sibling sources remain selectable.
-                rows=_fold_group_routes(rows,prefer_actionable=True)
-            else:
-                rows=_fold_group_routes(rows)
+            # Adding a read-only sibling must not replace an actionable route.
+            rows=_fold_group_routes(rows,prefer_actionable=owner_overview or (interactive and employee_all))
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
             if interactive and rollout.enforced:
                 _attach_missed_call_attention(cur,tenant,rows[:50])
             if not all_rows and not completion_preview:
                 from tenant_dialog_company_binding import attach_list_company_names
-                company_cards = rows[:50]
-                if policy.profile.get('role') != 'owner':
-                    company_cards = [r for r in company_cards if not r.get('archive_read_only')]
-                _attach_verified_phones(cur,tenant,company_cards,check_conflicts=True)
+                cards = rows[:50]
+                owner = policy.profile.get('role') == 'owner'
+                contact_cards = cards if owner else [r for r in cards if not r.get('archive_read_only')]
+                _attach_verified_phones(cur,tenant,contact_cards,check_conflicts=True)
                 from tenant_contact_phone import attach_list_source_revisions
-                attach_list_source_revisions(cur,tenant,company_cards)
+                attach_list_source_revisions(cur,tenant,contact_cards)
+                from tenant_beinsystems_operator_access import dialogue_chooser_enabled
+                # Archive cards may show a verified Operator label only with
+                # its independent read grant. Keep legacy and search-only
+                # archive metadata behind its original boundary.
+                show_archive_labels = (interactive and lifecycle in {'all','completed'}
+                    and not search_overview and dialogue_chooser_enabled(tenant)
+                    and policy.allows_action('operator_data','view'))
+                company_cards = cards if owner else [r for r in cards
+                    if not r.get('search_overview_read_only')
+                    and (not r.get('archive_read_only') or show_archive_labels)]
                 attach_list_company_names(cur,tenant,company_cards,policy=policy)
     return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
