@@ -165,8 +165,7 @@ const beta='@verified_account';
     assert(await toggle.evaluate(el=>!!el.closest('[inert]')),'the covered toolbar is not keyboard-accessible');
     assert(await page.locator('#chatRows').evaluate(el=>!!el.closest('[inert]')),'behind the panel the chat is inert');
   }else{
-    assert(await toggle.evaluate(el=>!el.closest('[inert]')),'the desktop original-slot toggle remains active');
-    assert(await toggle.evaluate(hitTarget),'the desktop panel does not intercept the toggle');
+    assert.equal(await toggle.isVisible(),false,'desktop details stay open without an open-panel icon');
   }
   if(width<=900)await page.waitForFunction(()=>window.savedOpen===true);
   else assert.equal(await page.evaluate(()=>window.savedOpen),false,'desktop auto-open does not persist a manual preference');
