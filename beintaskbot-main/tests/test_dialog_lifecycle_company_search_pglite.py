@@ -91,6 +91,41 @@ def test_group_company_match_never_uses_an_inaccessible_sibling_source(companies
     assert [route['lead_id'] for route in owner_hit['group_sources']] == [52]
 
 
+def test_employee_archive_shows_exact_operator_label_with_read_grant(companies, monkeypatch):
+    db, own, *_ = companies
+    _connect_scope(db, monkeypatch)
+    _links(db,A,CA,'client',own)
+    db.commit()
+    command()
+    command('close',1)
+    monkeypatch.setenv('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED','true')
+    for lead, account in ((41,'synthetic-real'),(42,'wrong-route')):
+        db.execute("""INSERT INTO saas_operator_dialog_accounts
+          (tenant_id,provider,lead_id,channel_id,conversation_id,id,account,generation,instance_id,updated_by)
+          VALUES(%s::uuid,'connect',%s,%s,'client',%s::uuid,%s,'fixture',%s::uuid,11)""",
+          (A,lead,CA,str(uuid.uuid4()),account,str(uuid.uuid4())))
+    db.commit()
+
+    def archive(mode):
+        row, = dialogs.listing(STAFF,lifecycle=mode,channel='connect:'+CA)['dialogs']
+        assert row['lead_id']==41 and row['archive_read_only'] and not row['can_send']
+        assert row['last_message_at']
+        return row
+
+    assert 'dialog_company_name' not in archive('all')
+    db.execute("""UPDATE saas_tenant_members SET permissions=permissions||'["operator_data:view"]'::jsonb
+      WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
+    db.commit()
+    for mode in ('all','completed'):
+        row=archive(mode)
+        assert row['dialog_company_name']=='synthetic-real'
+        assert 'company_binding' not in row and 'last_message_text' not in row
+    assert not dialogs.listing(STAFF,lifecycle='active')['dialogs']
+    db.execute("DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=33",(A,))
+    db.commit()
+    assert not dialogs.listing(STAFF,lifecycle='all')['dialogs']
+
+
 def test_kommo_company_lookup_requires_the_full_visible_route_tuple(companies, monkeypatch):
     db, own, misplaced, *_ = companies
     _connect_scope(db, monkeypatch)

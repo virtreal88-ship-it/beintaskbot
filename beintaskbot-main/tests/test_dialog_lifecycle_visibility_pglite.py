@@ -144,9 +144,15 @@ def test_other_employee_can_read_exact_archive_and_must_start_before_work(reader
                       VALUES(%s::uuid,%s::uuid,33,11)""",(A,CA))
     readers.commit()
     assert not dialogs.listing(recipient)['dialogs']
-    summary=dialogs.listing(recipient,lifecycle='completed')
-    assert [(r['lifecycle']['state'],r['archive_read_only']) for r in summary['dialogs']]==[(outcome,True)]
-    assert summary['unread_count']==0
+    for mode in ('all','completed'):
+        summary=dialogs.listing(recipient,lifecycle=mode,channel='connect:'+CA,agent='',state='')
+        row,=summary['dialogs']
+        assert row['lifecycle']['state']==outcome and row['archive_read_only']
+        assert row['last_message_at'] and not row['can_send']
+        assert 'last_message_text' not in row and 'last_message_id' not in row
+        assert summary['total_count']==1 and summary['unread_count']==0
+        assert not dialogs.listing(recipient,lifecycle=mode,agent='unassigned')['dialogs']
+        assert not dialogs.listing(recipient,lifecycle=mode,channel='connect:'+OTHER)['dialogs']
     assert not dialogs.listing(recipient,lifecycle='all',include_read_cursors=True)['dialogs']
     page=dialogs.history(recipient,'connect',41,CA,'client',include_shared_reminder_events=True)
     assert [item['body'] for item in page['messages']]==['Internet is down']
