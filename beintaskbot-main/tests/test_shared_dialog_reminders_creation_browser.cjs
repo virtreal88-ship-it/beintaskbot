@@ -6,7 +6,7 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
 (async()=>{
   const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
   try{
-    for(const width of [360,1440]){
+    for(const width of [360,1440])for(const [locale,label] of [['ru','Создать напоминание'],['az','Xatırlatma yarat'],['en','Create reminder']]){
       const mobile=width===360;
       const page=await browser.newPage({viewport:{width,height:800},hasTouch:mobile});
       try{
@@ -37,8 +37,8 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
         });
         for(const file of ['tenant-operator-i18n.js','tenant-operator-dialogs.js','tenant-dialog-company.js','tenant-shared-dialog-reminders.js'])
           await page.addScriptTag({path:path.join(docs,file)});
-        await page.evaluate(async()=>{window.tenantI18n.setLanguage('en');await window.tenantOperator.refresh();
-          if(!await window.tenantOperator.openDialog(window.testDialog))throw Error('Synthetic dialog did not open');});
+        await page.evaluate(async locale=>{window.tenantI18n.setLanguage(locale);await window.tenantOperator.refresh();
+          if(!await window.tenantOperator.openDialog(window.testDialog))throw Error('Synthetic dialog did not open');},locale);
         const panel=page.locator('#operatorCompanyPanel'),create=panel.locator('#operatorSharedReminderCreate');
         if(!await panel.isVisible()){
           const toggle=page.locator('#operatorCompanyPanelOpen');
@@ -47,25 +47,23 @@ const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<s
         await create.waitFor({state:'visible',timeout:10000});
         for(const theme of ['light','dark']){
           await page.evaluate(theme=>{document.documentElement.dataset.appTheme=theme;},theme);
-          for(const [locale,label] of [['ru','Создать напоминание'],['az','Xatırlatma yarat'],['en','Create reminder']]){
-            await page.evaluate(locale=>window.tenantI18n.setLanguage(locale),locale);
-            const text=create.locator('svg[aria-hidden=true][focusable=false] + span');
-            assert.equal(await text.textContent(),label);
-            const actual=await create.evaluate(button=>{
-              const icon=button.querySelector('svg'),label=button.querySelector('span');
-              const br=button.getBoundingClientRect(), ir=icon.getBoundingClientRect();
-              const range=document.createRange();range.selectNodeContents(label);
-              const rects=[...range.getClientRects()], tr=range.getBoundingClientRect();
-              return {gap:tr.left-ir.right,centerGap:Math.abs((tr.top+tr.bottom-ir.top-ir.bottom)/2),
-                lines:rects.length,size:ir.width,minHeight:br.height,contained:ir.left>=br.left&&tr.right<=br.right};
-            });
-            assert(actual.gap>=4&&actual.gap<=12&&actual.centerGap<=2&&actual.lines===1&&actual.size>=12
-              &&actual.minHeight>=36&&actual.contained, `icon and text must share one row at ${width}/${theme}/${locale}: ${JSON.stringify(actual)}`);
-          }
+          const text=create.locator('svg[aria-hidden=true][focusable=false] + span');
+          assert.equal(await text.textContent(),label);
+          const actual=await create.evaluate(button=>{
+            const icon=button.querySelector('svg'),label=button.querySelector('span');
+            const br=button.getBoundingClientRect(), ir=icon.getBoundingClientRect();
+            const range=document.createRange();range.selectNodeContents(label);
+            const rects=[...range.getClientRects()], tr=range.getBoundingClientRect();
+            return {gap:tr.left-ir.right,centerGap:Math.abs((tr.top+tr.bottom-ir.top-ir.bottom)/2),
+              lines:rects.length,size:ir.width,minHeight:br.height,contained:ir.left>=br.left&&tr.right<=br.right};
+          });
+          assert(actual.gap>=4&&actual.gap<=12&&actual.centerGap<=2&&actual.lines===1&&actual.size>=12
+            &&actual.minHeight>=36&&actual.contained, `icon and text must share one row at ${width}/${theme}/${locale}: ${JSON.stringify(actual)}`);
         }
         assert(await create.evaluate(button=>button.parentElement===document.querySelector('#operatorCompanyView-main').lastElementChild));
         assert.equal(await page.locator('#operatorClientCard #operatorSharedReminderCreate').count(),0);
         assert.deepEqual(await page.evaluate(()=>window.reminderRequests),[],'creation-only does not call the bell feed');
+        if(locale!=='en')continue;
         if(mobile)await create.tap();else await create.click();
         const modal=page.getByRole('dialog',{name:'Create reminder',exact:true});
         await modal.waitFor({state:'visible'});
