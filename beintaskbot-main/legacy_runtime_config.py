@@ -1,8 +1,8 @@
-"""Validated legacy runtime configuration.
+"""Validated configuration for shared legacy APIs and integrations.
 
-This module intentionally contains the current single-customer mappings while
-legacy /webapp is migrated to tenant policies. It has no network clients,
-mutable caches, logging setup or background work.
+The legacy browser UI is retired; this module keeps server-side compatibility
+settings until its API and webhook consumers are migrated. It has no network
+clients, mutable caches, logging setup or background work.
 """
 import os
 from datetime import timedelta, timezone
@@ -24,10 +24,9 @@ BAKU_TZ = timezone(timedelta(hours=4))
 LLM_MODEL = str(os.environ.get("OPENAI_MODEL") or "gpt-4o-mini-2024-07-18").strip()
 WEBHOOK_PORT = int(os.environ.get("PORT", 8080))
 CANONICAL_WEB_ORIGIN = str(os.environ.get("CANONICAL_WEB_ORIGIN") or "https://crm.pro.az").rstrip("/")
-# Telegram buttons must never point at a deployment-specific Railway URL.
-# Keep one stable public address even if an old WEBAPP_PUBLIC_URL variable is
-# still present in Railway.
-WEB_APP_URL = f"{CANONICAL_WEB_ORIGIN}/webapp"
+# New browser entrypoint. The legacy /webapp route is only a compatibility
+# redirect; registration and sign-in belong to the tenant app.
+APP_URL = f"{CANONICAL_WEB_ORIGIN}/app"
 LEGACY_RAILWAY_HOST = "worker-production-3e3e.up.railway.app"
 # The HTTP server has its own event loop. Keep this public value as state
 # populated by the Telegram polling loop; never call Bot methods from aiohttp.
@@ -59,10 +58,8 @@ PIPELINE_ID = 8329347
 # variable silently make the retired Şamil UID the primary account.
 RUFAT_CHAT_ID = 6824377548
 SAMIL_CHAT_ID = RUFAT_CHAT_ID  # Deprecated alias for old integrations
-# Historical web-app links used Şamil's Telegram UID.  Keep those links
-# working while the current employee account uses RUFAT_CHAT_ID.
+# Historical aliases used Şamil's Telegram UID; retain the current ID only.
 RUFAT_COMPAT_CHAT_IDS = {RUFAT_CHAT_ID}
-RUFAT_LOGIN_LINK = f"{WEB_APP_URL}?uid={RUFAT_CHAT_ID}"
 RUFAT_PIPELINE_ID = int(os.environ.get("RUFAT_PIPELINE_ID", os.environ.get("SAMIL_PIPELINE_ID", "14357580")))
 # Rüfət's current pipeline snapshot. Do not alter other pipeline mappings here.
 RUFAT_STAGES = {

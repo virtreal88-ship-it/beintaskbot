@@ -1,5 +1,4 @@
 """Exact /app PWA routes: public install metadata only, no CRM data cache route."""
-import json
 import unittest
 from pathlib import Path
 
@@ -47,10 +46,8 @@ class TenantAppPwaAssets(unittest.IsolatedAsyncioTestCase):
     async def test_real_app_declares_own_manifest_and_pwa_registration_without_push_opt_in(self):
         html = (ROOT / 'docs' / 'tenant-app.html').read_text(encoding='utf-8')
         pwa_script = (ROOT / 'docs' / 'tenant-pwa.js').read_text(encoding='utf-8')
-        legacy_manifest = json.loads((ROOT / 'docs' / 'manifest.json').read_text(encoding='utf-8'))
         self.assertIn('href="/app/manifest.webmanifest"', html)
         self.assertIn('src="/assets/tenant-pwa.js"', html)
-        self.assertEqual(legacy_manifest['start_url'], '/webapp')
         self.assertIn("register('/app/pwa-sw.js'", pwa_script)
         self.assertIn("scope: '/app'", pwa_script)
         self.assertNotIn('requestPermission', pwa_script)
