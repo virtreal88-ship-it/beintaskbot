@@ -16,13 +16,26 @@ def test_sql_40p01_after_write_rolls_back_before_new_connection(active,monkeypat
     incoming=message(active,20)
     if action=='close':
         lifecycle.mutate(PROFILE,payload('accept'))
-    request=payload(action,1 if action=='close' else 0,**({'message_id':incoming} if action=='dismiss' else {}))
+    no_reply=action=='dismiss'
+    request=payload(action,0 if no_reply else 1,
+        **({'message_id':incoming,'individual_no_reply':True} if no_reply else {}))
+    action_name='dialog_no_reply' if no_reply else 'dialog_close'
+    audit_sql="""SELECT id::text, payload FROM saas_tenant_audit_events
+      WHERE tenant_id=%s::uuid AND action=%s"""
+    receipt_sql="""SELECT actor_id,result FROM saas_dialog_lifecycle_receipts
+      WHERE tenant_id=%s::uuid AND request_id=%s::uuid"""
+    workflow_sql="""SELECT state,operator_id,closed_at,last_inbound_id FROM saas_dialog_workflows
+      WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id='client'"""
+    prior_workflow=active.query(workflow_sql,(A,CA))
     execute=active.execute
     failed=False
     def injected(sql,params=()):
         nonlocal failed
         result=execute(sql,params)
-        target=('INSERT INTO saas_dialog_workflows' in sql if action=='dismiss' else "UPDATE saas_dialog_workflows SET state='closed'" in sql)
+        # For no-reply, abort after the audit marker, the last write, so the
+        # first attempt has exercised both the marker and the receipt.
+        target=('INSERT INTO saas_tenant_audit_events' in sql if no_reply else
+                "UPDATE saas_dialog_workflows SET state='closed'" in sql)
         if phase=='write' and target and not failed:
             failed=True
             # PostgreSQL itself reports 40P01 and aborts the transaction after
@@ -43,17 +56,33 @@ def test_sql_40p01_after_write_rolls_back_before_new_connection(active,monkeypat
             active.commit()
     def connect():
         assert active.transaction is False, 'previous transaction must be rolled back first'
+        if len(connections)==1:
+            assert not active.query(receipt_sql,(A,request['request_id']))
+            assert not active.query(audit_sql,(A,action_name))
+            assert active.query(workflow_sql,(A,CA))==prior_workflow
         session=Session();connections.append(session);return session
     monkeypatch.setattr(tenant_platform,'_connect',connect)
     monkeypatch.setattr(lifecycle.time,'sleep',Mock())
     result=lifecycle.mutate(PROFILE,request)
-    assert len(connections)==2 and connections[0] is not connections[1]
-    assert result['lifecycle']['revision']==(2 if action=='close' else 1)
-    assert result['lifecycle']['state']==('closed' if action=='close' else 'dismissed')
-    assert active.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE request_id=%s::uuid',(request['request_id'],))[0]['n']==1
-    assert active.execute('SELECT count(*) AS n FROM saas_tenant_audit_events WHERE action=%s',('dialog_'+action,))[0]['n']==1
+    assert failed and len(connections)==2 and connections[0] is not connections[1]
+    assert result['lifecycle']['revision']==(1 if no_reply else 2)
+    assert result['lifecycle']['state']==('waiting' if no_reply else 'closed')
+    assert active.execute(receipt_sql,(A,request['request_id']))==[
+        {'actor_id':PROFILE['telegram_id'],'result':result}]
+    events=active.execute(audit_sql,(A,action_name))
+    assert len(events)==1
+    if no_reply:
+        assert result['lifecycle']['no_reply_needed'] and result['lifecycle']['operator_id'] is None
+        assert events[0]['id']==lifecycle._no_reply_id(A,CA,'client',incoming)
+        assert events[0]['payload']['message_id']==incoming and events[0]['payload']['counts_as_missed'] is False
+        assert active.execute(workflow_sql,(A,CA))==[
+            {'state':'waiting','operator_id':None,'closed_at':None,'last_inbound_id':incoming}]
+        assert not active.execute('SELECT 1 FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))
     active.commit()
     assert lifecycle.mutate(PROFILE,request)==result
+    assert active.execute(audit_sql,(A,action_name))==events
+    assert len(active.execute(receipt_sql,(A,request['request_id'])))==1
+    active.commit()
 
 
 @pytest.mark.parametrize('action',['close','dismiss'])

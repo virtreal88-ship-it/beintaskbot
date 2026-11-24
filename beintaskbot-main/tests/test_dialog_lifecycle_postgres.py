@@ -140,6 +140,9 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
         episodes.commit()
         archived=seed_legacy_dismissed(episodes,inbound)
     old=episodes.execute('SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))
+    receipt_sql='SELECT request_id::text,actor_id,result FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid'
+    previous_receipts={r['request_id']:r for r in episodes.execute(receipt_sql,(A,))}
+    assert len(previous_receipts)==(2 if outcome=='closed' else 0)
     episodes.commit()
     revision=archived['revision']
     start_a,start_b=payload('start',revision),payload('start',revision)
@@ -154,7 +157,12 @@ def test_native_simultaneous_start_has_one_new_episode_and_preserves_prior_archi
     assert pair[:-1]==old and len(pair)==(2 if outcome=='closed' else 1)
     assert not old or old[0]['closed_at'] is not None
     assert pair[-1]['accepted_by']==pair[-1]['operator_id']==winner and pair[-1]['closed_at'] is None
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s::uuid',(A,))[0]['n']==revision+1
+    receipts={r['request_id']:r for r in episodes.execute(receipt_sql,(A,))}
+    assert len(receipts)==len(previous_receipts)+1
+    assert {rid:receipts[rid] for rid in previous_receipts}==previous_receipts
+    won,lost=(start_a,start_b) if winner==11 else (start_b,start_a)
+    assert lost['request_id'] not in receipts
+    assert receipts[won['request_id']]=={'request_id':won['request_id'],'actor_id':winner,'result':{'lifecycle':winners[0]}}
     assert episodes.execute("SELECT count(*) AS n FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_start'",(A,))[0]['n']==1
     episodes.commit()
     loser=11 if winner==33 else 33

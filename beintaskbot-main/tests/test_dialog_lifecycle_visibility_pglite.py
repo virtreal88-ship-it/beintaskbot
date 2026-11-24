@@ -163,7 +163,7 @@ def test_other_employee_can_read_exact_archive_and_must_start_before_work(reader
         lambda:dialogs.mark_read(recipient,{**payload(),'message_id':page['messages'][0]['id']}),
         lambda:command('transfer',archived['revision'],actor=33,target_employee_id=11),
         lambda:command('close',archived['revision'],actor=33),
-        lambda:command('dismiss',archived['revision'],actor=33,message_id=page['messages'][0]['id']),
+        lambda:command('dismiss',archived['revision'],actor=33,message_id=page['messages'][0]['id'],individual_no_reply=True),
     ):
         with pytest.raises(TenantLinearError):
             blocked()
