@@ -115,7 +115,15 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
             'chat':route['conversation_id'],'kind':kind,'text':text,'mime':mime,'name':name,
             'data':base64.b64encode(content).decode('ascii')}
         if quoted_message_id is not None:
-            payload.update(resolve_quote(cur,current,quoted_message_id))
+            try:
+                payload.update(resolve_quote(cur, current, quoted_message_id))
+            except TenantPlatformError as error:
+                from tenant_connect_transport import ConnectPreflightError
+                code = {'native_quote_scope_denied': 'quoted_source_scope_conflict',
+                        'native_quote_evidence_missing': 'quoted_message_unavailable'}.get(str(error))
+                if code:
+                    raise ConnectPreflightError(code) from None
+                raise
         # Keep the current source locked through dispatch. Caller also holds its
         # normal actor/dialogue authorization transaction. Never retry HTTP.
         try:

@@ -30,6 +30,29 @@ def handler(member_from_request, canonical_origin, request_provider, wait_slot, 
     return handle
 
 
+def send_status_handler(member_from_request, logger):
+    import asyncio
+    from tenant_read_session import require_read_session
+    from tenant_chat_send_store import read_send_status
+
+    async def handle(request):
+        headers = {'Cache-Control': 'no-store'}
+        try:
+            session = require_read_session(request, member_from_request)
+            result = await asyncio.to_thread(read_send_status, session, request.query.get('lead_id'),
+                                             request.query.get('request_id'))
+            return web.json_response({'success': True, **result}, headers=headers)
+        except TenantLinearError as error:
+            return web.json_response({'success': False, 'error': str(error)}, status=error.status, headers=headers)
+        except (ValueError, TypeError, KeyError):
+            return web.json_response({'success': False, 'error': 'Sorğu düzgün deyil.'}, status=400, headers=headers)
+        except Exception:
+            logger.warning('Chat send receipt read unavailable')
+            return web.json_response({'success': False, 'error': 'Göndərmə vəziyyəti əlçatan deyil.'},
+                                     status=503, headers=headers)
+    return handle
+
+
 def receipt_handler(member_from_request,logger):
     """GET status never dispatches, records customer history or marks handling."""
     import asyncio
@@ -49,8 +72,10 @@ def receipt_handler(member_from_request,logger):
             # Preserve existing timeout recovery: reconcile only an already-verified
             # own receipt cache, never invoke send/history/handling from this GET.
             state=fresh['receipt_state']
-            if request_id and state in {'sending','unknown'} and fresh['quote']:
-                await asyncio.to_thread(accept_quoted_lookup,fresh,status['message_id']);state='accepted'
+            if (request_id and state in {'sending', 'unknown'} and fresh['quote']
+                    and status.get('provider_accepted') is True and status.get('message_id')):
+                await asyncio.to_thread(accept_quoted_lookup, fresh, status['message_id'])
+                state = 'accepted'
             return web.json_response({'success':True,'state':state,'receipt_state':state,'request_id':item['key'][2],**status},headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error),'keep_request':True},status=error.status,headers=headers)

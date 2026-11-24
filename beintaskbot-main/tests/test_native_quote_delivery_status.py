@@ -285,11 +285,13 @@ def test_get_unknown_receipt_reconciles_only_explicit_uuid_and_rechecks_revocati
     source=db.execute('SELECT id::text FROM saas_crm_messages WHERE tenant_id=%s::uuid',(A,))[0]['id']
     db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s::uuid",('{"externalMessageId":"SOURCE123"}',A));db.commit()
     item=store.reserve(PROFILE,{**PAYLOAD,'quote_message_id':source});store.mark_sending(item,{'origin':'connect'});store.finish(item,'unknown')
-    calls=[];revoke={'value':False}
+    calls=[];revoke={'value':False};confirmed={'value':False}
     def request(_key,method,path,payload=None):
         calls.append(method);assert method=='GET'
         if revoke['value']:
             db.execute('UPDATE saas_tenant_members SET active=FALSE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit()
+        if confirmed['value']:
+            return result(phase='accepted',status='sent',providerAccepted=True,externalMessageId='OUTBOUND123')
         return result(phase='unknown',status='unknown')
     monkeypatch.setattr(transport,'_request',request)
     async def scenario():
@@ -303,7 +305,10 @@ def test_get_unknown_receipt_reconciles_only_explicit_uuid_and_rechecks_revocati
             assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='unknown'
             db.execute('UPDATE saas_tenant_members SET active=TRUE WHERE tenant_id=%s::uuid AND telegram_id=11',(A,));db.commit();revoke['value']=False
             response=await client.get('/status',params={**query,'request_id':REQUEST});assert response.status==200
+            assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='unknown'
+            confirmed['value']=True
+            response=await client.get('/status',params={**query,'request_id':REQUEST});assert response.status==200
             assert db.execute('SELECT state FROM saas_chat_send_receipts WHERE request_id=%s::uuid',(REQUEST,))[0]['state']=='accepted'
-        assert calls==['GET','GET','GET']
+        assert calls==['GET','GET','GET','GET']
     asyncio.run(scenario())
     assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE direction='outgoing' AND tenant_id=%s::uuid",(A,))[0]['n']==0

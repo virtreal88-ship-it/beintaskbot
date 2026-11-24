@@ -35,7 +35,30 @@
     };
     const key='tenant-chat-send:'+identity+':'+leadId;
     const scoped=provider==='connect'&&String(me.tenant_id)==='e09a5c24-093f-4141-992d-532052e00c90'&&String(channelId)==='96863d75-d272-4c93-a25e-ffb2b16ecae3';
-    const readReceipt=requestId=>api('/api/platform/crm/chat/quote-receipt?'+new URLSearchParams({lead_id:String(leadId),expected_tenant_id:String(me.tenant_id),expected_user_id:String(me.telegram_id),...(requestId?{request_id:requestId}:{})}),{method:'GET'});
+    const readStatus=(path,requestId)=>api('/api/platform/crm/chat/'+path+'?'+new URLSearchParams({
+      lead_id:String(leadId),expected_tenant_id:String(me.tenant_id),expected_user_id:String(me.telegram_id),
+      ...(requestId?{request_id:requestId}:{})
+    }),{method:'GET'});
+    const readReceipt=requestId=>readStatus('quote-receipt',requestId);
+    async function checkPending(pending){
+      const saved=await readStatus('send-status',pending.request_id);
+      if(pending.quote_message_id&&provider==='connect'&&['sending','unknown'].includes(saved.state)){
+        return readReceipt(pending.request_id);
+      }
+      return saved;
+    }
+    function forgetPending(requestId){
+      try{
+        if(JSON.parse(sessionStorage.getItem(key)||'null')?.request_id!==requestId)return false;
+        sessionStorage.removeItem(key);
+        return true;
+      }catch{return false;}
+    }
+    const checkCopy=state=>({
+      ru:{blocked:'Предыдущая попытка завершилась без отправки. Теперь можно отправить ответ.',pending:'Статус предыдущей отправки пока не подтверждён. Черновик сохранён.'},
+      az:{blocked:'Əvvəlki cəhddə mesaj göndərilmədi. İndi cavab göndərə bilərsiniz.',pending:'Əvvəlki göndərişin statusu hələ təsdiqlənməyib. Qaralama saxlanıldı.'},
+      en:{blocked:'The previous attempt did not send. You can now send a reply.',pending:'The previous send is still unconfirmed. Your draft is saved.'}
+    }[language()][state]);
     let receiptOutput;
     const showDiagnostic=sent=>{
       const text=diagnostic(sent);
@@ -52,25 +75,38 @@
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
+      if(!pending&&button.textContent.trim()===copy('checkSend','Vəziyyəti yoxla')){
+        onDiscard();button.textContent=copy('send','Göndər');return;
+      }
       const checking=Boolean(pending);
       const text=input.value.trim();if(!pending&&!text)return;
-      if(pending&&text&&text!==pending.text){alert('Əvvəlki mesajın vəziyyəti yoxlanmalıdır. Yeni mesaj göndərilmədi.');return;}
       const quote=getQuote();
       if(pending?.quote_message_id&&!isQuoteCurrent(pending)){alert('Əvvəlki mesaj başqa dialoqa aiddir.');return;}
       if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
       try{
-        const sent=scoped&&checking&&pending.quote_message_id?await readReceipt(pending.request_id):await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
+        const sent=checking?await checkPending(pending):await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
+        if(checking&&sent.state==='blocked'&&sent.quote_protocol!==true){
+          if(forgetPending(pending.request_id)&&isCurrent()){
+            onDiscard();button.textContent=copy('send','Göndər');showAccepted(checkCopy('blocked'));
+          }
+          return;
+        }
+        if(checking&&sent.state!=='accepted'&&sent.quote_protocol!==true){
+          showAccepted(checkCopy('pending'));
+          return;
+        }
         if(sent.quote_protocol===true)showDiagnostic({...sent,request_id:sent.request_id||pending.request_id});
         if(pending.quote_message_id&&sent.quote_protocol===true&&sent.provider_accepted!==true&&sent.manual_review!==true){
-          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){sessionStorage.removeItem(key);if(isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
+          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){if(forgetPending(pending.request_id)&&isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
           else if(isCurrent()){onPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
           if(isCurrent()){alert(diagnostic(sent));await reload();}return;
         }
-        sessionStorage.removeItem(key);onAccepted(pending.text);if(!isCurrent())return;
+        if(!forgetPending(pending.request_id)||!isCurrent())return;
+        onAccepted(pending.text);
         if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
         showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
-      }catch(e){const discard=e.keepRequest===false&&!pending?.quote_message_id;if(discard){sessionStorage.removeItem(key);if(isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
+      }catch(e){const discard=!checking&&e.keepRequest===false&&!pending?.quote_message_id;if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
