@@ -114,7 +114,7 @@ const beta='@verified_account';
   assert.equal(await page.locator('#operatorClientCompanyHost [data-company-value]').textContent(),alpha);
   const card=page.locator('#operatorClientCard'),panel=page.locator('#operatorCompanyPanel');
   assert.equal(await panel.isVisible(),width>900,'desktop details stay open; mobile starts with the overlay closed');
-  assert.deepEqual(await page.evaluate(()=>window.profilePosts),[]);
+  assert.deepEqual(await page.evaluate(()=>window.profilePosts),width<=900?[]:['a'],'company profile loads only when the details panel is visible');
   const pane=page.locator('#operatorConversationPane');
   const corners=el=>{const c=getComputedStyle(el);return [c.borderTopLeftRadius,c.borderTopRightRadius,c.borderBottomLeftRadius,c.borderBottomRightRadius];};
   const originalPaneCorners=await pane.evaluate(corners);
