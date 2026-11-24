@@ -47,6 +47,19 @@
       }
       return saved;
     }
+    function presentPending(pending){
+      let saved;
+      try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}
+      if(saved?.request_id!==pending.request_id)return;
+      onPending(saved,()=>{
+        try{
+          const current=JSON.parse(sessionStorage.getItem(key)||'null');
+          if(current?.request_id===pending.request_id){
+            sessionStorage.setItem(key,JSON.stringify({...current,quote_preview_dismissed:true}));
+          }
+        }catch{}
+      });
+    }
     function forgetPending(requestId){
       try{
         if(JSON.parse(sessionStorage.getItem(key)||'null')?.request_id!==requestId)return false;
@@ -71,7 +84,7 @@
       check.onclick=async()=>{if(check.disabled||!isCurrent())return;check.disabled=true;try{let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}const result=await readReceipt(saved?.quote_message_id?saved.request_id:null);if(isCurrent())showDiagnostic(result);}catch(error){if(isCurrent())receiptOutput.textContent=error.message;}finally{check.disabled=false;}};
     }
 
-    try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){button.textContent=copy('checkSend','Vəziyyəti yoxla');if(!saved.quote_message_id||isQuoteCurrent(saved))onPending(saved);}}catch(e){button.disabled=true;}
+    try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){button.textContent=copy('checkSend','Vəziyyəti yoxla');if(!saved.quote_message_id||isQuoteCurrent(saved))presentPending(saved);}}catch(e){button.disabled=true;}
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
@@ -84,6 +97,7 @@
       if(pending?.quote_message_id&&!isQuoteCurrent(pending)){alert('Əvvəlki mesaj başqa dialoqa aiddir.');return;}
       if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
+      if(!checking&&pending.quote_message_id)presentPending(pending);
       try{
         const sent=checking?await checkPending(pending):await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
         if(checking&&sent.state==='blocked'&&sent.quote_protocol!==true){
@@ -99,14 +113,14 @@
         if(sent.quote_protocol===true)showDiagnostic({...sent,request_id:sent.request_id||pending.request_id});
         if(pending.quote_message_id&&sent.quote_protocol===true&&sent.provider_accepted!==true&&sent.manual_review!==true){
           if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){if(forgetPending(pending.request_id)&&isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
-          else if(isCurrent()){onPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
+          else if(isCurrent()){presentPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
           if(isCurrent()){alert(diagnostic(sent));await reload();}return;
         }
         if(!forgetPending(pending.request_id)||!isCurrent())return;
         onAccepted(pending.text);
         if(input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
         showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
-      }catch(e){const discard=!checking&&e.keepRequest===false&&!pending?.quote_message_id;if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}else if(isCurrent())onPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
+      }catch(e){const discard=!checking&&e.keepRequest===false&&!pending?.quote_message_id;if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}else if(isCurrent())presentPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});

@@ -135,6 +135,11 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                     body.extend(chunk)
                     if len(body)>16384:raise ValueError()
                 value=json.loads(body)
+                if (quoted_message_id is not None and response.status_code == 422
+                        and value.get('error') == 'native_quote_not_sent'
+                        and value.get('confirmed') is False and 'result' not in value):
+                    from tenant_connect_transport import ConnectPreflightError
+                    raise ConnectPreflightError('quoted_source_scope_conflict')
                 result=value.get('result',{})
                 provider=result.get('provider_id')
                 if (response.status_code!=200 or value.get('confirmed') is not True or
@@ -176,8 +181,17 @@ def resolve_quote(cur,route,provider_id):
     if not row:raise TenantPlatformError('native_quote_evidence_missing')
     from tenant_whatsapp_native_projection import open_stored
     evidence=open_stored(row,scope)
-    if (evidence.get('kind')!='message' or evidence.get('variant') or
-            evidence.get('provider_id')!=provider_id or not quote_chat_matches(evidence,route['conversation_id'],facts)):
+    def verify_stored_alias(original, target):
+        from tenant_connect_identity import conflicted
+        from tenant_whatsapp_native_status import verified_receipt_chats
+        tenant, channel = scope['tenant'], scope['source']
+        return (facts.get('conversationIdentityConflict') is not True
+                and original in verified_receipt_chats(cur, tenant, channel, target)
+                and not conflicted(cur, tenant, channel, target))
+
+    if (evidence.get('kind') != 'message' or evidence.get('variant')
+            or evidence.get('provider_id') != provider_id
+            or not quote_chat_matches(evidence, route['conversation_id'], facts, verify_stored_alias)):
         raise TenantPlatformError('native_quote_scope_denied')
     return {'quote_event':event_id,'quote_id':provider_id}
 
@@ -197,14 +211,19 @@ def legacy_quote(row,route,provider_id):
     return {'quote_id':provider_id,'legacy_quote':{'chat':chat,'provider_id':provider_id,'sender':sender,'text':body}}
 
 
-def quote_chat_matches(evidence,conversation,facts):
+def quote_chat_matches(evidence, conversation, facts, verify_alias=None):
     original=facts.get('_crm_provider_conversation_id') or facts.get('conversationId') or conversation
     if evidence.get('chat')!=original:return False
     if original==conversation:return True
     if original.endswith('@g.us') or conversation.endswith('@g.us'):return False
     alternate=evidence.get('recipient_alt') if evidence.get('from_me') else evidence.get('sender_alt')
     if not evidence.get('from_me') and evidence.get('sender')!=original:return False
-    return alternate==conversation and {original.split('@')[-1],conversation.split('@')[-1]}=={'s.whatsapp.net','lid'}
+    if {original.split('@')[-1], conversation.split('@')[-1]} != {'s.whatsapp.net', 'lid'}:
+        return False
+    if alternate:
+        return alternate == conversation
+    # Quote fallback only. The gateway independently checks its own device map.
+    return verify_alias is not None and verify_alias(original, conversation)
 
 
 def media_receipt(route,request_id,*,kind,mime,name='',caption='',content):

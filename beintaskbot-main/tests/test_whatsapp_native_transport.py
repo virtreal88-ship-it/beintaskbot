@@ -271,6 +271,64 @@ def test_quote_requires_exact_existing_dialog_evidence(configured,monkeypatch):
     call.assert_not_called()
 
 
+def test_old_quote_without_event_alias_uses_verified_current_source_pair(configured, monkeypatch):
+    from test_whatsapp_native_projection import message
+    from test_whatsapp_native_inbox import delivery, store
+    import tenant_whatsapp_native_projection as projection
+    import tenant_whatsapp_native_inbox as inbox
+    db, route = configured
+    call = accepted(monkeypatch)
+    monkeypatch.setattr(projection, '_fernet', inbox._fernet)
+    peer, lid = route['conversation_id'], '123456789012@lid'
+    value = delivery()
+    value['event']['payload'] = message(chat=lid, sender=lid, sender_alt='')
+    store(value)
+    db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',
+               (peer, A, CA))
+    facts = {'externalMessageId': 'SYNTHETIC_MESSAGE_1', 'nativeEventId': 'a'*64,
+             '_crm_provider_conversation_id': lid, 'conversationId': peer}
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",
+               (json.dumps(facts), A))
+    db.commit()
+    with pytest.raises(transport.ConnectPreflightError):
+        native.text(route, 'reply', str(uuid.uuid4()), quoted_message_id='SYNTHETIC_MESSAGE_1')
+    call.assert_not_called()
+    for identity in (lid, peer):
+        db.execute('''INSERT INTO saas_connect_direct_identities
+            (tenant_id,connect_channel_id,identity_key,canonical_conversation_id) VALUES(%s,%s,%s,%s)''',
+            (A, CA, identity, peer))
+    db.commit()
+    native.text(route, 'reply', str(uuid.uuid4()), quoted_message_id='SYNTHETIC_MESSAGE_1')
+    call.assert_called_once()
+    assert call.call_args.kwargs['json']['chat'] == peer
+    assert call.call_args.kwargs['json']['quote_event'] == 'a'*64
+    assert 'legacy_quote' not in call.call_args.kwargs['json']
+
+    call.reset_mock()
+    db.execute("UPDATE saas_crm_messages SET raw=raw||%s::jsonb WHERE tenant_id=%s AND external_id='m1'",
+               (json.dumps({'conversationIdentityConflict': True}), A))
+    db.commit()
+    with pytest.raises(transport.ConnectPreflightError):
+        native.text(route, 'reply', str(uuid.uuid4()), quoted_message_id='SYNTHETIC_MESSAGE_1')
+    call.assert_not_called()
+
+
+@pytest.mark.parametrize('http,extra,preflight', [
+    (422, {}, True), (409, {}, False), (422, {'result': {'provider_id': 'old'}}, False),
+])
+def test_gateway_quote_refusal_is_known_only_with_exact_predispatch_signal(configured, monkeypatch, http, extra, preflight):
+    _, route = configured
+    call = accepted(monkeypatch)
+    monkeypatch.setattr(native, 'resolve_quote', lambda *_: {'quote_id': 'ORIGINAL', 'quote_event': 'a'*64})
+    response = call.return_value
+    response.status_code = http
+    response.iter_content.return_value = [json.dumps({'error': 'native_quote_not_sent', 'confirmed': False, **extra}).encode()]
+    with pytest.raises(TenantPlatformError) as failure:
+        native.text(route, 'reply', str(uuid.uuid4()), quoted_message_id='ORIGINAL')
+    assert isinstance(failure.value, transport.ConnectPreflightError) is preflight
+    call.assert_called_once()
+
+
 def test_lookup_is_read_only_exact_actor_operation(configured,monkeypatch):
     db,route=configured;call=accepted(monkeypatch)
     route={**route,'author_id':11,'crm_conversation_id':41}
