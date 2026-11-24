@@ -1138,6 +1138,9 @@
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
   const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||'';
+  const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
+  const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
+  const phoneUnavailable=()=>dialogPhoneLabel(currentDialog);
   const isDialogGroup=route=>route.customer_kind==='group'||route.conversation_kind==='group';
   const hasContactName=route=>{
     const name=safeName(route);
@@ -1162,9 +1165,10 @@
     const query=historyQuery(route);
     if(route.contact_source_revision)query.set('contact_source_revision',route.contact_source_revision);
     entry.flight=rawApi(endpoint+'dialogs/contact-phone?'+query,{signal:entry.controller.signal}, {optionalScopedRead:true}).then(({result})=>{
-      if(entry.controller.signal.aborted||key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||result.status!=='available'||result.provider!=='connect'||!sameDialog(result,route))return;
+      if(entry.controller.signal.aborted||key!==contactPhoneKey(route)||owner!==identity(member)||!hasRight('dialogs')||result?.display_only!==true||!['available','hidden'].includes(result.status)||result.provider!=='connect'||!sameDialog(result,route))return;
       if(route.contact_source_revision&&result.contact_source_revision!==route.contact_source_revision)return;
       if(/^\+[1-9][0-9]{6,14}$/.test(result.phone||''))entry.phone=result.phone;
+      entry.phoneHidden=result.status==='hidden'&&!entry.phone;
       entry.name=usableDialogName(result.display_name,route);
     }).catch(()=>{}).finally(()=>{
       entry.retryAt=Date.now()+(fromList&&!entry.phone&&!entry.name?120000:30000);
@@ -1259,21 +1263,20 @@
     const key=contactPhoneKey(route),revision=openRevision;
     lookupContactDetails(route).then(()=>{
       if(key!==contactPhoneKey(route)||revision!==openRevision||!inDialogsView()||!sameDialog(route,currentDialog)||!head.isConnected||head!==$('operatorConversationHeader'))return;
-      const phone=displayDialogPhone(currentDialog)||phoneUnavailable();
+      const phone=dialogPhoneLabel(currentDialog);
       for(const label of [head.querySelector('[data-header-phone]'),$('operatorClientCard')?.querySelector('[data-panel-phone]')])if(label)label.textContent=phone;
       const title=$('operatorDialogTitleText');if(title)title.textContent=dialogTitle(currentDialog);
       const panelName=$('operatorClientCard')?.querySelector('[data-panel-name]');if(panelName)panelName.textContent=dialogTitle(currentDialog);
       updateRowContact(route);
     });
   }
-  const phoneUnavailable=()=>({ru:'Номер не подтверждён',az:'Nömrə təsdiqlənməyib',en:'Phone not confirmed'}[i18n.language]||'Phone not confirmed');
   const dialogTitle=row=>{
     const known=safeName(row);
     if(isDialogGroup(row))return known||t('whatsappGroup');
     if(row.provider!=='connect')return known||row.phone||t('whatsappContact');
     return usableDialogName(row.manual_display_name,row)||(hasContactName(row)?known:'')||contactDetails(row)?.name||displayDialogPhone(row)||t('whatsappContact');
   };
-  const dialogIdentity=row=>isDialogGroup(row)?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):displayDialogPhone(row);
+  const dialogIdentity=row=>isDialogGroup(row)?(row.group_participant_count?`${row.group_participant_count} · ${t('participants')}`:''):dialogPhoneLabel(row);
   const dialogRowSubtitle=row=>{const identity=dialogIdentity(row);return !isDialogGroup(row)&&identity===dialogTitle(row)?'':identity;};
   const avatarUrl=row=>'/api/platform/ai/dialogs/avatar?'+new URLSearchParams({provider:row.provider||'connect',lead_id:String(row.lead_id||''),channel_id:String(row.channel_id||''),conversation_id:String(row.conversation_id||'')});
   const avatarAttempts=new Set(),avatarReady=new Set(),avatarQueue=[];let avatarActive=0,avatarObserver;
@@ -1875,7 +1878,7 @@
     const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route);
     const panelTitle=hasCompany()||(!hasTransfer&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';
-    const name=dialogTitle(route),phone=displayDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
+    const name=dialogTitle(route),phone=dialogPhoneLabel(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
     const oldCompany=$('operatorCompanyPanel');
     const sameCard=oldCard?.dataset.scope===scope;
     const companySnapshot=sameCard&&oldCompany?.open?{

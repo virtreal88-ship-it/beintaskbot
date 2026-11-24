@@ -113,7 +113,11 @@ def claim(channel: str) -> dict | None:
                 row = {**row, 'deal': None}  # Task-only users do not gain client contact access.
             item.update(send=allowed, resource=row, tenant_name=(member or {}).get('tenant_name', ''),target_url=target_url)
             if allowed and channel=='push' and push_context:
+                # Keep notification content's established shape unchanged.
+                # The stable event ID only deduplicates this delivery in the
+                # service worker; it must not replace another message in chat.
                 item['notification_context']=push_context
+                item['notification_id']=str(item['event_id'])
         conn.commit()
     return item
 

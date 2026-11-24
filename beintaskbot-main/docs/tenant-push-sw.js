@@ -20,7 +20,8 @@ function allowedTarget(value){
   }catch{}
   return '/app';
 }
-function dialogNoticeTag(target){
+function dialogNoticeTag(target,notificationId){
+  if(typeof notificationId==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(notificationId))return 'crm-message-'+notificationId.toLowerCase();
   try{
     const url=new URL(target||'/app',self.location.origin),seed=['channel_id','lead_id','conversation_id'].map(key=>url.searchParams.get(key)||'').join('|');
     let hash=2166136261;for(let i=0;i<seed.length;i++){hash^=seed.charCodeAt(i);hash=Math.imul(hash,16777619);}
@@ -34,11 +35,11 @@ function safeMessageText(value,limit){
 self.addEventListener('push',event=>{
   let kind='';try{kind=event.data?.json()?.kind || '';}catch{}
   if(kind==='crm_notice'){
-    let eventKey='',target='/app',title='CRM Smart Assistant',body='';try{const payload=event.data.json();eventKey=payload.event||'';target=allowedTarget(payload.url);if(eventKey==='incoming_message'){title=safeMessageText(payload.title,120)||title;body=safeMessageText(payload.body,180);}}catch{}
+    let eventKey='',target='/app',title='CRM Smart Assistant',body='',notificationId='';try{const payload=event.data.json();eventKey=payload.event||'';target=allowedTarget(payload.url);if(eventKey==='incoming_message'){title=safeMessageText(payload.title,120)||title;body=safeMessageText(payload.body,180);notificationId=payload.notification_id||'';}}catch{}
     const task=['task_assigned','task_overdue'].includes(eventKey);
     event.waitUntil(self.registration.showNotification(title,{
       body:task?'Tapşırıq üzrə yenilik var. Kabinetdə yoxlayın.':eventKey==='incoming_message'?(body||'Yeni mesaj var. Kabinetdə yoxlayın.'):'Yeni mesaj və ya sövdələşmə var. Kabinetdə yoxlayın.',
-      tag:task?'crm-task-notice':eventKey==='incoming_message'?dialogNoticeTag(target):'crm-notice',data:{url:task?'/app?view=tasks':target}
+      tag:task?'crm-task-notice':eventKey==='incoming_message'?dialogNoticeTag(target,notificationId):'crm-notice',data:{url:task?'/app?view=tasks':target}
     }));return;
   }
   const linear=kind==='linear',risk=kind==='risk_alert',hot=kind==='hot_order',review=['hot_order_review','hot_order_decided'].includes(kind);

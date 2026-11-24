@@ -112,9 +112,16 @@ def _incoming_copy(context: object) -> tuple[str, str]:
         if name and phone:
             title += ' · ' + phone
     body = _notification_text(context.get('text'), 180)
-    if not body:
-        kind = str(context.get('message_type') or '').casefold()
-        if kind in {'audio', 'voice', 'ptt', 'voicenote', 'audio_message'}:
+    kind = re.sub(r'[-\s]+', '_', str(context.get('message_type') or '').casefold())
+    generic = re.sub(r'[^a-z0-9]+', ' ', body.casefold()).strip()
+    placeholders = {
+        'new customer message', 'new message', 'new customer message received',
+        'customer sent a new message', 'new incoming message',
+    }
+    # Provider placeholders are not message captions. For media, use the
+    # attachment kind instead; keep genuine user captions intact.
+    if not body or generic in placeholders:
+        if kind in {'audio', 'voice', 'ptt', 'voicenote', 'voice_note', 'audio_message'}:
             body = 'Səsli mesaj'
         elif kind in {'image', 'photo', 'image_message', 'sticker'}:
             body = 'Foto'
@@ -122,12 +129,13 @@ def _incoming_copy(context: object) -> tuple[str, str]:
             body = 'Video'
         elif kind in {'document', 'file', 'document_message'}:
             body = 'Sənəd'
-        else:
+        elif not body:
             body = 'Yeni mesaj var. Kabinetdə yoxlayın.'
     return title[:120], body
 
 
-def payload_for(event: str | None, target_url: str = '', notification_context: object = None) -> dict[str, str]:
+def payload_for(event: str | None, target_url: str = '', notification_context: object = None,
+                notification_id: object = None) -> dict[str, str]:
     """Return an independent copy; unknown events retain the old default."""
     payload=dict(_PAYLOADS.get(event, _DEFAULT))
     if event=='proactive_risk':
@@ -137,4 +145,6 @@ def payload_for(event: str | None, target_url: str = '', notification_context: o
         safe_target=_safe_dialog_target(target_url)
         if safe_target:payload['url']=safe_target
         payload['title'],payload['body']=_incoming_copy(notification_context)
+        if isinstance(notification_id,str) and re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',notification_id,re.I):
+            payload['notification_id']=notification_id.lower()
     return payload

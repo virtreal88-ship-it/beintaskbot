@@ -71,7 +71,9 @@
     });
     const payload=await result.json();
     if(!result.ok||payload?.success!==true){
-      const error=new Error(t('error'));error.status=result.status;throw error;
+      const safeMessage=typeof payload?.error==='string'
+        ?payload.error.replace(/[\x00-\x1f\x7f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,240):'';
+      const error=new Error(safeMessage||t('error'));error.status=result.status;throw error;
     }
     return payload;
   }
@@ -590,7 +592,7 @@
       if(current(s)){
         recheck=[401,403,404,409].includes(error.status);
         if(recheck&&expected_company_id)s.reset();
-        s.status.textContent=fields.operator_account?copy('bindError'):t('error');
+        s.status.textContent=error.message&&error.message!==t('error')?error.message:(fields.operator_account?copy('bindError'):t('error'));
       }
     }finally{
       s.writing=false;
