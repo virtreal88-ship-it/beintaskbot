@@ -134,10 +134,10 @@ def test_missing_tables_no_reply_and_manual_start_unchanged(companies,monkeypatc
         command('dismiss',0,message_id=inbound)
     assert old_client.value.status==422
     assert state(database) is None
-    request=payload('dismiss',0,message_id=inbound,individual_no_reply=True)
+    assert command('accept',0)['lifecycle']['state']=='accepted'
+    request=payload('dismiss',1,message_id=inbound,individual_no_reply=True)
     result=lifecycle.mutate(PROFILE,request)
-    assert result['lifecycle']['state']=='waiting' and result['lifecycle']['no_reply_needed'] and lifecycle.mutate(PROFILE,request)==result
-    assert command('accept',1)['lifecycle']['state']=='accepted'
+    assert result['lifecycle']['state']=='accepted' and result['lifecycle']['no_reply_needed'] and lifecycle.mutate(PROFILE,request)==result
     with pytest.raises(TenantLinearError) as unavailable:
         command('close',2)
     assert unavailable.value.status==422 and state(database)['state']=='accepted'

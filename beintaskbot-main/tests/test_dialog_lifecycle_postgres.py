@@ -242,19 +242,20 @@ def test_native_close_racing_fresh_inbound_never_hides_the_new_message(episodes)
     episodes.commit()
 
 
-def test_native_dismiss_racing_newer_inbound_never_dismisses_the_new_message(episodes):
+def test_native_rhetorical_after_acceptance_races_new_inbound(episodes):
+    import tenant_dialog_lifecycle as lifecycle
     latest=episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'];episodes.commit()
-    values=race(episodes,[(11,payload('dismiss',0,message_id=str(latest),individual_no_reply=True),'mutate'),(11,payload(),'incoming')])
+    accepted=lifecycle.mutate(PROFILE,payload('accept'))['lifecycle']
+    values=race(episodes,[(11,payload('dismiss',1,message_id=str(latest),individual_no_reply=True),'mutate'),(11,payload(),'incoming')])
     incoming=next(value[1]['incoming_id'] for value in values if value[0]=='ok' and 'incoming_id' in value[1])
-    rows=episodes.execute('SELECT state,last_inbound_id FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))
-    assert not rows or rows[0]['state']=='waiting',values
-    if rows:assert rows[0]['last_inbound_id']==incoming
-    else:assert ('denied',409) in values, 'new message ID invalidates marking before a workflow exists'
+    rows=episodes.execute('SELECT id::text,state,operator_id,last_inbound_id,closed_at FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(A,))
+    assert rows==[{'id':accepted['id'],'state':'accepted','operator_id':11,'last_inbound_id':incoming,'closed_at':None}],values
     marks=episodes.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_no_reply'",(A,))
     assert len(marks)<=1
     assert all(row['payload']['message_id']==str(latest) and row['payload']['counts_as_missed'] is False for row in marks)
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
-    assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
+    assert (('denied',409) in values)==(not marks)
+    assert len(episodes.execute('SELECT 1 FROM saas_dialog_episodes WHERE closed_at IS NULL'))==1
+    assert not episodes.execute('SELECT * FROM saas_support_tickets')
     episodes.commit()
 
 
@@ -271,5 +272,7 @@ def test_native_source_revocation_serializes_send_and_blocks_future_actions(epis
     before=episodes.execute('SELECT count(*) AS n FROM test_external_sends')[0]['n'];episodes.commit()
     assert race(episodes,[(33,payload(),'guarded_send')])==[('denied',403)]
     assert race(episodes,[(33,payload('close',1),'mutate')])==[('denied',403)]
+    latest=episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'];episodes.commit()
+    assert race(episodes,[(33,payload('dismiss',1,message_id=str(latest),individual_no_reply=True),'mutate')])==[('denied',403)]
     assert episodes.execute('SELECT count(*) AS n FROM test_external_sends')[0]['n']==before
     episodes.commit()

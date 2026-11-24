@@ -16,7 +16,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
    if(body.action==='accept'){route={...route,can_send:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,accepted_by_name:'Operator & <b>Example</b>',revision:2,can_close:true,can_transfer:true,transfer_targets:[{employee_id:44,name:'Hüseyn'}]}};}
    if(body.action==='start'){route={...route,archive_read_only:false,can_send:true,lifecycle:{id:'new-episode',state:'accepted',operator_id:33,revision:8,can_close:true,can_transfer:true}};}
    if(body.action==='close'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:3,can_close:false,can_transfer:false,can_submit_case:true}};}
-   if(body.action==='dismiss'){route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'waiting',revision:5,operator_id:null,no_reply_needed:true,can_dismiss:false}};}
+   if(body.action==='dismiss'){route={...route,lifecycle:{...route.lifecycle,revision:5,no_reply_needed:true,can_dismiss:false}};}
    result={lifecycle:route.lifecycle,...(body.action==='case'?caseResult:{})};
   }else if(url.includes('/dialogs/history')){if(denyHistory)return{ok:false,status:404,json:async()=>({success:false,error:'Unavailable'})};result={dialog:{...route},messages:[{id:'message',body:'Private customer message',direction:'incoming'}],next_before:null};}
   else if(url.includes('/dialogs?'))result={dialogs:[],channels:[],agents:[],attention_count:0,next_offset:null};
@@ -31,7 +31,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  assert(d.querySelector('#operatorAcceptAction [data-operator-lifecycle=accept]'));assert(d.querySelector('#operatorAcceptAction').nextElementSibling.classList.contains('operator-composer'),'accept action is directly above composer, outside scrolling history');assert(!d.querySelector('.operator-chat-scrollarea #operatorAcceptAction'));assert(!d.querySelector('[data-operator-complete]'));assert(!d.querySelector('[data-operator-create-ticket]'));assert(!d.querySelector('[data-operator-action=resume]'));assert(d.querySelector('#sendChat').disabled);assert(d.querySelector('#operatorTraining').hidden);
  assert(d.querySelector('[data-client-accepted-by]').hidden,'waiting routes do not display an inferred name');
  failed=true;d.querySelector('[data-operator-lifecycle=accept]').click();await tick();const first=calls.find(c=>c.body?.action==='accept').body;assert.equal(first.expected_revision,1);assert.equal(first.expected_tenant_id,'tenant');assert.equal(first.expected_user_id,33);
- failed=false;hold=true;d.querySelector('[data-operator-lifecycle=accept]').click();d.querySelector('[data-operator-lifecycle=accept]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='accept').length,2);assert.equal(calls.filter(c=>c.body?.action==='accept')[1].body.request_id,first.request_id,'retry retains exact receipt');hold=false;release();await tick();await tick();assert(!d.querySelector('[data-operator-lifecycle=accept]'));assert.equal(d.querySelector('[data-operator-lifecycle=close]').nextElementSibling.id,'operatorAIReply');assert(!d.querySelector('#sendChat').disabled);
+ failed=false;hold=true;d.querySelector('[data-operator-lifecycle=accept]').click();d.querySelector('[data-operator-lifecycle=accept]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='accept').length,2);assert.equal(calls.filter(c=>c.body?.action==='accept')[1].body.request_id,first.request_id,'retry retains exact receipt');hold=false;release();await tick();await tick();assert(!d.querySelector('[data-operator-lifecycle=accept]'));assert.equal(d.querySelector('[data-operator-lifecycle=close]').parentElement.nextElementSibling.id,'operatorAIReply');assert(!d.querySelector('#sendChat').disabled);
  const acceptedBy=d.querySelector('#operatorClientCard [data-client-accepted-by]');
  assert.equal(acceptedBy.querySelector('small').textContent,'Dialoqu qəbul edən');
  assert.equal(acceptedBy.querySelector('span').textContent,'Operator & <b>Example</b>');
@@ -52,7 +52,15 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  let episodeModal=d.querySelector('#operatorLifecycleModal'),episodeSelect=episodeModal.querySelector('[data-episode-select]');assert(episodeModal.querySelector('[type=submit]').disabled);assert(episodeSelect.querySelector('[value="already-sent"]').disabled);episodeSelect.value='old-completed';episodeSelect.dispatchEvent(new w.Event('change'));episodeModal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();assert.equal(calls.filter(c=>c.body?.action==='case').at(-1).body.episode_id,'old-completed');assert.equal(calls.filter(c=>c.body?.action==='case').at(-1).body.expected_revision,4);assert.match(d.querySelector('#operatorChatError').textContent,/Only a greeting/);
  denyCase=true;d.querySelector('[data-operator-lifecycle=case]').click();episodeModal=d.querySelector('#operatorLifecycleModal');episodeSelect=episodeModal.querySelector('select');episodeSelect.value='old-completed';episodeSelect.dispatchEvent(new w.Event('change'));episodeModal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();assert(!d.querySelector('#chatRows'),'stale ownership blocks historical submission and clears chat');assert(!d.querySelector('#operatorLifecycleModal'));denyCase=false;
  d.querySelector('#operatorLifecycle').value='active';
- route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',can_dismiss:true,last_inbound_id:'latest-inbound'}};await w.tenantOperator.openDialog(route);d.querySelector('[data-operator-lifecycle=dismiss]').click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');assert(d.querySelector('#chatRows'),'no-reply retains the active conversation');assert(!d.querySelector('[data-operator-lifecycle=dismiss]'));assert(d.querySelector('[data-operator-lifecycle=accept]'),'no-reply does not acquire ownership or disable ordinary acceptance');assert.equal(calls.filter(c=>c.body?.action==='case').length,3);
+ route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
+ await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-lifecycle=dismiss]'),'waiting never shows rhetorical even if an older server advertises it');
+ route={...route,can_send:true,lifecycle:{state:'accepted',revision:4,operator_id:33,can_close:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
+ await w.tenantOperator.openDialog(route);const rhetorical=d.querySelector('[data-operator-lifecycle=dismiss]');
+ assert.equal(rhetorical.textContent,'Ritorik sual');assert.equal(rhetorical.previousElementSibling.dataset.operatorLifecycle,'close');
+ rhetorical.click();await tick();await tick();assert.equal(calls.find(c=>c.body?.action==='dismiss').body.message_id,'latest-inbound');
+ assert(d.querySelector('#chatRows'),'rhetorical mark retains the active conversation');assert(d.querySelector('[data-operator-lifecycle=dismiss]').disabled);assert.equal(d.querySelector('[data-operator-lifecycle=dismiss]').getAttribute('aria-pressed'),'true');
+ assert(d.querySelector('[data-operator-lifecycle=close]'),'rhetorical mark keeps explicit completion');assert(!d.querySelector('#sendChat').disabled);
+ assert.equal(calls.filter(c=>c.body?.action==='case').length,3);
  assert.equal(calls.find(c=>c.body?.action==='dismiss').body.individual_no_reply,true);
  route={...route,lifecycle:{state:'waiting',revision:5,can_accept:true,last_inbound_id:null}};await w.tenantOperator.openDialog(route);assert(d.querySelector('[data-operator-lifecycle=accept]'),'owner can explicitly accept a waiting dialogue without an incoming message');
  route={...route,archive_read_only:true,can_send:false,lifecycle:{state:'closed',revision:7,operator_id:22,can_start:true}};
@@ -150,7 +158,7 @@ async function verifyCompanyCompletion(){
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'operator',active:true},capabilities:{modules:{dialogs:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'a',conversation_id:'client',customer_kind:'contact',customer_name:'Synthetic client',can_send:true,lifecycle_enabled:true,
   lifecycle:{id:'episode',state:'accepted',operator_id:33,revision:1,can_close:true,company_completion:{status:'missing',can_choose:true}}};
- const waiting={...route,lead_id:42,conversation_id:'waiting',lifecycle:{state:'waiting',revision:1,can_dismiss:true,last_inbound_id:'other-inbound',bulk_company_gate:'no_reply_separate'}};
+ const waiting={...route,lead_id:42,conversation_id:'waiting',lifecycle:{state:'waiting',revision:1,can_dismiss:false,has_inbound:true,last_inbound_id:'other-inbound',bulk_company_gate:'no_reply_separate'}};
  const calls=[];let allowClose=false,prelinked=false,heldSearch,failClose=null;
  w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});w.alert=()=>{};
  w.confirm=()=>{throw Error('company and waiting exclusions must not reach bulk confirmation');};
@@ -184,7 +192,7 @@ async function verifyCompanyCompletion(){
  assert.equal(d.querySelector('#sendChat').disabled,false,'unlinked active conversation can still reply');
  d.querySelector('#operatorCompleteAll').click();await tick();await tick();
  assert.match(d.querySelector('#operatorBulkCompletionStatus').textContent,/Left open for company verification: 1/);
- assert.match(d.querySelector('#operatorBulkCompletionStatus').textContent,/individual No reply needed decision: 1/);
+ assert.match(d.querySelector('#operatorBulkCompletionStatus').textContent,/Not yet accepted: 1/);
  assert(!calls.some(c=>c.body?.action),'bulk does not mutate either excluded route');
  prelinked=true;
  w.confirm=prompt=>{assert.match(prompt,/up to 1 accepted dialogues/);assert.match(prompt,/verify each link and dialogue address/);return true;};
