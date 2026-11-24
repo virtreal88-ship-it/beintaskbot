@@ -17,11 +17,11 @@ const companyId='11111111-1111-4111-8111-111111111111';
         await page.evaluate(companyId=>{
           document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-dialogs'));
           const profile={member:{tenant_id:'synthetic-tenant',telegram_id:33,role:'operator',active:true},capabilities:{modules:{dialogs:true}}};
-          window.tenantProfileSnapshot=profile;window.closeWrites=[];window.historyReads=0;window.companySearchReads=0;window.atClose=[];
+          window.tenantProfileSnapshot=profile;window.closeWrites=[];window.historyReads=0;window.companySearchReads=0;window.atClose=[];window.rhetoricalWrites=[];
           let route={provider:'connect',lead_id:41,channel_id:'synthetic-source',conversation_id:'synthetic-contact',
             customer_name:'Synthetic client',can_send:true,lifecycle_enabled:true,available_actions:[],
             lifecycle:{id:'episode',state:'accepted',revision:1,operator_id:33,can_close:true,
-              company_completion:{status:'missing',can_choose:true,can_skip:true}}};
+              can_dismiss:true,last_inbound_id:'latest-inbound',company_completion:{status:'missing',can_choose:true,can_skip:true}}};
           window.routeForTest=route;
           window.setScopedClose=(revision,binding,proof={})=>{
             route={...route,...proof,can_send:true,company_binding:binding,
@@ -40,6 +40,11 @@ const companyId='11111111-1111-4111-8111-111111111111';
                 {id:companyId,name:'Synthetic company',actions:{update:true}},{id:'denied',name:'Denied row',actions:{update:false}}]})};
             }
             if(url.pathname.endsWith('/dialogs_lifecycle')){
+              if(body?.action==='dismiss'){
+                window.rhetoricalWrites.push(body);
+                route={...route,lifecycle:{...route.lifecycle,revision:2,no_reply_needed:true,can_dismiss:false}};
+                return good({lifecycle:route.lifecycle});
+              }
               window.atClose.push(window.historyReads);window.closeWrites.push(body);
               route={...route,can_send:false,lifecycle:{...route.lifecycle,state:'closed',revision:route.lifecycle.revision+1,can_close:false}};
               return good({lifecycle:route.lifecycle});
@@ -66,6 +71,18 @@ const companyId='11111111-1111-4111-8111-111111111111';
         const launch=page.locator('[data-operator-lifecycle="close"]');
         const modal=page.getByRole('dialog',{name:'Company for dialogue completion',exact:true});
         const perform=async target=>{if(mobile)await target.tap();else await target.click();};
+        const rhetorical=page.getByRole('button',{name:'Rhetorical question',exact:true});
+        const [finishAction,rhetoricalAction]=await Promise.all([launch.boundingBox(),rhetorical.boundingBox()]);
+        assert(finishAction&&rhetoricalAction,'both actions visible after acceptance');
+        assert.equal(finishAction.y,rhetoricalAction.y,'both actions share the same row');
+        assert(finishAction.x+finishAction.width<=rhetoricalAction.x&&rhetoricalAction.x+rhetoricalAction.width<=width);
+        await perform(rhetorical);
+        await rhetorical.and(page.locator('[aria-pressed=true]:disabled')).waitFor();
+        await launch.waitFor();
+        assert.deepEqual(await page.evaluate(()=>window.rhetoricalWrites.map(({action,expected_revision,message_id,individual_no_reply})=>
+          ({action,expected_revision,message_id,individual_no_reply}))),
+          [{action:'dismiss',expected_revision:1,message_id:'latest-inbound',individual_no_reply:true}]);
+        assert.deepEqual(await page.evaluate(()=>window.closeWrites),[],'marking rhetorical does not close');
         await perform(launch);
         const input=modal.getByRole('combobox',{name:'Find a CRM company'}),done=modal.getByRole('button',{name:'Complete',exact:true});
         assert.deepEqual(await modal.getByRole('button').allTextContents(),['Complete','Cancel']);
@@ -87,7 +104,7 @@ const companyId='11111111-1111-4111-8111-111111111111';
         await perform(done);await modal.waitFor({state:'hidden'});
         const [close]=await page.evaluate(()=>window.closeWrites);
         assert.equal(await page.evaluate(()=>window.closeWrites.length),1);
-        assert.equal(close.action,'close');assert.equal(close.channel_id,'synthetic-source');assert.equal(close.expected_revision,1);
+        assert.equal(close.action,'close');assert.equal(close.channel_id,'synthetic-source');assert.equal(close.expected_revision,2);
         if(mobile){assert.equal(close.company_choice,'none');assert(!('company_id' in close));}
         else{assert.equal(close.company_id,companyId);assert(!('company_choice' in close));}
 

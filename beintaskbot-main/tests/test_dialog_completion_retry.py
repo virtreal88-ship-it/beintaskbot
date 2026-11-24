@@ -14,10 +14,9 @@ def test_sql_40p01_after_write_rolls_back_before_new_connection(active,monkeypat
     import tenant_platform
     from test_dialog_lifecycle_pglite import payload
     incoming=message(active,20)
-    if action=='close':
-        lifecycle.mutate(PROFILE,payload('accept'))
+    lifecycle.mutate(PROFILE,payload('accept'))
     no_reply=action=='dismiss'
-    request=payload(action,0 if no_reply else 1,
+    request=payload(action,1,
         **({'message_id':incoming,'individual_no_reply':True} if no_reply else {}))
     action_name='dialog_no_reply' if no_reply else 'dialog_close'
     audit_sql="""SELECT id::text, payload FROM saas_tenant_audit_events
@@ -65,19 +64,19 @@ def test_sql_40p01_after_write_rolls_back_before_new_connection(active,monkeypat
     monkeypatch.setattr(lifecycle.time,'sleep',Mock())
     result=lifecycle.mutate(PROFILE,request)
     assert failed and len(connections)==2 and connections[0] is not connections[1]
-    assert result['lifecycle']['revision']==(1 if no_reply else 2)
-    assert result['lifecycle']['state']==('waiting' if no_reply else 'closed')
+    assert result['lifecycle']['revision']==2
+    assert result['lifecycle']['state']==('accepted' if no_reply else 'closed')
     assert active.execute(receipt_sql,(A,request['request_id']))==[
         {'actor_id':PROFILE['telegram_id'],'result':result}]
     events=active.execute(audit_sql,(A,action_name))
     assert len(events)==1
     if no_reply:
-        assert result['lifecycle']['no_reply_needed'] and result['lifecycle']['operator_id'] is None
+        assert result['lifecycle']['no_reply_needed'] and result['lifecycle']['operator_id']==PROFILE['telegram_id']
         assert events[0]['id']==lifecycle._no_reply_id(A,CA,'client',incoming)
         assert events[0]['payload']['message_id']==incoming and events[0]['payload']['counts_as_missed'] is False
         assert active.execute(workflow_sql,(A,CA))==[
-            {'state':'waiting','operator_id':None,'closed_at':None,'last_inbound_id':incoming}]
-        assert not active.execute('SELECT 1 FROM saas_dialog_episodes WHERE tenant_id=%s::uuid',(A,))
+            {'state':'accepted','operator_id':PROFILE['telegram_id'],'closed_at':None,'last_inbound_id':incoming}]
+        assert len(active.execute('SELECT 1 FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND closed_at IS NULL',(A,)))==1
     active.commit()
     assert lifecycle.mutate(PROFILE,request)==result
     assert active.execute(audit_sql,(A,action_name))==events
