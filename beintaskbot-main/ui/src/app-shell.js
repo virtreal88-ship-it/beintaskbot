@@ -10,6 +10,7 @@ if (document.body.dataset.appUi === 'kwid') {
   const body=document.body, sidebar=document.querySelector('.shell>aside'), nav=sidebar.querySelector('.nav')
   const icon=path=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"/></svg>`
   const icons={menu:'M4 6h16M4 12h16M4 18h16',chevron:'m14 7-5 5 5 5',settings:'M4 7h16M4 17h16M8 4v6M16 14v6',profile:'M20 21a8 8 0 0 0-16 0M12 13a5 5 0 1 0 0-10 5 5 0 0 0 0 10',exit:'M9 3H4v18h5M10 12h11m-4-4 4 4-4 4',sun:'M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4m10 10 1.4 1.4M5.6 18.4 7 17m10-10 1.4-1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',moon:'M20 15a9 9 0 0 1-11-11 9 9 0 1 0 11 11',system:'M3 4h18v13H3zM8 21h8M12 17v4'}
+  const navIconPaths={hot_orders:'M4 7.5 12 3l8 4.5v9L12 21l-8-4.5zM4.5 7.8 12 12l7.5-4.2M12 12v9M8 5.3l8 4.5',linear:'M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6z',news:'M5 4h15v16H5zM3 7v11a2 2 0 0 0 2 2M8 8h9M8 12h9M8 16h5',night_report:'M4 5h11a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-5l-4 3v-3H6a2 2 0 0 1-2-2zM18 8h1a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-1M19 3v2m-1-1h2'}
   function preference(key,fallback) {try{return localStorage.getItem(key)||fallback}catch{return fallback}}
   function remember(key,value) {try{localStorage.setItem(key,value)}catch{}}
   const systemTheme=matchMedia('(prefers-color-scheme: dark)'), mobile=matchMedia('(max-width:1023px)')
@@ -24,8 +25,8 @@ if (document.body.dataset.appUi === 'kwid') {
   body.dataset.sidebar=preference('tenant-app-sidebar','expanded')==='collapsed'?'collapsed':'expanded'
   const t=key=>window.tenantI18n?.t(key)||key
   const language=()=>window.tenantI18n?.language||document.documentElement.lang||'az'
-  const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',instructions:'Instructions'}}
-  const aiLabels={ru:{ai_administrator:'Обучение AI',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',ai_analytics:'AI-аналитика',knowledge_center:'Центр знаний',support_cases:'Кейсы поддержки',ai_testing:'Тестирование AI'},az:{ai_administrator:'AI təlimi',ai_agents:'AI agentlər',ai_dashboard:'AI paneli',ai_analytics:'AI analitikası',knowledge_center:'Bilik mərkəzi',support_cases:'Dəstək halları',ai_testing:'AI sınağı'},en:{ai_administrator:'AI Learning',ai_agents:'AI agents',ai_dashboard:'AI Dashboard',ai_analytics:'AI Analytics',knowledge_center:'Knowledge Center',support_cases:'Support Cases',ai_testing:'AI testing'}}
+  const crmLabels={ru:{tasks:'Задачи',customers:'Контакты',companies:'Компании',deals:'Сделки',hot_orders:'Заказы',instructions:'Инструкции'},az:{tasks:'Tapşırıqlar',customers:'Əlaqələr',companies:'Şirkətlər',deals:'Sövdələşmələr',hot_orders:'Sifarişlər',instructions:'Təlimatlar'},en:{tasks:'Tasks',customers:'Contacts',companies:'Companies',deals:'Deals',hot_orders:'Orders',instructions:'Instructions'}}
+  const aiLabels={ru:{ai_administrator:'Обучение AI',ai_agents:'AI-агенты',ai_dashboard:'AI-панель',ai_analytics:'AI-аналитика',knowledge_center:'Центр знаний',support_cases:'Кейсы',ai_testing:'Тестирование AI'},az:{ai_administrator:'AI təlimi',ai_agents:'AI agentlər',ai_dashboard:'AI paneli',ai_analytics:'AI analitikası',knowledge_center:'Bilik mərkəzi',support_cases:'Keyslər',ai_testing:'AI sınağı'},en:{ai_administrator:'AI Learning',ai_agents:'AI agents',ai_dashboard:'AI Dashboard',ai_analytics:'AI Analytics',knowledge_center:'Knowledge Center',support_cases:'Cases',ai_testing:'AI testing'}}
   const employeeLabels={ru:'Сотрудники и доступ',az:'Əməkdaşlar və giriş',en:'Employees and access'}
   const reportLabel=()=>({ru:'Отчёты',az:'Hesabatlar',en:'Reports'}[language()]||'Reports');
   const pageLabel=page=>page==='night_report'?({ru:'Отчёты агентов',az:'Agent hesabatları',en:'Agent reports'}[language()]||'Agent reports'):page==='employees'?employeeLabels[language()]||employeeLabels.en:crmLabels[language()]?.[page]||aiLabels[language()]?.[page]||t(page)
@@ -84,12 +85,14 @@ if (document.body.dataset.appUi === 'kwid') {
   function organizeNav() {
     for(const button of [...nav.querySelectorAll('[data-view],[data-report-link]')]){
       const page=button.dataset.view||button.dataset.reportLink
+      if(navIconPaths[page]){let iconHost=button.querySelector('.nav-icon');if(!iconHost){iconHost=document.createElement('span');iconHost.className='nav-icon';iconHost.setAttribute('aria-hidden','true');button.prepend(iconHost)}const existingIcon=iconHost.querySelector('svg');if(existingIcon?.dataset.appIcon!==page){iconHost.innerHTML=icon(navIconPaths[page]);iconHost.querySelector('svg').dataset.appIcon=page}}
       if(['employees','integrations'].includes(page)&&nav.querySelector('#settingsFamilyNav')){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1}
       if(page==='settings'||page==='profile'){button.classList.add('app-nav-route-hidden');button.setAttribute('aria-hidden','true');button.tabIndex=-1;continue}
       let label=button.querySelector('.app-nav-label,[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label]')
+      if(!label)label=[...button.children].find(child=>child.matches('span:not(.nav-icon):not(.badge)'))||null
       if(!label){label=document.createElement('span');label.textContent=[...button.childNodes].filter(node=>node.nodeType===Node.TEXT_NODE).map(node=>node.textContent).join('').trim()||page}
       for(const node of [...button.childNodes])if(node.nodeType===Node.TEXT_NODE)node.remove()
-      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label],.app-nav-label'))if(extra!==label)extra.remove()
+      for(const extra of button.querySelectorAll('[data-i18n],[data-crm-nav-label],[data-ai-teams-label],[data-ai-dashboard-label],[data-ai-analytics-label],[data-knowledge-center-label],.app-nav-label,span:not(.nav-icon):not(.badge)'))if(extra!==label)extra.remove()
       label.removeAttribute('data-crm-nav-label')
       label.className='app-nav-label';label.dataset.appNavLabel=page
       label.removeAttribute('data-i18n')
