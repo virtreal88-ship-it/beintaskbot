@@ -281,27 +281,62 @@ def accept_quoted_lookup(item,message_id):
         conn.commit()
 
 
-def read_send_status(session, lead_id, request_id):
-    """Read an exact, owned send receipt, without reserving or dispatching."""
+def _send_status_ids(lead_id, request_id):
     lead_id = int(lead_id)
     if not 0 < lead_id < 2**63:
         raise ValueError('Invalid lead')
-    request_id = str(uuid.UUID(str(request_id)))
-    with _connect() as conn, conn.cursor() as cur:
-        profile, _, _ = authority(cur, session, lead_id)
-        cur.execute("""SELECT state,route FROM saas_chat_send_receipts
-          WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s AND request_id=%s::uuid""",
-          (profile['tenant_id'], profile['telegram_id'], lead_id, request_id))
-        row = cur.fetchone()
+    return lead_id, str(uuid.UUID(str(request_id)))
+
+
+def _saved_send_status(row):
     if not row:
         return {'state': 'unavailable'}
     route = row.get('route') or {}
     if (row['state'] == 'accepted' and route.get('quote_protocol') is True
             and route.get('provider_accepted') is not True):
-        # A legacy quoted request can be accepted by a queue before the
-        # provider receives it. Require the existing scoped receipt check.
+        # Queue admission for legacy quotes does not establish provider acceptance.
         return {'state': 'unknown'}
     return {'state': row['state']}
+
+
+def _read_send_row(cur, tenant, actor, lead_id, request_id):
+    cur.execute("""SELECT state,route FROM saas_chat_send_receipts
+      WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s AND request_id=%s::uuid""",
+      (tenant, actor, lead_id, request_id))
+    return cur.fetchone()
+
+
+def read_send_status(session, lead_id, request_id):
+    """Read an exact, owned send receipt, without reserving or dispatching."""
+    lead_id, request_id = _send_status_ids(lead_id, request_id)
+    with _connect() as conn, conn.cursor() as cur:
+        profile, _, _ = authority(cur, session, lead_id)
+        return _saved_send_status(_read_send_row(cur, profile['tenant_id'], profile['telegram_id'],
+                                                  lead_id, request_id))
+
+
+def close_unsubmitted_send(session, lead_id, request_id):
+    """Fence the exact missing request before allowing the browser to move on."""
+    lead_id, request_id = _send_status_ids(lead_id, request_id)
+    with _connect() as conn, conn.cursor() as cur:
+        profile, _, _ = authority(cur, session, lead_id)
+        tenant, actor = profile['tenant_id'], profile['telegram_id']
+        # Reserve commits a receipt before any provider submission. Take its
+        # dialogue lock and claim the same unique key so a delayed POST cannot
+        # reserve it after we report the attempt closed.
+        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                    (f'chat-send:{tenant}:{lead_id}',))
+        cur.execute("""INSERT INTO saas_chat_send_receipts
+          (tenant_id,actor_id,request_id,lead_id,input_hash,state,route)
+          VALUES(%s::uuid,%s,%s::uuid,%s,'closed-before-reservation','blocked',%s::jsonb)
+          ON CONFLICT(tenant_id,actor_id,request_id) DO NOTHING RETURNING state,route""",
+          (tenant, actor, request_id, lead_id, json.dumps({'closed_before_reservation': True})))
+        row = cur.fetchone()
+        if not row:
+            row = _read_send_row(cur, tenant, actor, lead_id, request_id)
+        if not row:
+            raise TenantLinearError('Sorğu bu dialoqa aid deyil.', 409)
+        return _saved_send_status(row)
 
 
 def read_quoted_receipt(session,lead_id,request_id=None):

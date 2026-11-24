@@ -41,7 +41,15 @@
     }),{method:'GET'});
     const readReceipt=requestId=>readStatus('quote-receipt',requestId);
     async function checkPending(pending){
-      const saved=await readStatus('send-status',pending.request_id);
+      let saved=await readStatus('send-status',pending.request_id);
+      if(saved.state==='unavailable'&&isCurrent()){
+        saved=await api('/api/platform/crm/chat/send-status/close-unsubmitted',{
+          method:'POST',body:JSON.stringify({
+            lead_id:leadId,request_id:pending.request_id,
+            expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id
+          })
+        });
+      }
       if(pending.quote_message_id&&provider==='connect'&&['sending','unknown'].includes(saved.state)){
         return readReceipt(pending.request_id);
       }

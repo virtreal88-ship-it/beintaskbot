@@ -32,6 +32,51 @@ def test_read_receipt_rejects_scope_mismatch_without_post(monkeypatch,change):
     assert request.call_args.args[1]=='GET';assert request.call_count==1
 
 
+def test_close_unsubmitted_send_fences_later_provider_submission(db, monkeypatch):
+    import logging
+    import tenant_chat_send_store as store
+    from tenant_linear_policy import TenantLinearError
+    monkeypatch.setattr(store, '_connect', lambda: db)
+    monkeypatch.setattr(store, 'connect_route', lambda *_: ROUTE)
+    sender = Mock(side_effect=AssertionError('the previous request must never be dispatched'))
+    monkeypatch.setattr(service, 'send_connect', sender)
+    request_id = str(uuid.uuid4())
+    original = {'lead_id': 41, 'request_id': request_id, 'text': 'synthetic reply'}
+    store.ensure_schema(db)
+    db.commit()
+    assert store.read_send_status(PROFILE, 41, request_id) == {'state': 'unavailable'}
+    for _ in range(2):
+        assert store.close_unsubmitted_send(PROFILE, 41, request_id) == {'state': 'blocked'}
+        db.commit()
+    with pytest.raises(TenantLinearError):
+        asyncio.run(service.run(PROFILE, original, Mock(), Mock(), logging.getLogger(__name__)))
+    db.rollback()
+    sender.assert_not_called()
+    row = db.execute("SELECT state,route,message_id FROM saas_chat_send_receipts WHERE request_id=%s", (request_id,))[0]
+    assert row == {'state': 'blocked', 'route': {'closed_before_reservation': True}, 'message_id': None}
+    db.commit()
+    next_send = store.reserve(PROFILE, {**original, 'request_id': str(uuid.uuid4())})
+    assert next_send['command']['lead_id'] == 41
+
+
+@pytest.mark.parametrize('state', ['preparing', 'sending', 'unknown', 'accepted'])
+def test_close_unsubmitted_preserves_any_existing_send_receipt(db, monkeypatch, state):
+    import tenant_chat_send_store as store
+    monkeypatch.setattr(store, '_connect', lambda: db)
+    monkeypatch.setattr(store, 'connect_route', lambda *_: ROUTE)
+    request_id = str(uuid.uuid4())
+    item = store.reserve(PROFILE, {'lead_id': 41, 'request_id': request_id, 'text': 'synthetic reply'})
+    if state != 'preparing':
+        store.mark_sending(item, {'origin': 'connect'})
+    if state in {'unknown', 'accepted'}:
+        store.finish(item, state, 'synthetic-message' if state == 'accepted' else None)
+    assert store.close_unsubmitted_send(PROFILE, 41, request_id) == {'state': state}
+    db.commit()
+    row = db.execute('SELECT state,route FROM saas_chat_send_receipts WHERE request_id=%s', (request_id,))[0]
+    assert row['state'] == state
+    assert not row['route'].get('closed_before_reservation')
+
+
 def test_queue_and_provider_acceptance_are_not_customer_delivery(monkeypatch):
     request=Mock(return_value=result());monkeypatch.setattr(transport,'_request',request)
     assert transport.quoted_delivery_status(ROUTE,MID,REQUEST,'SOURCE123')['provider_accepted'] is False

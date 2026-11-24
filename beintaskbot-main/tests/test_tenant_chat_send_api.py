@@ -68,6 +68,27 @@ class Api(unittest.IsolatedAsyncioTestCase):
             saved.assert_called_once()
         self.run.assert_not_awaited()
 
+    async def test_close_unsubmitted_requires_same_origin_and_identity_without_sending(self):
+        closed = Mock(return_value={'state': 'blocked'})
+        with unittest.mock.patch('tenant_chat_send_store.close_unsubmitted_send', closed):
+            handle = self.module.close_unsubmitted_handler(lambda request: SESSION, 'https://crm.pro.az', Mock())
+            body = {'lead_id': 7, 'request_id': INPUT['request_id'],
+                    'expected_tenant_id': TENANT, 'expected_user_id': 20}
+            def req(origin, data):
+                return SimpleNamespace(method='POST', content_type='application/json', headers={'Origin': origin},
+                                       json=AsyncMock(return_value=data))
+            bad_origin = req('https://other.invalid', body)
+            self.assertEqual((await handle(bad_origin))['status'], 403)
+            bad_origin.json.assert_not_awaited()
+            for mismatch in ({'expected_user_id': 21}, {'expected_tenant_id': 'other'}):
+                self.assertEqual((await handle(req('https://crm.pro.az', {**body, **mismatch})))['status'], 409)
+            closed.assert_not_called()
+            ok = await handle(req('https://crm.pro.az', body))
+            self.assertEqual(ok['data'], {'success': True, 'state': 'blocked'})
+            self.assertEqual(ok['headers']['Cache-Control'], 'no-store')
+            closed.assert_called_once_with(SESSION, 7, INPUT['request_id'])
+        self.run.assert_not_awaited()
+
     async def test_unconfirmed_provider_status_does_not_accept_quote_receipt(self):
         item = {'key': (TENANT, 20, INPUT['request_id']), 'credentials': {}, 'message_id': None,
                 'quote': 'PROVIDER_QUOTE', 'receipt_state': 'unknown', 'connection': ['connect', 'source']}
