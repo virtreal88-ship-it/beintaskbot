@@ -1146,7 +1146,8 @@
   const contactPhoneLookups=new Map();
   const contactPhoneKey=route=>`${epoch}:${contextKey('contact-phone',route)}:${route.lead_id}:${route.contact_source_revision||''}`;
   const contactDetails=route=>{if(route.archive_read_only||route.owner_overview_read_only||route.case_attachment||route.contact_identity_conflict)return null;const cached=contactPhoneLookups.get(contactPhoneKey(route));return cached&&(!cached.done||Date.now()<cached.retryAt)?cached:null;};
-  const displayDialogPhone=route=>verifiedDialogPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
+  const deviceDisplayPhone=route=>!route.contact_identity_conflict&&verifiedDialogPhone({phone:route.device_display_phone});
+  const displayDialogPhone=route=>verifiedDialogPhone(route)||deviceDisplayPhone(route)||contactDetails(route)?.phone||(!route.contact_identity_conflict&&!route.identity_conflict?verifiedDialogPhone({phone:route.manual_display_phone}):'');
   const phoneHiddenLabel=()=>({ru:'Скрыт',az:'Gizlidir',en:'Hidden'}[i18n.language]||'Hidden');
   const dialogPhoneLabel=route=>displayDialogPhone(route)||(contactDetails(route)?.phoneHidden?phoneHiddenLabel():'');
   const phoneUnavailable=()=>dialogPhoneLabel(currentDialog);
@@ -1157,7 +1158,7 @@
   };
   const canLookupContact=route=>route?.provider==='connect'&&!isDialogGroup(route)
     &&!route.archive_read_only&&!route.owner_overview_read_only&&!route.case_attachment&&!route.contact_identity_conflict
-    &&!(verifiedDialogPhone(route)&&hasContactName(route))
+    &&!((verifiedDialogPhone(route)||deviceDisplayPhone(route))&&hasContactName(route))
     &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
   const canLookupRowContact=route=>canLookupContact(route)&&/^[a-f0-9]{64}$/.test(route.contact_source_revision||'');
   const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');

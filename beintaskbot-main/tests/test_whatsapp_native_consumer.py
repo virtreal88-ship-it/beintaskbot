@@ -4,6 +4,9 @@ from test_whatsapp_native_inbox import capture, store, delivery
 from test_call_sources import managed
 from test_browser_calls import gateway
 from test_call_recordings import pilot
+from test_whatsapp_integration import setup
+from test_whatsapp_native_rollout import staged_source
+from test_whatsapp_source_control import active
 from test_tenant_support_inbox import database, db, A, B, CA, CB
 from test_whatsapp_native_projection import message
 from tenant_linear_policy import TenantLinearError
@@ -342,4 +345,130 @@ def test_invalid_group_snapshot_cannot_erase_name_or_create_conversation(ready):
         apply_metadata(cur,scope,{**base,'chat':'120363999999999@g.us'})
     assert db.execute('SELECT display_name FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s AND conversation_id=%s',(A,CA,group))[0]['display_name']=='Keep this name'
     assert not db.execute('SELECT 1 FROM saas_connect_conversations WHERE conversation_id=%s',('120363999999999@g.us',))
+    db.commit()
+
+
+def test_late_device_phone_is_listed_and_keeps_route_after_rebind(ready, monkeypatch):
+    import asyncio
+    import tenant_whatsapp_contact_refresh as refresh
+    import tenant_operator_dialogs as dialogs
+
+    db, _ = ready
+    activate(db)
+    source = (A, CA)
+    lid = '188888888@lid'
+    pn = '15550000003@s.whatsapp.net'
+    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', ':'.join(source))
+    monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND', '1')
+    monkeypatch.setattr(refresh, '_connect', lambda: db)
+    with db.cursor() as cur:
+        from tenant_whatsapp_native_transport import migrate
+        migrate(cur)
+    first_generation = delivery()['scope']['generation']
+    db.execute('INSERT INTO saas_whatsapp_native_routes(tenant_id,channel_id,generation,enabled) VALUES (%s,%s,%s,TRUE)',
+               (*source, first_generation))
+    db.commit()
+
+    def receive(generation, peer, char, sequence, after):
+        value = delivery(after=after)
+        value['scope']['generation'] = generation
+        value['event'].update(id=char*64, sequence=sequence,
+                              payload=message(chat=peer, sender=peer, sender_alt='', provider_id=f'SYNTHETIC_{char}'))
+        receipt = store(value)
+        consumer.project_stored(receipt)
+        consumer.project_stored(receipt)
+
+    receive(first_generation, lid, 'b', 3, 2)
+    binding, candidates = refresh.candidates(*source, 0)
+    assert len(candidates) == 1 and candidates[0]['conversation_id'] == lid
+    candidate, = candidates
+    lead = candidate['lead_id']
+
+    async def no_phone(_):
+        return {}
+
+    monkeypatch.setattr(refresh, 'fetch_contact', no_phone)
+    assert asyncio.run(refresh.refresh_batch(*source)) == (0, 1, 0, 0)
+    second_generation = 'test-rebound'
+    db.execute('UPDATE saas_whatsapp_capture_generations SET projection_enabled=FALSE,enabled=FALSE')
+    db.execute("""INSERT INTO saas_whatsapp_capture_generations
+        (tenant_id,channel_id,generation,gateway_id,account_jid,enabled,projection_enabled)
+        SELECT tenant_id,channel_id,%s,gateway_id,account_jid,TRUE,TRUE
+        FROM saas_whatsapp_capture_generations WHERE generation=%s""", (second_generation, first_generation))
+    db.execute('UPDATE saas_whatsapp_native_routes SET generation=%s', (second_generation,))
+    db.commit()
+
+    assert not refresh.save_confirmation(*source, binding, candidate, '+15550000003')
+
+    async def confirmed(route):
+        assert route['conversation_id'] == lid
+        assert route['native']['scope']['generation'] == second_generation
+        return {'phone': '+15550000003'}
+
+    monkeypatch.setattr(refresh, 'fetch_contact', confirmed)
+    assert asyncio.run(refresh.refresh_batch(*source)) == (0, 1, 1, 0)
+    card = {**candidate, 'phone': '', 'channel_id': CA, 'provider': 'connect'}
+    summary = dict(card)
+    with db.cursor() as cur:
+        dialogs._attach_verified_phones(cur, A, [summary], check_conflicts=True)
+        dialogs._attach_verified_phone(cur, A, card)
+    assert summary['phone'] == card['phone'] == '+15550000003'
+    db.commit()
+
+    # Post-rebind input has no alternate, even when the envelope is addressed to PN.
+    receive(second_generation, pn, 'c', 2, 0)
+    receive(second_generation, lid, 'd', 3, 2)
+    rows = db.execute("""SELECT kommo_lead_id FROM saas_crm_messages
+        WHERE tenant_id=%s AND raw->>'externalMessageId' IN ('SYNTHETIC_b','SYNTHETIC_c','SYNTHETIC_d')""", (A,))
+    assert rows == [{'kommo_lead_id': lead}]*3
+    assert not db.execute('SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s AND conversation_id=%s', (A,pn))
+    assert len(db.execute('SELECT 1 FROM saas_tenant_audit_events WHERE action=%s', (refresh.AUDIT_ACTION,))) == 1
+    db.execute('DELETE FROM saas_whatsapp_native_routes WHERE tenant_id=%s AND channel_id=%s', source)
+    db.commit()
+
+
+
+@pytest.mark.parametrize('barrier', ['existing_phone_route', 'identity_conflict', 'other_tenant', 'other_source'])
+def test_device_confirmation_cannot_link_conflicts_or_other_sources(active, monkeypatch, barrier):
+    import tenant_whatsapp_contact_refresh as refresh
+    import tenant_operator_dialogs as dialogs
+    from tenant_connect_transport import _upsert_conversation
+
+    db, channel, _, _, _ = active
+    scope = (A, channel)
+    monkeypatch.setenv('BEINTASKBOT_NATIVE_CONTACT_SOURCE', ':'.join(scope))
+    monkeypatch.setattr(refresh, '_connect', lambda: db)
+    lid = '188888888@lid'
+    phone = '+15550000003'
+    with db.cursor() as cur:
+        lead = _upsert_conversation(cur, *scope, lid, {'kind': 'contact'})
+        if barrier == 'existing_phone_route':
+            _upsert_conversation(cur, *scope, '15550000003@c.us', {'kind': 'contact'})
+        elif barrier == 'identity_conflict':
+            cur.execute("""INSERT INTO saas_connect_identity_conflicts
+              (tenant_id,connect_channel_id,conversation_id,event_id,evidence)
+              VALUES(%s,%s,%s,'synthetic','{}')""", (*scope, lid))
+    db.commit()
+    binding, _ = refresh.candidates(*scope, 0)
+    assert binding
+    attempts = {'other_tenant': (B, channel), 'other_source': (A, CA)}
+    actual_scope = attempts.get(barrier, scope)
+    candidate = {'lead_id': lead, 'conversation_id': lid}
+    display_only = barrier == 'existing_phone_route'
+    assert refresh.save_confirmation(*actual_scope, binding, candidate, phone) == display_only
+    assert not db.execute('SELECT 1 FROM saas_connect_direct_identities WHERE canonical_conversation_id=%s', (lid,))
+    assert bool(db.execute('SELECT 1 FROM saas_tenant_audit_events WHERE action=%s', (refresh.AUDIT_ACTION,))) == display_only
+    card = {**candidate, 'phone': '', 'provider': 'connect', 'channel_id': channel}
+    with db.cursor() as cur:
+        dialogs._attach_verified_phone(cur, A, card)
+    assert card.get('device_display_phone') == (phone if display_only else None)
+    if display_only:
+        assert len(db.execute('SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s AND connect_channel_id=%s', scope)) == 2
+        db.execute("""INSERT INTO saas_connect_identity_conflicts
+          (tenant_id,connect_channel_id,conversation_id,event_id,evidence)
+          VALUES(%s,%s,'15550000003@c.us','synthetic','{}')""", scope)
+        another = {**candidate, 'phone': '', 'provider': 'connect', 'channel_id': channel}
+        with db.cursor() as cur:
+            dialogs._attach_verified_phone(cur, A, another)
+        assert 'device_display_phone' not in another
     db.commit()
