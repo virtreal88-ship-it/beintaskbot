@@ -226,6 +226,12 @@ def test_lifecycle_worker_requires_exact_historical_proof_then_keeps_both_episod
         ledger(conn,'before',3,proof)
         ledger(conn,'legacy-only',2,self_only)
         ledger(conn,'after',1,proof)
+        mirror=PN.replace('@s.whatsapp.net','@c.us')
+        phone_only={**self_only,'originalConversationId':PN,'canonicalConversationId':PN}
+        ledger(conn,'phone-before',3,proof,PN)
+        ledger(conn,'phone-self',2,phone_only,PN)
+        ledger(conn,'phone-self',2,phone_only,mirror)
+        ledger(conn,'phone-after',1,proof,PN)
         conn.execute("""INSERT INTO saas_connect_direct_identities
               (tenant_id,connect_channel_id,identity_key,canonical_conversation_id)
               VALUES(%s,%s,%s,%s)""",(A,channel,PN.replace('@s.whatsapp.net','@c.us'),PN))
