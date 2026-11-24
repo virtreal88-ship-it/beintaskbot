@@ -22,6 +22,12 @@ def _aliases(value):
     return {phone, phone.replace('@s.whatsapp.net', '@c.us')} if phone else {value}
 
 
+def lock_identities(cur, tenant, channel, identities):
+    for identity in sorted(set(identities)):
+        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                    ('connect-direct:' + json.dumps([str(tenant), str(channel), identity]),))
+
+
 def verified_phone_jid(cur, tenant, channel, conversation):
     """Phone evidence for a canonical LID, without consulting mutable labels."""
     cur.execute('''SELECT identity_key FROM saas_connect_direct_identities
@@ -71,9 +77,7 @@ def canonical_conversation(cur, tenant, channel, conversation, data, metadata):
     aliases = _aliases(current)
     if verified and not conflict:
         aliases |= _aliases(jid) | {lid}
-    for identity in sorted(aliases):
-        cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
-                    ('connect-direct:' + json.dumps([str(tenant), str(channel), identity]),))
+    lock_identities(cur, tenant, channel, aliases)
     cur.execute('''SELECT identity_key,canonical_conversation_id FROM saas_connect_direct_identities
       WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND identity_key=ANY(%s::text[])''',
       (tenant, channel, sorted(aliases)))

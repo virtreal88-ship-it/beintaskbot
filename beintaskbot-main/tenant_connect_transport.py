@@ -285,6 +285,9 @@ _SCHEMA_COLUMNS = {
     'saas_whatsapp_history_pairs': (
         'id tenant_id channel_id generation primary_id alternate_id lid_is_primary verified_at '
     ).split(),
+    'saas_whatsapp_device_display_phones': (
+        'tenant_id channel_id conversation_id generation gateway_id account_jid phone verified_at '
+    ).split(),
 }
 _SCHEMA_INDEXES = ['saas_connect_dialog_links_canonical',
  'saas_connect_direct_canonical_idx',
@@ -359,6 +362,8 @@ def _schema(conn) -> None:
         equivalence_schema(cur)
         from tenant_whatsapp_history_pairs import migrate as migrate_history_pairs
         migrate_history_pairs(cur)
+        from tenant_whatsapp_contact_refresh import migrate as migrate_contact_refresh
+        migrate_contact_refresh(cur)
         from tenant_connect_owner_identity import schema as owner_identity_schema
         owner_identity_schema(cur)
         cur.execute('''CREATE TABLE IF NOT EXISTS saas_connect_call_retractions (

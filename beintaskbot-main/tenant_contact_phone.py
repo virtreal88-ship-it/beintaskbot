@@ -55,7 +55,8 @@ def authorized_route(profile, params):
                 or route['channel_id'] != str(selected['connect_channel_id'])
                 or route['conversation_id'] != selected['conversation_id']):
             raise TenantLinearError('Контакт недоступен.', 404)
-        if params.get('contact_source_revision'):
+        from tenant_whatsapp_contact_refresh import enabled_for
+        if params.get('contact_source_revision') or enabled_for(tenant, route['channel_id']):
             cur.execute("""SELECT EXISTS(SELECT 1 FROM saas_connect_identity_conflicts
                WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid AND conversation_id=%s) AS conflict""",
               (tenant,route['channel_id'],route['conversation_id']))

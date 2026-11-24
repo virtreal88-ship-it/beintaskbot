@@ -299,6 +299,8 @@ def register_feature_routes(app: web.Application, context: TenantWebContext) -> 
     # shutdown must drain active voice sessions before Railway tears it down.
     from tenant_operator_voice_gateway import install_voice_shutdown
     install_voice_shutdown(app)
+    from tenant_whatsapp_contact_refresh import install as install_contact_refresh
+    install_contact_refresh(app, context.logger)
     for method, path, handle in feature_routes(context):
         # AI agent CRUD also needs PATCH and DELETE; register explicitly so
         # every module route is mounted instead of silently becoming POST-only.

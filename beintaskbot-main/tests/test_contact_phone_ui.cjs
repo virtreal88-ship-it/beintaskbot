@@ -3,8 +3,9 @@ const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const read=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
 const tenant='00000000-0000-0000-0000-000000000101',channel='00000000-0000-0000-0000-000000000201';
 const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
-const routes=[1,2,3,4,5].map(n=>({provider:'connect',channel_id:channel,lead_id:n,conversation_id:`11111111111111${n}@lid`,customer_kind:'contact',customer_name:'Synthetic '+n,phone:'',channel_name:'Synthetic source',available_actions:[],can_send:true,controls_allowed:true,display_state:'human',state:'human',agent_status:'manual'}));
+const routes=[1,2,3,4,5,6].map(n=>({provider:'connect',channel_id:channel,lead_id:n,conversation_id:`11111111111111${n}@lid`,customer_kind:'contact',customer_name:'Synthetic '+n,phone:'',channel_name:'Synthetic source',available_actions:[],can_send:true,controls_allowed:true,display_state:'human',state:'human',agent_status:'manual'}));
 routes[0].customer_name=routes[0].conversation_id;
+routes[5].device_display_phone='+994100000006';
 const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r));};
 const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
 w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
@@ -23,6 +24,10 @@ const answer=(id,value={})=>pending.get(id)({...routes.find(r=>r.lead_id===id),d
 const label=()=>w.document.querySelector('#operatorConversationHeader [data-header-phone]')?.textContent||'';
 (async()=>{
  w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));await settle();
+ assert.match(w.document.querySelector('[data-open-operator="5"] .operator-row-sub').textContent,/994100000006/);
+ await w.tenantOperator.openDialog(routes[5]);await settle();
+ assert.equal(label(),'+994100000006');
+ assert.deepEqual(lookups,[],'server proof renders without another gateway lookup');
  await w.tenantOperator.openDialog(routes[0]);await settle();
  assert.deepEqual(lookups,[1]);assert(!label().includes('111111'),'LID is never a phone');
  const history=w.document.getElementById('chatRows'),editor=w.document.getElementById('chatText');editor.value='Unsaved text';editor.focus();
