@@ -4,7 +4,7 @@
   const copy=key=>(labels[window.tenantI18n?.language]||labels.az)[key];
   const icons={
     send:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m3.6 3.8 17.6 7.3a1 1 0 0 1 0 1.8L3.6 20.2a.9.9 0 0 1-1.2-1l1.3-5.4 9-1.8-9-1.8-1.3-5.4a.9.9 0 0 1 1.2-1Z"/></svg>',
-    emoji:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M8 14a4.5 4.5 0 0 0 8 0M9 9h.01M15 9h.01" stroke-width="2.2"/></svg>',
+    emoji:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path stroke-linejoin="round" d="M9.5 3.5h5A5.5 5.5 0 0 1 20 9v3a4 4 0 0 1-1.2 2.8l-3.5 3.5a4 4 0 0 1-2.8 1.2h-3A5.5 5.5 0 0 1 4 14V9a5.5 5.5 0 0 1 5.5-5.5Z"/><circle cx="9.2" cy="9.4" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.8" cy="9.4" r="1.1" fill="currentColor" stroke="none"/><path d="M8.5 13a3.7 3.7 0 0 0 3.3 2M14 19v-3.4a2 2 0 0 1 2-2h3.5"/></svg>',
     voice:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21m-2.5 0h5"/></svg>',
   };
   const emojiGroups=[
@@ -148,6 +148,7 @@
 .operator-composer-actions #operatorComposerPrimary svg{width:22px;height:22px;pointer-events:none}
 .operator-composer-actions #operatorComposerPrimary:focus-visible{outline:2px solid var(--brand);outline-offset:2px}.operator-composer-actions #operatorAIActionMenu{min-width:44px;min-height:44px;font-weight:700}.operator-composer-ai-menu{position:absolute;z-index:25;left:8px;bottom:calc(100% + 6px);max-width:calc(100% - 16px);padding:6px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 8px 24px #0003;display:grid;gap:3px}.operator-composer-ai-menu[hidden]{display:none!important}.operator-composer-actions .operator-composer-ai-menu button.operator-icon-action{display:flex;width:auto;max-width:100%;min-height:44px;height:auto;text-align:left;gap:9px;padding:9px 12px;white-space:normal}.operator-composer-ai-menu svg,.operator-composer-ai-menu .operator-voice-wave{flex:none}.operator-ai-action-caption{font-size:14px}.operator-composer-actions #operatorComposerPrimary:disabled{opacity:.5}
 .operator-composer-actions #operatorComposerEmoji{margin-left:auto}
+.operator-composer-actions #operatorComposerEmoji svg{fill:none}
 .operator-composer-actions #operatorComposerEmoji + #operatorComposerPrimary{margin-left:0}
 .operator-emoji-panel{position:absolute;right:6px;bottom:calc(100% + 6px);z-index:25;display:grid;width:min(410px,calc(100% - 12px));box-sizing:border-box;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);box-shadow:0 8px 24px #0003}
 .operator-emoji-panel[hidden]{display:none!important}
