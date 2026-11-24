@@ -6,6 +6,7 @@ const profile={member:{tenant_id:tenant,telegram_id:33,role:'worker',permissions
 const routes=[1,2,3,4,5,6].map(n=>({provider:'connect',channel_id:channel,lead_id:n,conversation_id:`11111111111111${n}@lid`,customer_kind:'contact',customer_name:'Synthetic '+n,phone:'',channel_name:'Synthetic source',available_actions:[],can_send:true,controls_allowed:true,display_state:'human',state:'human',agent_status:'manual'}));
 routes[0].customer_name=routes[0].conversation_id;
 routes[5].device_display_phone='+994100000006';
+routes[5].contact_identity_conflict=true;
 const settle=async()=>{for(let i=0;i<25;i++)await new Promise(r=>setImmediate(r));};
 const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
 w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});

@@ -689,10 +689,12 @@ _HANDOFF_REASONS={'human_handoff','operator_handoff','trigger_reply_sent_then_ha
 def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
     """Batch only authorized, exact direct routes; LID digits are not phones."""
     from tenant_connect_direct_identity import direct_identity, phone_jid
+    from tenant_whatsapp_contact_refresh import attach_display_phones
     pending={(str(d['channel_id']),d['conversation_id']):d for d in dialogs
              if d.get('provider','connect')=='connect'
              and d.get('customer_kind')!='group' and d.get('conversation_kind')!='group'
              and direct_identity(d.get('conversation_id'))}
+    display_candidates=list(pending.values())
     if check_conflicts:
         lids=[{'channel':ch,'conversation':conv} for ch,conv in pending if conv.endswith('@lid')]
         if lids:
@@ -708,7 +710,9 @@ def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
                     if dialog is not None:
                         dialog.update(phone='',contact_identity_conflict=True)
     pending={key:d for key,d in pending.items() if not d.get('phone')}
-    if not pending:return
+    if not pending:
+        attach_display_phones(cur, tenant, display_candidates)
+        return
     phones={key:{phone_jid(key[1])}-{''} for key in pending}
     cur.execute("SELECT to_regclass('public.saas_connect_direct_identities') AS relation")
     if (cur.fetchone() or {}).get('relation'):
@@ -726,8 +730,7 @@ def _attach_verified_phones(cur,tenant,dialogs,*,check_conflicts=False):
             if match:pending[key]['phone']='+'+match[1]
         elif check_conflicts and len(candidates)>1 and key[1].endswith('@lid'):
             pending[key]['contact_identity_conflict']=True
-    from tenant_whatsapp_contact_refresh import attach_display_phones
-    attach_display_phones(cur, tenant, pending.values())
+    attach_display_phones(cur, tenant, display_candidates)
 
 
 def _attach_verified_phone(cur,tenant,dialog):
