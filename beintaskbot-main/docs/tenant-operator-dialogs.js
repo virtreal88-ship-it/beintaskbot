@@ -525,12 +525,22 @@
   function lifecycleUnavailable(error,route){
     if(route?.lifecycle_enabled&&[403,404,409].includes(error.status)){removeLifecycleDialog(route);notice(lifecycleText('unavailable'));return true;}return false;
   }
+  function showLifecycleTimelineEvent(event,kind){
+    if(!currentPage||!sameDialog(currentPage.dialog,currentDialog)||event?.kind!==kind||!validOperatorEvent(event))return;
+    retainOperatorEvents(currentPage,{operator_events:[event]});
+    const chat=$('chatRows');
+    if(!chat)return;
+    const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+    placeOperatorEvents(chat,currentPage);
+    setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),true);
+  }
   function applyLifecycleReceipt(route,action,result){
     const state=result.lifecycle,controls=result.controls;
     if(!currentPage||!sameDialog(currentPage.dialog,route)||!state||
        state.revision!==Number(route.lifecycle?.revision)+1||
        String(state.operator_id)!==String(member.telegram_id)||
        state.state!==(action==='accept'?'accepted':'closed'))return;
+    showLifecycleTimelineEvent(result.operator_event,action);
     const previous=currentDialog.lifecycle;
     if(Number(previous?.revision)>=state.revision)return;
     const {company_completion,...prior}=previous||{};
@@ -577,10 +587,12 @@
       if(action==='start')window.tenantDialogueCompany?.refresh?.();
       if(action==='transfer'){removeLifecycleDialog(route);void refresh();return;}
       if(action==='dismiss'){
-        if(result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true&&currentPage&&
-          Number(currentDialog.lifecycle?.revision??-1)<=result.lifecycle.revision){
-          currentDialog={...currentDialog,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_dismiss:false}};
-          currentPage.dialog=currentDialog;renderDialog(currentPage,{suppressRead:true});
+        if(currentPage&&result.lifecycle?.state==='accepted'&&result.lifecycle?.no_reply_needed===true){
+          showLifecycleTimelineEvent(result.operator_event,'no_reply');
+          if(Number(currentDialog.lifecycle?.revision??-1)<=result.lifecycle.revision){
+            currentDialog={...currentDialog,lifecycle:{...currentDialog.lifecycle,...result.lifecycle,can_dismiss:false}};
+            currentPage.dialog=currentDialog;renderDialog(currentPage,{suppressRead:true});
+          }
         }
         void refresh(false,false,{revalidateSelected:true,suppressRead:true});return;
       }
@@ -1624,7 +1636,7 @@
     return query;
   }
   const timelineStamp=value=>Date.parse(value||'');
-  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','no_reply'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
+  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','no_reply','close'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
   const operatorEventOrder=(a,b)=>timelineStamp(a.at)-timelineStamp(b.at)||a.at.localeCompare(b.at)||a.id.localeCompare(b.id);
   const OPERATOR_TIMELINE_LIMIT=180;
   function noteOperatorEventOmission(page,at){
@@ -1729,9 +1741,12 @@
       if(!node.isConnected){node.className='operator-timeline-event';node.dataset.operatorTimelineEvent=event.id;node.setAttribute('role','note');node.append(document.createElement('span'),document.createElement('time'));}
       const name=typeof event.employee_name==='string'?event.employee_name.trim():'';
       const reminderLabel=({ru:'Напоминание',az:'Xatırlatma',en:'Reminder'})[i18n.language]||'Reminder';
-      const rhetoricalLabel=({ru:'Ответ риторический',az:'Cavab ritorikdir',en:'Rhetorical reply'})[i18n.language]||'Rhetorical reply';
+      const statusLabel={
+        no_reply:{ru:'Ответ риторический',az:'Cavab ritorikdir',en:'Rhetorical reply'},
+        close:{ru:'Диалог завершён',az:'Dialoq tamamlandı',en:'Dialog completed'}
+      }[event.kind];
       node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
-        event.kind==='no_reply'?rhetoricalLabel:name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
+        statusLabel?(statusLabel[i18n.language]||statusLabel.en):name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
       if(next)next.before(node);else chat.append(node);

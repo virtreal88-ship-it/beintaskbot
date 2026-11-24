@@ -34,7 +34,7 @@ def test_timeline_is_actual_exact_and_does_not_change_message_pages(episodes, mo
     audit_ids={(row["action"],row["revision"]):row["id"] for row in audit}
     assert len(audit_ids)==len(audit)==5
     for key,when in {( "dialog_accept","1"):"2030-01-01",("dialog_transfer","2"):"2030-03-10T12:00:00Z",
-                     ("dialog_transfer","3"):"2030-04-10",("dialog_start","5"):"2030-04-11"}.items():
+                     ("dialog_transfer","3"):"2030-04-10",("dialog_close","4"):"2030-04-10T12:00:00Z",("dialog_start","5"):"2030-04-11"}.items():
         episodes.execute("UPDATE saas_tenant_audit_events SET created_at=%s WHERE id=%s::uuid",(when,audit_ids[key]))
     # Make the fallback observable without inventing a person.
     episodes.execute("UPDATE saas_tenant_members SET display_name='' WHERE tenant_id=%s::uuid AND telegram_id=33",(A,))
@@ -62,8 +62,8 @@ def test_timeline_is_actual_exact_and_does_not_change_message_pages(episodes, mo
     assert latest["next_before"]==ordinary["next_before"]
     assert latest["read_through_message_id"]==ordinary["read_through_message_id"]
     assert latest["operator_events_revision"]==5
-    assert [event["id"] for event in latest["operator_events"]]==[audit_ids["dialog_transfer","3"],audit_ids["dialog_start","5"]]
-    assert [event["kind"] for event in latest["operator_events"]]==["transfer","start"]
+    assert [event["id"] for event in latest["operator_events"]]==[audit_ids["dialog_transfer","3"],audit_ids["dialog_close","4"],audit_ids["dialog_start","5"]]
+    assert [event["kind"] for event in latest["operator_events"]]==["transfer","close","start"]
     assert all(event["employee_name"]=="Owner" for event in latest["operator_events"])
     assert len(latest["messages"])==50
     older=read(include_operator_events=True,before=latest["next_before"])

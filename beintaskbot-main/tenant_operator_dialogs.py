@@ -1614,6 +1614,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 if not shared_archive:
                     require_lead(cur,tenant,policy,int(anchor_row['kommo_lead_id']))
             group_channels=None
+            merge_timeline_boundary={}
             if provider=='connect' and group_jid(conversation):
                 from tenant_connect_group_history import page as group_history
                 from tenant_dialog_access import allowed_channels
@@ -1625,7 +1626,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             elif history_merge:
                 from tenant_dialog_history_merge_projection import page as merged_page
                 messages=merged_page(cur,tenant,channel,history_merge,before=identifier(before) if before else None,
-                                     call_filter=_RECORDED_CALL_OBSERVATION_FILTER)
+                                     call_filter=_RECORDED_CALL_OBSERVATION_FILTER,
+                                     timeline_boundary=merge_timeline_boundary)
             else:
                 args=[tenant,message_leads,row['history_channel']];clause=''
                 if anchor_at:
@@ -1740,7 +1742,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 from tenant_dialog_operator_timeline import page as operator_event_page
                 operator_timeline=operator_event_page(conn,cur,tenant,channel,conversation,messages=messages,
                     before=identifier(before) if before else None,history_leads=history_leads,
-                    history_channel=row['history_channel'],group_channels=group_channels)
+                    history_channel=row['history_channel'],group_channels=group_channels,
+                    authorized_before_stamp=merge_timeline_boundary.get('before_stamp'))
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
             if (include_shared_reminder_events and not shared_archive and provider=='connect' and not anchor

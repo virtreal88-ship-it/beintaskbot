@@ -9,7 +9,6 @@
   };
   const copy=key=>(words[window.tenantI18n?.language]||words.az)[key]||key;
   const icons={
-    templates:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
     close:'<path d="m6 6 12 12M18 6 6 18"/>',
     edit:'<path d="m14 5 5 5M4 20l4-.8L20 7a2.8 2.8 0 0 0-4-4L4 15.9 4 20Z"/>',
     remove:'<path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/>'
@@ -41,20 +40,15 @@
     '.operator-reply-template-suggestion .operator-reply-template-replace{display:block;flex:0 0 auto;width:auto;min-width:44px;font-size:12px;color:var(--brand-deep,#14523c);white-space:nowrap}',
     '.operator-reply-template-suggestions small{overflow:hidden;color:var(--muted,#64776f);text-overflow:ellipsis;white-space:nowrap}',
   ].join('')+`
-    #operatorReplyTemplatesOpen {
-      display:flex; align-items:center; gap:8px;
-    }
-    #operatorReplyTemplatesOpen svg { flex:none }
     .operator-reply-template-card .operator-reply-template-icon {
       display:inline-grid; place-items:center; width:44px; height:44px;
       min-width:44px; min-height:44px; padding:0; border:0; border-radius:10px;
       flex:none; background:transparent; color:var(--ink,#18332c);
     }
     #operatorReplyTemplatesOpen[hidden] { display:none!important }
-    #operatorReplyTemplatesOpen svg,.operator-reply-template-icon svg {
+    .operator-reply-template-icon svg {
       display:block; width:20px; height:20px; pointer-events:none;
     }
-    #operatorReplyTemplatesOpen:hover,
     .operator-reply-template-card .operator-reply-template-icon:hover { background:var(--paper,#f4f8f5) }
     .operator-reply-template-card .operator-reply-template-delete { color:var(--danger,#b42318) }
     .operator-reply-template-modal {
@@ -392,12 +386,10 @@
     if(mounted?.root===root&&mounted.menu===menu&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();
     root.classList.add('operator-reply-template-root');
-    const button=iconButton('templates',copy('button'));
-    button.hidden=true;button.id='operatorReplyTemplatesOpen';
+    const button=document.createElement('button');button.type='button';
+    button.hidden=true;button.id='operatorReplyTemplatesOpen';button.textContent=copy('button');
     button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
     button.setAttribute('role','menuitem');
-    const label=document.createElement('span');label.textContent=copy('button');
-    button.append(label);
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
     const state={menu,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
     state.onInput=()=>renderSuggestions(state);

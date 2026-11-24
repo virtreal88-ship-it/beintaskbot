@@ -253,7 +253,7 @@ def available_job(cur, tenant, policy, job):
     return bool(pair and pair['id'] == str(job.get('id')))
 
 
-def page(cur, tenant, channel, pair, *, before=None, call_filter=''):
+def page(cur, tenant, channel, pair, *, before=None, call_filter='', timeline_boundary=None):
     """Take at most 51 indexed keys per route, then interleave their timelines."""
     if not enabled() or not allows(tenant,channel) or str(pair.get('channel_id')) != str(channel):
         return []
@@ -269,6 +269,10 @@ def page(cur, tenant, channel, pair, *, before=None, call_filter=''):
         cursor=cur.fetchone()
         if not cursor:
             return []
+        if timeline_boundary is not None:
+            # Derived only from the same authorized combined-history cursor
+            # that is about to fence the message query.
+            timeline_boundary['before_stamp']=cursor['at']
     branch="""SELECT id,COALESCE(happened_at,created_at) AS merge_at,external_id FROM saas_crm_messages m
               WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND channel=%s"""
     cursor_clause=" AND (COALESCE(happened_at,created_at),external_id)<(%s,%s)" if cursor else ''
