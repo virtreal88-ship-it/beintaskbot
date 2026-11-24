@@ -873,7 +873,10 @@
       if(job==null&&operation!=='latest')throw Error('Missing job');
       if(job!=null&&(!job.id||!['queued','running','processing','completed','cancelled','canceled','blocked','failed'].includes(job.state)))throw Error('Unknown job state');
       if(state.job&&job&&state.job.id!==job.id)throw Error('Job changed');
-      if(job?.state==='completed'&&state.job?.state!=='completed')void refresh(false,false);
+      if(job?.state==='completed'&&state.job?.state!=='completed'){
+        void refresh(false,false);
+        if(duplicateCurrent(state.search))void searchDuplicateDialogs(state.search,state.search.mode);
+      }
       state.job=job;
     }catch{
       if(mergeCurrent(state))state.error=true;
@@ -983,7 +986,7 @@
     const node=document.createElement('dialog');
     node.id='operatorHistoryMerge';node.setAttribute('aria-labelledby','operatorHistoryMergeTitle');
     node.innerHTML=`<header><h2 id="operatorHistoryMergeTitle"></h2><button type="button" class="outline" data-dupe-merge-close aria-label="${esc(duplicateCopy('close'))}">×</button></header><p role="status" data-dupe-merge-progress></p><p class="sub" data-dupe-merge-note hidden></p><progress max="100" aria-label="${esc(mergeCopy('running'))}"></progress><button type="button" class="outline" data-dupe-merge-cancel hidden>${esc(mergeCopy('cancel'))}</button>`;
-    const state={node,owner:search.owner,epoch:search.epoch,source:left.channel_id,job:null,loading:false,error:false};
+    const state={node,search,owner:search.owner,epoch:search.epoch,source:left.channel_id,job:null,loading:false,error:false};
     mergeDialog=state;document.body.append(node);
     const close=node.querySelector('[data-dupe-merge-close]');
     close.onclick=closeMergeDialog;
