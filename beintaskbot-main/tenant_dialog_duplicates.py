@@ -86,10 +86,37 @@ def discover(profile, params):
             # A windowed group emits one row per route, never all N² pairs.
             keys={'phone':'suffix','name':'normalized_name','both':'suffix,normalized_name'}[mode]
             present={'phone':"suffix<>''",'name':"normalized_name<>''",'both':"suffix<>'' AND normalized_name<>''"}[mode]
+            from tenant_dialog_history_merge_projection import _pairs, lifecycle_enabled
+            pairs=_pairs(cur,tenant,policy,eligible_lifecycle=lifecycle_enabled())
+            candidates='hints'
+            if pairs:
+                # Collapse only exact, still-effective joined routes, and only
+                # within a matching group whose two physical routes are visible.
+                # An alternate may still be the sole match for a third route.
+                pair_fields=('channel_id','primary_id','primary_lead','alternate_id','alternate_lead')
+                args.extend([pair[field] for pair in pairs] for field in pair_fields)
+                sql+=""" , visible_joins AS (
+                  SELECT j.* FROM unnest(%s::text[],%s::text[],%s::bigint[],%s::text[],%s::bigint[])
+                    j(channel_id,primary_id,primary_lead,alternate_id,alternate_lead)
+                  JOIN hints p ON (p.channel_id,p.conversation_id,p.lead_id)=
+                    (j.channel_id,j.primary_id,j.primary_lead)
+                  JOIN hints a ON (a.channel_id,a.conversation_id,a.lead_id)=
+                    (j.channel_id,j.alternate_id,j.alternate_lead)
+                ), matching_routes AS (
+                  SELECT h.*,j.primary_lead AS joined_primary
+                  FROM hints h LEFT JOIN visible_joins j ON (h.channel_id,h.conversation_id,h.lead_id)=
+                    (j.channel_id,j.alternate_id,j.alternate_lead)
+                  WHERE """+present+"""
+                ), matching_contacts AS (
+                  SELECT DISTINCT ON (channel_id,"""+keys+""",COALESCE(joined_primary,lead_id)) *
+                  FROM matching_routes
+                  ORDER BY channel_id,"""+keys+""",COALESCE(joined_primary,lead_id),joined_primary NULLS FIRST,lead_id
+                ) """
+                candidates='matching_contacts'
             sql+=""" , candidate_rows AS (
               SELECT h.*,count(*) OVER (PARTITION BY channel_id,"""+keys+""") AS group_size,
                 min(lead_id) OVER (PARTITION BY channel_id,"""+keys+""") AS candidate_group
-              FROM hints h WHERE """+present+"""
+              FROM """+candidates+""" h WHERE """+present+"""
             ) SELECT """+columns+""",candidate_group,group_size FROM candidate_rows
                   WHERE group_size>1 ORDER BY channel_id,candidate_group,last_message_at DESC NULLS LAST,lead_id"""
         cur.execute(sql+" LIMIT %s OFFSET %s",(*args,PAGE_SIZE+1,offset))
