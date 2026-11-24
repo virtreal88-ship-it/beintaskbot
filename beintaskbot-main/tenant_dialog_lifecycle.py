@@ -296,11 +296,15 @@ def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, mess
         return False
     if is_online(cur,tenant,row['operator_id'],source_channel=channel):
         return False
+    # Operator routing eligibility excludes owners. An active owner's
+    # availability is informational and must not release an accepted dialog.
     cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
         id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
         FROM saas_dialog_episodes e
         WHERE w.tenant_id=%s::uuid AND w.channel_id=%s::uuid AND w.conversation_id=%s
           AND w.id=e.id AND e.tenant_id=w.tenant_id AND w.state='accepted' AND e.closed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM saas_tenant_members m
+            WHERE m.tenant_id=w.tenant_id AND m.telegram_id=w.operator_id AND m.active AND m.role='owner')
           AND w.last_inbound_id IS DISTINCT FROM %s
           AND %s::timestamptz>GREATEST(e.accepted_at,w.updated_at)
         RETURNING w.updated_at""",
