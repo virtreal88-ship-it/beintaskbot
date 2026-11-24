@@ -46,6 +46,12 @@ class Store(unittest.TestCase):
         self.assertFalse(any('INSERT ' in call.args[0] or 'UPDATE ' in call.args[0]
                              for call in self.cur.execute.call_args_list))
 
+    def test_saved_queued_quote_requires_provider_confirmation(self):
+        for confirmed, expected in ((False, 'unknown'), (True, 'accepted')):
+            row = {'state': 'accepted', 'route': {'quote_protocol': True, 'provider_accepted': confirmed}}
+            self.cur.fetchone.side_effect = [*self.authority_rows, row]
+            self.assertEqual(self.module.read_send_status(SESSION, 7, INPUT['request_id']), {'state': expected})
+
     def test_reserve_before_post_is_tenant_and_actor_bound(self):
         item = self.reserve()
         self.assertEqual(item['key'], (TENANT, 20, INPUT['request_id']))

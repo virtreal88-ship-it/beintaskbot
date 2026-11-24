@@ -289,11 +289,19 @@ def read_send_status(session, lead_id, request_id):
     request_id = str(uuid.UUID(str(request_id)))
     with _connect() as conn, conn.cursor() as cur:
         profile, _, _ = authority(cur, session, lead_id)
-        cur.execute("""SELECT state FROM saas_chat_send_receipts
+        cur.execute("""SELECT state,route FROM saas_chat_send_receipts
           WHERE tenant_id=%s::uuid AND actor_id=%s AND lead_id=%s AND request_id=%s::uuid""",
           (profile['tenant_id'], profile['telegram_id'], lead_id, request_id))
         row = cur.fetchone()
-    return {'state': row['state'] if row else 'unavailable'}
+    if not row:
+        return {'state': 'unavailable'}
+    route = row.get('route') or {}
+    if (row['state'] == 'accepted' and route.get('quote_protocol') is True
+            and route.get('provider_accepted') is not True):
+        # A legacy quoted request can be accepted by a queue before the
+        # provider receives it. Require the existing scoped receipt check.
+        return {'state': 'unknown'}
+    return {'state': row['state']}
 
 
 def read_quoted_receipt(session,lead_id,request_id=None):
