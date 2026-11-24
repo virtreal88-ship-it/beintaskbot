@@ -5,11 +5,11 @@ async function scenario({confirm=true,fail=null,cycle=false,scopeChange=false,ol
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs&lang=ru',runScripts:'outside-only'}),w=dom.window,d=w.document;
  if(selected)d.querySelector('#view-dialogs').classList.add('active');
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
- const route=(id,state='waiting',owner=33)=>({provider:'connect',lead_id:id,channel_id:'channel-'+id,conversation_id:'client-'+id,state:'human',agent_name:'Agent',can_send:false,lifecycle_enabled:true,lifecycle:{id:'episode-'+id,state,operator_id:owner,revision:4,can_dismiss:state==='waiting',can_close:state==='accepted'&&owner===33,last_inbound_id:'inbound-'+id}});
+ const route=(id,state='waiting',owner=33)=>({provider:'connect',lead_id:id,channel_id:'channel-'+id,conversation_id:'client-'+id,state:'human',agent_name:'Agent',can_send:false,lifecycle_enabled:true,lifecycle:{id:'episode-'+id,state,operator_id:owner,revision:4,can_dismiss:false,has_inbound:true,bulk_waiting:state==='waiting',can_close:state==='accepted'&&owner===33,last_inbound_id:'inbound-'+id}});
  const a=route(1),b=route(2,'accepted'),other=route(3,'accepted',44),closed=route(4,'closed'),group={...a,group_sources:[a,b,other]};
- const noInbound={...route(5),lifecycle:{...route(5).lifecycle,last_inbound_id:null,has_inbound:false,can_dismiss:false}};
+ const noInbound={...route(5),lifecycle:{...route(5).lifecycle,last_inbound_id:null,has_inbound:false,can_dismiss:false,bulk_waiting:false}};
  if(unknownInbound)noInbound.lifecycle.has_inbound=undefined;
- const unavailable={...route(6),lifecycle:{...route(6).lifecycle,can_dismiss:false}};
+ const unavailable={...route(6),lifecycle:{...route(6).lifecycle,has_inbound:undefined,can_dismiss:false,bulk_waiting:false}};
  if(ineligible||onlyIneligible)group.group_sources=onlyIneligible?[other,noInbound,unavailable]:[a,b,other,noInbound,unavailable];
  const routes=new Map([a,b,other,closed].map(r=>[String(r.lead_id),r]));
  const calls=[],prompts=[];let bulk=false,staleHistory,staleOpen,reminderOpens=0;

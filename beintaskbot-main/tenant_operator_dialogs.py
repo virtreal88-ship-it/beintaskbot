@@ -1162,11 +1162,11 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 # Only entries matching already-authorized rows are projected.
                 cur.execute('SELECT * FROM saas_dialog_workflows WHERE tenant_id=%s::uuid',(tenant,))
                 workflows={(str(w['channel_id']),w['conversation_id']):w for w in cur.fetchall()}
-                from tenant_dialog_lifecycle import no_reply_marks
+                from tenant_dialog_lifecycle import optional_no_reply_marks
                 visible_routes={(str(r['channel_id']),r['conversation_id']) for r in rows if r['provider']=='connect'}
-                marked=no_reply_marks(cur,tenant,[(channel,conversation,workflow.get('last_inbound_id'))
+                marked=optional_no_reply_marks(cur,tenant,[(channel,conversation,workflow.get('last_inbound_id'))
                     for (channel,conversation),workflow in workflows.items()
-                    if workflow['state']=='waiting' and (channel,conversation) in visible_routes])
+                    if workflow['state'] in {'waiting','accepted'} and (channel,conversation) in visible_routes])
                 if marked:
                     exact_routes={(channel,conversation) for channel,conversation,_ in marked}
                     latest=_completion_inbound_snapshot(cur,tenant,[r for r in rows
@@ -1198,10 +1198,15 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         _no_reply_marked=(str(r['channel_id']),r['conversation_id'],int(r['lead_id'])) in marked_inbound,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
+                    if completion_preview and r.get('lifecycle_enabled'):
+                        row_lifecycle=r['lifecycle']
+                        row_lifecycle['bulk_waiting']=bool(row_lifecycle['state']=='waiting' and row_lifecycle['has_inbound']
+                            and (row_lifecycle['no_reply_needed'] or (rollout.admission_enabled
+                                 and action_capabilities.get('update',False) is True)))
                     if company_prelinked_for_bulk is not None and r.get('lifecycle_enabled'):
                         row_lifecycle=r['lifecycle']
                         bulk_gate='not_applicable'
-                        if row_lifecycle['state']=='waiting' and row_lifecycle['can_dismiss']:
+                        if row_lifecycle['bulk_waiting']:
                             bulk_gate='no_reply_separate'
                         elif row_lifecycle['state']=='accepted' and row_lifecycle['can_close']:
                             bulk_gate=('prelinked_unverified' if (str(r['channel_id']),r['conversation_id'])

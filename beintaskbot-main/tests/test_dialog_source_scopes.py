@@ -490,6 +490,9 @@ def test_offline_dismiss_projection_preserves_independent_source_scope(scoped,up
         lifecycle.migrate(cur)
         transition(cur,A,mode='active',admission_enabled=True,expected_generation=0)
     db.commit()
+    grants(db,33,'all','all')
+    from test_dialog_lifecycle_pglite import payload
+    lifecycle.mutate(person,payload('accept'))
     grants(db,33,'all',update)
     db.execute("UPDATE saas_tenant_integrations SET status='disconnected' WHERE tenant_id=%s::uuid AND provider='connect'",(A,))
     db.commit()
@@ -501,7 +504,7 @@ def test_offline_dismiss_projection_preserves_independent_source_scope(scoped,up
         assert row['can_send'] is False
         assert row['lifecycle']['can_accept'] is False
     request=dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,action='dismiss',
-        expected_revision=0,request_id=str(uuid.uuid4()),message_id=preview['lifecycle']['last_inbound_id'])
+        individual_no_reply=True,expected_revision=1,request_id=str(uuid.uuid4()),message_id=preview['lifecycle']['last_inbound_id'])
     # Revoke after preview: unchanged mutation must still reject without a write.
     grants(db,33,'all','none')
     with pytest.raises(TenantLinearError) as denied:lifecycle.mutate(person,request)
