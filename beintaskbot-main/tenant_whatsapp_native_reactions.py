@@ -1,4 +1,4 @@
-"""Outgoing WeCall reactions and the linked account's reaction state."""
+"""WeCall reaction commands and reaction state for the existing message history."""
 import json
 import os
 import unicodedata
@@ -23,6 +23,13 @@ def migrate(cur):
       target_id TEXT NOT NULL, target_from_me BOOLEAN NOT NULL, participant TEXT NOT NULL,
       emoji TEXT NOT NULL, event_timestamp BIGINT NOT NULL, provider_id TEXT NOT NULL,
       PRIMARY KEY(tenant_id,channel_id,account,chat,target_id,target_from_me,participant))""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_whatsapp_peer_reactions (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      channel_id UUID NOT NULL, account TEXT NOT NULL, chat TEXT NOT NULL,
+      target_id TEXT NOT NULL, target_from_me BOOLEAN NOT NULL, participant TEXT NOT NULL,
+      reactor TEXT NOT NULL, reactor_alt TEXT NOT NULL, participant_alt TEXT NOT NULL,
+      emoji TEXT NOT NULL, event_timestamp BIGINT NOT NULL, provider_id TEXT NOT NULL,
+      PRIMARY KEY(tenant_id,channel_id,account,chat,target_id,target_from_me,participant,reactor))""")
 
 
 def _target(row):
@@ -218,10 +225,21 @@ def status(session, lead, request_id):
         return {'state':'accepted' if row['provider_id'] else 'unknown','emoji':display_emoji}
 
 
+def _alternate(jid, alternate):
+    try:
+        other = _jid(alternate, optional=True, participant=True)
+    except TenantLinearError:
+        return ''
+    if not jid or not other or jid.rsplit('@',1)[1] == other.rsplit('@',1)[1]:
+        return ''
+    return other
+
+
 def observe(cur, scope, payload):
-    """Only reactions by the linked account update its one shared reaction."""
+    """Keep the linked account and each outside participant independent."""
     key = payload.get('reaction')
-    if (payload.get('from_me') is not True or not isinstance(key,dict)
+    own = payload.get('from_me')
+    if (type(own) is not bool or not isinstance(key,dict)
             or set(key)-{'id','from_me','participant'} or type(key.get('from_me')) is not bool):
         return False
     chat, target, provider = payload.get('chat'),key.get('id'),payload.get('provider_id')
@@ -241,6 +259,35 @@ def observe(cur, scope, payload):
             return False
     elif participant:
         return False
+    if not own:
+        try:
+            actor = _jid(payload.get('sender'), participant=True)
+        except TenantLinearError:
+            return False
+        actor_alt = _alternate(actor,payload.get('sender_alt'))
+        if actor == scope['account'] or actor_alt == scope['account']:
+            return False
+        if GROUP.fullmatch(chat):
+            if actor.endswith('@lid') and actor_alt:
+                actor,actor_alt = actor_alt,actor
+        else:
+            if chat not in (actor,actor_alt):
+                return False
+            # One remote sender per private chat, even if its address changes.
+            actor = actor_alt = ''
+        participant_alt = _alternate(participant,payload.get('reaction_participant_alt'))
+        cur.execute("""INSERT INTO saas_whatsapp_peer_reactions AS old
+          (tenant_id,channel_id,account,chat,target_id,target_from_me,participant,
+           reactor,reactor_alt,participant_alt,emoji,event_timestamp,provider_id)
+          VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+          ON CONFLICT(tenant_id,channel_id,account,chat,target_id,target_from_me,participant,reactor)
+          DO UPDATE SET emoji=EXCLUDED.emoji,event_timestamp=EXCLUDED.event_timestamp,provider_id=EXCLUDED.provider_id,
+            reactor_alt=COALESCE(NULLIF(EXCLUDED.reactor_alt,''),old.reactor_alt),
+            participant_alt=COALESCE(NULLIF(EXCLUDED.participant_alt,''),old.participant_alt)
+          WHERE (old.event_timestamp,old.provider_id)<(EXCLUDED.event_timestamp,EXCLUDED.provider_id)""",
+          (scope['tenant'],scope['source'],scope['account'],chat,target,key['from_me'],participant,
+           actor,actor_alt,participant_alt,emoji,stamp,provider))
+        return True
     cur.execute("""INSERT INTO saas_whatsapp_reactions
       (tenant_id,channel_id,account,chat,target_id,target_from_me,participant,emoji,event_timestamp,provider_id)
       VALUES(%s::uuid,%s::uuid,%s,%s,%s,%s,%s,%s,%s,%s)
@@ -254,8 +301,9 @@ def observe(cur, scope, payload):
 
 def attach(cur, tenant, messages):
     for message in messages:
-        message.update(wa_reaction='',wa_reaction_available=False,wa_reaction_event='')
+        message.update(wa_reaction='',wa_reaction_available=False,wa_reaction_event='',wa_peer_reactions=[])
     targets = []
+    messages_by_id = {str(message['id']):message for message in messages}
     for message in messages:
         target = _target(message)
         if target:
@@ -269,7 +317,7 @@ def attach(cur, tenant, messages):
       AND to_regclass('saas_whatsapp_reactions') IS NOT NULL AS ready""")
     if not cur.fetchone()['ready']:
         return
-    cur.execute("""SELECT m.row_id,wr.emoji,wr.event_timestamp,wr.provider_id, r.enabled AND NOT r.paused AND g.enabled AND g.projection_enabled AND s.enabled AND ch.active AS available
+    cur.execute("""SELECT m.row_id,g.account_jid AS account,wr.emoji,wr.event_timestamp,wr.provider_id, r.enabled AND NOT r.paused AND g.enabled AND g.projection_enabled AND s.enabled AND ch.active AS available
       FROM jsonb_to_recordset(%s::jsonb) AS m(row_id text,channel uuid,chat text,target_id text,from_me boolean,participant text)
       JOIN saas_whatsapp_native_routes r ON r.tenant_id=%s::uuid AND r.channel_id=m.channel
       JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
@@ -288,3 +336,48 @@ def attach(cur, tenant, messages):
             if current['provider_id']:
                 message['wa_reaction_event'] = str(current['event_timestamp'])+':'+current['provider_id']
             message['wa_reaction_available'] = enabled and bool(current['available'])
+    _attach_peer_reactions(cur,tenant,targets,state,messages_by_id)
+
+
+def _attach_peer_reactions(cur, tenant, targets, state, messages_by_id):
+    from tenant_whatsapp_native_status import verified_receipt_chats
+    chat_aliases = {}
+    peer_targets = []
+    for target in targets:
+        row_id, channel, chat = target['row_id'],target['channel'],target['chat']
+        if row_id not in state:
+            continue
+        participant = target['participant']
+        chats = [chat]
+        if DIRECT.fullmatch(chat):
+            if (channel,chat) not in chat_aliases:
+                chat_aliases[channel,chat] = sorted(verified_receipt_chats(cur,tenant,channel,chat))
+            chats = chat_aliases[channel,chat]
+        raw = messages_by_id[row_id]['raw']
+        alt = _alternate(participant,raw.get('participantAlt'))
+        peer_targets.append({**target,'chats':chats,'participants':[participant,alt] if alt else [participant],
+                             'account':state[row_id]['account']})
+    if not peer_targets:
+        return
+    # Read replacements and removals across proven aliases before counting.
+    # Only the latest state for each sender contributes to the displayed count.
+    cur.execute("""SELECT m.row_id, peers.emoji, peers.count
+      FROM jsonb_to_recordset(%s::jsonb) AS m(row_id text,channel uuid,account text,chats text[],
+          target_id text,from_me boolean,participants text[])
+      CROSS JOIN LATERAL (
+        WITH candidates AS (
+          SELECT reactor,reactor_alt,emoji,event_timestamp,provider_id FROM saas_whatsapp_peer_reactions
+          WHERE tenant_id=%s::uuid AND channel_id=m.channel AND account=m.account AND chat=ANY(m.chats)
+            AND target_id=m.target_id AND target_from_me=m.from_me
+            AND (participant=ANY(m.participants) OR participant_alt<>'' AND participant_alt=ANY(m.participants))
+        ), latest AS (
+          SELECT DISTINCT ON (actor) emoji,
+            COALESCE((SELECT min(p.reactor) FROM candidates p WHERE p.reactor_alt=c.reactor AND p.reactor<>c.reactor
+                      HAVING count(DISTINCT p.reactor)=1),c.reactor) AS actor
+          FROM candidates c ORDER BY actor,event_timestamp DESC,provider_id DESC
+        )
+        SELECT emoji,count(*)::int AS count FROM latest WHERE emoji<>'' GROUP BY emoji
+        ORDER BY count DESC,emoji LIMIT 24
+      ) peers""", (json.dumps(peer_targets),tenant))
+    for row in cur.fetchall():
+        messages_by_id[row['row_id']]['wa_peer_reactions'].append({'emoji':row['emoji'],'count':row['count']})

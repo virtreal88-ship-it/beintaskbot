@@ -37,7 +37,7 @@ func TestGroupSenderKeyAndContentWithSameProviderID(t *testing.T) {
 			}
 			for repeat := 0; repeat < 3; repeat++ {
 				for _, e := range ordered {
-					if !j.Capture(context.Background(), e) {
+					if !j.Capture(context.Background(), e, nil) {
 						t.Fatal("capture failed")
 					}
 				}
