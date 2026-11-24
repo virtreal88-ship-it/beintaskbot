@@ -161,6 +161,27 @@ def no_reply_marks(cur, tenant, keys):
 
 
 
+def optional_no_reply_marks(cur, tenant, keys):
+    """Bound a UI-only lookup and release its audit-table locks before timeline enrichment."""
+    keys=[key for key in keys if key[-1]]
+    if not keys:return set()
+    from psycopg.errors import LockNotAvailable, QueryCanceled
+    cur.execute("SAVEPOINT dialog_no_reply_lookup")
+    try:
+        cur.execute("""SELECT setting::integer AS milliseconds
+          FROM pg_settings WHERE name='statement_timeout'""")
+        timeout=(cur.fetchone() or {}).get('milliseconds') or 150
+        cur.execute("SELECT set_config('statement_timeout',%s,true)",(f'{min(timeout,150)}ms',))
+        return no_reply_marks(cur,tenant,keys)
+    except (LockNotAvailable, QueryCanceled):
+        return None
+    finally:
+        # RELEASE alone retains AccessShare until the outer transaction ends.
+        # Rewind on success too: this subtransaction performs no writes.
+        cur.execute("ROLLBACK TO SAVEPOINT dialog_no_reply_lookup")
+        cur.execute("RELEASE SAVEPOINT dialog_no_reply_lookup")
+
+
 def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='routes.channel_id', conversation_expr='routes.conversation_id', *, allow_closed_archive=False, owner_overview=False, search_overview=False):
     if not enabled(cur, policy.profile['tenant_id']): return 'TRUE'
     # The caller's independent tenant/source policy still gates every row.
@@ -463,8 +484,10 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
           AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
           ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+str(dialog['channel_id']),dialog['lead_id']))
         last=cur.fetchone() or {}
-    no_reply=state=='waiting' and (_no_reply_marked or bool(details and last.get('id') and no_reply_marks(
-        cur,tenant,[(str(dialog['channel_id']),dialog['conversation_id'],last['id'])])))
+    markers=set()
+    if state in {'waiting','accepted'} and details and last.get('id'):
+        markers=optional_no_reply_marks(cur,tenant,[(str(dialog['channel_id']),dialog['conversation_id'],last['id'])])
+    no_reply=state in {'waiting','accepted'} and (_no_reply_marked or bool(markers))
     dialog['lifecycle_enabled']=True
     dialog['lifecycle']={'id':str(row['id']) if row else None,'state':state,
         'revision':int(row['revision']) if row else 0,'operator_id':row.get('operator_id') if row else None,
@@ -473,7 +496,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
             and _can_update is True and (own or dialog.get('can_send') is True)
             and dialog.get('channel_active') is True
             and (online or (own and _manual_start_exempt_from_operator_routing(tenant,dialog['channel_id'],_policy))),
-        'can_dismiss':state=='waiting' and rollout.admission_enabled and _can_update is True and bool(last) and not no_reply,
+        'can_dismiss':state=='accepted' and own and rollout.admission_enabled and _can_update is True and bool(last) and markers is not None and not no_reply,
         'no_reply_needed':no_reply,
         'last_inbound_id':last.get('id'),
         'has_inbound':bool(last) if details else _has_inbound,
@@ -605,7 +628,7 @@ def _mutate_once(profile, payload):
                 raise TenantLinearError('Выберите источник Connect.',400)
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action != "takeover")
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
-            from tenant_dialog_presence import is_online, is_sidebar_transfer_online, work_status_routing_requested
+            from tenant_dialog_presence import is_online, is_sidebar_transfer_online
             target = None
             eligible = True
             transfer_source_active = False
@@ -620,9 +643,7 @@ def _mutate_once(profile, payload):
                     AND active FOR SHARE''',(tenant,channel))
                 if not cur.fetchone():
                     raise TenantLinearError('Источник недоступен.',403)
-            elif (policy.profile.get('role') != 'owner'
-                  and (action in {'accept','start'}
-                       or (action == 'dismiss' and work_status_routing_requested(tenant,channel)))):
+            elif policy.profile.get('role') != 'owner' and action in {'accept','start'}:
                 eligible = is_online(cur,tenant,actor,lock=True,source_channel=channel)
             takeover = action=='takeover'
             if takeover or (action=='accept' and policy.profile.get('role')=='owner'):
@@ -686,10 +707,12 @@ def _mutate_once(profile, payload):
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             if action=='dismiss':
-                if row and row['state']!='waiting': raise TenantLinearError('Диалог уже принят или закрыт.',409)
-                # Old bulk clients must not silently mark messages.
+                # Old bulk clients must never silently mark messages.
                 if payload.get('individual_no_reply') is not True:
-                    raise TenantLinearError('Отметьте этот диалог отдельно как «Не требует ответа».',422)
+                    raise TenantLinearError('Отметьте сообщение отдельно как «Риторический вопрос».',422)
+                if not row or row['state']!='accepted':
+                    raise TenantLinearError('Сначала примите диалог.',409)
+                require_access(cur,tenant,actor,'connect',channel,conversation,'update')
                 cur.execute("""SELECT id::text AS id FROM saas_crm_messages WHERE tenant_id=%s::uuid
                   AND channel=%s AND kommo_lead_id=%s AND direction='incoming'
                   ORDER BY created_at DESC,id DESC LIMIT 1""",(tenant,'connect:'+channel,route['lead_id']))
@@ -699,12 +722,10 @@ def _mutate_once(profile, payload):
                 marker=_no_reply_id(tenant,channel,conversation,last['id'])
                 if no_reply_marks(cur,tenant,[(channel,conversation,last['id'])]):
                     raise TenantLinearError('Это сообщение уже не требует ответа.',409)
-                cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,revision,last_inbound_id)
-                  VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'waiting',1,%s)
-                  ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET
-                  revision=saas_dialog_workflows.revision+1,
-                  last_inbound_id=EXCLUDED.last_inbound_id,updated_at=clock_timestamp()""",
-                  (tenant,channel,conversation,str(uuid.uuid4()),last['id']))
+                cur.execute('''UPDATE saas_dialog_workflows
+                  SET revision=revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
+                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s''',
+                  (last['id'],tenant,channel,conversation))
             elif action in {'accept','start'}:
                 if action=='start':
                     require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True,

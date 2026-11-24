@@ -206,12 +206,12 @@ def test_preview_exact_inbound_token_and_no_read_or_lifecycle_writes(active, mon
     assert result['completion_preview'] is True and result['unread_count'] is None
     row=next(r for r in result['dialogs'] if r['lead_id']==41)
     assert row['lifecycle']['last_inbound_id']==latest
-    assert row['lifecycle']['can_dismiss'] is True
+    assert row['lifecycle']['can_dismiss'] is False
     assert row['lifecycle']['revision']==0
     after={table:active.execute('SELECT count(*) AS n FROM '+table)[0]['n'] for table in tables}
     assert after==before
     detail=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']
-    assert row['lifecycle']=={k:v for k,v in detail['lifecycle'].items() if k!='completed_episodes'}
+    assert row['lifecycle']=={k:v for k,v in detail['lifecycle'].items() if k!='completed_episodes'} | {'bulk_waiting': True}
 
 
 def test_preview_has_constant_query_round_trips_and_default_is_unchanged(active):
@@ -231,6 +231,8 @@ def test_preview_has_constant_query_round_trips_and_default_is_unchanged(active)
 
 def test_new_inbound_after_preview_is_not_dismissed(active):
     prior=message(active,7)
+    from test_dialog_lifecycle_pglite import payload
+    lifecycle.mutate(PROFILE,payload('accept'))
     row=next(r for r in dialogs.listing(PROFILE,completion_preview=True)['dialogs'] if r['lead_id']==41)
     message(active,8)
     with pytest.raises(TenantLinearError) as denied:
@@ -238,7 +240,7 @@ def test_new_inbound_after_preview_is_not_dismissed(active):
             lead_id=41,action='dismiss',individual_no_reply=True,expected_revision=row['lifecycle']['revision'],
             message_id=prior,request_id=str(uuid.uuid4())))
     assert denied.value.status==409
-    assert active.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts')[0]['n']==0
+    assert active.execute('SELECT count(*) AS n FROM saas_dialog_lifecycle_receipts')[0]['n']==1
 
 
 def test_preview_api_is_opt_in_and_identity_bound(monkeypatch):
@@ -271,6 +273,8 @@ def test_preview_respects_disabled_admission(active):
 @pytest.mark.parametrize('offline',['disconnected','inactive'])
 def test_dismiss_permission_is_independent_of_transport(active,offline):
     incoming=message(active,31)
+    from test_dialog_lifecycle_pglite import payload
+    lifecycle.mutate(PROFILE,payload('accept'))
     if offline=='disconnected':
         active.execute("UPDATE saas_tenant_integrations SET status='disconnected' WHERE tenant_id=%s::uuid AND provider='connect'",(A,))
     else:
@@ -285,8 +289,8 @@ def test_dismiss_permission_is_independent_of_transport(active,offline):
         assert row['can_send'] is False
         assert 'update' not in row and '_action_capabilities' not in row
     result=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,
-        action='dismiss',individual_no_reply=True,expected_revision=0,request_id=str(uuid.uuid4()),message_id=incoming))
-    assert result['lifecycle']['state']=='waiting' and result['lifecycle']['no_reply_needed']
+        action='dismiss',individual_no_reply=True,expected_revision=1,request_id=str(uuid.uuid4()),message_id=incoming))
+    assert result['lifecycle']['state']=='accepted' and result['lifecycle']['no_reply_needed']
     assert any(r['lead_id']==41 for r in dialogs.listing(PROFILE)['dialogs'])
 
 
@@ -456,10 +460,12 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
       (system_event,A,CA))
     active.commit()
 
+    from test_dialog_lifecycle_pglite import payload
+    lifecycle.mutate(PROFILE,payload('accept'))
     dismissed=lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,
-        conversation_id='client',lead_id=41,action='dismiss',individual_no_reply=True,expected_revision=0,
+        conversation_id='client',lead_id=41,action='dismiss',individual_no_reply=True,expected_revision=1,
         message_id=str(uuid.UUID(int=1000150)),request_id=str(uuid.uuid4())))
-    assert dismissed['lifecycle']['state']=='waiting' and dismissed['lifecycle']['no_reply_needed']
+    assert dismissed['lifecycle']['state']=='accepted' and dismissed['lifecycle']['no_reply_needed']
     no_reply_view=dialogs.listing(PROFILE,lifecycle='active')
     assert no_reply_view['unread_count']==150
     assert no_reply_view['dialogs'][0]['lifecycle']['no_reply_needed']
@@ -501,18 +507,18 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
     after_all=dialogs.listing(PROFILE,lifecycle='all')
     assert after_all['unread_count']==1
     assert after_all['dialogs'][0]['unread_count']==1
-    assert after_all['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert after_all['dialogs'][0]['lifecycle']['state']=='accepted'
     assert not after_all['dialogs'][0]['lifecycle']['no_reply_needed']
     # A fresh server listing (the state after reload) retains both lifecycle and read cursor.
     reloaded=dialogs.listing(PROFILE,lifecycle='all')
     assert reloaded['unread_count']==1
     assert reloaded['dialogs'][0]['unread_count']==1
-    assert reloaded['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert reloaded['dialogs'][0]['lifecycle']['state']=='accepted'
     assert not reloaded['dialogs'][0]['lifecycle']['no_reply_needed']
     repeated=dialogs.mark_all_read(PROFILE)
     assert repeated['updated_dialogs']==1
     after_repeat=dialogs.listing(PROFILE,lifecycle='all')
     assert after_repeat['unread_count']==0
     assert after_repeat['dialogs'][0]['unread_count']==0
-    assert after_repeat['dialogs'][0]['lifecycle']['state']=='waiting'
+    assert after_repeat['dialogs'][0]['lifecycle']['state']=='accepted'
     assert not after_repeat['dialogs'][0]['lifecycle']['no_reply_needed']

@@ -495,44 +495,62 @@ def test_legacy_dismiss_receipt_replays_audited_alias_but_new_marks_require_exac
     assert state(episodes)['state']=='dismissed'
 
 
-def test_no_reply_marks_only_latest_inbound_without_terminal_side_effects(episodes,monkeypatch):
+def test_rhetorical_marks_only_assigned_accepted_latest_message_without_completing(episodes,monkeypatch):
     import tenant_operator_dialogs as dialogs
     monkeypatch.setattr(dialogs,'_connect',lambda:episodes)
     message=str(episodes.execute('SELECT id FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=41',(A,))[0]['id'])
     episodes.commit()
+    waiting=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']
+    assert waiting['state']=='waiting' and not waiting['can_dismiss']
+    with pytest.raises(TenantLinearError) as not_yet:
+        command('dismiss',0,message_id=message,individual_no_reply=True)
+    assert not_yet.value.status==409
+    assert state(episodes) is None
+    operator={'tenant_id':A,'telegram_id':33}
+    accepted=command(actor=33)['lifecycle']
+    detail_before=dialogs.history(operator,'connect',41,CA,'client')['dialog']
+    current=detail_before['lifecycle']
+    assert current['can_dismiss'] and current['can_close']
     with pytest.raises(TenantLinearError) as bulk:
-        command('dismiss',0,message_id=message)
+        command('dismiss',1,actor=33,message_id=message)
     assert bulk.value.status==422
+    with pytest.raises(TenantLinearError) as foreign:
+        command('dismiss',1,actor=11,message_id=message,individual_no_reply=True)
+    assert foreign.value.status==404
     with pytest.raises(TenantLinearError) as stale:
-        command('dismiss',0,message_id=str(uuid.uuid4()),individual_no_reply=True)
+        command('dismiss',1,actor=33,message_id=str(uuid.uuid4()),individual_no_reply=True)
     assert stale.value.status==409
-    request=payload('dismiss',0,message_id=message,individual_no_reply=True)
-    result=lifecycle.mutate(PROFILE,request)
+    request=payload('dismiss',1,message_id=message,individual_no_reply=True)
+    result=lifecycle.mutate(operator,request)
     status=result['lifecycle']
-    assert status['state']=='waiting' and status['operator_id'] is None and status['no_reply_needed'] is True
+    assert status=={**accepted,'revision':2,'no_reply_needed':True}
     assert state(episodes)['closed_at'] is None
-    assert lifecycle.mutate(PROFILE,request)==result
-    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==0
+    assert lifecycle.mutate(operator,request)==result
+    assert episodes.execute('SELECT count(*) AS n FROM saas_dialog_episodes')[0]['n']==1
     assert episodes.execute('SELECT count(*) AS n FROM saas_support_tickets')[0]['n']==0
-    events=episodes.execute("SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_no_reply'",(A,))
+    events=episodes.execute("SELECT entity_id,actor_telegram_id,payload FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_no_reply'",(A,))
     assert len(events)==1 and events[0]['payload']['message_id']==message and events[0]['payload']['counts_as_missed'] is False
+    assert str(events[0]['entity_id'])==accepted['id'] and events[0]['actor_telegram_id']==33
     episodes.commit()
-    staff={'tenant_id':A,'telegram_id':33}
-    for profile in (PROFILE,staff):
-        item=next(row for row in dialogs.listing(profile,lifecycle='active')['dialogs'] if row['lead_id']==41)
-        assert item['lifecycle']['no_reply_needed'] is True
-        details=dialogs.history(profile,'connect',41,CA,'client')['dialog']
-        assert details['lifecycle']['no_reply_needed'] is True and not details['can_send']
-        assert not details['lifecycle']['can_close'] and not details['lifecycle']['can_dismiss']
-    assert not [r for r in dialogs.listing(PROFILE,lifecycle='completed')['dialogs'] if r['lead_id']==41]
-    with pytest.raises(TenantLinearError):command('close',1)
+    item=next(row for row in dialogs.listing(operator,lifecycle='active')['dialogs'] if row['lead_id']==41)
+    assert item['lifecycle']['no_reply_needed'] is True
+    details=dialogs.history(operator,'connect',41,CA,'client')['dialog']
+    assert details['lifecycle']['no_reply_needed'] and details['lifecycle']['can_close']
+    assert details['can_send']==detail_before['can_send']
+    assert not details['lifecycle']['can_dismiss']
+    assert not [r for r in dialogs.listing(operator,lifecycle='completed')['dialogs'] if r['lead_id']==41]
+    transferred=command('transfer',2,actor=33,target_employee_id=11)['lifecycle']
+    assert transferred['state']=='accepted' and transferred['id']==accepted['id']
+    assert dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']['no_reply_needed']
+    with pytest.raises(TenantLinearError) as old_actor:
+        lifecycle.mutate(operator,request)
+    assert old_actor.value.status==404
     newer=insert_message(episodes,'real-new-inbound',created_at='2099-01-01T00:00:00Z')
     with episodes.cursor() as cur:lifecycle.note_inbound(cur,A,CA,'client',newer,'2099-01-01T00:00:00Z')
     episodes.commit()
     fresh=dialogs.history(PROFILE,'connect',41,CA,'client')['dialog']['lifecycle']
-    assert fresh['state']=='waiting' and not fresh['no_reply_needed'] and fresh['can_dismiss']
-    assert command('accept',fresh['revision'])['lifecycle']['state']=='accepted'
-    assert command('close',fresh['revision']+1)['lifecycle']['state']=='closed'
+    assert fresh['state']=='accepted' and not fresh['no_reply_needed'] and fresh['can_dismiss']
+    assert command('close',fresh['revision'])['lifecycle']['state']=='closed'
 
 
 @pytest.mark.parametrize('episodes',['legacy','shadow'],indirect=True)

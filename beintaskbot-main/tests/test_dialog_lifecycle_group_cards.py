@@ -92,7 +92,8 @@ def test_completion_preview_retains_physical_source_tokens_and_visibility(projec
     assert sources[CA]['lifecycle']['last_inbound_id'] is None
     assert sources[CA]['lifecycle']['can_dismiss'] is False
     assert sources[CB]['lifecycle']['last_inbound_id']
-    assert sources[CB]['lifecycle']['can_dismiss'] is True
+    assert sources[CB]['lifecycle']['can_dismiss'] is False
+    assert sources[CB]['lifecycle']['bulk_waiting'] is True
     assert {r['channel_id'] for r in cards(33,completion_preview=True)[0]['group_sources']}=={CB}
     change(44)
     assert {r['channel_id'] for r in cards(completion_preview=True)[0]['group_sources']}=={CB}
