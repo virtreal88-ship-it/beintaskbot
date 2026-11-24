@@ -93,8 +93,8 @@ def prepare_database() -> None:
 
 def _provision_dialog_duplicates(conn):
     """Optional UI schema under the bounded startup lock; never blocks boot."""
-    from tenant_dialog_duplicate_actions import prepare_schema
     try:
+        from tenant_dialog_duplicate_actions import prepare_schema
         with conn.transaction():
             prepare_schema(conn)
     except Exception:

@@ -74,6 +74,16 @@ class TenantAiAgentStartupTests(unittest.TestCase):
         self.assertEqual(events[:3],["SET transaction_timeout='5000ms'","SET lock_timeout='2000ms'",'lock'])
         self.assertNotIn('unlock',events)
 
+
+    def test_optional_duplicate_import_failure_cannot_stop_base_boot(self):
+        events=[]
+        modules=self._bootstrap_modules(events)
+        modules['tenant_dialog_duplicate_actions']=None
+        with patch.dict('sys.modules',modules), self.assertLogs('tenant_ai_agent_startup',level='WARNING'):
+            prepare_database()
+        self.assertIn('verified',events)
+        self.assertEqual(events[-1],'close')
+
     def test_bootstrap_failure_closes_session_without_masking_original_error(self):
         events=[]
         with patch.dict('sys.modules',self._bootstrap_modules(events,fail=True)):
