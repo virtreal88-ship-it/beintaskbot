@@ -107,7 +107,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/transfer-candidates', ('GET',)),
     ('dialogs/presence', ('GET','POST')),
     ('profile/availability', ('GET','POST')),
-    ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/contact-phone', ('GET',)), ('dialogs/duplicates', ('POST',)), ('dialogs/duplicates/preview', ('POST',)), ('dialogs/contact-display-phone', ('POST',)), ('dialogs/group-participants', ('GET',)), ('dialogs/transfer-details', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
+    ('dialogs/sources', ('GET','POST')), ('dialogs', ('GET',)), ('dialogs/avatar', ('GET',)), ('dialogs/contact-phone', ('GET',)), ('dialogs/duplicates', ('POST',)), ('dialogs/duplicates/preview', ('POST',)), ('dialogs/contact-display-phone', ('POST',)), ('dialogs/history-merges', ('POST',)), ('dialogs/group-participants', ('GET',)), ('dialogs/transfer-details', ('GET',)), ('dialogs/history', ('GET',)), ('dialogs/copilot', ('GET','POST')), ('dialogs/display-name', ('POST',)),
     ('dialogs/copilot-voice/preflight', ('POST',)), ('dialogs/copilot-voice/ws', ('GET',)),
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),

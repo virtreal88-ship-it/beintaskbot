@@ -57,10 +57,10 @@ def page(conn, cur, tenant, channel, conversation, **window):
 
 
 def history_window(cur, tenant, conversation, *, messages, before,
-                   history_leads, history_channel, group_channels=None):
+                   history_leads, history_channel, group_channels=None, authorized_before_stamp=None):
     """Fence metadata to the same authorized message page as the timeline."""
-    upper = None
-    if before:
+    upper = authorized_before_stamp if before else None
+    if before and upper is None:
         if group_channels is not None:
             cur.execute("""SELECT COALESCE(m.happened_at,m.created_at) AS stamp
               FROM saas_crm_messages m JOIN saas_connect_conversations c
@@ -84,7 +84,7 @@ def history_window(cur, tenant, conversation, *, messages, before,
 
 
 def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
-                 history_leads, history_channel, group_channels=None):
+                 history_leads, history_channel, group_channels=None, authorized_before_stamp=None):
     # No new index/migration. Limit the optional JSON audit read's latency,
     # and keep a timeout from suppressing otherwise valid chat history.
     # The statement setting is restored on success or savepoint rollback.
@@ -96,7 +96,8 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
         budget = min(setting["milliseconds"] or 200, 200)
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (f"{budget}ms",))
         window = history_window(cur,tenant,conversation,messages=messages,before=before,
-            history_leads=history_leads,history_channel=history_channel,group_channels=group_channels)
+            history_leads=history_leads,history_channel=history_channel,group_channels=group_channels,
+            authorized_before_stamp=authorized_before_stamp)
         if window is None:
             cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
             return {'operator_events': []}

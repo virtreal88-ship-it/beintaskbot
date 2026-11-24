@@ -1,0 +1,56 @@
+name: Asynchronous dialogue history merge
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/dialog-history-merge.yml'
+      - 'beintaskbot-main/tenant_dialog_history_merge*.py'
+      - 'beintaskbot-main/tenant_message_delivery.py'
+      - 'beintaskbot-main/tenant_operator_api.py'
+      - 'beintaskbot-main/tenant_operator_dialogs.py'
+      - 'beintaskbot-main/tenant_dialog_duplicates.py'
+      - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
+      - 'beintaskbot-main/tenant_whatsapp_pair_evidence.py'
+      - 'beintaskbot-main/tenant_dialog_merge_display.py'
+      - 'beintaskbot-main/tests/test_dialog_duplicate_actions.py'
+      - 'beintaskbot-main/tests/test_whatsapp_pair_evidence.py'
+      - 'beintaskbot-main/tests/test_dialog_history_merge*'
+      - 'beintaskbot-main/tests/test_history_merge_worker_cleanup.py'
+      - 'beintaskbot-main/tenant_ai_agent_startup.py'
+      - 'beintaskbot-main/tests/test_dialog_duplicate_owner_ui.cjs'
+permissions:
+  contents: read
+
+jobs:
+  dialogue-history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    defaults:
+      run:
+        working-directory: beintaskbot-main
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://invalid.invalid/disabled
+      BEINTASKBOT_TEST_POSTGRES_DSN: host=127.0.0.1 port=5432 user=postgres password=postgres dbname=postgres
+      PYTHONPATH: tests/isolated_database_guard:.:tests
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: pip install -r requirements.txt pytest pytest-asyncio
+      - run: npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26.1.0 playwright@1.62.1
+      - run: .support-test-deps/node_modules/.bin/playwright install --with-deps chromium
+      - run: python -m pytest -q -rs tests/test_dialog_history_merge_jobs.py tests/test_dialog_history_merge_projection.py tests/test_dialog_history_merge_cards.py tests/test_dialog_history_merge_native_postgres.py tests/test_dialog_history_merge_native_acl.py tests/test_whatsapp_pair_evidence.py tests/test_message_delivery_projection.py tests/test_dialog_duplicate_discovery.py tests/test_dialog_duplicate_actions.py tests/test_history_merge_worker_cleanup.py
+      - run: node tests/test_dialog_duplicate_owner_ui.cjs
+      - run: node tests/test_dialog_history_merge_browser.cjs

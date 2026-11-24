@@ -1,7 +1,7 @@
 const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
 const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
-const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window;
+const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://fixture.test/app?view=dialogs',runScripts:'outside-only',pretendToBeVisual:true}),w=dom.window;
 const owner={member:{tenant_id:'00000000-0000-0000-0000-000000000101',telegram_id:33,role:'owner',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}};
 const worker={...owner,member:{...owner.member,role:'worker'}};
 const channel='00000000-0000-0000-0000-000000000201';
@@ -13,7 +13,19 @@ const missing=row(3,{customer_name:'100000000003@lid',display_phone_editable:tru
 const closed=row(6,{customer_name:'Closed without phone',display_phone_editable:false,lifecycle:{state:'closed'}});
 const conflict=row(7,{display_phone_editable:true,contact_identity_conflict:true});
 const noPermission=row(8,{display_phone_editable:false});
-let profile=worker,pending;
+let profile=worker,pending,job=null,holdMergeStatus=null,projection=null,holdOlder=null,holdRoute=null,actionRoutes=null;
+const timers=new Map();
+let timerSequence=-1;
+const realTimeout=w.setTimeout.bind(w),realClear=w.clearTimeout.bind(w);
+w.setTimeout=(callback,ms,...args)=>{
+ if(ms!==2500)return realTimeout(callback,ms,...args);
+ const id=timerSequence--;timers.set(id,()=>callback(...args));return id;
+};
+w.clearTimeout=id=>{if(timers.has(id))timers.delete(id);else realClear(id);};
+const displayRevision='a'.repeat(64);
+let displayPreviewMode='valid';
+const readyOwner={...owner,capabilities:{...owner.capabilities,dialog_history_merge:true,dialog_history_merge_source_id:channel}};
+
 const seen=[];
 w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
 w.document.getElementById('view-dialogs').classList.add('active');
@@ -26,16 +38,44 @@ w.fetch=async (target,options)=>{
    if(body.mode==='name')return new Promise(resolve=>pending=()=>resolve(response({dialogs:[row(9)],next_offset:null})));
    return response({dialogs:body.mode==='missing'?[missing,closed,conflict,noPermission]:[first,second,...more],next_offset:null});
  }
- if(resource==='/duplicates/preview'||resource==='/duplicates/merge'){
+ if(resource==='/duplicates/preview'){
+   seen.push({resource,body});
+   if(displayPreviewMode==='bad-revision')return response({name_choices:[],phone_choices:[]});
+   if(displayPreviewMode==='empty')return response({display_revision:displayRevision,name_choices:[],phone_choices:[]});
+   return response({display_revision:displayRevision,name_choices:[{lead_id:body.left.lead_id,display_name:'<b>Display choice</b>'}],
+     phone_choices:[{lead_id:body.right.lead_id,display_phone:'+994500000002'}]});
+ }
+ if(resource==='/duplicates/merge'){
    seen.push({resource,body});throw new Error('no merge network is allowed from the browser');
+ }
+ if(resource==='/history-merges'){
+   seen.push({resource,body});
+   if(body.operation==='create')job={id:'job-1',state:'queued',processed:0,total:3,unit:'steps'};
+   if(body.operation==='cancel')job={...job,state:'cancelled'};
+   if(body.operation==='status'&&holdMergeStatus==='pending')return new Promise(resolve=>{holdMergeStatus=()=>resolve(response({job:{...job,state:'completed',processed:3}}));});
+   return response({job});
  }
  if(resource==='/contact-display-phone'){
    seen.push({resource,body});return response({display_phone:'+994500000009'});
  }
  if(resource==='/history'){
-   seen.push({resource,lead:url.searchParams.get('lead_id')});return response({dialog:[missing,closed,conflict].find(row=>String(row.lead_id)===url.searchParams.get('lead_id'))||missing,messages:[],next_before:null});
+   seen.push({resource,lead:url.searchParams.get('lead_id')});
+   if(['1','2'].includes(url.searchParams.get('lead_id'))&&projection){
+     const isSecondary=url.searchParams.get('lead_id')==='2';
+     const source=(id,body,companion=false)=>({id,body,external_id:'external-'+id,provider_message_id:'provider-'+id,source:'connect',direction:'incoming',message_type:'text',source_channel_id:channel,source_conversation_id:companion?second.conversation_id:first.conversation_id});
+     const dialog={...(isSecondary?second:first),can_send:!isSecondary,...(actionRoutes?{lifecycle_enabled:true,lifecycle:{state:'accepted',revision:isSecondary?4:3,can_close:!isSecondary}}:{}),...(projection==='merged'?{history_merge_id:'merge-1',history_merge_action_routes:actionRoutes}:{})};
+     if(url.searchParams.get('before')){
+       const older=response({dialog,messages:[source('old-copy','older companion',true)],next_before:'oldest'});
+       if(holdOlder==='pending')return new Promise(resolve=>{holdOlder=()=>resolve(older);});
+       return older;
+     }
+     const newest=response({dialog,messages:[source('primary','primary newest'),...(projection==='merged'?[source('new-copy','newer companion',true)]:[])],next_before:'primary'});
+     if(isSecondary&&holdRoute==='pending')return new Promise(resolve=>{holdRoute=()=>resolve(newest);});
+     return newest;
+   }
+   return response({dialog:[missing,closed,conflict].find(row=>String(row.lead_id)===url.searchParams.get('lead_id'))||missing,messages:[],next_before:null});
  }
- if(resource==='')return response({dialogs:[],channels:[],agents:[],total_count:0,unread_count:0,next_offset:null});
+ if(resource==='')return response({dialogs:projection==='merged'&&actionRoutes?[{...first,history_merge_id:'merge-1'}]:[],channels:[],agents:[],total_count:0,unread_count:0,next_offset:null});
  return {ok:true,json:async()=>({...profile,success:true})};
 };
 const settle=async()=>{for(let i=0;i<20;i++)await new Promise(resolve=>setImmediate(resolve));};
@@ -60,6 +100,7 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  assert.equal(w.document.querySelectorAll('[data-dupe-open]').length,2,'only one candidate group is shown');
  assert.equal($('[data-dupe-preview]'),null);
  assert.equal($('[data-dupe-confirm]'),null);
+ assert.equal($('[data-dupe-merge-start]'),null,'feature defaults off for owners');
  assert.match($('[data-dupe-merge-unavailable]').textContent,/not available|недоступно|mümkün/i);
  assert.equal(w.document.querySelectorAll('.operator-dupe-pair [data-dupe-open]').length,2);
  $('[data-dupe-prev]').click();assert.match($('[data-dupe-count]').textContent,/1.*2/);
@@ -89,6 +130,143 @@ const submit=(form,value)=>{if(value!==undefined)form.querySelector('input').val
  $('[data-dupe-mode="phone"]').checked=false;submit($('[data-dupe-form]'));await settle();
  assert.equal(seen.findLast(req=>req.resource==='/duplicates').body.mode,'name');
  emitProfile(worker);pending();await settle();assert.equal($('#operatorDuplicateSearch'),null);
- console.log('PASS: owner-only duplicate modal, no query in URLs, browse-only comparisons and no merge, missing navigation and display-only phone, profile race.');
+ const mergeCalls=()=>seen.filter(req=>req.resource==='/history-merges').map(req=>req.body);
+ const firePoll=async()=>{assert.equal(timers.size,1,'only one polling timer');const [id,fn]=timers.entries().next().value;timers.delete(id);fn();await settle();};
+ const searchDuplicates=async()=>{$('#operatorFindDuplicates').click();submit($('[data-dupe-form]'));await settle();};
+ emitProfile({...readyOwner,capabilities:{...readyOwner.capabilities,dialog_history_merge_source_id:'00000000-0000-0000-0000-000000000299'}});await settle();
+ await searchDuplicates();
+ assert.equal($('[data-dupe-merge-start]'),null,'another source still supports search, not merging');
+ assert.equal(mergeCalls().length,0);
+ $('[data-dupe-close]').click();
+ emitProfile(readyOwner);await settle();
+ const beforeHistory=seen.filter(req=>req.resource==='/history').length;
+ await searchDuplicates();
+ assert.equal(mergeCalls().length,0,'search and comparison do not request proof, history, or jobs');
+ assert.equal(seen.filter(req=>req.resource==='/duplicates/preview').length,1,'exactly one metadata-only preview for the current pair');
+ assert.equal(seen.filter(req=>req.resource==='/history').length,beforeHistory);
+ const choose=kind=>{const picker=$('[data-dupe-display-field="'+kind+'"]');picker.value='0';picker.dispatchEvent(new w.Event('change'));};
+ assert($('[data-dupe-merge-start]').disabled,'no implicit name or phone selection');
+ assert.equal($('[data-dupe-display-field="name"] b'),null,'choices are rendered as text');
+ choose('name');assert($('[data-dupe-merge-start]').disabled);
+ choose('phone');assert(!$('[data-dupe-merge-start]').disabled);
+ $('[data-dupe-merge-start]').click();await settle();
+ assert.equal(mergeCalls().length,1);assert.equal(mergeCalls()[0].operation,'create');
+ assert.deepEqual(mergeCalls()[0].display,{revision:displayRevision,name_lead_id:1,phone_lead_id:2});
+ assert.match(mergeCalls()[0].request_id,/^[0-9a-f-]{36}$/i);
+ assert.deepEqual(mergeCalls()[0].left,{provider:'connect',channel_id:channel,conversation_id:first.conversation_id,lead_id:first.lead_id});
+ assert.deepEqual(mergeCalls()[0].right,{provider:'connect',channel_id:channel,conversation_id:second.conversation_id,lead_id:second.lead_id});
+ assert.equal($('#operatorHistoryMerge progress').value,0);
+ assert.equal($('[data-dupe-merge-progress]').textContent,'0%');
+ job={...job,state:'running',processed:1,total:null};await firePoll();
+ assert.equal($('#operatorHistoryMerge progress').hasAttribute('value'),false,'unknown total is indeterminate');
+ assert.match($('[data-dupe-merge-progress]').textContent,/1/);
+ $('[data-dupe-merge-close]').click();assert.equal(timers.size,0);
+ assert(!mergeCalls().some(call=>call.operation==='cancel'),'close is not cancel');
+ $('[data-dupe-close]').click();
+ await searchDuplicates();$('[data-dupe-merge-status]').click();await settle();
+ assert.equal(mergeCalls().at(-1).operation,'latest','reopening asks server for persisted job, does not create another');
+ assert.equal(mergeCalls().filter(call=>call.operation==='create').length,1);
+ job={...job,processed:2,total:3};await firePoll();
+ assert.equal($('[data-dupe-merge-progress]').textContent,'66%');
+ assert.match($('[data-dupe-merge-note]').textContent,/merge steps|этапы объединения|birləşdirmə mərhələlərini/i);
+ assert.equal($('[data-dupe-merge-note]').hidden,false);
+ job={...job,processed:3,state:'completed'};await firePoll();
+ assert.equal($('#operatorHistoryMerge progress').value,100); assert.match($('#operatorHistoryMerge h2').textContent,/merged|диалоги объединены|birləşdirildi/i);
+ assert.equal(timers.size,0);
+ assert.equal(seen.filter(req=>req.resource==='/history').length,beforeHistory,'job UI never loads a dialogue history');
+ $('[data-dupe-merge-close]').click();
+ job={...job,processed:1,state:'running'};
+ $('[data-dupe-merge-status]').click();await settle();$('[data-dupe-merge-cancel]').click();await settle();
+ assert.equal(mergeCalls().at(-1).operation,'cancel');assert.equal(mergeCalls().at(-1).job_id,'job-1');
+ assert.match($('[data-dupe-merge-progress]').textContent,/cancelled|отменено|ləğv/i);
+ $('[data-dupe-merge-close]').click();
+ job={...job,state:'blocked',code:'identity_unproven'};
+ $('[data-dupe-merge-status]').click();await settle();
+ assert.match($('[data-dupe-merge-progress]').textContent,/verified|подтвердить|təsdiqlənmədi/i);
+ assert.doesNotMatch($('#operatorHistoryMerge h2').textContent,/Dialogs merged|Диалоги объединены/i);
+ $('[data-dupe-merge-close]').click();
+ job={...job,state:'running'};$('[data-dupe-merge-status]').click();await settle();
+ holdMergeStatus='pending';await firePoll();
+ emitProfile({...worker,capabilities:readyOwner.capabilities});
+ holdMergeStatus();await settle();
+ assert.equal($('#operatorHistoryMerge'),null,'in-flight job reply cannot repaint after access is revoked');
+ assert.equal($('#operatorDuplicateSearch'),null);assert.equal(timers.size,0);
+ emitProfile(readyOwner);await settle();
+ projection='merged';
+ await w.tenantOperator.openDialog(first,true);await settle();
+ assert.match($('#chatRows').textContent,/newer companion/);
+ $('#operatorEarlier').click();await settle();
+ assert.match($('#chatRows').textContent,/older companion/);
+ const composer=$('#chatText');composer.value='unsent local draft';
+ const quote=$('#operatorReplyQuote');quote.hidden=false;quote.textContent='stale selected quote';quote.dataset.quoteMessageId='new-copy';
+ holdOlder='pending';$('#operatorEarlier').click();await settle();
+ let purgedMediaCache=false;
+ w.document.addEventListener('tenant-chat-history-reset',event=>{purgedMediaCache=event.detail?.dropCache===true;},{once:true});
+ projection='revoked';
+ await w.tenantOperator.refresh();await settle();
+ assert.equal(purgedMediaCache,true,'revocation also closes rendered media and requests dropping the attachment cache');
+ assert.equal(w.tenantOperator.currentDialog.history_merge_id,undefined,'ordinary list poll rechecks the selected projection even without a new message');
+ assert.doesNotMatch($('#chatRows').textContent,/companion/,'revocation replaces history even when newest response has older pages');
+ assert.match($('#chatRows').textContent,/primary newest/);
+ assert.equal($('#operatorReplyQuote').hidden,true);
+ assert.equal($('#operatorReplyQuote').textContent,'');
+ assert.equal($('#chatText').value,'unsent local draft');
+ holdOlder();await settle();
+ assert.doesNotMatch($('#chatRows').textContent,/companion/,'stale in-flight older response cannot restore revoked history');
+ const tuple=item=>({provider:item.provider,channel_id:item.channel_id,conversation_id:item.conversation_id,lead_id:item.lead_id});
+ const switchTo=index=>{const picker=$('[data-merge-action-route]');assert(picker);picker.value=String(index);picker.dispatchEvent(new w.Event('change',{bubbles:true}));};
+ projection='merged';actionRoutes=[tuple(first),tuple(second)];
+ await w.tenantOperator.openDialog(first,true);await settle();
+ assert.equal($('[data-merge-action-route]').options.length,2);
+ assert.doesNotMatch($('[data-merge-action-route]').textContent,/@lid|Synthetic/);
+ assert.equal($('#sendChat').disabled,false);
+ assert($('[data-operator-lifecycle="close"]'));
+ holdRoute='pending';switchTo(1);await settle();
+ assert.equal(seen.at(-1).lead,'2','selection validates exactly the explicitly chosen route');
+ assert.equal(w.tenantOperator.currentDialog.lead_id,1,'pending history never changes the action route');
+ holdRoute();await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,2);
+ assert.equal($('[data-merge-action-route]').value,'1');
+ assert.equal($('#sendChat').disabled,true,'fresh chosen-route permissions alone govern actions, not the first route');
+ assert.equal($('[data-operator-lifecycle="close"]'),null,'first route cannot lend its Complete action to the selected second route');
+ await w.tenantOperator.refresh();await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,2,'ordinary polling retains the explicit route');
+ assert.equal($('[data-open-operator]').getAttribute('aria-selected'),'true');
+ $('[data-open-operator]').click();await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,2,'clicking the same folded card does not silently change the action route');
+ switchTo(0);await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,1);
+ holdRoute='pending';switchTo(1);await settle();
+ actionRoutes=null;await w.tenantOperator.refresh();await settle();
+ assert.equal($('[data-merge-action-route]'),null,'loss of route pair removes picker');
+ holdRoute();await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,1,'stale grant cannot switch after route scope is lost');
+ actionRoutes=[tuple(first),{...tuple(second),channel_id:'other-channel'}];
+ await w.tenantOperator.refresh();await settle();
+ assert.equal($('[data-merge-action-route]'),null,'cross-channel route projection is not rendered');
+ const assignedOperator={...worker,member:{...worker.member,role:'operator'}};
+ emitProfile(assignedOperator);await settle();
+ assert.equal($('#operatorFindDuplicates').hidden,true,'job creation remains owner only');
+ actionRoutes=[tuple(first),tuple(second)];
+ await w.tenantOperator.openDialog(first,true);await settle();
+ assert.equal($('[data-merge-action-route]').options.length,2,'an assigned operator receives exactly the two server-authorized options without owner capability');
+ switchTo(1);await settle();
+ assert.equal(w.tenantOperator.currentDialog.lead_id,2);
+ actionRoutes=null;await w.tenantOperator.refresh();await settle();
+ assert.equal($('[data-merge-action-route]'),null,'no selector when the server withholds action routes');
+ assert.equal(w.tenantOperator.currentDialog.lead_id,2,'scope loss does not silently switch the operator to another route');
+ emitProfile(readyOwner);await settle();
+ displayPreviewMode='bad-revision';
+ await searchDuplicates();
+ assert($('[data-dupe-merge-start]').disabled,'invalid preview cannot start');
+ assert.equal($('[data-dupe-display-field="name"]'),null);
+ displayPreviewMode='empty';
+ $('[data-dupe-display] button').click();await settle();
+ assert($('[data-dupe-display-field="name"]').disabled);
+ assert($('[data-dupe-display-field="phone"]').disabled);
+ assert(!$('[data-dupe-merge-start]').disabled,'genuinely absent options may be null');
+ $('[data-dupe-merge-start]').click();await settle();
+ assert.deepEqual(mergeCalls().at(-1).display,{revision:displayRevision,name_lead_id:null,phone_lead_id:null});
+  console.log('PASS: owner-only duplicate modal, no query in URLs, browse-only by default, feature-gated owner merge confirmation, persisted progress and scope, display-only phone.');
  dom.window.close();
 })().catch(err=>{console.error(err);dom.window.close();process.exitCode=1;});

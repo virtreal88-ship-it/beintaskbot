@@ -185,6 +185,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/duplicates/preview', operator_handler(member, origin, logger, 'dialog_duplicate_preview'), ('POST',)),
         ('dialogs/contact-display-phone', operator_handler(member, origin, logger, 'contact_display_phone'), ('POST',)),
         ('dialogs/duplicates', operator_handler(member, origin, logger, 'dialog_duplicates'), ('POST',)),
+        ('dialogs/history-merges', operator_handler(member, origin, logger, 'dialog_history_merges'), ('POST',)),
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),
         ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
         ('dialogs/reply-templates', reply_templates_handler(member, origin, logger), ('GET','POST')),

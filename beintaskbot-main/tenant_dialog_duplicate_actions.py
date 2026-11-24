@@ -1,18 +1,17 @@
 """Exact owner-only inspection and display-only phone editing."""
-import re
 import uuid
 
 from tenant_ai_agents_store import _audit
 from tenant_connect_direct_identity import direct_identity
 from tenant_connect_direct_reconcile import _owner
 from tenant_connect_phone_evidence import normalize_phone, normalize_phone_jid
+from tenant_dialog_merge_display import PHONE_SCHEMA, display_name_choices, merge_display_options
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 from tenant_platform import _connect
 
 
 _ROUTE = {'provider', 'channel_id', 'conversation_id', 'lead_id'}
-PHONE_SCHEMA = {'saas_connect_dialog_display_phones': ('tenant_id', 'channel_id', 'conversation_id', 'lead_id', 'phone')}
 
 
 def prepare_schema(conn):
@@ -46,21 +45,6 @@ def _route(value):
     return str(uuid.UUID(value['channel_id'])), value['conversation_id'], value['lead_id']
 
 
-def _labels(rows):
-    choices = []
-    for row in rows:
-        conversation = row['conversation_id']
-        for value in (row.get('manual_display_name'), row.get('contact_name'), row.get('display_name')):
-            name = str(value or '').strip()
-            if (name and len(name) <= 180 and name not in {conversation, conversation.split('@')[0]}
-                    and not re.fullmatch(r'[+0-9().\s-]+', name)
-                    and not re.search(r'@(lid|s\.whatsapp\.net|g\.us|c\.us)$', name, re.I)
-                    and not any(ord(c) < 32 or ord(c) == 127 for c in name)):
-                choices.append({'lead_id': row['lead_id'], 'display_name': name})
-                break
-    return choices
-
-
 def preview(profile, payload):
     if not isinstance(payload, dict) or set(payload) != {'left', 'right'}:
         raise TenantLinearError('Выберите два диалога.', 400)
@@ -71,11 +55,17 @@ def preview(profile, payload):
         _budget(cur)
         tenant, _ = _owner(cur, profile)
         _, _, policy = access(cur, profile, 'dialogs')
-        rows = [assert_route(cur, tenant, policy, 'connect', conv, ch, lead, allow_closed_archive=True)
+        from tenant_dialog_history_merge_scope import allows
+        from tenant_dialog_history_merge_projection import lifecycle_enabled
+        scoped = allows(tenant, a[0])
+        rows = [assert_route(cur, tenant, policy, 'connect', conv, ch, lead, allow_closed_archive=True,
+                             owner_overview=scoped and lifecycle_enabled())
                 for ch, conv, lead in sorted((a, b))]
         if any(r.get('conversation_kind') not in ('contact', '') for r in rows):
             raise TenantLinearError('Выберите личные WhatsApp-диалоги.',400)
-        return {'eligible':False,'conflicts':['merge_deferred'],'name_choices':_labels(rows)}
+        options = (merge_display_options(cur, tenant, a[0], rows) if scoped
+                   else {'name_choices': display_name_choices(rows)})
+        return {'eligible':False,'conflicts':['merge_deferred'],**options}
 
 
 def _budget(cur):

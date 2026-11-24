@@ -18938,9 +18938,10 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/health", health_check)
 
 async def start_webhook_server():
-    from tenant_ai_agent_startup import require_database_ready
+    from tenant_ai_agent_startup import install_history_merge_worker_cleanup, require_database_ready
     await asyncio.to_thread(require_database_ready)
     app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
+    install_history_merge_worker_cleanup(app_web)
     _register_legacy_web_routes(app_web)
     _register_tenant_web_routes(app_web)
     # Voice shutdown needs a bounded window to close OpenAI and ElevenLabs

@@ -297,7 +297,7 @@
   }
   document.addEventListener('tenant-profile',event=>{const nextPolicy=policy(event.detail),changed=!!profilePolicy&&profilePolicy!==nextPolicy;if(profilePolicy!==nextPolicy)profileRevision++;if(changed){freshProfile=false;forgetAudioIntent();clear(true);}member=event.detail.member;profilePolicy=nextPolicy;if(!member){freshProfile=false;forgetAudioIntent();}else if(changed)refreshAudioProfile();bind();});
   document.addEventListener('tenant-chat-open',event=>{clear();lead=event.detail.lead_id;});
-  document.addEventListener('tenant-chat-history-reset',clear);
+  document.addEventListener('tenant-chat-history-reset',event=>clear(event.detail?.dropCache===true));
   document.addEventListener('tenant-chat-close',clear);
   // Operator history only needs preview binding; legacy loaded events carry a different contract.
   document.addEventListener('tenant-chat-attachments-ready',bind);
