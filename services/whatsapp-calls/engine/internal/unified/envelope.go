@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
@@ -14,28 +15,29 @@ import (
 // only the encrypted journal/inbox may retain it, never CRM raw JSON or logs.
 // The chat allowlist/source binding is checked by the caller BEFORE extraction.
 type Envelope struct {
-	Kind         string `json:"kind"`
-	Chat         string `json:"chat"`
-	Sender       string `json:"sender,omitempty"`
-	SenderAlt    string `json:"sender_alt,omitempty"`
-	RecipientAlt string `json:"recipient_alt,omitempty"`
-	ProviderID   string `json:"provider_id"`
-	FromMe       bool   `json:"from_me"`
-	AppDispatch  bool   `json:"app_dispatch,omitempty"`
-	Timestamp    int64  `json:"timestamp"`
-	Text         string `json:"text,omitempty"`
-	Status       string `json:"status,omitempty"`
-	Proto        []byte `json:"proto,omitempty"`
-	MediaKind    string `json:"media_kind,omitempty"`
-	MediaMime    string `json:"media_mime,omitempty"`
-	MediaSize    uint64 `json:"media_size,omitempty"`
-	FileName     string `json:"file_name,omitempty"`
-	MessageType  string `json:"message_type,omitempty"`
-	PushName     string `json:"push_name,omitempty"`
-	QuoteID      string `json:"quote_id,omitempty"`
-	QuoteChat    string `json:"quote_chat,omitempty"`
-	QuoteSender  string `json:"quote_sender,omitempty"`
-	Variant      string `json:"variant,omitempty"`
+	Kind         string          `json:"kind"`
+	Chat         string          `json:"chat"`
+	Sender       string          `json:"sender,omitempty"`
+	SenderAlt    string          `json:"sender_alt,omitempty"`
+	RecipientAlt string          `json:"recipient_alt,omitempty"`
+	ProviderID   string          `json:"provider_id"`
+	FromMe       bool            `json:"from_me"`
+	AppDispatch  bool            `json:"app_dispatch,omitempty"`
+	Timestamp    int64           `json:"timestamp"`
+	Text         string          `json:"text,omitempty"`
+	Status       string          `json:"status,omitempty"`
+	Proto        []byte          `json:"proto,omitempty"`
+	MediaKind    string          `json:"media_kind,omitempty"`
+	MediaMime    string          `json:"media_mime,omitempty"`
+	MediaSize    uint64          `json:"media_size,omitempty"`
+	FileName     string          `json:"file_name,omitempty"`
+	MessageType  string          `json:"message_type,omitempty"`
+	PushName     string          `json:"push_name,omitempty"`
+	QuoteID      string          `json:"quote_id,omitempty"`
+	QuoteChat    string          `json:"quote_chat,omitempty"`
+	QuoteSender  string          `json:"quote_sender,omitempty"`
+	Variant      string          `json:"variant,omitempty"`
+	Reaction     *ReactionTarget `json:"reaction,omitempty"`
 }
 
 // MessageEnvelope retains the original lab event identity across rollout. New
@@ -95,6 +97,24 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 		variant = hex.EncodeToString(hash[:])
 		// Do not project an edit/reaction/protocol payload as a fresh user turn.
 		out.Variant, out.MessageType = "control", "unsupported"
+	}
+	if reaction := event.Message.GetReactionMessage(); reaction != nil && !event.IsEdit && out.FromMe {
+		key := reaction.GetKey()
+		target := &ReactionTarget{ID: key.GetID(), FromMe: key.GetFromMe()}
+		if !target.FromMe && event.Info.Chat.Server == types.GroupServer {
+			participant, err := types.ParseJID(key.GetParticipant())
+			if err == nil {
+				target.Participant = participant.ToNonAD().String()
+			}
+		}
+		targetChat := key.GetRemoteJID()
+		if (targetChat == out.Chat || reactionChatAlias(event.Info.Chat, event.Info.RecipientAlt, targetChat)) &&
+			key.FromMe != nil && target.valid(targetChat) && validReactionText(reaction.GetText()) {
+			out.Chat, out.Reaction, out.Text = targetChat, target, reaction.GetText()
+			if stamp := reaction.GetSenderTimestampMS(); stamp > 0 {
+				out.Timestamp = stamp
+			}
+		}
 	}
 	key, _ := json.Marshal([]any{"message", out.Chat, out.Sender, out.FromMe, out.ProviderID, variant})
 	return string(key), out, true, nil

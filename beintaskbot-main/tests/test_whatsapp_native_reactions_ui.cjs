@@ -1,0 +1,118 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-deps/node_modules/playwright');
+
+const root = path.join(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'docs/tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+
+async function run(browser, group) {
+  const page = await browser.newPage();
+  try {
+    await page.route('http://127.0.0.1/**', route => route.fulfill({
+      contentType: 'text/html', body: app
+    }));
+    await page.goto('http://127.0.0.1/app?view=dialogs');
+    await page.evaluate(group => {
+      document.querySelectorAll('.view').forEach(view => view.classList.remove('active'));
+      document.getElementById('view-dialogs').classList.add('active');
+      const tenant = '00000000-0000-4000-8000-000000000001';
+      const channel = '00000000-0000-4000-8000-000000000002';
+      window.testRoute = {
+        provider:'connect', lead_id:41, channel_id:channel,
+        conversation_id:group ? '15550000003@g.us' : '15550000002@s.whatsapp.net',
+        customer_kind:group ? 'group' : 'contact', state:'human', can_send:true,
+        controls_allowed:true, available_actions:[]
+      };
+      window.tenantProfileSnapshot = {
+        member:{tenant_id:tenant, telegram_id:33, role:'owner', active:true},
+        capabilities:{modules:{dialogs:true,support:true}}
+      };
+      window.posts = [];
+      window.checks = [];
+      window.value = '';
+      window.event = 0;
+      window.timeout = false;
+      window.fetch = async (url, options={}) => {
+        url = String(url);
+        let payload = {success:true};
+        if (url.includes('/chat/reaction')) {
+          if (options.method === 'POST') {
+            const body = JSON.parse(options.body);
+            window.posts.push(body);
+            window.value = body.emoji;
+            if (window.timeout) throw new TypeError('fixture timeout');
+            payload = {...payload, state:'accepted', emoji:body.emoji};
+          } else {
+            window.checks.push(new URL(url, location.origin).searchParams.get('request_id'));
+            payload = {...payload, state:window.timeout?'unknown':'accepted', emoji:window.value};
+          }
+        } else if (url.includes('/dialogs/history')) {
+          payload.result = {dialog:window.testRoute,messages:[
+            {id:'original', external_id:'connect:original', provider_message_id:'TEST_MSG', direction:'incoming',
+              author_type:group?'participant':'customer', message_type:'text', body:'Synthetic original',
+              wa_reaction_available:true, wa_reaction:window.value, wa_reaction_event:String(window.event)},
+            {id:'unavailable', external_id:'connect:unavailable', provider_message_id:'UNAVAILABLE_MSG',
+              direction:'outgoing', author_type:'operator', message_type:'text', body:'Unavailable'}
+          ],next_before:null};
+        } else if (url.includes('/dialogs?')) {
+          payload.result = {dialogs:[], channels:[], agents:[], attention_count:0, next_offset:null};
+        } else if (url.includes('/api/platform/me')) {
+          payload = window.tenantProfileSnapshot;
+        }
+        return {ok:true,json:async()=>payload};
+      };
+    }, group);
+    for (const file of ['tenant-operator-i18n.js','tenant-chat-send.js','tenant-operator-dialogs.js']) {
+      await page.addScriptTag({path:path.join(root,'docs',file)});
+    }
+    await page.evaluate(() => window.tenantOperator.openDialog(window.testRoute));
+    const article = page.locator('[data-message-id="original"]');
+    const chip = article.locator('[data-whatsapp-reaction]');
+    const menu = page.locator('.operator-reply-context-menu');
+    async function pick(emoji) {
+      await article.press('Shift+F10');
+      await menu.locator('.operator-reaction-picker button').filter({hasText:emoji}).click();
+      await menu.waitFor({state:'detached'});
+    }
+    await pick('👍');
+    await page.waitForFunction(() => document.querySelector('[data-whatsapp-reaction]').textContent === '👍');
+    await pick('😂');
+    await page.waitForFunction(() => document.querySelector('[data-whatsapp-reaction]').textContent === '😂');
+    await pick('😂');
+    await chip.waitFor({state:'hidden'});
+    assert.deepEqual(await page.evaluate(() => window.posts.map(p => p.emoji)), ['👍','😂','']);
+    await page.evaluate(() => { window.timeout=true; });
+    await pick('❤️');
+    await page.waitForFunction(() => window.checks.length === 1);
+    await page.evaluate(() => { window.timeout=false; });
+    await article.press('Shift+F10');
+    await menu.locator('button').filter({hasText:/Check reaction|Проверить реакцию|Reaksiyanı yoxla/}).click();
+    await page.waitForFunction(() => document.querySelector('[data-whatsapp-reaction]').textContent === '❤️');
+    const requests = await page.evaluate(() => ({posts:window.posts,checks:window.checks}));
+    assert.equal(requests.posts.length,4);
+    assert(requests.posts.every(post=>post.message_id==='original' && post.lead_id===41 && !('jid' in post)));
+    assert.deepEqual(requests.checks,[requests.posts[3].request_id,requests.posts[3].request_id]);
+    await page.evaluate(() => {
+      window.value = '🙏';
+      window.event++;
+      return window.tenantOperator.openDialog(window.testRoute,true);
+    });
+    assert.equal(await chip.innerText(),'🙏');
+    await page.locator('[data-message-id="unavailable"]').press('Shift+F10');
+    assert.equal(await menu.locator('.operator-reaction-picker').count(),0);
+  } finally {
+    await page.close();
+  }
+}
+
+(async () => {
+  const browser = await chromium.launch({headless:true,args:['--no-sandbox']});
+  try{
+    await run(browser,false);
+    await run(browser,true);
+    console.log('PASS: direct and group reaction menu, replace/remove, timeout status, linked-phone sync');
+  } finally {
+    await browser.close();
+  }
+})().catch(error => {console.error(error);process.exitCode=1;});

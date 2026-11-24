@@ -99,7 +99,7 @@ def dispatch_cursor(route):
             yield cur
 
 
-def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None):
+def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None, reaction=None):
     request_id=str(uuid.UUID(str(request_id)))
     if not isinstance(content,bytes) or len(content)>10*1024*1024:
         raise TenantPlatformError('native_media_invalid')
@@ -114,6 +114,9 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
         payload={'scope':current['native']['scope'],'operation':operation,
             'chat':route['conversation_id'],'kind':kind,'text':text,'mime':mime,'name':name,
             'data':base64.b64encode(content).decode('ascii')}
+        if reaction is not None:
+            payload['operation']='reaction:'+str(int(actor))+':'+request_id
+            payload['reaction']=reaction
         if quoted_message_id is not None:
             try:
                 payload.update(resolve_quote(cur, current, quoted_message_id))
@@ -148,6 +151,8 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                     raise ValueError()
         except (requests.RequestException,ValueError,TypeError,AttributeError):
             raise TenantPlatformError('native_send_unconfirmed') from None
+    if reaction is not None:
+        return {'external_message_id':provider}
     from tenant_whatsapp_native_identity import message_id
     facts={'channelId':route['channel_id'],'conversationId':route['conversation_id'],
         'externalMessageId':provider,'fromMe':True,'status':'sent','_crm_native_send_receipt':True}
@@ -334,7 +339,7 @@ def download(route,message_id,*,max_bytes,allowed_types):
         return bytes(content),mime
 
 
-def lookup(route,request_id):
+def lookup(route,request_id,*,reaction=False):
     """Private read of this actor's exact operation. Never resend on uncertainty."""
     request_id=str(uuid.UUID(str(request_id)))
     actor=route.get('native_actor_id',route.get('author_id'))
@@ -347,7 +352,7 @@ def lookup(route,request_id):
         if not current.get('native') or current['native']!=route.get('native'):
             raise TenantPlatformError('native_source_changed')
         payload={'scope':current['native']['scope'],'chat':route['conversation_id'],
-                 'operation':'employee:'+str(int(actor))+':'+request_id}
+                 'operation':('reaction:' if reaction else 'employee:')+str(int(actor))+':'+request_id}
         try:
             with requests.post(url+'/v1/sources/'+current['native']['gateway_id']+'/messages/status',
                   headers={'Authorization':'Bearer '+token},json=payload,timeout=(5,15),allow_redirects=False,stream=True) as response:
@@ -362,6 +367,8 @@ def lookup(route,request_id):
         except (requests.RequestException,ValueError,TypeError,AttributeError):
             raise TenantPlatformError('native_receipt_unavailable') from None
         accepted=result['state']=='accepted'
+        if reaction:
+            return {'providerAccepted':accepted,'externalMessageId':provider}
         status='sent' if accepted else 'unknown'
         if accepted and not route['conversation_id'].endswith('@g.us'):
             cur.execute("""SELECT MAX(rank) AS rank FROM saas_whatsapp_native_status

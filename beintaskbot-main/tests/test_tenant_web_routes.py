@@ -20,6 +20,7 @@ EXPECTED_API += (("GET","/api/platform/crm/chat/quote-receipt"), ("GET","/api/pl
 EXPECTED_API += (("POST","/api/platform/ai/analytics/tools"),("POST","/api/platform/ai/analytics/ask"),
                  ("GET","/api/platform/ai/analytics/settings"),("PATCH","/api/platform/ai/analytics/settings"),
                  ("POST","/api/platform/ai/analytics/voice/preflight"),("GET","/api/platform/ai/analytics/voice/ws"))
+EXPECTED_API += (("GET","/api/platform/crm/chat/reaction"),("POST","/api/platform/crm/chat/reaction"))
 EXPECTED_API += (("POST","/api/platform/crm/chat/send-media"),("GET","/api/platform/crm/chat/media-capability"),("GET","/api/platform/crm/chat/media-receipt"))
 EXPECTED_API += (("POST","/api/platform/crm/chat/send-voice"),("GET","/api/platform/crm/chat/voice-receipt"),("POST","/api/platform/crm/chat/voice-manual-confirmation"),("GET","/api/platform/crm/chat/voice-capability"),("GET","/api/platform/crm/chat/voice-status"))
 EXPECTED_API += (("GET","/api/platform/notifications"),("POST","/api/platform/notifications/{notification_id}/read"))
@@ -162,7 +163,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dashboard', ('GET',)), ('dashboard/events', ('GET',)),
 ] for method in methods)
 FACTORIES = ('notification_center_handler', 'instruction_handler', 'finance_handler', 'linear_handler', 'tasks_handler', 'proactive_risk_handler', 'proactive_risk_alert_handler', 'news_handler',
-    'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_ai_recorded_voice_access_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_send_status_handler', 'chat_close_unsubmitted_handler', 'chat_upload_handler',
+    'news_telegram_handler', 'chat_ai_handler', 'chat_ai_model_handler', 'chat_ai_recorded_voice_access_handler', 'chat_send_handler', 'chat_receipt_handler', 'chat_send_status_handler', 'chat_close_unsubmitted_handler', 'whatsapp_reaction_handler', 'chat_upload_handler',
     'customer_media_handler', 'customer_media_read_handler',
     'customer_voice_handler', 'customer_voice_receipt_handler', 'customer_voice_capability_handler', 'customer_voice_status_handler',
     'customer_voice_manual_confirmation_handler',
