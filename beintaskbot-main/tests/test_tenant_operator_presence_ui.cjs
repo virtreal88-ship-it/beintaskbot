@@ -37,7 +37,7 @@ async function run({globalReply=unavailable,canUpdate=true,canOffline=false,rout
  const {w,calls,posts,el}=await run();
  assert.deepEqual(calls,['/api/platform/ai/profile/availability','/api/platform/ai/dialogs/presence']);
  const control=el('appWorkStatus'),trigger=el('appWorkStatusTrigger'),options=el('appWorkStatusOptions');
- assert.equal(control.hidden,false,'legacy operator retains status access via the avatar');
+ assert.equal(control.hidden,false,'legacy operator retains status access in the header');
  assert.match(trigger.textContent,/В сети/);assert.equal(posts.length,0);
  trigger.click();assert.equal(options.hidden,false);
  assert.equal(options.querySelector('button[data-status=offline]'),null,'legacy endpoint cannot select Offline');
