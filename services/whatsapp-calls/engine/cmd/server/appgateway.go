@@ -20,7 +20,6 @@ import (
 
 	"go.mau.fi/whatsmeow/types"
 	"sync/atomic"
-	"wacalls/internal/recording"
 	"wacalls/internal/unified"
 	"wacalls/internal/voip/core"
 	"wacalls/internal/voip/signaling"
@@ -257,7 +256,7 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	g.seq++
 	result := map[string]any{"boot_id": g.boot, "seq": g.seq, "connected": info.State == "open" && sess.transportReady() && sess.client.Store.ID != nil && sess.client.Store.ID.ToNonAD().String() == g.cfg.Account, "active": active, "ended": ended}
 	if g.cfg.Managed {
-		result["max_seconds"] = recording.ManagedMaxSeconds
+		result["max_seconds"] = managedCallMaxSeconds
 		result["closed_process_boots"] = append([]string{}, g.retired...)
 	}
 	return result

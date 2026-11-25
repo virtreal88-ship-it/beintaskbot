@@ -61,6 +61,9 @@ func TestLabCallProfileCannotExtendManagedOrMismatchedAccount(t *testing.T) {
 	if err := m.prepareCallTests(g.server); err == nil {
 		t.Fatal("managed source admitted")
 	}
+	if liveCallMaxSeconds(g.server.recordings) != 3600 {
+		t.Fatal("managed live calls should allow one hour")
+	}
 	if g.server.recordings.maxSeconds() != recording.ManagedMaxSeconds {
 		t.Fatal("managed bound changed")
 	}
@@ -69,7 +72,7 @@ func TestLabCallProfileCannotExtendManagedOrMismatchedAccount(t *testing.T) {
 	if err := m.prepareCallTests(g.server); err == nil {
 		t.Fatal("other account admitted")
 	}
-	if (*recordingStore)(nil).maxSeconds() != recording.MaxSeconds {
+	if liveCallMaxSeconds(nil) != recording.MaxSeconds {
 		t.Fatal("legacy bound changed")
 	}
 }

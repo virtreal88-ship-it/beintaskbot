@@ -51,6 +51,16 @@ func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) 
 	return s
 }
 
+// Managed browser conversations and stored recordings have separate bounds.
+const managedCallMaxSeconds = 60 * 60
+
+func liveCallMaxSeconds(store *recordingStore) int {
+	if store != nil && store.cfg.Managed {
+		return managedCallMaxSeconds
+	}
+	return store.maxSeconds()
+}
+
 func (s *Session) createCall(callID string) *call.CallManager {
 	return s.createCallWithCaller(callID, nil)
 }
@@ -62,7 +72,7 @@ func (s *Session) createCallWithCaller(callID string, caller *callerIdentity) *c
 	if !s.reg.addBounded(callID, ac, s.mgr.maxCalls) {
 		return nil
 	}
-	seconds := s.mgr.recordings.maxSeconds()
+	seconds := liveCallMaxSeconds(s.mgr.recordings)
 	ac.timer.Store(time.AfterFunc(time.Duration(seconds)*time.Second, func() {
 		if current, ok := s.reg.get(callID); ok && current == ac {
 			ac.markEnd("duration_limit")
