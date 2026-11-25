@@ -22,7 +22,7 @@ def enabled():
 
 
 def stamp(value):
-    dt = datetime.fromisoformat(value)
+    dt = value if isinstance(value, datetime) else datetime.fromisoformat(value)
     return (dt if dt.tzinfo else dt.replace(tzinfo=ZoneInfo("Asia/Baku"))).astimezone(timezone.utc)
 
 
@@ -38,14 +38,26 @@ def snapshot(cur, tenant, credentials, routes, login):
     cur.execute(
         """INSERT INTO saas_widget_sources(tenant_id,instance,generation,refreshed_at)
         VALUES(%s,%s,%s,now()) ON CONFLICT(tenant_id,instance) DO UPDATE
-        SET generation=excluded.generation,refreshed_at=excluded.refreshed_at""",
+        SET generation=excluded.generation,refreshed_at=excluded.refreshed_at RETURNING started_at""",
         (tenant, instance, credentials["generation"]),
     )
+    cutoff = stamp(cur.fetchone()["started_at"]).replace(microsecond=0)
+    cur.execute(
+        "SELECT chat_id,identity FROM saas_widget_dialogs WHERE tenant_id=%s AND instance=%s AND latest_in IS NOT NULL",
+        (tenant, instance),
+    )
+    admitted = {(r["chat_id"], r["identity"]) for r in cur.fetchall()}
     cur.execute(
         "UPDATE saas_widget_dialogs SET visible=false WHERE tenant_id=%s AND instance=%s AND visible",
         (tenant, instance),
     )
     for chat, (row, rev) in routes.items():
+        try:
+            if stamp(row.get("updated_at")) < cutoff and (chat, _hash([row["client_id"]])) not in admitted:
+                continue
+        except (ValueError, TypeError):
+            # Without an activity timestamp only the newest page can establish freshness.
+            pass
         identity = _hash([row["client_id"]])
         cur.execute(
             """INSERT INTO saas_widget_dialogs
@@ -77,23 +89,28 @@ def ingest(cur, route, messages, full):
         return
     # Resume an interrupted traversal from its durable page boundary. Newly arriving
     # messages are picked up by the next traversal from the head.
+    cur.execute("SELECT started_at FROM saas_widget_sources WHERE tenant_id=%s AND instance=%s", key[:2])
+    cutoff = stamp(cur.fetchone()["started_at"])
+    reached_cutoff = False
     ids = []
     for msg in messages:
         mid = int(msg["id"])
         if (route["before_id"] and mid >= route["before_id"]) or mid <= route["high_id"]:
             continue
         at = stamp(msg["created_at"])
+        ids.append(mid)
+        if at <= cutoff:
+            reached_cutoff = True
+            continue
         cur.execute(
             """INSERT INTO saas_widget_messages
             (tenant_id,instance,chat_id,identity,mid,sender,author,body,attachment,at,fresh)
-            SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::timestamptz>s.started_at
-            FROM saas_widget_sources s WHERE s.tenant_id=%s AND s.instance=%s
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
             ON CONFLICT DO NOTHING RETURNING fresh""",
-            (*key, mid, msg["sender"], msg["name"], msg["text"], msg["attachment"], at, at, *key[:2]),
+            (*key, mid, msg["sender"], msg["name"], msg["text"], msg["attachment"], at),
         )
         inserted = cur.fetchone()
-        ids.append(mid)
-        if inserted and msg["sender"] == "client" and inserted["fresh"]:
+        if inserted and msg["sender"] == "client":
             cur.execute(
                 """UPDATE saas_widget_dialogs SET latest_in=%s,
                 state=CASE WHEN state='accepted' THEN state ELSE 'waiting' END,
@@ -107,7 +124,7 @@ def ingest(cur, route, messages, full):
             "UPDATE saas_widget_dialogs SET latest_at=GREATEST(latest_at,%s) WHERE " + KEY, (at, *key)
         )
     head = route["active_snapshot"] or max(ids, default=route["high_id"])
-    more = bool(full and ids and min(int(m["id"]) for m in messages) > route["high_id"])
+    more = bool(full and ids and not reached_cutoff and min(int(m["id"]) for m in messages) > route["high_id"])
     cur.execute(
         """UPDATE saas_widget_dialogs SET checked_at=now(), before_id=%s,active_snapshot=%s,
         high_id=%s, fetched_at=CASE WHEN %s THEN fetched_at ELSE %s END WHERE """

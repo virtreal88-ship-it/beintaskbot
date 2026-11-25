@@ -43,7 +43,7 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     cur.execute(
         "SELECT * FROM saas_widget_dialogs WHERE "
         + KEY
-        + " AND visible"
+        + " AND visible AND latest_in IS NOT NULL"
         + (" FOR UPDATE" if lock else " FOR SHARE"),
         key,
     )
@@ -125,7 +125,7 @@ def cards(cur, policy, mode, rollout):
        LEFT JOIN LATERAL (SELECT m.body,m.mid,m.sender FROM saas_widget_messages m
            WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
            ORDER BY m.mid DESC LIMIT 1) last ON true
-       WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND (state<>'accepted' OR operator_id=%s)
+       WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
         (actor, tenant, instance, actor, mode, mode),
