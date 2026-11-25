@@ -47,9 +47,15 @@ const server = http.createServer((req, res) => {
         window.alert = () => {};
         window.tenantProfileSnapshot = profile;
         window.testRoute = route;
-        window.fetch = async target => {
+        window.fetch = async (target, options = {}) => {
           const url = String(target);
           if (url.includes('/api/platform/me')) return { ok: true, status: 200, json: async () => profile };
+          if (url.includes('/dialogs/new?')) {
+            if (options.method !== 'GET') throw new Error('Opening new chat must not send a message');
+            return { ok: true, status: 200, json: async () => ({
+              success: true, result: { sources: [{ channel_id: route.channel_id, name: route.channel_name }] }
+            }) };
+          }
           if (url.includes('/dialogs/history')) return { ok: true, status: 200, json: async () => ({ success: true, result: { dialog: route, messages, next_before: null } }) };
           if (url.includes('/dialogs?')) return { ok: true, status: 200, json: async () => ({ success: true, result: { dialogs: [{ ...route, last_message_id: 'message-1', last_message_direction: 'incoming', last_message_text: messages[0].body, unread_count: 1 }], channels: [], agents: [], next_offset: null } }) };
           return { ok: true, status: 200, json: async () => ({ success: true, result: {} }) };
@@ -62,6 +68,27 @@ const server = http.createServer((req, res) => {
       await page.evaluate(() => window.tenantOperator.refresh());
       await page.locator('.operator-row').waitFor();
       await page.evaluate(() => { const nav = document.querySelector('#nativeCrmNav'); if (nav) nav.open = false; });
+      await page.addScriptTag({ path: path.join(docs, 'tenant-dialog-new-chat.js') });
+      const newChat = page.locator('#operatorNewChat');
+      const search = page.locator('#operatorSearch');
+      await newChat.waitFor();
+      assert.equal(await newChat.textContent(), '+');
+      assert.match(await newChat.getAttribute('aria-label'), /^(Yeni çat|Новый чат|New chat)$/);
+      const plusBox = await newChat.boundingBox(), searchBox = await search.boundingBox();
+      assert.ok(plusBox.width >= 44 && plusBox.height >= 44);
+      assert.ok(plusBox.x >= searchBox.x && Math.abs(plusBox.x + plusBox.width - searchBox.x - searchBox.width) <= 1);
+      assert.ok(Math.abs(plusBox.y - searchBox.y) <= 1 && plusBox.y + plusBox.height <= searchBox.y + searchBox.height + 1);
+      assert.ok(await search.evaluate(input => parseFloat(getComputedStyle(input).paddingInlineEnd)) >= plusBox.width);
+      await search.fill('Example');
+      await (width <= 430 ? newChat.tap() : newChat.press('Enter'));
+      const newChatDialog = page.locator('.operator-new-chat-dialog');
+      await newChatDialog.waitFor();
+      assert.equal(await newChatDialog.locator('select').inputValue(), route.channel_id);
+      await newChatDialog.locator('[data-new-chat-cancel]').click();
+      await newChatDialog.waitFor({ state: 'hidden' });
+      assert.equal(await search.inputValue(), 'Example', 'opening new chat preserves the search');
+      await search.fill('');
+
       const listGeometry = await page.evaluate(() => {
         const view = document.querySelector('#view-dialogs');
         const pane = document.querySelector('.operator-list-pane');
