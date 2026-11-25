@@ -193,14 +193,30 @@ async def _download_media(item, *, max_bytes=None, preview_documents=False):
         try:
             content,mime=download(route,item['message_id'],max_bytes=cap,allowed_types=types)
         except Exception as error:
-            # Existing historical attachments stay readable during migration.
-            # Only this read path may use the retained legacy media credential.
-            if str(error)!='native_media_evidence_missing' or not route.get('legacy_media_key'):
+            code=str(error)
+            # Only missing retained evidence may use the legacy media credential.
+            if code=='native_media_evidence_missing' and route.get('legacy_media_key'):
+                legacy={**route,'api_key':route['legacy_media_key']}
+                legacy.pop('native',None)
+                legacy.pop('native_media',None)
+                return await _download_media({**item,'route':legacy},max_bytes=max_bytes,preview_documents=preview_documents)
+            if kind!='video':
                 raise
-            legacy={**route,'api_key':route['legacy_media_key']}
-            legacy.pop('native',None)
-            legacy.pop('native_media',None)
-            return await _download_media({**item,'route':legacy},max_bytes=max_bytes,preview_documents=preview_documents)
+            from tenant_platform_core import TenantPlatformError
+            if not isinstance(error,TenantPlatformError):
+                raise
+            if code=='native_video_busy':
+                raise _media_limited(getattr(error,'retry_after',5)) from None
+            message,status={
+                'native_video_too_large':('Video faylı çox böyükdür.',413),
+                'native_video_format':('Video formatı dəstəklənmir.',415),
+                'native_video_size_unknown':('Video faylının ölçüsü təsdiqlənmədi.',415),
+                'native_video_expired':('Video WhatsApp-da artıq əlçatan deyil.',404),
+                'native_media_evidence_missing':('Video WhatsApp-da artıq əlçatan deyil.',404),
+                'native_source_changed':('Video artıq bu bağlantıda əlçatan deyil.',409),
+                'native_media_scope_denied':('Video bu dialoqda əlçatan deyil.',404),
+            }.get(code,('WhatsApp videosu hazırda əlçatan deyil. Sonra yenidən yoxlayın.',502))
+            raise TenantLinearError(message,status) from None
         if kind in {'audio','voice'}:mime=canonical_audio_mime(content,mime)
         return content,mime
     raw=item.get('row',{}).get('raw') or {}

@@ -321,13 +321,28 @@ def download(route,message_id,*,max_bytes,allowed_types):
             raise TenantPlatformError('native_media_scope_denied')
         mime=str(evidence.get('media_mime','')).split(';')[0].lower().strip()
         size=evidence.get('media_size',0)
-        if mime not in allowed_types or type(size) is not int or not 0<size<=min(max_bytes,10*1024*1024):
+        if rows[0]['message_type']=='video':
+            if mime not in allowed_types:
+                raise TenantPlatformError('native_video_format')
+            if type(size) is not int or size<=0:
+                raise TenantPlatformError('native_video_size_unknown')
+            if size>min(max_bytes,10*1024*1024):
+                raise TenantPlatformError('native_video_too_large')
+        elif mime not in allowed_types or type(size) is not int or not 0<size<=min(max_bytes,10*1024*1024):
             raise TenantPlatformError('native_media_restricted')
         payload={'scope':scope,'event_id':event_id,'chat':evidence['chat']}
         try:
             with requests.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/media',
                     headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'},json=payload,
                     timeout=(5,40),allow_redirects=False,stream=True) as response:
+                if rows[0]['message_type']=='video':
+                    if response.status_code==404:
+                        raise TenantPlatformError('native_video_expired')
+                    if response.status_code==429:
+                        from tenant_connect_media import retry_after_seconds
+                        error=TenantPlatformError('native_video_busy')
+                        error.retry_after=retry_after_seconds(response.headers.get('Retry-After'),default=5)
+                        raise error
                 if response.status_code!=200 or response.headers.get('Content-Encoding','identity')!='identity':raise ValueError()
                 content=bytearray()
                 for chunk in response.iter_content(65536):
