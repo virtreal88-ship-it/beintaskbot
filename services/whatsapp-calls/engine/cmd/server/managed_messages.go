@@ -47,6 +47,10 @@ func (s *server) handleManagedMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind, mime, size, _ := unified.MediaFacts(&message)
+	if r.Header.Get("X-Native-Media-Kind") == "video" && kind != "video" {
+		http.Error(w, "native_media_restricted", 400)
+		return
+	}
 	video := kind == "video" && mime == "video/mp4"
 	maxSize := uint64(unified.MaxMediaBytes)
 	if video {

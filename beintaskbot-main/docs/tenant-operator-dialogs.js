@@ -1502,6 +1502,16 @@
       const status=$('operatorChatError');if(status)status.textContent=error.message;
     }
   }
+  async function refreshSentAttachment(messageId){
+    if(typeof messageId!=='string'||!messageId)return;
+    const route=currentDialog,version=epoch,revision=openRevision,external='connect:'+messageId;
+    const selected=()=>version===epoch&&revision===openRevision&&currentPage&&!pendingDialogRoute&&inDialogsView()&&sameDialog(route,currentDialog);
+    // Another incremental request may supersede the first read. Try once more
+    // while the same dialog remains open and the accepted message is missing.
+    for(let attempt=0;attempt<2&&selected()&&!(currentPage.messages||[]).some(message=>message.external_id===external);attempt++){
+      await appendNewMessages(route,true);
+    }
+  }
   const usableDialogName=(value,route)=>{
     const name=typeof value==='string'?value.trim():'';
     const lid=route?.provider==='connect'&&String(route.conversation_id).match(/^([1-9][0-9]{5,21})@lid$/);
@@ -3739,7 +3749,7 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
     const article=[...document.querySelectorAll('#chatRows [data-message-id]')].find(node=>node.dataset.messageId===String(id));
     const footer=article?.querySelector('[data-message-footer-actions]');if(footer)footer.innerHTML=deliveryMarkup(message)+copyControlMarkup(message);
   }
-  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,hasRight,updateCustomerVoiceDelivery,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
+  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,refreshSentAttachment,hasRight,updateCustomerVoiceDelivery,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();
 

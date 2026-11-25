@@ -9,12 +9,12 @@ const wav=Buffer.alloc(44+480000);wav.write('RIFF');wav.writeUInt32LE(wav.length
 const deferred=()=>{let release;const promise=new Promise(resolve=>release=resolve);return {promise,release};};
 const server=()=>({cache:new Map(),flights:new Map(),requests:[],upstream:[],gates:new Map(),status:200,networkFailure:false,active:0,maxActive:0,self429:0,paidOrSend:0});
 const launch=()=>chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||process.env.CHROMIUM_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
-async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobile=false,messages=[message()]}={}){
- const context=await browser.newContext({viewport:{width,height},isMobile:mobile,hasTouch:mobile}),page=await context.newPage(),errors=[];
+async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobile=false,messages=[message()],origin='https://crm.test',attachmentPassthrough=false,sharedContext}={}){
+ const context=sharedContext||await browser.newContext({viewport:{width,height},isMobile:mobile,hasTouch:mobile}),page=await context.newPage(),errors=[];
  await context.addInitScript(()=>{window.fixtureVisibleMedia=new Set();const Original=IntersectionObserver;window.IntersectionObserver=class extends Original{constructor(callback,options){super((entries,observer)=>{callback(entries,observer);for(const entry of entries)if(entry.isIntersecting&&entry.target.dataset.chatAttachment)window.fixtureVisibleMedia.add(entry.target.dataset.chatAttachment);},options);}};});
  if(withoutLocks)await context.addInitScript(()=>Object.defineProperty(navigator,'locks',{value:undefined,configurable:true}));
  const state={authed:true,tenant,user:33,dialog:{...dialog},messages,navigations:0};page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(10000);
- await context.route('**/*',async route=>{
+ await (sharedContext?page:context).route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url()),name=url.pathname;
   if(name==='/app'){state.navigations++;return route.fulfill({contentType:'text/html',body:fs.readFileSync(path.join(root,'docs/tenant-app.html'),'utf8')});}
   if(name==='/login')return route.fulfill({contentType:'text/html',body:'<p>Signed out fixture</p>'});
@@ -22,6 +22,7 @@ async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobi
   if(name.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(name));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
   if(name==='/api/platform/me')return route.fulfill({json:state.authed?{success:true,member:{tenant_id:state.tenant,telegram_id:state.user,role:'worker',permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}}:{success:false}});
   if(name.endsWith('/crm/chat/attachment')){
+   if(attachmentPassthrough)return route.continue();
    const id=url.searchParams.get('message_id'),cacheOnly=url.searchParams.get('cache_only')==='1',automatic=url.searchParams.get('auto_preview')==='1';
    srv.requests.push({id,cacheOnly,automatic,url:url.href});
    assert.equal(req.method(),'GET');assert.equal(state.authed,true);assert.equal(url.searchParams.get('expected_tenant_id'),state.tenant);assert.equal(url.searchParams.get('expected_user_id'),String(state.user));
@@ -47,7 +48,7 @@ async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobi
  });
  const card=id=>page.locator('[data-chat-attachment="'+id+'"]');
  const loaded=id=>page.waitForFunction(id=>{const audio=document.querySelector('[data-chat-attachment="'+id+'"] audio');return !!audio?.getAttribute('src')&&audio.readyState>=1;},id);
- const open=async beforeSelect=>{await page.goto('https://crm.test/app?view=dialogs');if(beforeSelect)await beforeSelect();await page.locator('.operator-row').first().click();};
+ const open=async beforeSelect=>{await page.goto(origin+'/app?view=dialogs');if(beforeSelect)await beforeSelect();await page.locator('.operator-row').first().click();};
  const refresh=()=>page.evaluate(()=>window.tenantOperator.openDialog(window.tenantOperator.currentDialog));
  const action=async(id,command='load',mode='mouse')=>{
   if(mode==='keyboard'){await page.locator('article[data-message-id="'+id+'"]').focus();await page.keyboard.press('Shift+F10');}
@@ -60,4 +61,4 @@ async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobi
  };
  return {page,context,state,errors,card,loaded,open,refresh,action};
 }
-module.exports={fixture,server,message,launch,deferred,tenant,channel,dialog};
+module.exports={fixture,server,message,launch,deferred,tenant,channel,dialog,png,wav};

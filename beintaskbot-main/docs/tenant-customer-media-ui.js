@@ -2,7 +2,7 @@
 (()=>{
   if(!window.createTenantVoiceStore)return;
   const store=window.createTenantVoiceStore(window.indexedDB,'media');
-  const words={ru:{add:'Прикрепить файл',photo:'Фото',video:'Видео',file:'PDF',cancel:'Убрать файл',send:'Отправить вложение',check:'Проверить отправку',unknown:'Результат неизвестен. Не отправляйте повторно; проверьте статус.',accepted:'Провайдер принял сообщение. Доставка ещё не подтверждена.',limit:'JPEG, PNG, WebP, MP4 или PDF, до 5 МБ.',videoLimit:'Видео MP4 — до {mb} МБ.',error:'Не удалось подготовить файл или проверить отправку.',disabled:'Отправка вложений недоступна.',caption:'Подпись',preview:'Открыть предпросмотр',addCaption:'Добавьте подпись',close:'Закрыть предпросмотр',unavailable:'Предпросмотр недоступен.',sending:'Отправляем…',checkText:'Проверьте статус предыдущей отправки в чате.',saving:'Сохраняем файл…'},az:{add:'Fayl əlavə et',photo:'Şəkil',video:'Video',file:'PDF',cancel:'Faylı sil',send:'Əlavəni göndər',check:'Göndərməni yoxla',unknown:'Nəticə məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Çatdırılma hələ təsdiqlənməyib.',limit:'JPEG, PNG, WebP, MP4 və ya PDF, 5 MB-dək.',videoLimit:'MP4 video — {mb} MB-dək.',error:'Faylı hazırlamaq və ya göndərməni yoxlamaq mümkün olmadı.',disabled:'Əlavə göndərilməsi əlçatan deyil.',caption:'Başlıq',preview:'Önizləməni aç',addCaption:'Açıqlama əlavə edin',close:'Önizləməni bağla',unavailable:'Önizləmə əlçatan deyil.',sending:'Göndərilir…',checkText:'Çatda əvvəlki göndərişin vəziyyətini yoxlayın.',saving:'Fayl saxlanılır…'},en:{add:'Attach a file',photo:'Photo',video:'Video',file:'PDF',cancel:'Remove file',send:'Send attachment',check:'Check send status',unknown:'Send status is unknown. Check it before resending.',accepted:'The provider accepted the message. Delivery is still unconfirmed.',limit:'JPEG, PNG, WebP, MP4 or PDF, up to 5 MB.',videoLimit:'MP4 video, up to {mb} MB.',error:'Could not prepare the file or check its send status.',disabled:'Attachment sending is unavailable.',caption:'Caption',preview:'Open preview',addCaption:'Add a caption',close:'Close preview',unavailable:'Preview unavailable.',sending:'Sending…',checkText:'Check the previous send status in the chat.',saving:'Saving file…'}};
+  const words={ru:{add:'Прикрепить файл',photo:'Фото',video:'Видео',file:'PDF',cancel:'Убрать файл',send:'Отправить вложение',check:'Проверить отправку',unknown:'Результат неизвестен. Не отправляйте повторно; проверьте статус.',accepted:'Провайдер принял сообщение. Доставка ещё не подтверждена.',limit:'JPEG, PNG, WebP, MP4 или PDF, до 5 МБ.',videoLimit:'Видео MP4 — до {mb} МБ.',error:'Не удалось подготовить файл или проверить отправку.',disabled:'Отправка вложений недоступна.',caption:'Подпись',preview:'Открыть предпросмотр',addCaption:'Добавьте подпись',close:'Закрыть предпросмотр',unavailable:'Предпросмотр недоступен.',sending:'Отправляем вложение…',checkText:'Проверьте статус предыдущей отправки в чате.',saving:'Сохраняем файл…'},az:{add:'Fayl əlavə et',photo:'Şəkil',video:'Video',file:'PDF',cancel:'Faylı sil',send:'Əlavəni göndər',check:'Göndərməni yoxla',unknown:'Nəticə məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Çatdırılma hələ təsdiqlənməyib.',limit:'JPEG, PNG, WebP, MP4 və ya PDF, 5 MB-dək.',videoLimit:'MP4 video — {mb} MB-dək.',error:'Faylı hazırlamaq və ya göndərməni yoxlamaq mümkün olmadı.',disabled:'Əlavə göndərilməsi əlçatan deyil.',caption:'Başlıq',preview:'Önizləməni aç',addCaption:'Açıqlama əlavə edin',close:'Önizləməni bağla',unavailable:'Önizləmə əlçatan deyil.',sending:'Əlavə göndərilir…',checkText:'Çatda əvvəlki göndərişin vəziyyətini yoxlayın.',saving:'Fayl saxlanılır…'},en:{add:'Attach a file',photo:'Photo',video:'Video',file:'PDF',cancel:'Remove file',send:'Send attachment',check:'Check send status',unknown:'Send status is unknown. Check it before resending.',accepted:'The provider accepted the message. Delivery is still unconfirmed.',limit:'JPEG, PNG, WebP, MP4 or PDF, up to 5 MB.',videoLimit:'MP4 video, up to {mb} MB.',error:'Could not prepare the file or check its send status.',disabled:'Attachment sending is unavailable.',caption:'Caption',preview:'Open preview',addCaption:'Add a caption',close:'Close preview',unavailable:'Preview unavailable.',sending:'Sending attachment…',checkText:'Check the previous send status in the chat.',saving:'Saving file…'}};
   const t=k=>(words[window.tenantI18n?.language]||words.az)[k];
   const receiptNotice=r=>r?.state==='unknown'?t('unknown'):r?.state==='accepted'?!['sent','delivered','read'].includes(r.deliveryState)?t(r.deliveryState==='failed'?'error':'unknown'):'':'';
   const types={photo:'image/jpeg,image/png,image/webp',video:'video/mp4',file:'application/pdf'};
@@ -102,7 +102,8 @@
     s.caption.disabled=!draft||s.busy;
     s.caption.hidden=!s.preview&&(!draft||media);
     s.name.textContent=s.entry?.name||s.receipt?.name||'';
-    s.status.textContent=s.message||(!draft&&s.entry?t('unknown'):receiptNotice(s.receipt));
+    const status=s.entry?.state==='sending'?t('sending'):!draft&&s.entry?t('unknown'):receiptNotice(s.receipt);
+    s.status.textContent=s.message||status;
     s.host.hidden=!s.entry&&!s.status.textContent;
     if(s.preview){
       const {close,status,sendButton}=s.preview;
@@ -163,7 +164,12 @@
     void stage(s,photo);
   }
   document.addEventListener('paste',paste);
-  async function accepted(s,id,result){await store.removeAccepted(s.scope.key,id,result.delivery_state);await load(s);if(same(s)){s.message=receiptNotice(s.receipt);draw(s);}}
+  async function accepted(s,id,result){
+    if(scope()?.key===s.scope.key)void op()?.refreshSentAttachment?.(result.message_id);
+    await store.removeAccepted(s.scope.key,id,result.delivery_state);
+    await load(s);
+    if(same(s)){s.message=receiptNotice(s.receipt);draw(s);}
+  }
   async function check(s){const r=s.receipt;if(!same(s)||!r||s.busy)return;s.busy=true;draw(s);try{const q=query(s);q.set('request_id',r.request_id);const response=await fetch('/api/platform/crm/chat/media-receipt?'+q,{credentials:'same-origin',cache:'no-store'}),result=await json(response);if(response.ok&&result.success&&result.provider_accepted===true)await accepted(s,r.request_id,result);else if(same(s))s.message=t('unknown');}catch{if(same(s))s.message=t('unknown');}finally{s.busy=false;draw(s);}}
   async function send(s){
     if(!same(s)||s.busy||voiceBusy()||s.entry?.state!=='draft')return;

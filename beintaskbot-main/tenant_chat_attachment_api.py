@@ -5,6 +5,7 @@ import json
 import mimetypes
 import time
 from collections import OrderedDict
+from contextlib import nullcontext
 from urllib.parse import quote
 from aiohttp import web
 from tenant_chat_attachment_store import load, token
@@ -13,10 +14,15 @@ from tenant_linear_policy import TenantLinearError
 from tenant_read_session import require_read_session
 
 SLOTS = asyncio.Semaphore(3)
+VIDEO_STREAM_SLOTS = asyncio.Semaphore(2)
 REQUESTS = OrderedDict()
 MEDIA_CACHE = OrderedDict()
 MEDIA_CACHE_BYTES = 0
 MEDIA_INFLIGHT = {}
+VIDEO_INFLIGHT = {}
+LARGE_VIDEO_CACHE = {}
+LARGE_VIDEO_TTL = 120
+VIDEO_STREAM_TIMEOUT = 15 * 60
 MEDIA_CACHE_LIMIT = 32 * 1024 * 1024
 # Expired entries are removed lazily by cache reads; LRU/byte limits are separate.
 MEDIA_CACHE_TTL = 1800
@@ -46,7 +52,9 @@ def _media_key(session, item, lead, message):
     row = item.get('row') or {}
     raw = row.get('raw') if isinstance(row.get('raw'), (dict, list)) else {}
     # Do not place connection credentials or provider URLs in cache keys.
-    material = json.dumps(raw, sort_keys=True, default=str, separators=(',', ':'))
+    binding = route.get('native') or route.get('native_media') or {}
+    bound_source = (binding.get('gateway_id'), (binding.get('scope') or {}).get('generation'))
+    material = json.dumps([raw, bound_source], sort_keys=True, default=str, separators=(',', ':'))
     digest = hashlib.sha256(material.encode('utf-8')).hexdigest()
     return (str(session['tenant_id']), str(lead), str(message), str(item.get('provider') or ''),
             str(route.get('channel_id') or ''), str(route.get('conversation_id') or ''), digest)
@@ -107,7 +115,7 @@ def _byte_range(value, length):
     return (start, end) if start < length and end >= start else False
 
 
-def admit(session, *, automatic_photo=False):
+def admit(session, *, automatic_photo=False, video=False):
     now = time.monotonic()
     for key in list(REQUESTS):
         if REQUESTS[key][1] <= now:
@@ -116,7 +124,8 @@ def admit(session, *, automatic_photo=False):
     caps = [20, 60]
     if automatic_photo:
         # Leave room inside Connect's shared 20/min tenant budget for human/AI work.
-        keys.append((str(session['tenant_id']), 'automatic-photo')); caps.append(8)
+        keys.append((str(session['tenant_id']), 'automatic-video' if video else 'automatic-photo'))
+        caps.append(4 if video else 8)
     blocked = [(key, cap) for key, cap in zip(keys, caps)
                if REQUESTS.get(key, (0, 0))[0] >= cap]
     if len(REQUESTS) > 2000 or blocked:
@@ -169,18 +178,21 @@ def handler(member_from_request, request_provider, logger):
             item = await asyncio.to_thread(load, session, lead, message, **scope)
             await asyncio.to_thread(_check_case_attachment,session,item,request.query)
             automatic_photo = request.query.get('auto_preview') == '1'
+            video = item.get('provider') == 'connect' and item['row']['message_type'] == 'video'
             expected_version = request.query.get('expected_media_version')
             if expected_version or automatic_photo:
                 from tenant_media_evidence import media_version
                 if expected_version != media_version((item.get('row') or {}).get('raw')):
                     raise TenantLinearError('Fayl dəyişib. Dialoqu yeniləyin.', 409)
-            # Keep the existing automatic-photo admission bucket/transport flag:
-            # Visible photos, audio and video share its budget and reserved slot.
             if automatic_photo and (item.get('provider') != 'connect' or item['row']['message_type'] not in {'image', 'audio', 'voice', 'video'}):
                 raise TenantLinearError('Avtomatik baxış yalnız şəkil, səs və video üçündür.', 400)
             key = _media_key(session, item, lead, message)
             result = _cache_get(key)
-            if result is None and request.query.get('cache_only') == '1' and item.get('provider') == 'connect':
+            if result is None and video:
+                retained = LARGE_VIDEO_CACHE.get(key)
+                if retained and retained[0] > time.monotonic():
+                    result = retained[1]
+            if result is None and request.query.get('cache_only') == '1' and item.get('provider') == 'connect' and not video:
                 from tenant_connect_media import media_backpressure, _media_limited
                 wait = media_backpressure(item['route'])
                 if wait: raise _media_limited(wait)
@@ -188,16 +200,17 @@ def handler(member_from_request, request_provider, logger):
                 # A preview probe never joins a provider flight or starts a download.
                 return web.Response(status=204, headers=headers)
             if result is None:
-                task = MEDIA_INFLIGHT.get(key)
+                flights = VIDEO_INFLIGHT if video else MEDIA_INFLIGHT
+                task = flights.get(key)
                 if task is None:
-                    if len(MEDIA_INFLIGHT) >= MEDIA_PENDING_LIMIT:
+                    if len(flights) >= (1 if video else MEDIA_PENDING_LIMIT):
                         error = TenantLinearError('Fayllar yüklənir. Göstərilən müddətdən sonra yenidən yoxlayın.', 429)
                         error.retry_after = 5
                         raise error
-                    admit(session, automatic_photo=automatic_photo)
+                    admit(session, automatic_photo=automatic_photo, video=video)
 
                     async def fetch_and_verify():
-                        async with SLOTS:
+                        async with (nullcontext() if video else SLOTS):
                             if item.get('provider') == 'connect':
                                 from tenant_connect_media import download_media
                                 options = {'preview_documents': True}
@@ -208,22 +221,33 @@ def handler(member_from_request, request_provider, logger):
                                     account = await request_provider(session['tenant_id'], 'GET', 'account', params={'with': 'drive_url'})
                                 bearer = await asyncio.to_thread(token, item)
                                 data, content_type = await asyncio.to_thread(download, item['row'], account.get('drive_url'), bearer)
-                            filename = _media_name((item.get('row') or {}).get('raw'), content_type)
-                            result = data, content_type, filename
+                        filename = _media_name((item.get('row') or {}).get('raw'), content_type)
+                        result = data, content_type, filename
+                        if video and len(data) > MEDIA_CACHE_LIMIT:
+                            # One short-lived large preview lets an authorized returning
+                            # viewer reuse the latest download without evicting photos or audio.
+                            expiry = time.monotonic() + LARGE_VIDEO_TTL
+                            LARGE_VIDEO_CACHE.clear()
+                            LARGE_VIDEO_CACHE[key] = expiry, result
+                            def expire():
+                                if (LARGE_VIDEO_CACHE.get(key) or (None,))[0] == expiry:
+                                    LARGE_VIDEO_CACHE.pop(key, None)
+                            asyncio.get_running_loop().call_later(LARGE_VIDEO_TTL, expire)
+                        else:
                             _cache_put(key, result)
-                            return result
+                        return result
 
                     task = asyncio.create_task(fetch_and_verify())
-                    MEDIA_INFLIGHT[key] = task
+                    flights[key] = task
                     def settled(done):
-                        if MEDIA_INFLIGHT.get(key) is done: MEDIA_INFLIGHT.pop(key, None)
+                        if flights.get(key) is done: flights.pop(key, None)
                         if not done.cancelled(): done.exception()
                     task.add_done_callback(settled)
                 try:
                     result = await asyncio.shield(task)
                 finally:
-                    if MEDIA_INFLIGHT.get(key) is task and task.done():
-                        MEDIA_INFLIGHT.pop(key, None)
+                    if flights.get(key) is task and task.done():
+                        flights.pop(key, None)
             # Recheck authorization and tenant/channel/message ownership for every request,
             # including cache hits and concurrent waiters.
             current = await asyncio.to_thread(load, session, lead, message, **scope)
@@ -241,9 +265,22 @@ def handler(member_from_request, request_provider, logger):
             if requested_range is not None:
                 start, end = requested_range
                 headers['Content-Range'] = f'bytes {start}-{end}/{len(content)}'
-                headers['Content-Length'] = str(end - start + 1)
+            else:
+                start, end = 0, len(content) - 1
+            size = end - start + 1
+            headers['Content-Length'] = str(size)
+            status = 206 if requested_range is not None else 200
+            if video and size > MEDIA_CACHE_LIMIT:
+                if VIDEO_STREAM_SLOTS.locked():
+                    for name in ('Content-Disposition', 'Accept-Ranges', 'Content-Range', 'Content-Length'):
+                        headers.pop(name, None)
+                    error = TenantLinearError('Videolar yüklənir. Bir az sonra yoxlayın.', 429)
+                    error.retry_after = 5
+                    raise error
+                async with VIDEO_STREAM_SLOTS:
+                    return await _stream_video(request, content, start, end, mime, status, headers)
+            if requested_range is not None:
                 return web.Response(status=206, body=content[start:end + 1], content_type=mime, headers=headers)
-            headers['Content-Length'] = str(len(content))
             return web.Response(body=content, content_type=mime, headers=headers)
         except TenantLinearError as error:
             if error.status == 429:
@@ -258,3 +295,21 @@ def handler(member_from_request, request_provider, logger):
             logger.warning('Tenant attachment unavailable')
             return web.json_response({'success': False, 'error': 'Fayl yüklənmədi. Yenidən yoxlayın.'}, status=503, headers=headers)
     return handle
+
+
+async def _stream_video(request, content, start, end, mime, status, headers):
+    stream = web.StreamResponse(status=status, headers=headers)
+    stream.content_type = mime
+    try:
+        async with asyncio.timeout(VIDEO_STREAM_TIMEOUT):
+            await stream.prepare(request)
+            view = memoryview(content)
+            for offset in range(start, end + 1, 65536):
+                await stream.write(view[offset:min(offset + 65536, end + 1)])
+            await stream.write_eof()
+    except (ConnectionError, TimeoutError):
+        # Headers may already be sent. Close a timed-out transfer so the
+        # browser detects the incomplete body and can show a retry.
+        if request.transport is not None:
+            request.transport.close()
+    return stream
