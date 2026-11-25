@@ -80,7 +80,6 @@ ASSETS = (
     ('/assets/tenant-connect-pairing.js', 'tenant-connect-pairing.js', 'no-store'),
     ('/assets/tenant-call-sources.js', 'tenant-call-sources.js', 'no-store'),
     ('/assets/browser-call-audio.js', 'browser-call-audio.js', 'no-store'),
-    ('/assets/tenant-operator-widget.js', 'tenant-operator-widget.js', 'no-store'),
     ('/assets/tenant-dialog-composer.js', 'tenant-dialog-composer.js', 'no-store'),
     ('/assets/tenant-dialog-quick-replies.js', 'tenant-dialog-quick-replies.js', 'no-store'),
     ('/assets/tenant-dialog-reply-templates.js', 'tenant-dialog-reply-templates.js', 'no-store'),

@@ -21,6 +21,7 @@ const wait = async predicate => {
     channel_name:'Чат сайта BeinSystems',customer_name:'Widget Test',customer_kind:'contact',
     widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
+  assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
   const calls=[];
   w.fetch=async(url,opt={})=>{
     url=String(url);const data=opt.body&&JSON.parse(opt.body);
@@ -47,6 +48,11 @@ const wait = async predicate => {
   await wait(()=>d.querySelector('.dialog-source-tabs button:last-child')?.disabled===false);
   assert.equal(selected().textContent,'Чат');
   assert(d.getElementById('sendChat').disabled);
+  for(const action of ['close','dismiss']){
+    const control=d.querySelector('[data-operator-lifecycle="'+action+'"]');
+    assert(control,'expected '+action+' on the accepted dialogue');
+    assert(!control.closest('[hidden]'),action+' must be visible even when provider sending is blocked');
+  }
   assert(d.getElementById('operatorSendReason').textContent.includes('авторизац'));
   d.querySelector('.dialog-source-tabs button:last-child').click();
   const field=d.querySelector('.dialog-note-form textarea');field.value='staff only';field.dispatchEvent(new w.Event('input'));
