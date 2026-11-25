@@ -97,6 +97,27 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     regular = inbox.listing(PROFILE, channel=channel["id"])
     assert channel in regular["channels"]
     assert [(r["provider"], r["lead_id"]) for r in regular["dialogs"]] == [(sync.PROVIDER, 15)]
+    account = CHAT["account"]
+    assert regular["dialogs"][0]["dialog_company_name"] == account
+    assert [r["lead_id"] for r in inbox.listing(PROFILE, search=account)["dialogs"]] == [15]
+    company = str(uuid.uuid4())
+    cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name) VALUES(%s,%s,'Confirmed Co')", (company, A))
+    cur.execute("""INSERT INTO saas_beinsystems_operator_links
+        (id,tenant_id,connection_generation,connection_instance_id,local_entity_type,local_entity_id,
+         external_entity_type,external_id,verification_basis,evidence_summary,verified_by)
+        VALUES(%s,%s,%s,%s,'company',%s,'account',%s,'manual','Verified in test',11)""",
+        (str(uuid.uuid4()), A, CREDENTIALS["generation"], key[1], company, account))
+    db.commit()
+    linked = page()["dialog"]
+    assert (linked["dialog_company_name"], linked["crm_company_id"], linked["operator_account"]) == (
+        "Confirmed Co", company, account)
+    assert [r["lead_id"] for r in inbox.listing(PROFILE, search="Confirmed Co")["dialogs"]] == [15]
+    # Same route without new activity: replace or remove only the source assertion.
+    for changed, expected in [("other-account", "other-account"), (None, None), (["invalid"], None), (account, "Confirmed Co")]:
+        sync.snapshot(cur, A, CREDENTIALS, widget._routes([{**CHAT, "account": changed}], CREDENTIALS), "integration")
+        db.commit()
+        assert page()["dialog"]["dialog_company_name"] == expected
+        assert page()["dialog"]["lifecycle"]["state"] == "waiting"
     with pytest.raises(TenantLinearError):
         queue.history({"tenant_id": B, "telegram_id": 22}, params)
     change("accept")
@@ -136,6 +157,10 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     recipient = {"tenant_id": A, "telegram_id": 33}
     owned = queue.history(recipient, params)
     assert owned["internal_comments"][0]["note"] == "internal only"
+    assert owned["dialog"]["crm_company_id"] is None
+    assert owned["dialog"]["dialog_company_name"] == account
+    cur.execute("UPDATE saas_beinsystems_operator_links SET revoked_at=now() WHERE tenant_id=%s AND local_entity_id=%s", (A, company))
+    db.commit()
     lifecycle.mutate(
         recipient,
         {
