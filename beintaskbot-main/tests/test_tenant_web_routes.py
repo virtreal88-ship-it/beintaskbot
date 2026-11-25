@@ -81,6 +81,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/audio-transcription', ('GET', 'POST')),
     ('dialogs/read', ('POST',)),
     ('dialogs/reply-templates', ('GET','POST')),
+    ('dialogs/internal-comments', ('POST',)),
     ('dialogs/quick-replies', ('POST',)),
     ('dialogs/personal-reminders', ('GET','POST')),
     ('dialogs/shared-reminders', ('GET','POST')),
