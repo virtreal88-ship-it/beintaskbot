@@ -211,9 +211,10 @@ async function verifyImmediateListState(grouped){
  listState={...state};filter.value='active';filter.dispatchEvent(new w.Event('change'));await w.tenantOperator.refresh();
  assert.equal(badge(),null,'In work does not repeat the Accepted badge');
  assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
- assert.notEqual(w.getComputedStyle(d.querySelector('.operator-unread-count')).backgroundColor,'rgb(29, 78, 216)');
+ assert.equal(w.getComputedStyle(d.querySelector('.operator-unread-count')).backgroundColor,'rgb(185, 28, 28)','unread counter stays red in the active list');
  filter.value='all';filter.dispatchEvent(new w.Event('change'));await w.tenantOperator.refresh();
  assert.equal(badge().dataset.lifecycleState,'accepted','All retains the Accepted badge');
+ assert.equal(w.getComputedStyle(d.querySelector('.operator-unread-count')).backgroundColor,'rgb(185, 28, 28)','unread counter stays red in All');
  }
  d.querySelector('[data-operator-lifecycle=close]').click();await tick();await tick();assert.equal(badge().dataset.lifecycleState,'closed');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
  state={state:'waiting',revision:4,can_accept:true,last_inbound_id:'in-2'};listState={...state};await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'waiting','new inbound after completion restores New');assert.equal(d.querySelector('.operator-unread-count').textContent,'7');if(grouped){sibling.lifecycle={state:'waiting',revision:9};state={state:'accepted',revision:5};listState={...state};await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'waiting','accepting one source never accepts another waiting source');}dom.window.close();
