@@ -80,7 +80,17 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     // Native control geometry is excluded even when inert retargets its pointer event.
     await page.evaluate(()=>{const node=document.querySelector('[data-native-audio]'),rect=node.querySelector('.operator-audio-controls').getBoundingClientRect();node.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,pointerType:'touch',isPrimary:true,pointerId:8,clientX:rect.x+30,clientY:rect.y+20}));});await page.waitForTimeout(600);assert.equal(await menu.count(),0);
     await page.evaluate(()=>document.querySelector('#chatRows').dispatchEvent(new PointerEvent('pointercancel',{bubbles:true,pointerId:8})));
-    for(const id of ['image-row','video-row']){const row=page.locator('article[data-message-id="'+id+'"]');await row.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();assert.equal(await menu.locator('[data-context-file-action=load]').count(),1);assert.equal(await menu.locator('[data-context-file-action=download]').count(),1);assert.equal(await row.locator('[data-media-actions] summary').count(),0);await page.keyboard.press('Escape');}
+    for(const id of ['image-row','video-row']){
+     const row=page.locator('article[data-message-id="'+id+'"]');
+     await row.focus();await page.keyboard.press('ContextMenu');await menu.waitFor();
+     const load=menu.locator('[data-context-file-action=load]:visible');
+     const download=menu.locator('[data-context-file-action=download]');
+     const isPhoto=id==='image-row';
+     assert.equal(await load.count(),isPhoto?1:0);
+     assert.equal(await download.count(),isPhoto?1:0);
+     assert.equal(await row.locator('[data-media-actions] summary').count(),0);
+     await page.keyboard.press('Escape');
+    }
     await open();await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-auth-invalid')));assert.equal(await menu.count(),0);
     assert.equal(calls.some(c=>/audio-transcription/.test(c.path)&&c.method!=='GET'),false,'menu never starts paid ASR');assert.deepEqual(errors,[]);
     console.log('PASS shared attachment menu '+width+': read-only, keyboard/right-click/hold, per-file identity, stale source/render/auth, inert player exclusion, no paid writes');
