@@ -1,4 +1,4 @@
-/* Bounded visible photo/audio reads and explicit downloads. No provider URLs in the DOM. */
+/* Bounded visible photo/audio/video reads and explicit downloads. No provider URLs in the DOM. */
 (() => {
   let member, lead, epoch=0, profileRevision=0;
   const active=new Set(), urls=new Set(), previews=new Map(), mediaCache=new Map(), retryUntil=new Map(), loadedKeys=new Set(), pendingKeys=new Map();
@@ -37,8 +37,8 @@
       }
     }catch{}return true;
   }
-  // Photo and voice/audio share this queue, lock, attempts and tenant cooldown.
-  const automaticKinds=new Set(['image','audio','voice','voice_message','ptt']);
+  // Visible media share one queue, lock, attempt limit and tenant cooldown.
+  const automaticKinds=new Set(['image','audio','voice','voice_message','ptt','video']);
   let photoQueue=[],photoObserver,photoQueued=new WeakSet(),photoProbed=new WeakSet();
   let photoReads=0,photoWake=null;
   const photoPending=new WeakSet(),photoAttempts=new Map(),photoCooldown=new Map();
@@ -82,12 +82,15 @@
         if(!await restoreAudioCooldown(host)||!same())return;
         if(await load(false,false,null,true)!=='cache_miss'||!same()||photoAttempts.get(source)===revision)return;
         photoAttempts.set(source,revision);while(photoAttempts.size>200)photoAttempts.delete(photoAttempts.keys().next().value);
-        await load(false,false,null,false,true);
+        const outcome=await load(false,false,null,false,true);
+        if(outcome==='left_view'&&photoAttempts.get(source)===revision)photoAttempts.delete(source);
       };
       // Serialize automatic acquisitions across same-origin tabs where supported.
       // Server admission/singleflight still enforces the shared bound without Web Locks.
       const work=window.navigator?.locks?.request?window.navigator.locks.request('tenant-visible-photos.'+String(member.tenant_id),acquire):acquire();
-      void work.catch(()=>{}).finally(()=>{photoReads--;photoPending.delete(host);if(host.dataset.previewResidentWait==='true'){delete host.dataset.previewResidentWait;photoProbed.delete(host);enqueuePhoto(host);}pumpPhotoCache();});
+      void work.catch(()=>{}).finally(()=>{photoReads--;photoPending.delete(host);if(host.dataset.previewResidentWait==='true'){delete host.dataset.previewResidentWait;photoProbed.delete(host);}
+        if(revision===epoch&&!photoProbed.has(host))enqueuePhoto(host);
+        pumpPhotoCache();});
     }
   }
   function queuePhotoCache(host,load){
@@ -106,7 +109,19 @@
   const rememberRetry=(host,button,until,fallback='')=>{retryUntil.set(retryKey(host,fallback),until);if(host)host.dataset.mediaRetryAt=String(until);if(button)button.dataset.retryAt=String(until);};
   const canStartMedia=host=>active.size<3&&(!(host?.dataset.connectMedia==='true')||[...active].filter(controller=>controller.connectMedia).length<2);
   const busyText=()=>text('mediaBusy','Other attachments are loading. Try again when they finish.');
-  function updateMediaMenu(host){const load=host?.querySelector('[data-media-menu-load]'),primary=host?.querySelector('[data-media-open]'),download=host?.querySelector('[data-media-download]');if(load){const loaded=!!host.querySelector('[data-media-preview]'),state=host.dataset.mediaPreviewState,blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(state)&&!(state==='unavailable'&&host.dataset.photoAutoFailed==='true');load.hidden=loaded;load.disabled=blocked;load.textContent=['retryable','rate_limited'].includes(state)||state==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');if(primary)primary.disabled=blocked;if(download)download.disabled=blocked;}paintNativeAudioCard(host,primary,load);}
+  function paintVideoRetry(host,button){
+    if(host?.dataset.mediaKind!=='video'||!host.closest('#chatRows')||!button)return;
+    const passive=!!host.closest('[data-owner-overview-read-only]');
+    const loaded=!!host.querySelector('[data-media-preview]');
+    const busy=button.getAttribute('aria-busy')==='true';
+    const state=host.dataset.mediaPreviewState;
+    const failed=['retryable','rate_limited','invalid','terminal','too_large','unavailable','forbidden'].includes(state);
+    button.hidden=loaded||busy||!passive&&!failed;
+    button.disabled=busy||['too_large','unavailable','forbidden'].includes(state);
+    const openVideo={ru:'Открыть видео',az:'Videonu aç',en:'Open video'}[window.tenantI18n?.language]||'Open video';
+    button.textContent=failed?text('retryAttachment','Retry loading'):openVideo;
+  }
+  function updateMediaMenu(host){const load=host?.querySelector('[data-media-menu-load]'),primary=host?.querySelector('[data-media-open]'),download=host?.querySelector('[data-media-download]');if(load){const loaded=!!host.querySelector('[data-media-preview]'),state=host.dataset.mediaPreviewState,blocked=['unavailable','forbidden','too_large','invalid','terminal'].includes(state)&&!(state==='unavailable'&&host.dataset.photoAutoFailed==='true');load.hidden=loaded;load.disabled=blocked;load.textContent=['retryable','rate_limited'].includes(state)||state==='unavailable'&&host.dataset.photoAutoFailed==='true'?text('retryAttachment','Retry loading'):text('loadAttachment','Load file');if(primary)primary.disabled=blocked;if(download)download.disabled=blocked;}paintNativeAudioCard(host,primary,load);paintVideoRetry(host,primary);}
   function paintNativeAudioCard(host,primary,menuLoad){
     if(host?.dataset.nativeAudio!=='true')return;
     const audio=host.querySelector('.operator-native-audio'),busy=primary?.getAttribute('aria-busy')==='true';
@@ -236,18 +251,20 @@
               {credentials:'same-origin',cache:'no-store',signal:controller.signal});
             if(!valid()&&!canRetain())return;
             if(serverCacheOnly&&response.status===204){if(valid()){host.dataset.mediaPreviewState='unloaded';status.textContent='';}return 'cache_miss';}
+            if(controller.photoStopped){await response.body?.cancel();return 'left_view';}
             if(!response.ok){if(photoAuto&&[404,410].includes(response.status))host.dataset.photoAutoFailed='true';photoBackpressure(host,response);const data=await response.json().catch(()=>({}));const key=data.code==='media_duration_limit'?'mediaDuration':({404:'mediaUnavailable',410:'mediaUnavailable',413:'mediaLarge',415:'mediaInvalid',429:'mediaBusy'}[response.status]||'mediaFailed');await failAudio(host,intentBinding,response.status,response.status===429?Date.now()+retryDelay(response)*1000:0);if(response.status===429){const seconds=retryDelay(response),until=Date.now()+seconds*1000;rememberRetry(host,button,until,host.dataset.chatAttachment||'');host.dataset.mediaPreviewState='rate_limited';updateMediaMenu(host);throw Error(text('mediaRetryAfter','Try again in {seconds} seconds.').replace('{seconds}',String(seconds)));}host.dataset.mediaPreviewState=mediaFailureState(response.status);updateMediaMenu(host);throw Error(response.status===403?text('mediaForbidden','You do not have access to this file.'):response.status===404||response.status===410?text(key,'File is unavailable or expired.'):response.status===413?text(key,'File is too large.'):response.status===415?text(key,'File format is not supported.'):data.error||text('mediaFailed','File could not be downloaded.'));}
             servedFilename=dispositionName(response.headers.get('Content-Disposition'))||servedFilename;const declaredSize=Number(response.headers.get('Content-Length'));
             const chunks=[],reader=response.body.getReader(),total=declaredSize;
             let size=0;
             while(true){
               const {done,value}=await reader.read();if(done)break;
-              if(!valid()&&!canRetain()){await reader.cancel();return;}
+              if(controller.photoStopped||!valid()&&!canRetain()){await reader.cancel();return controller.photoStopped?'left_view':undefined;}
               size+=value.length;
               if(size>MAX_PREVIEW_BYTES){await reader.cancel();throw Error('Fayl çox böyükdür.');}
               chunks.push(value);status.textContent=total>0?' Yüklənir: '+Math.min(100,Math.round(size/total*100))+'%':' Yüklənir…';
             }
             const contentType=response.headers.get('Content-Type')||'application/octet-stream';
+            if(controller.photoStopped)return 'left_view';
             blob=new Blob(chunks,{type:contentType});if(!valid()&&!canRetain())return;
             // Large previews remain one-shot Blob URLs. They are never retained
             // in the 32 MiB in-tab cache after playback or preview is closed.
@@ -265,7 +282,7 @@
             if(nativeAudio){node=media=nativeAudio;node.dataset.mediaPreview='audio';node.src=blobUrl;node.load?.();}
             else ({node,media}=audioPlayer(blobUrl,host.dataset.mediaDuration));
           }else if(['video/mp4','video/webm'].includes(type)){
-            node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.preload='metadata';media=node;
+            node=document.createElement('video');if(node.dataset)node.dataset.mediaPreview='video';node.className='operator-media-video';node.controls=true;node.playsInline=true;node.controlsList='nodownload';node.preload='metadata';media=node;
           }else{
             node=document.createElement('a');if(node.dataset)node.dataset.mediaPreview='file';node.href=blobUrl;node.target='_blank';node.rel='noopener';node.download=servedFilename||'attachment';
             node.textContent=host.querySelector('[data-media-title]')?text('downloadAttachment','Download attachment'):servedFilename||text('downloadAttachment','Download attachment');
@@ -287,7 +304,7 @@
           if(!node.closest?.('.operator-audio-controls')){if(host.insertBefore)host.insertBefore(node,button);else host.append(node);}button.hidden=true;status.textContent='';
           delete host.dataset.mediaRetryAt;retryUntil.delete(retryKey(host,host.dataset.chatAttachment||''));host.dataset.mediaPreviewState='loaded';updateMediaMenu(host);if(!cachedOnly&&!automatic&&!photoAuto&&!serverCacheOnly)void rememberAudio(host);
           if(['AUDIO','VIDEO'].includes(media?.tagName)){media.addEventListener('pause',pumpPhotoCache);media.addEventListener('ended',pumpPhotoCache);}
-        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(controller.photoStopped){host.dataset.mediaPreviewState='unloaded';status.textContent='';return;}if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||['loaded','unloaded'].includes(host.dataset.mediaPreviewState))host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
+        }catch(error){if(blobUrl){URL.revokeObjectURL(blobUrl);urls.delete(blobUrl);}if(valid()){if(controller.photoStopped){host.dataset.mediaPreviewState='unloaded';status.textContent='';return 'left_view';}if(automatic)blockAudioIntent(intentBinding,0);if(!host.dataset.mediaPreviewState||['loaded','unloaded'].includes(host.dataset.mediaPreviewState))host.dataset.mediaPreviewState='retryable';status.textContent=controller.signal.aborted?' '+text('mediaTimeout','Yükləmə vaxtı bitdi. Yenidən yoxlayın.'):' '+error.message;updateMediaMenu(host);}}
         finally{clearTimeout(timer);active.delete(controller);if(pendingKeys.get(requestKey)===controller)pendingKeys.delete(requestKey);button.setAttribute('aria-busy','false');if(menuLoad)menuLoad.disabled=false;updateMediaMenu(host);if(restoreRetained)bind();pumpPhotoCache();}
       };
       button.onclick=()=>load();

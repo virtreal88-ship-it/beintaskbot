@@ -129,6 +129,7 @@ on:
       - 'beintaskbot-main/tests/test_photo_preview_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_photo_autoload_browser.cjs'
       - 'beintaskbot-main/tests/test_visible_audio_autoload_browser.cjs'
+      - 'beintaskbot-main/tests/test_visible_video_autoload_browser.cjs'
       - 'beintaskbot-main/tests/test_message_footer_browser.cjs'
       - 'beintaskbot-main/tests/test_message_delivery_projection.py'
       - 'beintaskbot-main/tests/visible_media_fixture.cjs'
@@ -454,6 +455,7 @@ jobs:
           node tests/test_photo_preview_browser.cjs
           node tests/test_visible_photo_autoload_browser.cjs
           node tests/test_visible_audio_autoload_browser.cjs
+          node tests/test_visible_video_autoload_browser.cjs
           node tests/test_message_footer_browser.cjs
 
           exit "$failed"
