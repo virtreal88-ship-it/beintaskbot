@@ -46,8 +46,19 @@ const settle=page=>page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(
  }
  {
   const s=server(),f=await fixture(browser,s,{messages:Array.from({length:35},(_,i)=>message('history-'+i,'audio',String(i%9)))});try{
-   await f.open();await f.loaded('history-34');assert.ok(s.upstream.length<=3,'initial viewport does not acquire the historical page');const initial=s.upstream.length;
-   await f.page.locator('#chatRows').evaluate(n=>n.scrollTop=0);await f.loaded('history-0');assert.ok(s.upstream.length<=initial+3);assert.ok(s.upstream.length<35);assert.equal(s.self429,0);
+   // Compact cards fit more than three voices in the viewport. Three is the
+   // resident player cap, not the cumulative number of eligible network reads.
+   const checkViewport=async(requests,withinEdge)=>{
+    await settle(f.page);
+    const visible=new Set(await f.page.evaluate(()=>[...window.fixtureVisibleMedia]));
+    assert.ok(requests.length>0);
+    assert.ok(requests.every(({id})=>withinEdge(Number(id.slice('history-'.length)))&&visible.has(id)),'automatically acquired only audio seen at this end of the viewport');
+    assert.ok(await f.page.locator('[data-media-preview=audio]').count()<=3,'visible audio never exceeds three resident players');
+   };
+   await f.open();await f.loaded('history-34');await settle(f.page);
+   await checkViewport(s.upstream, index=>index>=18);const initial=s.upstream.length;
+   await f.page.locator('#chatRows').evaluate(n=>{window.fixtureVisibleMedia.clear();n.scrollTop=0;});await f.loaded('history-0');await settle(f.page);
+   await checkViewport(s.upstream.slice(initial), index=>index<=16);assert.equal(s.maxActive,1);assert.equal(s.self429,0);
    assert.equal(s.requests.some(r=>!['audio','voice'].includes(f.state.messages.find(m=>m.external_id===r.id)?.message_type)),false);assert.deepEqual(f.errors,[]);console.log('PASS history viewport bound: initial/scroll loads only visible audio');
   }finally{await f.context.close();}
  }
