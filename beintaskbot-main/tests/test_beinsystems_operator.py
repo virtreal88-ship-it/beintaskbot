@@ -2022,7 +2022,7 @@ class BeinSystemsOperatorTests(unittest.TestCase):
         self.assertIn("FOREIGN KEY(tenant_id,company_id)", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_dialog_company_bindings", sql)
         self.assertIn("saas_beinsystems_operator_rate_limits_endpoint_check", sql)
-        self.assertIn("CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login'))", sql)
+        self.assertIn("CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login','widget'))", sql)
         self.assertIn("CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_employee_links", sql)
         self.assertIn("FOREIGN KEY(tenant_id,member_telegram_id)", sql)
         self.assertIn("saas_operator_active_member_link_idx", sql)
