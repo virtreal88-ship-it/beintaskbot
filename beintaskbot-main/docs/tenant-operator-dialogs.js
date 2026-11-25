@@ -1465,7 +1465,12 @@
       const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
       if(applyHistoryMergeChange(route,latest))return;
-      if(route.archive_read_only&&member?.role!=='owner'){
+      if(route.provider==='operator_widget'){
+        for(const snapshot of new Set([currentDialog,page.dialog])){
+          Object.assign(snapshot,{operator_account:latest.dialog.operator_account,crm_company_id:latest.dialog.crm_company_id,dialog_company_name:latest.dialog.dialog_company_name});
+        }
+        paintArchiveCompany(latest.dialog);
+      }else if(route.archive_read_only&&member?.role!=='owner'){
         paintArchiveCompany(latest.dialog);
         // Restore must use the same freshly authorized label, not the old list card.
         for(const snapshot of new Set([currentDialog,page.dialog])){
@@ -1730,9 +1735,14 @@
       row.history_merge_id===historyMergeId(currentPage))&&readRoutes.some(source=>sameDialog(source,row));
     return row.history_merge_id===historyMergeId(currentPage)&&historyMergeActionRoutes(currentDialog).some(source=>sameDialog(source,row));
   }
+  function widgetCompany(route){
+    if(route?.provider!=='operator_widget'||!route.operator_account)return '';
+    return route.crm_company_id ? route.dialog_company_name : clientCardText('company')+' (Operator) · '+route.operator_account;
+  }
   function renderRows(){
     $('operatorRows').innerHTML=rows.map((row,index)=>{
-      const companyName=(member?.role==='owner'||capabilities.dialog_company_binding===true)?row.dialog_company_name:'';
+      const companyName=row.provider==='operator_widget'?widgetCompany(row):
+        (member?.role==='owner'||capabilities.dialog_company_binding===true)?row.dialog_company_name:'';
       const name=visualDialogTitle(row),preview=dialogPreview(row);
       const selected=isSelectedMergeCard(row)||(row.group_sources||[row]).some(source=>sameDialog(currentDialog,source))
         ||(selectedDialogOwner===identity(member)&&sameDialog(selectedDialog,row));
@@ -2085,7 +2095,7 @@
   }
   function renderDialogSkeleton(route){
     const header=$('operatorConversationHeader'),content=$('operatorConversationContent');
-    const company=capabilities.dialog_company_binding===true
+    const company=route.provider==='operator_widget'?widgetCompany(route):capabilities.dialog_company_binding===true
       && !(route.archive_read_only&&member?.role!=='owner')
       ? (route.company_binding?.company_name||route.dialog_company_name||''):'';
     if(header)header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head"><div class="operator-dialog-title" role="heading" aria-level="2"><span class="operator-dialog-title-text" data-user-content>${esc(dialogTitle(route))}</span></div>${company?`<span id="operatorDialogCompanyName" title="${esc(company)}" data-user-content>${esc(company)}</span>`:''}<div class="operator-dialog-head-row"><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span></div></div></div><span class="sub" role="status">${esc(t('loading'))}</span>`;
@@ -2462,15 +2472,26 @@
   function paintArchiveCompany(route){
     const nameHost=$('operatorDialogCompanyName');
     if(!nameHost)return;
-    const label=capabilities.dialog_company_binding===true&&route?.archive_read_only
+    const label=route?.provider==='operator_widget'?widgetCompany(route):capabilities.dialog_company_binding===true&&route?.archive_read_only
       &&$('view-dialogs')?.classList.contains('active')&&$('operatorDialogs')?.style.visibility!=='hidden'
       &&!route.owner_overview_read_only&&!route.search_overview_read_only
       &&typeof route.dialog_company_name==='string'?route.dialog_company_name:'';
+    const companyRow=$('operatorWidgetCompanyRow');
+    if(companyRow){
+      companyRow.hidden=!label;
+      companyRow.querySelector('span').textContent=route?.dialog_company_name||'';
+      companyRow.querySelector('small').textContent=clientCardText('company')+(route?.crm_company_id?'':' (Operator)');
+    }
     nameHost.textContent=label;
     nameHost.hidden=!label;
     if(label)nameHost.title=label;else nameHost.removeAttribute('title');
   }
   function mountDialogCompany(route,useSnapshot=true){
+    if(route.provider==='operator_widget'){
+      window.tenantDialogueCompany?.clear();
+      paintArchiveCompany(route);
+      return;
+    }
     if((route.archive_read_only||route.owner_overview_read_only||route.search_overview_read_only)&&member?.role!=='owner'){
       window.tenantDialogueCompany?.clear();
       paintArchiveCompany(route);
@@ -2602,7 +2623,8 @@
       <div class="operator-client-panel-row" data-client-accepted-by hidden><small>${esc(clientCardText('acceptedBy'))}</small><span data-user-content></span></div>
       <div class="operator-client-panel-row" data-client-transfer ${route.handoff_active?'':'hidden'}><small>${esc(clientCardText('transfer'))}</small><span data-client-transfer-value>${esc(handoff||clientCardText('delegated'))}</span></div>
       <div class="operator-client-panel-row"><small>${esc(t('agent'))}</small><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span><span class="operator-state operator-dialog-agent-status" data-panel-agent-status data-state="${esc(route.agent_status||route.display_state)}">${esc(agentModeLabel(route))}</span><div id="operatorClientDeveloperStatus"></div><div id="operatorClientDeveloperHost"></div></div>`);
-    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}" autofocus>×</button></header><div class="operator-client-panel-content"><div class="operator-client-panel-block">${display}${nameForm}${phoneRow}</div>${conversation}<div data-client-support-case hidden></div>${roster}</div>`;
+    const widgetCompanyRow=route.provider==='operator_widget'?'<div id="operatorWidgetCompanyRow" class="operator-client-panel-row" hidden><small></small><span data-user-content></span></div>':'';
+    card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}" autofocus>×</button></header><div class="operator-client-panel-content"><div class="operator-client-panel-block">${display}${nameForm}${phoneRow}${widgetCompanyRow}</div>${conversation}<div data-client-support-case hidden></div>${roster}</div>`;
     layout.append(card);
     const historyToolbar=$('operatorConversationContent')?.querySelector('.operator-history-tools');
     if(hasCompany()||hasTransfer||canScheduleReminder)historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);

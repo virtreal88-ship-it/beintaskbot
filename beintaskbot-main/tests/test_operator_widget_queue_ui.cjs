@@ -19,6 +19,7 @@ const wait = async predicate => {
   w.tenantProfileSnapshot=profile;
   const site={provider:'operator_widget',channel_id:'instance',conversation_id:'verified-route',lead_id:15,
     channel_name:'Чат сайта BeinSystems',customer_name:'Widget Test',customer_kind:'contact',
+    operator_account:'test',dialog_company_name:'test',
     widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
   assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
@@ -47,6 +48,9 @@ const wait = async predicate => {
   d.querySelector('[data-operator-lifecycle=accept]').click();
   await wait(()=>d.querySelector('.dialog-source-tabs button:last-child')?.disabled===false);
   assert.equal(selected().textContent,'Чат');
+  assert.equal(d.getElementById('operatorDialogCompanyName').textContent,'Компания (Operator) · test');
+  assert(!d.getElementById('operatorDialogCompanyName').hidden);
+  assert.equal(d.querySelector('#operatorWidgetCompanyRow span').textContent,'test');
   assert(d.getElementById('sendChat').disabled);
   for(const action of ['close','dismiss']){
     const control=d.querySelector('[data-operator-lifecycle="'+action+'"]');

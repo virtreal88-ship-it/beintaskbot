@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import configured_workspace_id
-from tenant_operator_widget import _can_reply, _hash, _messages, _post, _routes, PAGE
+from tenant_operator_widget import _can_reply, _hash, _messages, _post, _routes, _string, PAGE
 
 PROVIDER = "operator_widget"
 SOURCE = "Чат сайта BeinSystems"
@@ -47,13 +47,16 @@ def snapshot(cur, tenant, credentials, routes, login):
     )
     for chat, (row, rev) in routes.items():
         identity = _hash([row["client_id"]])
+        account = _string(row.get("account"), 240)
+        if not account or account != account.strip() or not account.isprintable():
+            account = None
         cur.execute(
             """INSERT INTO saas_widget_dialogs
-            (tenant_id,instance,chat_id,identity,revision,title,upstream_at,writable,visible)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,true)
+            (tenant_id,instance,chat_id,identity,revision,title,operator_account,upstream_at,writable,visible)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
             ON CONFLICT(tenant_id,instance,chat_id,identity) DO UPDATE SET
             revision=excluded.revision,title=excluded.title,upstream_at=excluded.upstream_at,
-            writable=excluded.writable,visible=true""",
+            operator_account=excluded.operator_account,writable=excluded.writable,visible=true""",
             (
                 tenant,
                 instance,
@@ -61,6 +64,7 @@ def snapshot(cur, tenant, credentials, routes, login):
                 identity,
                 rev,
                 str(row.get("client_name") or row["client_id"])[:256],
+                account,
                 str(row.get("updated_at") or ""),
                 bool(_can_reply(row, login)),
             ),
