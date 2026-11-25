@@ -1,0 +1,55 @@
+name: CRM external Telegram uptime
+on:
+  schedule:
+    - cron: '2-59/5 * * * *'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/crm-telegram-uptime.yml
+      - ops/crm-availability/telegram_monitor.py
+      - ops/crm-availability/test_telegram_monitor.py
+
+permissions: {}
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s ops/crm-availability -p test_telegram_monitor.py
+
+  monitor:
+    name: Monitor
+    if: github.repository == 'virtreal88-ship-it/beintaskbot' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    concurrency:
+      group: crm-live-uptime
+      cancel-in-progress: false
+    environment:
+      name: crm-uptime
+      deployment: false
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Check public Worker and notify owner on change
+        id: probe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CRM_BOT_TOKEN: ${{ secrets.CRM_UPTIME_TELEGRAM_TOKEN }}
+          CRM_CHAT_ID: ${{ secrets.CRM_UPTIME_TELEGRAM_CHAT_ID }}
+        run: python3 ops/crm-availability/telegram_monitor.py
+      - name: Checkpoint up
+        if: steps.probe.outputs.state == 'up'
+        run: echo 'CRM health confirmed'
+      - name: Checkpoint down
+        if: steps.probe.outputs.state == 'down'
+        run: echo 'CRM incident acknowledged'
