@@ -13,6 +13,7 @@ const {JSDOM} = require('jsdom');
   const profile = {member:{tenant_id:'A',telegram_id:11},capabilities:{operator_widget:true}};
   const chat = {id:'5', name:'Demo <script>', revision:'a'.repeat(64), status:'open', can_reply:true,
     operator_url:'https://operator.beinsystems.az/chats?clientId=demo'};
+  let hasOlder = false;
   let calls = [], history = [{id:'1',text:'client message',sender:'client'}], late;
   const event = (name,detail) => document.dispatchEvent(new window.CustomEvent(name,{detail}));
   const wait = async predicate => {
@@ -25,7 +26,7 @@ const {JSDOM} = require('jsdom');
     assert.equal(body.expected_tenant_id, 'A');
     if (late && body.action === 'history') await late.promise;
     const payload = body.action === 'list' ? {chats:[chat]} : body.action === 'reply' ?
-      {state:'unknown'} : {chat, messages:history,has_older:false};
+      {state:'unknown'} : {chat, messages:body.action === 'older' ? [{id:'99',sender:'client',text:'older'}] : history,has_older:body.action === 'older' ? false : hasOlder};
     return {ok:true,status:200,json:async()=>({success:true,...payload})};
   };
   window.eval(fs.readFileSync('docs/tenant-operator-widget.js','utf8'));
@@ -60,6 +61,12 @@ const {JSDOM} = require('jsdom');
   await wait(()=>find('a','Ответить в Operator'));
   assert.ok(root.querySelector('form').hidden);
   assert.equal(root.querySelector('a').href, chat.operator_url);
+  history = [{id:'100',sender:'client',text:'new page after an outage'}]; hasOlder = true;
+  find('button','Обновить').click();
+  await wait(()=>root.textContent.includes('new page after an outage'));
+  assert.ok(!root.textContent.includes('client message'));
+  find('button','Предыдущие сообщения').click();
+  await wait(()=>calls.some(c=>c.action==='older' && c.before_id==='100') && root.textContent.includes('older'));
   let release;
   late={promise:new Promise(r=>{release=r;})};
   const before = calls.length;

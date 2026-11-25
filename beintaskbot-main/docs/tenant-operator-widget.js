@@ -17,6 +17,7 @@
       'Delivery is uncertain. Check the conversation in Operator before resending.', 'Refresh', 'Read only', 'Reply in Operator', 'unread']
   };
   const t = i => (labels[window.tenantI18n?.language] || labels.ru)[i];
+  const compareIds = (a,b) => a.length - b.length || a.localeCompare(b);
   const element = (tag, text) => {
     const node = document.createElement(tag);
     if (text) node.textContent = text;
@@ -62,7 +63,7 @@
     const bottom = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 48;
     const height = transcript.scrollHeight, top = transcript.scrollTop;
     transcript.replaceChildren();
-    const sorted = [...messages.values()].sort((a,b) => a.id.length-b.id.length || a.id.localeCompare(b.id));
+    const sorted = [...messages.values()].sort((a,b) => compareIds(a.id,b.id));
     for (const m of sorted) {
       const line = element('article');
       line.className = 'operator-message';
@@ -100,14 +101,27 @@
         const fields = {action:'history', chat_id:chat.id, revision:chat.revision};
         if (olderPage && messages.size) {
           fields.action = 'older';
-          fields.before_id = [...messages.keys()].sort((a,b)=>a.length-b.length || a.localeCompare(b))[0];
+          fields.before_id = [...messages.keys()].sort(compareIds)[0];
         }
         const result = await api(fields);
         if (current !== version || session !== epoch) return;
         selected = result.chat;
         const oldSize = messages.size;
+        if (!olderPage) {
+          const pageIds = new Set(result.messages.map(m => m.id));
+          const first = result.messages[0]?.id;
+          const overlaps = result.messages.some(m => messages.has(m.id));
+          if (!result.has_older || !overlaps) {
+            // A gap after reconnect must page back from this snapshot's oldest ID.
+            messages.clear();
+            more = result.has_older;
+          } else {
+            for (const id of messages.keys()) {
+              if (compareIds(id,first) >= 0 && !pageIds.has(id)) messages.delete(id);
+            }
+          }
+        } else more = result.has_older;
         for (const m of result.messages) messages.set(m.id, m);
-        if (olderPage || oldSize === 0) more = result.has_older;
         older.hidden = !more;
         const scroll = paintMessages();
         if (olderPage) transcript.scrollTop = scroll.top + transcript.scrollHeight - scroll.height;
