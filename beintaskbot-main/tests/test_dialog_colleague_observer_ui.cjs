@@ -29,7 +29,9 @@ const tick=()=>new Promise(r=>setTimeout(r,0));
  try{
   for(const file of ['tenant-operator-i18n.js','tenant-operator-dialogs.js'])w.eval(fs.readFileSync('docs/'+file,'utf8'));
   await w.tenantOperator.refresh();
+  assert.equal(d.querySelectorAll('#operatorAdvanced select').length,4);
   find('operatorFiltersToggle').click();await tick();
+  assert.equal(d.querySelectorAll('#operatorAdvanced select').length,5);
   assert.equal(find('operatorColleague').value,'');
   assert.equal(find('operatorColleagueLabel').hidden,false);
   find('operatorColleague').value='44';find('operatorColleague').dispatchEvent(new w.Event('change'));
