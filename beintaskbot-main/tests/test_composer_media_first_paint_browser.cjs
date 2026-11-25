@@ -18,7 +18,7 @@ for(const width of [320,390,430,1280])for(const state of ['empty','draft','unkno
  const msg=await page.locator('#lastMessage').boundingBox();assert(msg.y+msg.height<=pending.y,'last message remains above composer');
  await page.evaluate(()=>releaseStore());await page.waitForTimeout(80);
  if(state==='empty'){assert.equal(await page.locator('.operator-customer-media').isVisible(),false);const end=await primary.boundingBox();assert(Math.abs(end.y-before.y)<1,'empty draft restoration has zero vertical shift');await page.locator('#chatText').fill('Unsent');await page.setViewportSize({width,height:450});await page.locator('#chatText').blur();assert.equal(await page.locator('#chatText').inputValue(),'Unsent');const b=await primary.boundingBox();assert(b.y+b.height<=450);}
- else{assert.equal(await page.locator('.operator-customer-media').isVisible(),true,'real recovered draft or uncertain-send warning must be visible');if(state==='unknown')assert.match(await page.locator('.operator-customer-media [role=status]').innerText(),/Не повторяйте|неизвестен/);else assert.equal(await page.locator('.operator-customer-media input').inputValue(),'Draft caption');}
+ else{assert.equal(await page.locator('.operator-customer-media').isVisible(),true,'real recovered draft or uncertain-send warning must be visible');if(state==='unknown')assert.match(await page.locator('.operator-customer-media [role=status]').innerText(),/Не повторяйте|неизвестен/);else assert.equal(await page.locator('.operator-customer-media textarea').inputValue(),'Draft caption');}
  assert.deepEqual(errors,[]);assert((await page.evaluate(()=>calls)).every(c=>c.method==='GET'),'opening composer never sends');
  await page.close();console.log('PASS stable pre-paint media restoration',width,state);
 }
