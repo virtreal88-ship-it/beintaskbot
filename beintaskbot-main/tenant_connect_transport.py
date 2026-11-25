@@ -29,7 +29,7 @@ from tenant_connect_direct_identity import (
 )
 
 CONNECT_URL = str(os.environ.get("CONNECT_PUBLIC_URL") or "https://connect.crm.pro.az").rstrip("/")
-CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'channel.connection.updated')
+CONNECT_WEBHOOK_EVENTS = ('message.inbound.received', 'message.outbound.observed', 'message.edited', 'channel.connection.updated')
 CONNECT_CALL_EVENTS = ('call.missed', 'call.rejected', 'call.invalidated', 'call.observed')
 CONNECT_AUTO_CALL_EVENTS = ('call.missed',)
 CONNECT_REJECTED_CALL_EVENTS = ('call.rejected', 'call.invalidated')
@@ -1125,6 +1125,40 @@ def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=N
                     outgoing=event_type=='message.outbound.observed' or data.get('fromMe') is True)
             cur.execute('INSERT INTO saas_connect_webhook_events(tenant_id,event_id) VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING RETURNING event_id', (tenant,event_id))
             inserted_event = bool(cur.fetchone())
+            if event_type == 'message.edited':
+                # A signed edit updates the exact existing outgoing CRM row.
+                # It never creates a message, changes its author, or enters AI,
+                # handoff, notification, or knowledge-extraction flows.
+                if not inserted_event:
+                    conn.commit()
+                    return True
+                message_id = str(data.get('id') or '')
+                external_message_id = str(data.get('externalMessageId') or '')
+                edited_text = data.get('text')
+                if (not re.fullmatch(r'[0-9a-f-]{36}', message_id, re.I)
+                        or not re.fullmatch(r'[A-Za-z0-9_-]{5,200}', external_message_id)
+                        or data.get('fromMe') is not True or data.get('direction') != 'outgoing'
+                        or data.get('type') != 'text' or not isinstance(edited_text, str)
+                        or len(edited_text) > 4096):
+                    raise ConnectWebhookError('invalid_event', 'Invalid message edit event.', 400)
+                cur.execute('''SELECT id,external_id,channel,raw FROM saas_crm_messages
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND external_id=%s
+                    AND channel=%s AND direction='outgoing' AND message_type='text' FOR UPDATE''',
+                  (tenant, message_id, 'connect:' + message_id, 'connect:' + channel_id))
+                existing = cur.fetchone()
+                if not existing:
+                    # Roll back the event-id claim as the original message may
+                    # arrive shortly after this provider update.
+                    conn.rollback()
+                    return False
+                raw_facts={key:data[key] for key in ('externalMessageId','conversationId','channelId','fromMe','type','text','status') if key in data}
+                cur.execute('''UPDATE saas_crm_messages SET body=%s,
+                  raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND external_id=%s
+                    AND channel=%s AND direction='outgoing' AND message_type='text' ''',
+                  (edited_text,_json(raw_facts),tenant,message_id,'connect:'+message_id,'connect:'+channel_id))
+                conn.commit()
+                return True
             if call_occurred is not None:
                 if not inserted_event:
                     conn.commit()

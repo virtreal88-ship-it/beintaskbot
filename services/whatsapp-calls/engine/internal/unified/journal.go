@@ -21,6 +21,9 @@ var (
 	ErrConflict         = errors.New("unified_operation_conflict")
 	ErrQuoteUnavailable = errors.New("unified_quote_source_unverified")
 	ErrUnknown          = errors.New("unified_send_outcome_unknown")
+	ErrEditExpired      = errors.New("native_edit_expired")
+	ErrDeleteExpired    = errors.New("native_delete_expired")
+	ErrActionOriginal   = errors.New("native_action_original_unavailable")
 	ErrCapacity         = errors.New("unified_journal_capacity")
 )
 

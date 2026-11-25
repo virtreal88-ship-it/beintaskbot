@@ -169,8 +169,14 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 	code := 200
 	if errors.Is(err, unified.ErrConflict) {
 		code = 409
+	} else if errors.Is(err, unified.ErrEditExpired) || errors.Is(err, unified.ErrDeleteExpired) || errors.Is(err, unified.ErrActionOriginal) {
+		code = http.StatusUnprocessableEntity
 	} else if err != nil {
 		code = 503
+	}
+	if code == http.StatusUnprocessableEntity {
+		writeJSON(w, code, map[string]any{"error": err.Error(), "confirmed": false})
+		return
 	}
 	writeJSON(w, code, map[string]any{"result": result, "confirmed": err == nil})
 }

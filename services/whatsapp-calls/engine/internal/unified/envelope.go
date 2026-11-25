@@ -4,12 +4,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"regexp"
+	"strings"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
+
+var controlMessageID = regexp.MustCompile(`^[A-Za-z0-9_-]{5,200}$`)
 
 // Envelope is private engine-to-Worker evidence. Proto may contain media keys;
 // only the encrypted journal/inbox may retain it, never CRM raw JSON or logs.
@@ -39,6 +43,24 @@ type Envelope struct {
 	Variant                string          `json:"variant,omitempty"`
 	Reaction               *ReactionTarget `json:"reaction,omitempty"`
 	ReactionParticipantAlt string          `json:"reaction_participant_alt,omitempty"`
+	Edit                   *MessageEdit    `json:"edit,omitempty"`
+	Revoke                 *MessageRevoke  `json:"revoke,omitempty"`
+}
+
+// MessageEdit and MessageRevoke contain only the exact target identity. The
+// encrypted journal retains the original protocol message; CRM never receives
+// protobuf payloads or media keys.
+type MessageEdit struct {
+	ID        string `json:"id"`
+	Operation string `json:"operation,omitempty"`
+}
+
+type MessageRevoke struct {
+	ID          string `json:"id"`
+	Chat        string `json:"chat"`
+	FromMe      bool   `json:"from_me"`
+	Participant string `json:"participant,omitempty"`
+	Operation   string `json:"operation,omitempty"`
 }
 
 // MessageEnvelope retains the original lab event identity across rollout. New
@@ -93,11 +115,14 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 	// If content accompanies the key, retain its existing original identity.
 	keyOnly := out.MessageType == "unsupported" &&
 		(event.Message.GetSenderKeyDistributionMessage() != nil || event.Message.GetFastRatchetKeySenderKeyDistributionMessage() != nil)
-	if event.IsEdit || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil || keyOnly {
+	if event.IsEdit || event.Message.GetEditedMessage() != nil || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil || keyOnly {
 		hash := sha256.Sum256(data)
 		variant = hex.EncodeToString(hash[:])
 		// Do not project an edit/reaction/protocol payload as a fresh user turn.
 		out.Variant, out.MessageType = "control", "unsupported"
+	}
+	if out.Variant == "control" {
+		observeMessageControl(event, &out)
 	}
 	if reaction := event.Message.GetReactionMessage(); reaction != nil && !event.IsEdit && out.FromMe {
 		key := reaction.GetKey()
@@ -119,6 +144,68 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 	}
 	key, _ := json.Marshal([]any{"message", out.Chat, out.Sender, out.FromMe, out.ProviderID, variant})
 	return string(key), out, true, nil
+}
+
+func observeMessageControl(event *events.Message, out *Envelope) {
+	if event == nil || event.Message == nil || out == nil || out.Variant != "control" {
+		return
+	}
+	if change := event.Message.GetProtocolMessage(); change != nil {
+		if change.Type != nil && change.GetType() == waE2E.ProtocolMessage_REVOKE {
+			key := change.GetKey()
+			if key == nil || key.FromMe == nil || !validProviderID(key.GetID()) || !key.GetFromMe() {
+				return
+			}
+			// The key is relative to its sender. Only accept self-revokes.
+			// In a DM the authenticated outer chat identifies the other party,
+			// while its inner key can identify this device's account.
+			chat, sender := event.Info.Chat, event.Info.Sender.ToNonAD()
+			participant := ""
+			if out.FromMe {
+				if key.GetRemoteJID() != out.Chat && !reactionChatAlias(chat, event.Info.RecipientAlt, key.GetRemoteJID()) {
+					return
+				}
+			} else if chat.Server == types.GroupServer {
+				if key.GetRemoteJID() != out.Chat || !reactionUser(sender) {
+					return
+				}
+				participant = sender.String()
+			} else if !reactionUser(chat) || (sender != chat && event.Info.SenderAlt.ToNonAD() != chat) {
+				return
+			}
+			out.Revoke = &MessageRevoke{ID: key.GetID(), Chat: out.Chat, FromMe: out.FromMe, Participant: participant}
+			return
+		}
+	}
+	change := event.Message.GetProtocolMessage()
+	if change == nil {
+		change = event.Message.GetEditedMessage().GetMessage().GetProtocolMessage()
+	}
+	key := change.GetKey()
+	if !out.FromMe || change.GetType() != waE2E.ProtocolMessage_MESSAGE_EDIT ||
+		key == nil || !key.GetFromMe() || !validProviderID(key.GetID()) || !messagePeer.MatchString(key.GetRemoteJID()) ||
+		change.GetTimestampMS() <= 0 {
+		return
+	}
+	target, err := types.ParseJID(key.GetRemoteJID())
+	if err != nil || target.Device != 0 ||
+		(target.String() != out.Chat && !reactionChatAlias(event.Info.Chat, event.Info.RecipientAlt, target.String())) {
+		return
+	}
+	content := change.GetEditedMessage()
+	text := content.GetConversation()
+	if extended := content.GetExtendedTextMessage(); extended != nil {
+		text = extended.GetText()
+	}
+	if strings.TrimSpace(text) == "" || len(text) > 32000 || strings.ContainsRune(text, 0) {
+		return
+	}
+	out.Chat, out.Timestamp, out.Text = target.ToNonAD().String(), change.GetTimestampMS(), text
+	out.Edit = &MessageEdit{ID: key.GetID()}
+}
+
+func validProviderID(value string) bool {
+	return controlMessageID.MatchString(value)
 }
 
 func MediaFacts(message *waE2E.Message) (kind, mime string, size uint64, name string) {
