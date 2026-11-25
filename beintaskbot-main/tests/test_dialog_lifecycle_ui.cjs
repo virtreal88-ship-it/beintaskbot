@@ -388,15 +388,15 @@ async function verifyInternalComment(){
   }
   return ok({});
  };
- w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-dialog-source-tabs.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
  d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await tick();
  await w.tenantOperator.openDialog(route);
  const action=d.querySelector('[data-operator-internal-comment]');assert(action);
  action.click();
  const modal=d.querySelector('#operatorInternalComment');
  const note='<script>staff only</script>';
- modal.querySelector('textarea').value=note;
- const submit=()=>modal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+ const field=modal.querySelector('textarea');field.value=note;field.dispatchEvent(new w.Event('input'));
+ const submit=()=>modal.querySelector('button[type=submit]').click();
  submit();await tick();assert.match(modal.querySelector('[role=status]').textContent,/interrupted/);
  fail=false;submit();await tick();await tick();
  const events=()=>d.querySelectorAll('#chatRows .operator-internal-comment');
