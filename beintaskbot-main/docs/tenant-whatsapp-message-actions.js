@@ -166,7 +166,7 @@
   const get = (api, route, data) => api(base + route + '?' + new URLSearchParams(data));
 
   let active = null;
-  function show(title) {
+  function show(title, anchor) {
     active?.close();
     const dialog = element('dialog');
     dialog.className = 'operator-whatsapp-action';
@@ -188,14 +188,43 @@
     actions.append(close, primary);
     form.append(heading, status, actions);
     dialog.append(form);
+    const viewport = window.visualViewport;
+    let messageBounds = anchor()?.getBoundingClientRect();
+    function place() {
+      messageBounds = anchor()?.getBoundingClientRect() || messageBounds;
+      if (!messageBounds) return;
+      const gutter = 12, gap = 8;
+      const left = (viewport?.offsetLeft ?? 0) + gutter;
+      const top = (viewport?.offsetTop ?? 0) + gutter;
+      const right = left + (viewport?.width ?? document.documentElement.clientWidth) - 2 * gutter;
+      const bottom = top + (viewport?.height ?? document.documentElement.clientHeight) - 2 * gutter;
+      dialog.style.maxWidth = Math.max(0, right - left) + 'px';
+      dialog.style.maxHeight = Math.max(0, bottom - top) + 'px';
+      const {width, height} = dialog.getBoundingClientRect();
+      const below = messageBounds.bottom + gap;
+      const above = messageBounds.top - gap - height;
+      const y = below + height <= bottom || above < top ? below : above;
+      dialog.style.left = Math.max(left, Math.min(right - width, messageBounds.right - width)) + 'px';
+      dialog.style.top = Math.max(top, Math.min(bottom - height, y)) + 'px';
+    }
+    const resize = new ResizeObserver(place);
     dialog.addEventListener('close', () => {
       if (active === dialog) active = null;
+      resize.disconnect();
+      window.removeEventListener('resize', place);
+      viewport?.removeEventListener('resize', place);
+      viewport?.removeEventListener('scroll', place);
+      if (document.activeElement === document.body) anchor()?.focus({preventScroll:true});
       dialog.remove();
     });
     document.body.append(dialog);
     active = dialog;
     dialog.showModal();
-    return {dialog, form, status, actions, primary};
+    resize.observe(dialog);
+    window.addEventListener('resize', place);
+    viewport?.addEventListener('resize', place);
+    viewport?.addEventListener('scroll', place);
+    return {dialog, form, status, actions, primary, place};
   }
 
   function editKey(member, route, message) {
@@ -222,11 +251,11 @@
       !!read(deleteKey(member, route, message)).request_id;
   }
 
-  function openDelete({member, route, message, api, isCurrent, reload, onSaved}) {
+  function openDelete({member, route, message, anchor, api, isCurrent, reload, onSaved}) {
     if (!isCurrent() || !canDelete(member, route, message)) return;
     const owner = session(member), key = deleteKey(member, route, message), saved = read(key);
     let draft = {version: message.wa_delete_version, request_id: '', ...saved};
-    const view = show('deleteTitle');
+    const view = show('deleteTitle', anchor);
     view.status.textContent = t('deleteConfirm');
     let busy = false;
     const alive = () => view.dialog.open && isCurrent();
@@ -266,12 +295,13 @@
     };
     if (draft.request_id) view.status.textContent = t(draft.retry ? 'unavailable' : 'unknown');
     draw();
+    view.place();
   }
 
-  function openEdit({member, route, message, api, isCurrent, reload, getMessage, onSaved}) {
+  function openEdit({member, route, message, anchor, api, isCurrent, reload, getMessage, onSaved}) {
     if (!isCurrent() || !canEdit(member, route, message)) return;
     const owner = session(member);
-    const view = show('editTitle');
+    const view = show('editTitle', anchor);
     const key = editKey(member, route, message);
     const text = element('textarea');
     text.required = true;
@@ -386,12 +416,13 @@
     }
     if (draft.request_id) view.status.textContent = t(draft.retry ? 'unavailable' : 'unknown');
     draw();
-    text.focus();
+    view.place();
+    text.focus({preventScroll:true});
   }
 
   const style = element('style');
   style.textContent = `
-    .operator-whatsapp-action { box-sizing:border-box; width:min(480px,calc(100% - 24px));
+    .operator-whatsapp-action { position:fixed; inset:auto; margin:0; box-sizing:border-box; width:min(480px,calc(100% - 24px));
       max-height:calc(100dvh - 24px); padding:18px; border:1px solid var(--line);
       border-radius:12px; color:var(--ink); background:var(--card); }
     .operator-whatsapp-action::backdrop { background:#10142080; }

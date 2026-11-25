@@ -50,6 +50,48 @@ def test_only_verified_duplicates_collapsed(history_db):
     assert len(d.execute('SELECT id FROM saas_crm_messages WHERE kommo_lead_id IN (1001,1002)'))==7
 
 
+@pytest.mark.parametrize('message_type', ['text', 'video'])
+def test_native_outbound_receipt_and_group_echo_have_one_history_entry(history_db, message_type):
+    from tenant_whatsapp_native_rollout import migrate
+
+    d = history_db
+    phone = '994500000001@s.whatsapp.net'
+    lid = '123456789@lid'
+    with d.cursor() as cur:
+        migrate(cur)
+    d.execute("""INSERT INTO saas_whatsapp_capture_generations(tenant_id,channel_id,generation,gateway_id,account_jid)
+      VALUES(%s::uuid,%s::uuid,'one',%s::uuid,%s)""", (A, CA, str(uuid.uuid4()), phone))
+    receipt = {'_crm_native_send_receipt': True, 'message_deleted': True}
+    if message_type == 'video':
+        receipt = {'_crm_group_send_receipt': True, 'nativeEventId': 'a'*64}
+        d.execute("""INSERT INTO saas_whatsapp_native_inbox(tenant_id,channel_id,generation,event_id,
+          sequence,after_sequence,payload_sha256,encrypted_payload) VALUES(%s::uuid,%s::uuid,'one',%s,1,0,'test','test')""",
+            (A, CA, receipt['nativeEventId']))
+    add(d, 1, CA, event='GROUP_RECEIPT', participant='', direction='outgoing',
+        raw_patch={'fromMe': True, **receipt})
+    add(d, 2, CB, event='GROUP_RECEIPT', participant=lid, raw_patch={'fromMe': False,
+        'participantAlt': phone, 'transport': 'beintaskbot_whatsapp', 'message_deleted': True})
+    add(d, 3, CB, event='GROUP_RECEIPT', participant='994500000002@s.whatsapp.net')
+    d.execute("UPDATE saas_crm_messages SET message_type=%s WHERE raw->>'externalMessageId'='GROUP_RECEIPT'",
+              (message_type,))
+    d.commit()
+    original = str(uuid.UUID(int=10001))
+    peer = str(uuid.UUID(int=10002))
+    with d.cursor() as cur:
+        rows = page(cur, A, G)
+        assert len(rows) == 2
+        owned = next(row for row in rows if row['direction'] == 'outgoing')
+        assert str(owned['id']) == original and owned['raw']['fromMe'] is True
+        assert all(owned['raw'][key] == value for key, value in receipt.items())
+        assert {source['channel_id'] for source in owned['sources']} == {CA, CB}
+        assert str(page(cur, A, G, selected_row_id=peer)[0]['id']) == original
+        assert str(page(cur, A, G, selected_row_id=peer, channel_ids=[CB])[0]['id']) == peer
+    d.execute("""INSERT INTO saas_whatsapp_capture_generations(tenant_id,channel_id,generation,gateway_id,account_jid)
+      VALUES(%s::uuid,%s::uuid,'two',%s::uuid,'994500000003@s.whatsapp.net')""", (A, CA, str(uuid.uuid4())))
+    with d.cursor() as cur:
+        assert len(page(cur, A, G)) == (2 if message_type == 'video' else 3)
+
+
 def test_read_snapshot_selects_the_captured_copy_on_the_open_channel(history_db):
     d=history_db
     add(d,1,CA,event='SHARED_EVENT')
