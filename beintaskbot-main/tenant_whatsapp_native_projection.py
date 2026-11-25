@@ -20,7 +20,7 @@ GROUP = re.compile(r'^[0-9]{5,30}(?:-[0-9]{5,20})?@g\.us$')
 PROVIDER_ID = re.compile(r'^[A-Za-z0-9_-]{5,200}$')
 FIELDS = {'kind','chat','sender','sender_alt','recipient_alt','provider_id','from_me','timestamp',
           'text','status','proto','media_kind','media_mime','media_size','file_name','message_type',
-          'push_name','quote_id','quote_chat','quote_sender','variant','app_dispatch'}
+          'push_name','quote_id','quote_chat','quote_sender','variant','app_dispatch','edit','revoke'}
 
 
 def _error(code='native_projection_invalid'):

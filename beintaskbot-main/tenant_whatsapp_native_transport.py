@@ -19,6 +19,12 @@ MEDIA_EVIDENCE_BYTES = 16 * 1024 * 1024
 NATIVE_MEDIA_BYTES = 10 * 1024 * 1024
 
 
+def message_actions_enabled():
+    """Require the already active whatsmeow route and its full evidence path."""
+    return all(os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_'+flag) == '1'
+               for flag in ('SEND', 'INBOX', 'PROJECTION'))
+
+
 def _legacy(route):
     if route.get('native') or route.get('api_key') == NATIVE_KEY:
         raise TenantPlatformError('native_source_changed')
@@ -101,7 +107,10 @@ def dispatch_cursor(route):
             yield cur
 
 
-def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None, reaction=None):
+def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None,
+           reaction=None, edit=None, delete=None):
+    if sum(value is not None for value in (reaction, edit, delete)) > 1:
+        raise TenantPlatformError('native_message_invalid')
     request_id=str(uuid.UUID(str(request_id)))
     limit=VIDEO_MAX_BYTES if kind=='video' and mime=='video/mp4' else NATIVE_MEDIA_BYTES
     if not isinstance(content,bytes) or len(content)>limit:
@@ -121,6 +130,12 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
         if reaction is not None:
             payload['operation']='reaction:'+str(int(actor))+':'+request_id
             payload['reaction']=reaction
+        if edit is not None:
+            payload['operation']='edit:'+str(int(actor))+':'+request_id
+            payload['edit']=edit
+        if delete is not None:
+            payload['operation']='delete:'+str(int(actor))+':'+request_id
+            payload['delete']=delete
         if quoted_message_id is not None:
             try:
                 payload.update(resolve_quote(cur, current, quoted_message_id))
@@ -150,6 +165,12 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                     body.extend(chunk)
                     if len(body)>16384:raise ValueError()
                 value=json.loads(body)
+                if ((edit is not None or delete is not None) and response.status_code == 422
+                        and value.get('confirmed') is False
+                        and value.get('error') in {'native_edit_expired','native_delete_expired',
+                                                   'native_action_original_unavailable'}):
+                    from tenant_connect_transport import ConnectPreflightError
+                    raise ConnectPreflightError(value['error'])
                 if (quoted_message_id is not None and response.status_code == 422
                         and value.get('error') == 'native_quote_not_sent'
                         and value.get('confirmed') is False and 'result' not in value):
@@ -163,7 +184,7 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                     raise ValueError()
         except (requests.RequestException,ValueError,TypeError,AttributeError):
             raise TenantPlatformError('native_send_unconfirmed') from None
-    if reaction is not None:
+    if reaction is not None or edit is not None or delete is not None:
         return {'external_message_id':provider}
     from tenant_whatsapp_native_identity import message_id
     facts={'channelId':route['channel_id'],'conversationId':route['conversation_id'],

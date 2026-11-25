@@ -67,6 +67,7 @@ ASSETS = (
     ('/assets/tenant-request-coordinator.js', 'tenant-request-coordinator.js', 'no-store'),
     ('/assets/tenant-view-demand.js', 'tenant-view-demand.js', 'no-store'),
     ('/assets/tenant-operator-dialogs.js', 'tenant-operator-dialogs.js', 'no-store'),
+    ('/assets/tenant-whatsapp-message-actions.js', 'tenant-whatsapp-message-actions.js', 'no-store'),
     ('/assets/tenant-dialog-company.js', 'tenant-dialog-company.js', 'no-store'),
     ('/assets/tenant-voice-recorder.js', 'tenant-voice-recorder.js', 'no-store'),
     ('/assets/tenant-microphone-lease.js', 'tenant-microphone-lease.js', 'no-store'),

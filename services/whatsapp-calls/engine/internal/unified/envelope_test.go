@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
@@ -123,5 +124,32 @@ func TestMessageEnvelopeEphemeralAndMalformed(t *testing.T) {
 		if key, out, retained, err := MessageEnvelope(e); err != nil || retained || key != "" || len(out.Proto) != 0 || out.Text != "" {
 			t.Fatal("expiring message retained")
 		}
+	}
+}
+
+func TestRevokeEnvelopeCarriesExactTargetAndIgnoresLocalDeleteForMe(t *testing.T) {
+	chat := types.NewJID("120363000000001", types.GroupServer)
+	participant := types.NewJID("15550000002", types.DefaultUserServer)
+	message := &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
+		Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String("TARGET_MESSAGE"),
+			FromMe: proto.Bool(false), Participant: proto.String(participant.String())},
+	}}
+	event := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: participant},
+		ID: "REVOKE_EVENT", Timestamp: time.Unix(1700000000, 0)}, Message: message}
+	_, envelope, retained, err := MessageEnvelope(event)
+	if err != nil || !retained || envelope.Variant != "control" || envelope.Revoke == nil ||
+		envelope.Revoke.ID != "TARGET_MESSAGE" || envelope.Revoke.Chat != chat.String() ||
+		envelope.Revoke.FromMe || envelope.Revoke.Participant != participant.String() {
+		t.Fatalf("revoke target lost or became a chat message: %+v %v", envelope, err)
+	}
+
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "local-delete.db")), testScope)
+	if !j.Capture(context.Background(), &events.DeleteForMe{ChatJID: chat, MessageID: "LOCAL_ONLY"}, nil) {
+		t.Fatal("local DeleteForMe event should be safely ignored")
+	}
+	rows, err := j.Events(context.Background(), 0, 10)
+	if err != nil || len(rows) != 0 {
+		t.Fatal("local-only delete must not be projected as Delete for everyone", err)
 	}
 }

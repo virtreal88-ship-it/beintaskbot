@@ -73,6 +73,16 @@ def consume(reference):
         if payload.get('kind')=='message' and payload.get('variant')=='control' and 'reaction' in payload:
             from tenant_whatsapp_native_reactions import observe
             return observe(cur, scope, payload)
+        if payload.get('kind')=='message' and payload.get('variant')=='control' and 'edit' in payload:
+            from tenant_whatsapp_message_edit import observe
+            result=observe(cur, scope, payload)
+            conn.commit()
+            return result
+        if payload.get('kind')=='message' and payload.get('variant')=='control' and 'revoke' in payload:
+            from tenant_whatsapp_message_edit import observe_revoke
+            result=observe_revoke(cur, scope, payload)
+            conn.commit()
+            return result
         _, event = load(cur, reference)
     from tenant_connect_transport import _ingest_once
     # The shared path re-reads authenticated encrypted evidence and locks the

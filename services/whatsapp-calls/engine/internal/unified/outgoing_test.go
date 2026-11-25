@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
@@ -18,14 +20,32 @@ import (
 )
 
 type outgoingClient struct {
-	mediaType whatsmeow.MediaType
-	mediaBytes []byte
+	mediaType      whatsmeow.MediaType
+	mediaBytes     []byte
 	uploads, sends int
 	fail           bool
 	message        *waE2E.Message
+	id             string
 }
 
-func (c *outgoingClient) GenerateMessageID() types.MessageID { return "SYNTHETIC_ID" }
+func (c *outgoingClient) GenerateMessageID() types.MessageID {
+	if c.id != "" {
+		return types.MessageID(c.id)
+	}
+	return "SYNTHETIC_ID"
+}
+func (c *outgoingClient) BuildEdit(chat types.JID, id types.MessageID, content *waE2E.Message) *waE2E.Message {
+	return &waE2E.Message{EditedMessage: &waE2E.FutureProofMessage{Message: &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Key:  &waCommon.MessageKey{FromMe: proto.Bool(true), ID: proto.String(string(id)), RemoteJID: proto.String(chat.String())},
+		Type: waE2E.ProtocolMessage_MESSAGE_EDIT.Enum(), EditedMessage: content, TimestampMS: proto.Int64(time.Now().UnixMilli()),
+	}}}}
+}
+func (c *outgoingClient) BuildRevoke(chat, sender types.JID, id types.MessageID) *waE2E.Message {
+	return &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
+		Key:  &waCommon.MessageKey{FromMe: proto.Bool(sender.IsEmpty()), ID: proto.String(string(id)), RemoteJID: proto.String(chat.String())},
+		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
+	}}
+}
 func (c *outgoingClient) Upload(_ context.Context, b []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
 	c.uploads++
 	c.mediaType, c.mediaBytes = mediaType, append([]byte(nil), b...)
@@ -59,6 +79,83 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 		t.Fatal("conflict reached provider")
 	}
 }
+
+func TestOwnTextEditAndRevokeUseWhatsmeowControlMessages(t *testing.T) {
+	ctx := context.Background()
+	for _, action := range []string{"edit", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			j := journal(t, database(t, filepath.Join(t.TempDir(), "message-action.db")), testScope)
+			client := &outgoingClient{}
+			chat := "15550000002@s.whatsapp.net"
+			if _, err := j.Deliver(ctx, client, Outgoing{Scope: testScope, Operation: "employee:11:original",
+				Chat: chat, Kind: "text", Text: "original"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			client.id = "SYNTHETIC_ACTION_ID"
+			requestID := "4d29b630-4df7-4faf-b35d-0af3f4a9d4c3"
+			request := Outgoing{Scope: testScope, Operation: action + ":11:" + requestID, Chat: chat, Kind: action}
+			if action == "edit" {
+				request.Text = "corrected text"
+				request.Edit = &EditTarget{ID: "SYNTHETIC_ID", OriginalMS: time.Now().Add(-time.Minute).UnixMilli()}
+			} else {
+				request.Delete = &DeleteTarget{ID: "SYNTHETIC_ID", OriginalMS: time.Now().Add(-time.Minute).UnixMilli()}
+			}
+			if _, err := j.Deliver(ctx, client, request, nil); err != nil {
+				t.Fatal(err)
+			}
+			if client.sends != 2 {
+				t.Fatalf("expected one original and one action; got %d", client.sends)
+			}
+			if action == "edit" {
+				protocol := client.message.GetEditedMessage().GetMessage().GetProtocolMessage()
+				if protocol.GetType() != waE2E.ProtocolMessage_MESSAGE_EDIT || protocol.GetKey().GetID() != "SYNTHETIC_ID" ||
+					protocol.GetKey().GetRemoteJID() != chat || protocol.GetEditedMessage().GetConversation() != "corrected text" {
+					t.Fatal("edit did not target the original WhatsApp text")
+				}
+			} else if client.message.GetProtocolMessage().GetType() != waE2E.ProtocolMessage_REVOKE ||
+				client.message.GetProtocolMessage().GetKey().GetID() != "SYNTHETIC_ID" ||
+				!client.message.GetProtocolMessage().GetKey().GetFromMe() {
+				t.Fatal("revoke did not target the sender's own original message")
+			}
+			events, err := j.Events(ctx, 0, 10)
+			if err != nil || len(events) != 1 {
+				t.Fatalf("expected a confirmed control event: %v %v", events, err)
+			}
+			var envelope Envelope
+			if err := json.Unmarshal(events[0].Payload, &envelope); err != nil || envelope.Variant != "control" ||
+				(action == "edit" && (envelope.Edit == nil || envelope.Edit.Operation != request.Operation)) ||
+				(action == "delete" && (envelope.Revoke == nil || envelope.Revoke.Operation != request.Operation)) {
+				t.Fatal("confirmed action was not retained as a scoped control event", err)
+			}
+		})
+	}
+}
+
+func TestMessageActionExpiryAndUnknownOutcomeNeverRepeat(t *testing.T) {
+	ctx := context.Background()
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "message-action-unknown.db")), testScope)
+	client := &outgoingClient{}
+	chat := "15550000002@s.whatsapp.net"
+	if _, err := j.Deliver(ctx, client, Outgoing{Scope: testScope, Operation: "employee:11:original", Chat: chat, Kind: "text", Text: "original"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	client.id = "SYNTHETIC_EDIT_ID"
+	request := Outgoing{Scope: testScope, Operation: "edit:11:4d29b630-4df7-4faf-b35d-0af3f4a9d4c3", Chat: chat, Kind: "edit", Text: "new text",
+		Edit: &EditTarget{ID: "SYNTHETIC_ID", OriginalMS: time.Now().Add(-16 * time.Minute).UnixMilli()}}
+	if _, err := j.Deliver(ctx, client, request, nil); err != ErrEditExpired || client.sends != 1 {
+		t.Fatalf("expired edit reached provider: err=%v sends=%d", err, client.sends)
+	}
+	request.Operation = "edit:11:5d29b630-4df7-4faf-b35d-0af3f4a9d4c3"
+	request.Edit.OriginalMS = time.Now().Add(-time.Minute).UnixMilli()
+	client.fail = true
+	if _, err := j.Deliver(ctx, client, request, nil); err != ErrUnknown {
+		t.Fatal(err)
+	}
+	client.fail = false
+	if _, err := j.Deliver(ctx, client, request, nil); err != ErrUnknown || client.sends != 2 {
+		t.Fatalf("unknown edit was retried: err=%v sends=%d", err, client.sends)
+	}
+}
 func TestOutgoingAudioMIMEAndDurationOnlyForVoiceNotes(t *testing.T) {
 	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
 	if err != nil {
@@ -67,7 +164,7 @@ func TestOutgoingAudioMIMEAndDurationOnlyForVoiceNotes(t *testing.T) {
 
 	for _, tc := range []struct {
 		kind, wireMIME string
-		ptt           bool
+		ptt            bool
 	}{
 		{"voice", "audio/ogg; codecs=opus", true},
 		{"audio", "audio/ogg", false},
