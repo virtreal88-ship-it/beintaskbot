@@ -96,7 +96,7 @@ def test_media_uses_existing_receipt_contract(configured,monkeypatch):
 
 
 @pytest.fixture
-def retained_photo(configured,monkeypatch,request):
+def retained_media(configured,monkeypatch,request):
     from test_whatsapp_native_projection import message
     from test_whatsapp_native_inbox import delivery,store
     import tenant_whatsapp_native_projection as projection
@@ -104,12 +104,14 @@ def retained_photo(configured,monkeypatch,request):
     db,route=configured
     direction=getattr(getattr(request.node,'callspec',None),'params',{}).get('direction','incoming')
     monkeypatch.setattr(projection,'_fernet',inbox._fernet)
-    value=delivery();value['event']['payload']=message(sender_alt='',message_type='image',
-        from_me=direction=='outgoing',media_kind='image',media_mime='image/png',media_size=9)
+    kind=getattr(request,'param','image')
+    mime={'image':'image/png','video':'video/mp4'}[kind]
+    value=delivery();value['event']['payload']=message(sender_alt='',message_type=kind,
+        from_me=direction=='outgoing',media_kind=kind,media_mime=mime,media_size=9)
     store(value)
     db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',(route['conversation_id'],A,CA))
-    db.execute("UPDATE saas_crm_messages SET external_id='connect:photo-test',message_type='image',direction=%s,raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",
-        (direction,json.dumps({'externalMessageId':'SYNTHETIC_MESSAGE_1','nativeEventId':'a'*64,'conversationId':route['conversation_id']}),A))
+    db.execute("UPDATE saas_crm_messages SET external_id='connect:photo-test',message_type=%s,direction=%s,raw=%s::jsonb WHERE tenant_id=%s AND external_id='m1'",
+        (kind,direction,json.dumps({'externalMessageId':'SYNTHETIC_MESSAGE_1','nativeEventId':'a'*64,'conversationId':route['conversation_id']}),A))
     db.execute('UPDATE saas_whatsapp_native_routes SET enabled=FALSE,legacy_fallback=TRUE');db.commit()
     with db.cursor() as cur:
         route=native.bind(cur,{k:v for k,v in route.items() if k not in {'native','api_key'}}|{'api_key':'legacy-key'})
@@ -122,8 +124,8 @@ def retained_photo(configured,monkeypatch,request):
 
 
 @pytest.mark.parametrize('direction',['incoming','outgoing'])
-def test_retained_photo_read_after_rollback_never_enables_native_send(retained_photo,direction):
-    db,route,call=retained_photo
+def test_retained_media_read_after_rollback_never_enables_native_send(retained_media,direction):
+    db,route,call=retained_media
     db.execute("UPDATE saas_crm_messages SET direction=%s WHERE tenant_id=%s AND external_id='connect:photo-test'",(direction,A));db.commit()
     assert not route.get('native') and route['api_key']=='legacy-key'
     assert native.download(route,'photo-test',max_bytes=100,allowed_types={'image/png'})==(b'synthetic','image/png')
@@ -135,9 +137,30 @@ def test_retained_photo_read_after_rollback_never_enables_native_send(retained_p
     call.assert_not_called()
 
 
+@pytest.mark.parametrize('retained_media',['video'],indirect=True)
+@pytest.mark.parametrize('direction',['incoming','outgoing'])
+def test_native_video_keeps_gateway_scope_cap_and_useful_failure(retained_media,direction):
+    import asyncio
+    from tenant_connect_media import _download_media
+    from tenant_linear_policy import TenantLinearError
+    _,route,call=retained_media
+    item={'route':route,'row':{'message_type':'video'},'message_id':'photo-test'}
+    assert asyncio.run(_download_media(item))==(b'synthetic','video/mp4')
+    assert call.call_args.kwargs['json']['scope']==route['native_media']['scope']
+    call.reset_mock()
+    with pytest.raises(TenantLinearError) as too_large:
+        asyncio.run(_download_media(item,max_bytes=8))
+    assert too_large.value.status==413
+    call.assert_not_called()
+    call.return_value.status_code=503
+    with pytest.raises(TenantLinearError) as unavailable:
+        asyncio.run(_download_media(item))
+    assert unavailable.value.status==502 and 'WhatsApp' in str(unavailable.value)
+
+
 @pytest.mark.parametrize('change',['tenant','source','dialog','generation','source_revoked','capture_disabled','route_removed'])
-def test_retained_photo_read_rechecks_current_scope(retained_photo,change):
-    db,route,call=retained_photo
+def test_retained_media_read_rechecks_current_scope(retained_media,change):
+    db,route,call=retained_media
     if change=='tenant':route={**route,'tenant_id':B}
     if change=='source':route={**route,'channel_id':CB}
     if change=='dialog':route={**route,'conversation_id':'15550000003@s.whatsapp.net'}
@@ -150,11 +173,11 @@ def test_retained_photo_read_rechecks_current_scope(retained_photo,change):
     call.assert_not_called()
 
 
-def test_legacy_photo_fallback_drops_read_binding_without_loop(retained_photo,monkeypatch):
+def test_legacy_photo_fallback_drops_read_binding_without_loop(retained_media,monkeypatch):
     import asyncio
     import tenant_connect_media as media
     from unittest.mock import AsyncMock
-    _,route,_=retained_photo
+    _,route,_=retained_media
     monkeypatch.setattr(native,'download',Mock(side_effect=TenantPlatformError('native_media_evidence_missing')))
     legacy=AsyncMock(return_value=(b'old photo','image/png'))
     original=media._download_media;monkeypatch.setattr(media,'_download_media',legacy)
@@ -164,8 +187,8 @@ def test_legacy_photo_fallback_drops_read_binding_without_loop(retained_photo,mo
     assert not sent.get('native') and not sent.get('native_media') and sent['api_key']=='legacy-key'
 
 
-def test_legacy_incoming_photo_resolves_exact_retained_evidence_without_writes(retained_photo):
-    db,route,call=retained_photo
+def test_legacy_incoming_photo_resolves_exact_retained_evidence_without_writes(retained_media):
+    db,route,call=retained_media
     db.execute("UPDATE saas_crm_messages SET direction='incoming',raw=raw-'nativeEventId' WHERE tenant_id=%s AND external_id='connect:photo-test'",(A,));db.commit()
     before=db.execute("SELECT * FROM saas_crm_messages WHERE tenant_id=%s AND external_id='connect:photo-test'",(A,));db.commit()
     assert native.download(route,'photo-test',max_bytes=100,allowed_types={'image/png'})==(b'synthetic','image/png')
@@ -175,8 +198,8 @@ def test_legacy_incoming_photo_resolves_exact_retained_evidence_without_writes(r
 
 
 @pytest.mark.parametrize('change',['provider','direction','chat','kind'])
-def test_legacy_photo_recovery_does_not_match_similar_other_message(retained_photo,change):
-    db,route,call=retained_photo
+def test_legacy_photo_recovery_does_not_match_similar_other_message(retained_media,change):
+    db,route,call=retained_media
     db.execute("UPDATE saas_crm_messages SET direction='incoming',raw=raw-'nativeEventId' WHERE tenant_id=%s AND external_id='connect:photo-test'",(A,))
     if change=='provider':db.execute("UPDATE saas_crm_messages SET raw=jsonb_set(raw,'{externalMessageId}','\"DIFFERENT_PROVIDER\"') WHERE tenant_id=%s",(A,))
     if change=='direction':db.execute("UPDATE saas_crm_messages SET direction='outgoing' WHERE tenant_id=%s",(A,))
@@ -188,10 +211,10 @@ def test_legacy_photo_recovery_does_not_match_similar_other_message(retained_pho
     call.assert_not_called()
 
 
-def test_legacy_photo_lookup_is_bounded_and_rejects_ambiguity(retained_photo,monkeypatch):
+def test_legacy_photo_lookup_is_bounded_and_rejects_ambiguity(retained_media,monkeypatch):
     from test_whatsapp_native_projection import message
     from test_whatsapp_native_inbox import delivery,store
-    db,route,call=retained_photo
+    db,route,call=retained_media
     db.execute("UPDATE saas_crm_messages SET raw=raw-'nativeEventId' WHERE tenant_id=%s AND external_id='connect:photo-test'",(A,));db.commit()
     value=delivery(after=2,event={'id':'b'*64,'sequence':3,'payload':message(sender_alt='',message_type='image',media_kind='image',media_mime='image/png',media_size=9)})
     store(value)
