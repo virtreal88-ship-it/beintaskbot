@@ -9,8 +9,8 @@ const wav=Buffer.alloc(44+480000);wav.write('RIFF');wav.writeUInt32LE(wav.length
 const deferred=()=>{let release;const promise=new Promise(resolve=>release=resolve);return {promise,release};};
 const server=()=>({cache:new Map(),flights:new Map(),requests:[],upstream:[],gates:new Map(),status:200,networkFailure:false,active:0,maxActive:0,self429:0,paidOrSend:0});
 const launch=()=>chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||process.env.CHROMIUM_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
-async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,messages=[message()]}={}){
- const context=await browser.newContext({viewport:{width,height}}),page=await context.newPage(),errors=[];
+async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mobile=false,messages=[message()]}={}){
+ const context=await browser.newContext({viewport:{width,height},isMobile:mobile,hasTouch:mobile}),page=await context.newPage(),errors=[];
  await context.addInitScript(()=>{window.fixtureVisibleMedia=new Set();const Original=IntersectionObserver;window.IntersectionObserver=class extends Original{constructor(callback,options){super((entries,observer)=>{callback(entries,observer);for(const entry of entries)if(entry.isIntersecting&&entry.target.dataset.chatAttachment)window.fixtureVisibleMedia.add(entry.target.dataset.chatAttachment);},options);}};});
  if(withoutLocks)await context.addInitScript(()=>Object.defineProperty(navigator,'locks',{value:undefined,configurable:true}));
  const state={authed:true,tenant,user:33,dialog:{...dialog},messages,navigations:0};page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(10000);
@@ -26,7 +26,8 @@ async function fixture(browser,srv,{width=390,height=844,withoutLocks=false,mess
    srv.requests.push({id,cacheOnly,automatic,url:url.href});
    assert.equal(req.method(),'GET');assert.equal(state.authed,true);assert.equal(url.searchParams.get('expected_tenant_id'),state.tenant);assert.equal(url.searchParams.get('expected_user_id'),String(state.user));
    const key=['expected_tenant_id','channel_id','conversation_id','message_id','expected_media_version'].map(k=>url.searchParams.get(k)).join('|');
-   const item=state.messages.find(m=>m.external_id===id)||message(id),binary=item.message_type==='image'?{mime:'image/png',data:png}:{mime:'audio/wav',data:wav};
+   const item=state.messages.find(m=>m.external_id===id)||message(id);
+   const binary=item.message_type==='video'?{mime:'video/webm',data:srv.video}:item.message_type==='image'?{mime:'image/png',data:png}:{mime:'audio/wav',data:wav};
    const send=async value=>route.fulfill({contentType:value.mime,body:value.data}).catch(()=>{});
    if(cacheOnly)return srv.cache.has(key)?send(srv.cache.get(key)):route.fulfill({status:204,body:''});
    if(srv.networkFailure)return route.abort('failed');

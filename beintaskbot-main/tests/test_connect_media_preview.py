@@ -244,8 +244,8 @@ def test_attachment_api_serves_office_file_as_download_with_original_filename(mo
     fetched.assert_awaited_once_with(current,preview_documents=True)
 
 
-@pytest.mark.parametrize('kind,mime',[('image','image/png'),('audio','audio/ogg'),('voice','audio/ogg')])
-def test_photo_and_audio_auto_classification_reaches_same_shared_transport_admission(monkeypatch,kind,mime):
+@pytest.mark.parametrize('kind,mime',[('image','image/png'),('audio','audio/ogg'),('voice','audio/ogg'),('video','video/mp4')])
+def test_visible_media_uses_shared_transport_admission(monkeypatch,kind,mime):
     from tenant_media_evidence import media_version
     current=item()
     current['row']['message_type']=kind
@@ -260,10 +260,9 @@ def test_photo_and_audio_auto_classification_reaches_same_shared_transport_admis
     fetched.assert_awaited_once_with(current,preview_documents=True,automatic_photo=True)
 
 
-@pytest.mark.parametrize('kind',['video','document'])
-def test_video_and_documents_remain_explicit_even_with_automatic_preview_flag(monkeypatch,kind):
+def test_documents_remain_explicit_even_with_automatic_preview_flag(monkeypatch):
     from tenant_media_evidence import media_version
-    current=item();current['row']['message_type']=kind
+    current=item();current['row']['message_type']='document'
     monkeypatch.setattr(api,'load',Mock(return_value=current))
     fetched=AsyncMock();monkeypatch.setattr(media,'download_media',fetched)
     handle=api.handler(lambda _:PROFILE,AsyncMock(),Mock())
@@ -282,23 +281,26 @@ def test_images_and_audio_share_existing_eight_per_tenant_automatic_budget():
     api.admit({'tenant_id':B,'telegram_id':'other-tenant'},automatic_photo=True)
 
 
-@pytest.mark.parametrize('kind',['audio','voice'])
-def test_automatic_audio_cache_probe_is_read_only_then_original_is_reused(monkeypatch,kind):
+@pytest.mark.parametrize('kind,mime',[('audio','audio/ogg'),('voice','audio/ogg'),('video','video/mp4')])
+def test_automatic_media_cache_probe_is_read_only_then_original_is_reused(monkeypatch,kind,mime):
     from tenant_media_evidence import media_version
     current=item();current['row']['message_type']=kind
     loader=Mock(return_value=current);monkeypatch.setattr(api,'load',loader)
-    fetched=AsyncMock(return_value=(b'OggSsynthetic','audio/ogg'));monkeypatch.setattr(media,'download_media',fetched)
+    original=b'synthetic media'
+    fetched=AsyncMock(return_value=(original,mime));monkeypatch.setattr(media,'download_media',fetched)
     provider=AsyncMock();handle=api.handler(lambda _:PROFILE,provider,Mock())
     query={'lead_id':'41','message_id':'connect:'+MID,'expected_tenant_id':A,'expected_user_id':'11',
            'expected_media_version':media_version({})}
     assert run(handle(SimpleNamespace(query={**query,'cache_only':'1'},headers={}))).status==204
     fetched.assert_not_awaited();assert not api.MEDIA_INFLIGHT
-    assert run(handle(SimpleNamespace(query={**query,'auto_preview':'1'},headers={}))).body==b'OggSsynthetic'
-    assert run(handle(SimpleNamespace(query={**query,'cache_only':'1'},headers={}))).body==b'OggSsynthetic'
+    assert run(handle(SimpleNamespace(query={**query,'auto_preview':'1'},headers={}))).body==original
+    assert run(handle(SimpleNamespace(query={**query,'cache_only':'1'},headers={}))).body==original
     fetched.assert_awaited_once_with(current,preview_documents=True,automatic_photo=True)
     assert loader.call_count==5;provider.assert_not_awaited()
     stale=run(handle(SimpleNamespace(query={**query,'expected_media_version':'stale','cache_only':'1'},headers={})))
     assert stale.status==409 and fetched.await_count==1
+    seek=run(handle(SimpleNamespace(query=query,headers={'Range':'bytes=2-7'})))
+    assert seek.status==206 and seek.body==original[2:8] and fetched.await_count==1
 
 
 def test_preview_api_rechecks_authority_without_kommo_or_ai(monkeypatch):
