@@ -107,7 +107,7 @@ def test_widget_projection_and_durable_dispatch(db, monkeypatch, initial_state):
     db.commit()
     routes = [CHAT.copy(), {**CHAT, "id": 5, "client_id": "tg", "channel": "telegram"}]
     rows = [{"id": 3, "text": "from widget", "sender_type": "client", "chat_id": 15}]
-    monkeypatch.setattr(wire, "socket_available", lambda credentials: False)
+    monkeypatch.setattr(wire, "socket_block_reason", lambda credentials: "widget_socket_unavailable")
     sent = []
     def post(path, body, credentials):
         assert credentials == CREDENTIALS
@@ -189,7 +189,7 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
         try:
             monkeypatch.setattr(wire, "SOCKET_ORIGIN", f"http://127.0.0.1:{http.server_port}")
             request_id = str(uuid.uuid4())
-            assert wire.socket_available(CREDENTIALS)
+            assert wire.socket_block_reason(CREDENTIALS) == ""
             assert wire.send_reply(CREDENTIALS, CHAT, "hello", request_id) == {"state": "saved", "message_id": "37"}
             assert events == [{"client_id":CHAT["client_id"], "client_name":"Demo","channel":"widget",
                                "text":"hello","temp_id":"temp-"+request_id,"account":"synthetic-account"}]
@@ -229,3 +229,44 @@ def test_provider_outcome_without_saved(monkeypatch, events, expected):
     monkeypatch.setattr(wire.Event, "wait", lambda self, timeout: self.is_set())
     assert wire.send_reply(CREDENTIALS, CHAT, "hello", "test") == expected
     assert emitted == ["register_operator", "operator_message"]
+
+
+@pytest.mark.parametrize(("outcomes", "expected"), [
+    (["ok"], ""),
+    (["network", "ok"], ""),
+    (["denied"], "widget_socket_auth_denied"),
+    (["network", "network"], "widget_socket_unavailable"),
+])
+def test_realtime_access_uses_documented_transports_and_classifies_failure(monkeypatch, outcomes, expected):
+    attempts = []
+
+    class Client:
+        connected = False
+
+        def __init__(self, **options):
+            assert options["websocket_extra_options"]["redirect_limit"] == 0
+            assert options["reconnection"] is False
+
+        def on(self, event, handler):
+            assert event == "connect_error"
+            self.error = handler
+
+        def connect(self, url, *, transports, auth, wait_timeout):
+            assert url == wire.SOCKET_ORIGIN and auth == {"role": "operator", "token": "synthetic"}
+            mode = outcomes[len(attempts)]
+            attempts.extend(transports)
+            if mode == "ok":
+                self.connected = True
+                return
+            if mode == "denied":
+                self.error({"message": "Authentication required"})
+            raise socketio.exceptions.ConnectionError("connection failed")
+
+        def disconnect(self):
+            self.connected = False
+
+    monkeypatch.setattr(wire, "_availability", None)
+    monkeypatch.setattr(wire.socketio, "Client", Client)
+    assert wire.socket_block_reason(CREDENTIALS) == expected
+    assert wire.socket_block_reason(CREDENTIALS) == expected
+    assert attempts == ["websocket", "polling"][:len(outcomes)]

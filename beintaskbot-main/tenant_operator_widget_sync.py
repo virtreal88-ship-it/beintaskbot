@@ -203,7 +203,15 @@ def install(app, logger):
     if not tenant:
         return
 
+    def check_realtime():
+        from tenant_operator_widget_transport import socket_block_reason
+        socket_block_reason(operator._credentials(tenant))
+
     async def run():
+        try:
+            await asyncio.to_thread(check_realtime)
+        except Exception:
+            logger.warning("Operator widget realtime check could not start")
         while True:
             try:
                 await asyncio.to_thread(sync_once, tenant)

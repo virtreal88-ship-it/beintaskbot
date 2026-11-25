@@ -186,7 +186,7 @@ def merge_order(rows):
 
 
 def history(profile, params, before=None):
-    from tenant_operator_widget_transport import socket_available
+    from tenant_operator_widget_transport import socket_block_reason
     from tenant_dialog_internal_comments import _event
 
     with operator._connect() as db, db.cursor() as cur:
@@ -226,8 +226,9 @@ def history(profile, params, before=None):
         db.commit()
     if dialog["lifecycle"]["can_close"]:
         credentials = operator._credentials(key[0])
-        if credentials["connection_instance_id"] == key[1] and socket_available(credentials):
-            dialog.update(can_send=True, send_block_reason="")
+        if credentials["connection_instance_id"] == key[1]:
+            reason = socket_block_reason(credentials)
+            dialog.update(can_send=not reason, send_block_reason=reason)
     directions = {"client": "incoming", "system": "system", "operator": "outgoing"}
     authors = {"client": "customer", "system": "system", "operator": "operator"}
     messages = [
