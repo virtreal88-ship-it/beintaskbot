@@ -1,11 +1,18 @@
 """Owner source pairing and authenticated same-origin PCM relay."""
 import asyncio
 import json
+from asyncio import wait as _wait_relay_tasks
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from tenant_ai_agents_api import _expected, _origin
+from tenant_browser_calls import MANAGED_CALL_MAX_SECONDS
 from tenant_browser_calls_api import HEADERS, body
 from tenant_linear_policy import TenantLinearError
 import tenant_call_sources as store
+
+
+# The managed gateway ends the call first; this is a transport backstop,
+# independent of the much shorter recording cap.
+MANAGED_AUDIO_RELAY_MAX_SECONDS = MANAGED_CALL_MAX_SECONDS + 10
 
 
 def close_evidence(socket):
@@ -86,7 +93,8 @@ async def relay(request,profile,member,logger):
             tasks=[asyncio.create_task(transfer(socket,upstream,'browser')),asyncio.create_task(transfer(upstream,socket,'provider')),asyncio.create_task(recheck())]
             code='relay_cancelled'
             try:
-                done,_=await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED,timeout=910)
+                done,_=await _wait_relay_tasks(
+                    tasks,return_when=asyncio.FIRST_COMPLETED,timeout=MANAGED_AUDIO_RELAY_MAX_SECONDS)
                 code='duration_limit' if not done else 'transport_error'
                 for task in tasks:
                     if task in done and not task.cancelled() and task.exception() is None:
