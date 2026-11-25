@@ -5,6 +5,56 @@ const docs=path.resolve(__dirname,'../docs');
 const html=fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
 const alpha='<b>Company A & Partners</b> '+ 'very long stored name '.repeat(10);
 const beta='@demo';
+async function assertArchivedHeader(browser){
+ const page=await browser.newPage();
+ try{
+  await page.route('**/*',route=>route.request().isNavigationRequest()?route.fulfill({contentType:'text/html',body:html}):route.abort());
+  await page.goto('https://example.test/app?view=dialogs');
+  await page.evaluate(()=>{
+    document.querySelectorAll('.view').forEach(n=>n.classList.toggle('active',n.id==='view-dialogs'));
+    const member={tenant_id:'synthetic',telegram_id:33,role:'operator',active:true};
+    const capabilities={modules:{dialogs:true},dialog_company_binding:true};
+    window.tenantProfileSnapshot={member,capabilities};
+    const archive={provider:'connect',channel_id:'a',conversation_id:'qafarov',lead_id:41,
+      customer_name:'Synthetic Qafarov',archive_read_only:true,lifecycle_enabled:true,
+      can_send:false,lifecycle:{state:'closed',revision:3}};
+    window.listCard={...archive,dialog_company_name:'Stale list label'};
+    window.archiveLabel='<b>Baytash & Partners</b>';
+    window.companyCalls=[];
+    window.holdHistory=true;
+    window.fetch=async(target,opt={})=>{
+      const {pathname}=new URL(target,'https://example.test');
+      const ok=result=>({ok:true,json:async()=>({success:true,result})});
+      if(pathname==='/api/platform/me')return {ok:true,json:async()=>window.tenantProfileSnapshot};
+      if(pathname.includes('/operator/dialog-company')){window.companyCalls.push(pathname);return ok({});}
+      if(pathname.endsWith('/dialogs/history')){
+        if(window.holdHistory)await new Promise(resolve=>{window.releaseHistory=resolve;});
+        const label=window.archiveLabel;
+        return ok({dialog:{...archive,...(label?{dialog_company_name:label}:{})},messages:[],next_before:null});
+      }
+      if(pathname.endsWith('/dialogs'))return ok({dialogs:[window.listCard],channels:[],agents:[],next_offset:null});
+      return ok({});
+    };
+  });
+  for(const file of ['tenant-operator-i18n.js','tenant-dialog-company.js','tenant-operator-dialogs.js'])
+    await page.addScriptTag({path:path.join(docs,file)});
+  await page.evaluate(()=>{window.tenantI18n.setLanguage('en');return window.tenantOperator.refresh();});
+  await page.locator('.operator-row').first().click();
+  const name=page.locator('#operatorDialogCompanyName');
+  await page.waitForFunction(()=>Boolean(window.releaseHistory));
+  assert.equal(await name.count(),0,'do not render the stale list label during archive open');
+  await page.evaluate(()=>{window.holdHistory=false;window.releaseHistory();});
+  await name.waitFor();
+  assert.equal(await name.textContent(),'<b>Baytash & Partners</b>');
+  assert.equal(await name.locator('b').count(),0);
+  assert.equal(await page.locator('#operatorClientCompanyHost [data-company-value]').count(),0);
+  await page.evaluate(()=>{window.archiveLabel=null;return window.tenantOperator.openDialog(window.listCard);});
+  assert.equal(await name.textContent(),'');
+  assert.equal(await name.getAttribute('title'),null);
+  assert.equal(await name.isVisible(),false);
+  assert.deepEqual(await page.evaluate(()=>window.companyCalls),[],'an archive never mounts the company editor/API');
+ }finally{await page.close();}
+}
 (async()=>{
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
  try{for(const width of [360,430,1440]){
@@ -404,6 +454,7 @@ const beta='@demo';
   assert(!await name.isVisible()&&!(await name.textContent()),'identity transition clears company name');
   await page.close();
  }
+ await assertArchivedHeader(browser);
  console.log('PASS Chromium company header, separate authorized support case, transfer retained, 360/430/1440px');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

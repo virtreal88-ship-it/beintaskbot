@@ -2,8 +2,11 @@
 import json
 import uuid
 
+import pytest
+
 import tenant_dialog_company_binding as binding
 import tenant_operator_dialogs as dialogs
+from tenant_linear_policy import TenantLinearError
 from test_dialog_lifecycle_company_completion import STAFF, companies
 from test_dialog_lifecycle_pglite import command, episodes
 from test_tenant_support_inbox import A, B, CA, CB, PROFILE, database, db
@@ -127,6 +130,25 @@ def test_employee_archive_shows_exact_operator_label_with_read_grant(companies, 
     assert 'company_binding' not in match and 'last_message_text' not in match
     assert not _search(STAFF,'wrong-route',search_overview=True)['dialogs']
     assert not dialogs.listing(STAFF,lifecycle='active')['dialogs']
+
+    # Opening the matching shared archive may expose the exact name only.
+    def history():
+        return dialogs.history(STAFF,'connect',41,CA,'client')['dialog']
+
+    detail = history()
+    assert detail['archive_read_only'] and not detail['can_send']
+    assert detail['dialog_company_name'] == 'synthetic-real'
+    assert 'company_binding' not in detail
+    assert 'wrong-route' not in str(detail)
+    with pytest.raises(TenantLinearError) as denied:
+        dialogs.history(STAFF,'connect',41,CA,'client',support_case_only=True)
+    assert denied.value.status == 404
+
+    # The list result can outlive the grant. Always authorize the open again.
+    db.execute('''UPDATE saas_tenant_members SET permissions=permissions-'operator_data:view'
+      WHERE tenant_id=%s::uuid AND telegram_id=33''',(A,))
+    db.commit()
+    assert 'dialog_company_name' not in history()
     db.execute("DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=33",(A,))
     db.commit()
     assert not dialogs.listing(STAFF,lifecycle='all')['dialogs']
