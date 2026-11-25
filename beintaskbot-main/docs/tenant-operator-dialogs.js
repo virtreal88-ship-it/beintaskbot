@@ -725,6 +725,58 @@
     bulkChoice:{ru:'Оставлено в работе, нужна проверка компании: {count}.',az:'Şirkət yoxlanmalıdır, işdə qaldı: {count}.',en:'Left open for company verification: {count}.'},
     bulkWaiting:{ru:'Не приняты в работу: {count}.',az:'Hələ qəbul edilməyib: {count}.',en:'Not yet accepted: {count}.'}
   }[key]?.[i18n.language]||key);
+  const internalCommentCopy=key=>({
+    ru:{title:'Внутренний комментарий',hint:'Виден сотрудникам с доступом к диалогу.',save:'Сохранить комментарий'},
+    az:{title:'Daxili şərh',hint:'Dialoqa giriş hüququ olan əməkdaşlar görə bilər.',save:'Şərhi saxla'},
+    en:{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'}
+  }[i18n.language]||{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'})[key];
+  composerStyle.textContent+=`.operator-timeline-event.operator-internal-comment{display:block;text-align:start;max-width:min(90%,600px);padding:9px 12px;background:var(--paper);color:var(--ink);border-inline-start:3px solid var(--brand);border-radius:8px}.operator-internal-comment>span{font-weight:650}.operator-internal-comment p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}.operator-internal-comment time{display:block}.operator-internal-comment-modal::backdrop{background:#071d1688}.operator-internal-comment-modal textarea{display:block;width:100%;min-height:110px;box-sizing:border-box;margin:8px 0}`;
+  function openInternalComment(route,trigger){
+    if($('operatorInternalComment'))return;
+    const modal=document.createElement('dialog');modal.id='operatorInternalComment';
+    modal.className='operator-complete-card operator-internal-comment-modal';modal.setAttribute('aria-labelledby','operatorInternalCommentTitle');
+    modal.innerHTML=`<h2 id="operatorInternalCommentTitle">${esc(internalCommentCopy('title'))}</h2>
+      <p>${esc(internalCommentCopy('hint'))}</p><form>
+      <textarea maxlength="2000" required aria-label="${esc(internalCommentCopy('title'))}"></textarea>
+      <p role="status"></p><div class="operator-complete-actions">
+      <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button>
+      <button type="submit" class="primary">${esc(internalCommentCopy('save'))}</button></div></form>`;
+    const field=modal.querySelector('textarea'),submit=modal.querySelector('[type=submit]');
+    const version=epoch,view=openRevision;
+    const same=()=>version===epoch&&view===openRevision&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true;
+    const dispose=()=>{modal.remove();for(const event of dismissOn)document.removeEventListener(event,dispose);};
+    const close=()=>{dispose();if(same()&&trigger.isConnected)trigger.closest('details')?.querySelector('summary')?.focus();};
+    const dismissOn=['tenant-chat-close','tenant-auth-pending','tenant-auth-invalid','tenant-view'];
+    for(const event of dismissOn)document.addEventListener(event,dispose);
+    modal.addEventListener('cancel',event=>{event.preventDefault();event.stopPropagation();close();});
+    modal.querySelector('[data-cancel]').onclick=close;
+    let attempt;
+    modal.querySelector('form').onsubmit=async event=>{
+      event.preventDefault();
+      const note=field.value.trim();
+      if(!same()||!note||submit.disabled)return;
+      if(attempt?.note!==note)attempt={note,request_id:crypto.randomUUID()};
+      submit.disabled=true;field.readOnly=true;modal.querySelector('[role=status]').textContent='';
+      try{
+        const {comment}=await api('dialogs/internal-comments','POST',{provider:route.provider,lead_id:route.lead_id,
+          channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...attempt});
+        if(!same()||!currentPage){dispose();return;}
+        retainInternalComments(currentPage,{internal_comments:[comment]});
+        const chat=$('chatRows');
+        if(chat){
+          const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+          placeOperatorEvents(chat,currentPage);
+          setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),true);
+        }
+        close();
+      }catch(error){
+        if(same()&&modal.isConnected)modal.querySelector('[role=status]').textContent=error.message;
+      }finally{submit.disabled=false;field.readOnly=false;}
+    };
+    document.body.append(modal);
+    if(typeof modal.showModal==='function')modal.showModal();else modal.setAttribute('open','');
+    field.focus();
+  }
   function renderLifecycleActions(route,host,only=null){
     const state=route.lifecycle||{};
     for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['close',state.can_close===true],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
@@ -1371,7 +1423,8 @@
         const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
         patchDirectDialogNames(latest,page,chat);
         let placed=false;
-        if(Array.isArray(latest.shared_reminder_events)){
+        if(Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){
+          retainInternalComments(page,latest);
           retainSharedReminderEvents(page,latest);
           placed=placeOperatorEvents(chat,page);
         }
@@ -1386,7 +1439,7 @@
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
       retainOperatorEvents(currentPage,latest);
-      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',messageMarkup(added,route));
@@ -1663,6 +1716,10 @@
   }
   function timelineHistoryQuery(route,knownPage=null){
     const query=dialogueHistoryQuery(route);
+    if(!route.case_attachment&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
+      query.set('internal_comments','1');
+      query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
+    }
     if(route.provider==='connect'&&route.channel_id&&route.conversation_id&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
       if(!route.case_attachment){
         query.set('paired_history','1');query.set('paired_history_redirect','1');
@@ -1708,7 +1765,17 @@
     const delay=fresh.operator_events_retry_after_ms;
     if(operatorEventRetry(delay))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,Date.now()+delay);
   }
+  function retainInternalComments(page,fresh){
+    if(!Array.isArray(fresh.internal_comments))return;
+    noteOperatorEventOmission(page,fresh.internal_comments_omitted_at);
+    const updates=fresh.internal_comments.filter(item=>typeof item?.id==='string'&&typeof item.note==='string'&&
+      item.note.length>0&&item.note.length<=4000&&typeof item.at==='string'&&Number.isFinite(timelineStamp(item.at)));
+    const ordered=[...new Map([...(page.internalCommentTimeline||[]),...updates].map(item=>[item.id,item])).values()].sort(operatorEventOrder);
+    if(ordered.length>OPERATOR_TIMELINE_LIMIT)noteOperatorEventOmission(page,ordered[ordered.length-OPERATOR_TIMELINE_LIMIT].at);
+    page.internalCommentTimeline=ordered.slice(-OPERATOR_TIMELINE_LIMIT);
+  }
   function retainOperatorEvents(page,fresh,{older=false}={}){
+    retainInternalComments(page,fresh);
     retainSharedReminderEvents(page,fresh);
     retainOperatorEventRetry(page,fresh);
     if(Number.isSafeInteger(fresh.operatorEventsRetryAt))page.operatorEventsRetryAt=Math.max(page.operatorEventsRetryAt||0,fresh.operatorEventsRetryAt);
@@ -1762,7 +1829,12 @@
       delete page.shared_reminder_events;
       delete page.shared_reminder_events_omitted_at;
     }
-    const events=[...page.operator_events,...(page.sharedReminderTimeline||[])].sort(operatorEventOrder);
+    if(Array.isArray(page.internal_comments)){
+      retainInternalComments(page,page);
+      delete page.internal_comments;delete page.internal_comments_omitted_at;
+    }
+    const comments=(page.internalCommentTimeline||[]).map(item=>({...item,id:'internal-comment:'+item.id,kind:'internal_comment'}));
+    const events=[...page.operator_events,...(page.sharedReminderTimeline||[]),...comments].sort(operatorEventOrder);
     const omissions=[page.operator_events_omitted_at,page.sharedReminderOmission].map(timelineStamp).filter(Number.isFinite);
     const omission=omissions.length?Math.max(...omissions):NaN;
     if(!events.length&&!Number.isFinite(omission))return false;
@@ -1792,7 +1864,13 @@
         no_reply:{ru:'Ответ риторический',az:'Cavab ritorikdir',en:'Rhetorical reply'},
         close:{ru:'Диалог завершён',az:'Dialoq tamamlandı',en:'Dialog completed'}
       }[event.kind];
-      node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
+      if(event.kind==='internal_comment'){
+        node.classList.add('operator-internal-comment');
+        node.firstElementChild.textContent=internalCommentCopy('title')+' · '+(name||clientCardText('staff'));
+        let body=node.querySelector('[data-internal-comment-body]');
+        if(!body){body=document.createElement('p');body.dataset.internalCommentBody='';node.insertBefore(body,node.lastElementChild);}
+        body.textContent=event.note;
+      }else node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
         statusLabel?(statusLabel[i18n.language]||statusLabel.en):name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
@@ -2949,7 +3027,7 @@
         Object.assign(prior,message);}
     }
     retainOperatorEvents(old,latest);const timelinePlaced=placeOperatorEvents(chat,old);
-    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission'].includes(key))old[key]=value;
+    for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission','internal_comments','internal_comments_omitted_at','internalCommentTimeline'].includes(key))old[key]=value;
     updateLatestIncomingShortcut(chat,old);
     currentDialog=old.dialog;displayedPage=old;renderHistoryMergeReadPicker();if(historyMergeId(old)||$('operatorComposerSource')?.dataset.mergeActionScope)renderComposerSourcePicker();updateDialogueAcceptor(currentDialog);mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
     setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
@@ -3004,6 +3082,12 @@
     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
+    if(route.can_add_internal_comment===true&&!route.case_attachment){
+      const comment=document.createElement('button');comment.type='button';comment.dataset.operatorInternalComment='';
+      comment.textContent=internalCommentCopy('title');
+      comment.onclick=()=>{if(same()){menu.open=false;openInternalComment(route,comment);}};
+      appendMenu(comment);
+    }
     if(route.lifecycle_enabled)renderLifecycleActions(route,primaryHost);
     if(route.provider==='connect'&&canCreateSupport()&&canCreateManualCase(route)){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=({ru:'Обращение',az:'sorğu',en:'Ticket'}[i18n.language]||t('createTicketCompact'));create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);if(!route.lifecycle_enabled){const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}}
     if(!route.archive_read_only){const diagnostics=document.createElement('button');diagnostics.type='button';diagnostics.textContent=t('diagnostics');diagnostics.dataset.operatorDiagnostics='true';diagnostics.onclick=()=>{menu.open=false;openDialogDiagnostics(route);};appendMenu(diagnostics);}
@@ -3445,7 +3529,7 @@ if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPref
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{syncDuplicateButton();closeDuplicateSearch(true);updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
-  document.addEventListener('keydown',event=>{if(event.key==='Tab'&&$('operatorCopilot')&&!$('operatorCopilot').hidden&&window.matchMedia?.('(max-width: 900px)').matches){const nodes=[...$('operatorCopilot').querySelectorAll('button,input,select,textarea,summary,a[href]')].filter(node=>!node.disabled&&node.getClientRects().length);if(nodes.length){const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}}if(event.key!=='Escape')return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending||$('operatorTransferConfirmation'))closeDialog();});
+  document.addEventListener('keydown',event=>{if(event.key==='Tab'&&$('operatorCopilot')&&!$('operatorCopilot').hidden&&window.matchMedia?.('(max-width: 900px)').matches){const nodes=[...$('operatorCopilot').querySelectorAll('button,input,select,textarea,summary,a[href]')].filter(node=>!node.disabled&&node.getClientRects().length);if(nodes.length){const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}}if(event.key!=='Escape'||$('operatorInternalComment'))return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending||$('operatorTransferConfirmation'))closeDialog();});
   let caseLinkKey='';
   const caseLinkText=key=>({opening:{ru:'Открываем исходный диалог кейса…',az:'Halın ilkin dialoqu açılır…',en:'Opening the case conversation…'},invalid:{ru:'Ссылка на кейс неполная или некорректна.',az:'Hal keçidi natamam və ya yanlışdır.',en:'The case link is incomplete or invalid.'},unavailable:{ru:'Исходное сообщение кейса недоступно или у вас нет доступа к нему.',az:'Halın ilkin mesajı əlçatan deyil və ya ona girişiniz yoxdur.',en:'The original case message is unavailable or you do not have access to it.'}}[key]?.[i18n.language]||'The case conversation is unavailable.');
   const uuid=value=>/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value||''));

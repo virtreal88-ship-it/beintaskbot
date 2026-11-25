@@ -76,6 +76,12 @@ def prepare_database() -> None:
         require_schema(conn)
         conn.commit()
         _provision_dialog_duplicates(conn)
+        try:
+            from tenant_dialog_internal_comments import provision_schema as provision_comments
+            with conn.transaction(), conn.cursor() as cur:
+                provision_comments(cur)
+        except Exception:
+            logging.getLogger(__name__).warning('Internal dialogue comments schema unavailable')
         if os.environ.get('DIALOG_HISTORY_MERGE_ENABLED') == '1':
             try:
                 from tenant_dialog_history_merge_jobs import enabled as history_merge_enabled, provision as provision_history_merge_jobs
