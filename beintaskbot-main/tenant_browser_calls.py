@@ -16,9 +16,18 @@ from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 from tenant_platform import _connect, _json
 
+MANAGED_CALL_MAX_SECONDS = 3600
 FINAL = {'ended', 'failed'}
 LIVE = {'incoming', 'starting', 'ringing', 'connected', 'ending', 'unknown'}
 ID = re.compile(r'^[A-Za-z0-9_-]{5,160}$')
+
+
+def _advertised_live_call_limit(config, snapshot):
+    value = snapshot.get('max_seconds')
+    # Accept the old engine's explicit cap during rolling deployment.
+    if config.get('managed') and type(value) is int and value in (MANAGED_MAX_SECONDS, MANAGED_CALL_MAX_SECONDS):
+        return value
+    return MAX_SECONDS
 
 
 def migrate(cur):
@@ -495,7 +504,7 @@ def sync(c,data):
               VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,gateway_id) DO UPDATE SET
               boot_id=EXCLUDED.boot_id,seq=EXCLUDED.seq,connected=EXCLUDED.connected,max_seconds=EXCLUDED.max_seconds,last_seen=now()''',
               (c['tenant_id'],c['gateway_id'],boot,seq,data['connected'],
-               MANAGED_MAX_SECONDS if c.get('managed') and data.get('max_seconds')==MANAGED_MAX_SECONDS else MAX_SECONDS))
+               _advertised_live_call_limit(c, data)))
         cur.execute("SELECT *,browser_seen<now()-interval '15 seconds' AS browser_gone FROM saas_browser_calls WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND state NOT IN ('ended','failed') AND actor_id IS NOT NULL",(c['tenant_id'],c['gateway_id'],boot))
         for row in cur.fetchall():
             try:

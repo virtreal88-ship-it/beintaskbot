@@ -161,6 +161,13 @@ func (c *Capture) Finish(now time.Time, graceful bool, seed []byte) ([]byte, Man
 		}
 	}
 	m := c.manifest
+	// A live call can outlast the recorded audio. Sign the actual recorded
+	// interval so an intentionally bounded recording remains importable.
+	captureEnd := c.start.Add(time.Duration(c.maxSamples) * time.Second / Rate)
+	if now.After(captureEnd) {
+		now = captureEnd
+		c.truncated = true
+	}
 	m.EndedAt = now.UTC().Format(time.RFC3339Nano)
 	m.DurationMS = frames * 1000 / Rate
 	m.Complete = graceful && !c.truncated && m.Samples[0] > 0 && m.Samples[1] > 0 && m.Gaps[0] == 0 && m.Gaps[1] == 0

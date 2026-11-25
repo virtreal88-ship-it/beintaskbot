@@ -290,5 +290,8 @@ def test_duration_advertises_only_fresh_actual_engine_capability(managed):
     calls.sync(cfg,snapshot(2))
     assert calls.status(PROFILE)['sources'][0]['max_seconds']==900
     with pytest.raises(TenantLinearError):calls.sync(cfg,snapshot(1))
-    calls.sync(cfg,snapshot(3))
+    calls.sync(cfg,{**snapshot(3),'max_seconds':3600})
+    assert calls.status(PROFILE)['sources'][0]['max_seconds']==3600
+    calls.sync(cfg,{**snapshot(4),'max_seconds':3601})
     assert calls.status(PROFILE)['sources'][0]['max_seconds']==120
+    assert calls._advertised_live_call_limit({}, {'max_seconds':3600})==120
