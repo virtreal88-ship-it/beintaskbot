@@ -31,7 +31,7 @@ func (g *appGateway) attachMessages(s *Session) bool {
 			return false
 		}
 		g.observeProviderEvent(event)
-		stored := g.messages.Capture(s.mgr.appCtx, event, client.Store)
+		stored := g.messages.Capture(s.mgr.appCtx, event, client)
 		catchup.observe(s.mgr.appCtx, event, stored)
 		if stored {
 			g.providerDiagnostics.add("capture_handler_succeeded")

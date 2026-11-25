@@ -37,6 +37,11 @@ for (const hidden of ['private transcript','private/media','data-media-open','da
 markup = context.messageMarkup([{...own,wa_edited:true}]);
 assert.match(markup,/Operator message/);
 assert.match(markup,/Изменено/);
+markup = context.messageMarkup([{...own, id:'customer', direction:'incoming', author_type:'customer',
+  author_name:'Клиент', body:'Исправленный вопрос', wa_edited:true}]);
+assert.match(markup,/data-direction="incoming"/);
+assert.match(markup,/Исправленный вопрос/);
+assert.match(markup,/Изменено/);
 
 const noop = () => {};
 const document = {head:{append:noop},createElement:()=>({}),addEventListener:noop};
