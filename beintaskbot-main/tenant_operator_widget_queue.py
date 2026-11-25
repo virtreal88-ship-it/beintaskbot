@@ -203,6 +203,7 @@ def history(profile, params, before=None):
         {
             "id": str(m["mid"]),
             "body": m["body"],
+            "widget_attachment": m["attachment"],
             "direction": directions[m["sender"]],
             "author_name": m["author"],
             "author_type": authors[m["sender"]],

@@ -159,8 +159,27 @@ def handle(profile, data):
     with operator._connect() as db, db.cursor() as cur:
         current, login = _snapshot(cur, profile, credentials)
         writable = widget_allowed(current, "update")
+        from tenant_operator_widget_sync import enabled
+        managed = enabled() == tenant
+        assignments = {}
+        if managed:
+            cur.execute("""SELECT chat_id,identity,state,operator_id FROM saas_widget_dialogs
+                WHERE tenant_id=%s AND instance=%s""",(tenant,credentials["connection_instance_id"]))
+            assignments = {(r["chat_id"],r["identity"]):r for r in cur.fetchall()}
+        def access_for(i, provider_row):
+            workflow = assignments.get((i,_hash([provider_row["client_id"]]))) or {}
+            own = workflow.get("state")=="accepted" and workflow.get("operator_id")==int(profile["telegram_id"])
+            return workflow.get("state")!="accepted" or own, writable and (not managed or own)
         if action == "list":
-            return {"chats": [_card(i, r, rev, writable, login) for i, (r, rev) in routes.items()]}
+            cards = []
+            for i,(r,rev) in routes.items():
+                visible, allowed = access_for(i,r)
+                if visible:
+                    cards.append(_card(i,r,rev,allowed,login))
+            return {"chats":cards}
+        visible,writable = access_for(chat,row)
+        if not visible:
+            raise operator.OperatorError("Диалог недоступен.",403)
         messages = _messages(rows, chat, row["client_id"])
         _reconcile(cur, tenant, chat, data["revision"], rows)
         if action == "older":

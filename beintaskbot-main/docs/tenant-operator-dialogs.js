@@ -2205,7 +2205,8 @@
     const mediaActions=media&&!directAudio&&!video?`<div data-media-actions ${readOnly?'':'hidden'}>${fileActuators}</div>`:'';
     const knownSize=m.media_size_bytes!==undefined&&m.media_size_bytes!==null&&m.media_size_bytes!==''&&Number.isSafeInteger(Number(m.media_size_bytes))&&Number(m.media_size_bytes)>0;
     const mediaMeta=!knownSize?'':mediaSize(m.media_size_bytes);
-    const caption=media?attachmentCaption(m):m.body;
+    const widgetAttachment=route?.provider==='operator_widget'&&m.widget_attachment===true;
+    const caption=widgetAttachment?[m.body,({ru:'Вложение',az:'Qoşma',en:'Attachment'})[i18n.language]].filter(Boolean).join(' · '):media?attachmentCaption(m):m.body;
     const label=media?attachmentLabel(m):'';
     const original=!deleted&&m.quoted_provider_message_id?(readOnly?items:currentPage?.messages||items).find(item=>item.provider_message_id===m.quoted_provider_message_id&&String(item.source_channel_id||route.channel_id)===String(m.source_channel_id||route.channel_id)):null;const quote=!deleted&&m.quoted_provider_message_id?`<button type="button" class="operator-quote" data-quote-jump="${esc(m.quoted_provider_message_id)}">${esc(original?(messageAuthor(original)+' · '+String(quotedMessagePreview(original)).slice(0,160)):({ru:'Исходное сообщение не загружено',az:'Orijinal mesaj yüklənməyib',en:'Original message is not loaded'}[i18n.language]||'Original message is not loaded'))}</button>`:'';
     const deletedLabel=deleted&&(globalThis.window?.tenantWhatsAppMessageActions?.t('messageDeleted')||({ru:'Сообщение удалено',az:'Mesaj silinib',en:'Message deleted'}[i18n.language]||'Message deleted'));

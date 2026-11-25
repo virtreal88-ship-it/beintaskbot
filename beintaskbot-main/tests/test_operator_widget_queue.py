@@ -124,6 +124,13 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     receipt = lifecycle.mutate(PROFILE, transfer)
     assert receipt["lifecycle"]["operator_id"] == 33
     assert lifecycle.mutate(PROFILE, transfer) == receipt
+    # The retained #960 reader also respects a newly accepted employee's ownership.
+    monkeypatch.setattr(
+        widget, "_post", lambda path, body, creds: [CHAT] if path.endswith("getActiveChats") else []
+    )
+    assert widget.handle(PROFILE, {"action": "list"})["chats"] == []
+    with pytest.raises(op.OperatorError):
+        widget.handle(PROFILE, {"action": "history", "chat_id": "15", "revision": routes[15][1]})
     with pytest.raises(TenantLinearError):
         page()
     recipient = {"tenant_id": A, "telegram_id": 33}
