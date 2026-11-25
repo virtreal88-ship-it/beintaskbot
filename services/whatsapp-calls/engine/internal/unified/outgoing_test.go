@@ -52,6 +52,33 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 		t.Fatal("conflict reached provider")
 	}
 }
+func TestOutgoingAudioMIMEOnlyDeclaresOpusForVoiceNotes(t *testing.T) {
+	for _, tc := range []struct {
+		kind, wireMIME string
+		ptt           bool
+	}{
+		{"voice", "audio/ogg; codecs=opus", true},
+		{"audio", "audio/ogg", false},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			ctx := context.Background()
+			j := journal(t, database(t, filepath.Join(t.TempDir(), "audio.db")), testScope)
+			client := &outgoingClient{}
+			req := Outgoing{Scope: testScope, Operation: "audio-op", Chat: "15550000002@s.whatsapp.net", Kind: tc.kind, MIME: "audio/ogg", Data: []byte("synthetic")}
+			for i := 0; i < 2; i++ {
+				if _, err := j.Deliver(ctx, client, req, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			audio := client.message.GetAudioMessage()
+			if client.uploads != 1 || client.sends != 1 || audio == nil ||
+				audio.GetPTT() != tc.ptt || audio.GetMimetype() != tc.wireMIME {
+				t.Fatal("unexpected wire audio format or duplicate send")
+			}
+		})
+	}
+}
+
 func TestOutgoingUnknownCannotResend(t *testing.T) {
 	j := journal(t, database(t, filepath.Join(t.TempDir(), "send.db")), testScope)
 	client := &outgoingClient{fail: true}
