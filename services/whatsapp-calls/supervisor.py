@@ -65,6 +65,7 @@ class Supervisor:
         self.stopping=False
         self.message_slots=asyncio.Semaphore(2)
         self.avatar_slots=asyncio.Semaphore(2)
+        self.video_slots=asyncio.Semaphore(1)
 
     async def start(self,app):
         # Linux volume fencing: two replicas/processes must never restore the
@@ -307,6 +308,39 @@ class Supervisor:
         async with slots:
             return await self._messages(request,source,entry,cfg,b)
 
+    async def send_video(self,request):
+        _,entry=self.entry(request)
+        data=entry['data']
+        cfg,b=data.get('messaging'),data['binding']
+        if data.get('disabled') or not cfg:raise web.HTTPConflict(text='source_stopped')
+        length=request.content_length
+        if request.content_type!='application/octet-stream' or request.headers.get('Content-Encoding') or not length:
+            raise web.HTTPBadRequest(text='native_video_invalid')
+        if length>100*1024*1024:
+            raise web.HTTPRequestEntityTooLarge(max_size=100*1024*1024,actual_size=length)
+        command=request.headers.get('X-Native-Video-Command','')
+        if not command or len(command)>28000:raise web.HTTPBadRequest(text='native_video_invalid')
+        try:payload=json.loads(base64.b64decode(command,validate=True))
+        except (ValueError,UnicodeError):raise web.HTTPBadRequest(text='native_video_invalid') from None
+        expected={'tenant':b['tenant_id'],'source':b['channel_id'],'account':b['account_jid'],'generation':cfg['generation']}
+        if (not isinstance(payload,dict) or payload.get('scope')!=expected or payload.get('kind')!='video'
+                or payload.get('mime')!='video/mp4' or payload.get('data') not in (None,'')):
+            raise web.HTTPForbidden(text='native_video_scope_denied')
+        if self.client is None:raise web.HTTPServiceUnavailable(text='calls_service_unavailable')
+        if self.video_slots.locked():raise web.HTTPTooManyRequests(text='native_video_busy')
+        async with self.video_slots:
+            async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages/video',
+                    data=request.content.iter_chunked(65536),headers={'Authorization':'Bearer '+data['http_token'],
+                    'Content-Type':'application/octet-stream','Content-Length':str(length),'X-Native-Video-Command':command},
+                    allow_redirects=False,timeout=ClientTimeout(total=130)) as upstream:
+                chunks,size=[],0
+                async for chunk in upstream.content.iter_chunked(4096):
+                    size+=len(chunk)
+                    if size>16384:raise web.HTTPBadGateway(text='native_response_invalid')
+                    chunks.append(chunk)
+                return web.Response(body=b''.join(chunks),status=upstream.status,content_type='application/json',
+                    headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+
     async def _messages(self,request,source,entry,cfg,b):
         data=entry['data']
         raw=await request.clone(client_max_size=15*1024*1024).read()
@@ -321,7 +355,17 @@ class Supervisor:
         # No retries: a lost response may follow an accepted provider send.
         async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages'+suffix,
                 data=raw,headers={'Authorization':'Bearer '+data['http_token'],'Content-Type':'application/json'},
-                allow_redirects=False,timeout=ClientTimeout(total=35)) as upstream:
+                allow_redirects=False,timeout=ClientTimeout(total=125 if suffix=='/media' else 35)) as upstream:
+            if suffix=='/media' and upstream.status==200 and upstream.content_type=='video/mp4':
+                length=upstream.content_length
+                if not length or length>100*1024*1024:raise web.HTTPBadGateway(text='native_response_invalid')
+                outgoing=web.StreamResponse(status=200,headers={'Content-Type':'application/octet-stream',
+                    'Content-Length':str(length),'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Disposition':'attachment'})
+                await outgoing.prepare(request)
+                async for chunk in upstream.content.iter_chunked(65536):
+                    await outgoing.write(chunk)
+                await outgoing.write_eof()
+                return outgoing
             chunks=[];size=0
             async for chunk in upstream.content.iter_chunked(65536):
                 size+=len(chunk)
@@ -416,7 +460,7 @@ def make_app(supervisor):
             # No exception text, request headers, phone numbers or audio.
             print('calls_service_request_failed',flush=True)
             return web.json_response({'error':'calls_service_unavailable'},status=503)
-    app=web.Application(client_max_size=4096,middlewares=[errors])
+    app=web.Application(client_max_size=4096,middlewares=[errors],handler_args={'max_field_size':32768})
     app.router.add_get('/healthz',lambda r:web.json_response({'ok':True}))
     app.router.add_post('/v1/sources/{source}',supervisor.provision)
     app.router.add_get('/v1/sources/{source}',supervisor.status)
@@ -424,6 +468,7 @@ def make_app(supervisor):
     app.router.add_post('/v1/sources/{source}/messages',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/status',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/media',supervisor.messages)
+    app.router.add_post('/v1/sources/{source}/messages/video',supervisor.send_video)
     app.router.add_post('/v1/sources/{source}/messages/group',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/avatar',supervisor.messages)
     app.router.add_post('/v1/sources/{source}/messages/contact',supervisor.messages)

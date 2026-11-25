@@ -236,3 +236,41 @@ async def test_audio_proxy_diagnosis_distinguishes_stage_without_error_text():
     assert await copy_audio(frames(),target,'engine')=='engine_send_timeout'
     target.send_bytes.side_effect=RuntimeError('private credentials')
     assert await copy_audio(frames(),target,'worker')=='worker_transport_error'
+
+@pytest.mark.asyncio
+async def test_video_binary_proxy_checks_scope_and_streams_to_engine(tmp_path):
+    import base64
+    from aiohttp import ClientSession, web
+
+    observed=[]
+    async def upstream(request):
+        content=await request.read()
+        observed.append((content, request.content_type, request.headers['X-Native-Video-Command']))
+        return web.json_response({'confirmed':True})
+
+    engine=web.Application(handler_args={'max_field_size':32768})
+    engine.router.add_post('/internal/messages/video',upstream)
+    supervisor,client=await client_for(tmp_path)
+    endpoint='/v1/sources/'+SOURCE
+    headers={'Authorization':'Bearer '+TOKEN}
+    scope={'tenant':BINDING['tenant_id'],'source':BINDING['channel_id'],'account':BINDING['account_jid'],'generation':'g1'}
+    def command(target):
+        fields={'scope':target,'kind':'video','mime':'video/mp4','data':'','text':'təbrik'*1500}
+        return base64.b64encode(json.dumps(fields,ensure_ascii=False).encode()).decode()
+    content=b'\0\0\0\x18ftypmp42'+b'\0'*64
+    try:
+        assert (await client.post(endpoint,json={**BINDING,'messaging_generation':'g1'},headers=headers)).status==200
+        async with TestServer(engine) as engine_server, ClientSession() as proxy:
+            supervisor.client=proxy
+            supervisor.sources[SOURCE]['data']['port']=engine_server.port
+            upload={**headers,'Content-Type':'application/octet-stream'}
+            assert (await client.post(endpoint+'/messages/video',data=content,headers={
+                **upload,'X-Native-Video-Command':command({**scope,'generation':'other'})})).status==403
+            assert not observed
+            encoded=command(scope)
+            response=await client.post(endpoint+'/messages/video',data=content,
+                headers={**upload,'X-Native-Video-Command':encoded})
+            assert response.status==200 and (await response.json())['confirmed']
+            assert observed==[(content,'application/octet-stream',encoded)]
+    finally:
+        await client.close()

@@ -11,6 +11,7 @@ import (
 	"rsc.io/qr"
 	"strings"
 	"sync"
+	"wacalls/internal/unified"
 )
 
 var streamPath = regexp.MustCompile(`^/internal/audio/([A-Za-z0-9_-]{5,160})/([0-9a-f-]{36})$`)
@@ -53,6 +54,7 @@ func managedHandler(s *server, host, token string) http.Handler {
 				out["provider_diagnostics"] = s.appGateway.providerDiagnostics.snapshot()
 				if counts, err := s.appGateway.messages.Maintenance(r.Context()); err == nil {
 					out["messaging_diagnostics"] = counts
+					out["video_max_bytes"] = unified.MaxVideoBytes
 				}
 			}
 			if len(infos) == 1 {
@@ -92,7 +94,7 @@ func managedHandler(s *server, host, token string) http.Handler {
 			s.handleManagedContact(w, r)
 			return
 		}
-		if r.Method == "POST" && r.URL.Path == "/internal/messages" {
+		if r.Method == "POST" && (r.URL.Path == "/internal/messages" || r.URL.Path == "/internal/messages/video") {
 			s.handleManagedMessage(w, r)
 			return
 		}

@@ -61,3 +61,17 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_encoded_file_rejected(self):
         self.file.headers['Content-Transfer-Encoding']='base64'
         self.assertEqual((await self.handle(self.request))['status'],400);self.run.assert_not_awaited()
+
+    async def test_native_video_uses_advertised_video_limit(self):
+        from tenant_chat_upload_policy import VIDEO_MAX_BYTES
+        cap=AsyncMock(return_value=VIDEO_MAX_BYTES)
+        handle=self.mod.handler(lambda _:self.session,'https://crm.pro.az',Mock(),Mock(),Mock(),video_limit=cap)
+        packet=b'\x00\x00\x00\x18ftypmp42'
+        self.file.filename='clip.mp4'
+        self.file.headers={'Content-Type':'video/mp4'}
+        self.file.chunks=[packet]+[b'\x00'*65536]*1600
+        self.file.chunks[-1]=self.file.chunks[-1][:-len(packet)]
+        response=await handle(self.request)
+        self.assertEqual(response['data']['state'],'accepted')
+        self.assertEqual(self.run.call_args.args[1]['file']['size'],VIDEO_MAX_BYTES)
+        cap.assert_awaited_once_with(self.session,7)
