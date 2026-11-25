@@ -1725,6 +1725,16 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if before is None and not shared_archive:
                 from tenant_dialog_company_binding import read_dialogue_binding
                 dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)
+            elif before is None and closed_archive and not (owner_observer or search_observer):
+                # The shared archive grants history, not access to the company editor.
+                # Reuse the contextual list permission on this one exact, authorized route.
+                from tenant_beinsystems_operator_access import dialogue_chooser_enabled
+                if dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view'):
+                    from tenant_dialog_company_binding import attach_list_company_names
+                    label_card = {**requested_route}
+                    attach_list_company_names(cur,tenant,[label_card],policy=policy)
+                    if 'dialog_company_name' in label_card:
+                        dialog['dialog_company_name'] = label_card['dialog_company_name']
             if before is None:
                 from tenant_shared_dialog_reminders import dialogue_marker
                 reminder=dialogue_marker(cur,tenant,actor,policy,dialog,workflow=workflow,

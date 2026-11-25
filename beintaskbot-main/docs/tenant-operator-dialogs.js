@@ -1359,6 +1359,14 @@
       const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
       if(applyHistoryMergeChange(route,latest))return;
+      if(route.archive_read_only&&member?.role!=='owner'){
+        paintArchiveCompany(latest.dialog);
+        // Restore must use the same freshly authorized label, not the old list card.
+        for(const snapshot of new Set([currentDialog,page.dialog])){
+          if(latest.dialog.dialog_company_name) snapshot.dialog_company_name=latest.dialog.dialog_company_name;
+          else delete snapshot.dialog_company_name;
+        }
+      }
       if(namesOnly){
         const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
         patchDirectDialogNames(latest,page,chat);
@@ -1933,6 +1941,7 @@
   function renderDialogSkeleton(route){
     const header=$('operatorConversationHeader'),content=$('operatorConversationContent');
     const company=capabilities.dialog_company_binding===true
+      && !(route.archive_read_only&&member?.role!=='owner')
       ? (route.company_binding?.company_name||route.dialog_company_name||''):'';
     if(header)header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}" title="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><div class="operator-dialog-head"><div class="operator-dialog-title" role="heading" aria-level="2"><span class="operator-dialog-title-text" data-user-content>${esc(dialogTitle(route))}</span></div>${company?`<span id="operatorDialogCompanyName" title="${esc(company)}" data-user-content>${esc(company)}</span>`:''}<div class="operator-dialog-head-row"><span class="operator-agent-label" data-user-content>${esc(assignmentLabel(route))}</span></div></div></div><span class="sub" role="status">${esc(t('loading'))}</span>`;
     if(content)content.innerHTML=`<section class="operator-dialog-shell operator-dialog-loading" role="status" aria-live="polite"><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-line"></span><span class="operator-dialog-skeleton-label">${esc(t('loading'))}</span></section>`;
@@ -2229,8 +2238,23 @@
       const details=document.createElement('details');details.className='operator-roster-meta';const summary=document.createElement('summary');summary.textContent=groupParticipantsText('snapshot');const timestamp=document.createElement('p');timestamp.textContent=new Date(result.observed_at).toLocaleString();const note=document.createElement('p');note.textContent=groupParticipantsText('note');details.append(summary,timestamp,note);host.append(details);
     }catch{if(current()&&card.open)status.textContent=groupParticipantsText('unavailable');}finally{host.dataset.loading='false';}
   }
+  function paintArchiveCompany(route){
+    const nameHost=$('operatorDialogCompanyName');
+    if(!nameHost)return;
+    const label=capabilities.dialog_company_binding===true&&route?.archive_read_only
+      &&$('view-dialogs')?.classList.contains('active')&&$('operatorDialogs')?.style.visibility!=='hidden'
+      &&!route.owner_overview_read_only&&!route.search_overview_read_only
+      &&typeof route.dialog_company_name==='string'?route.dialog_company_name:'';
+    nameHost.textContent=label;
+    nameHost.hidden=!label;
+    if(label)nameHost.title=label;else nameHost.removeAttribute('title');
+  }
   function mountDialogCompany(route,useSnapshot=true){
-    if((route.archive_read_only||route.owner_overview_read_only||route.search_overview_read_only)&&member?.role!=='owner'){window.tenantDialogueCompany?.clear();return;}
+    if((route.archive_read_only||route.owner_overview_read_only||route.search_overview_read_only)&&member?.role!=='owner'){
+      window.tenantDialogueCompany?.clear();
+      paintArchiveCompany(route);
+      return;
+    }
     if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
     const host=$('operatorClientCompanyHost'),owner=identity(member);
     const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
@@ -2244,7 +2268,10 @@
   }
   function restoreDialogCompany(){
     if(currentDialog&&sameDialog(displayedPage?.dialog,currentDialog)&&$('view-dialogs')?.classList.contains('active')){
-      mountDialogCompany(currentDialog,false);
+      if(currentDialog.archive_read_only&&member?.role!=='owner'){
+        paintArchiveCompany(null);
+        void openDialog(currentDialog,true,'',{revalidateAccess:true,suppressRead:true});
+      }else mountDialogCompany(currentDialog,false);
     }
   }
   function supportCaseBlock(route,block){
@@ -3395,12 +3422,12 @@ if(changed){companyPanelPreference=null;filterPreferencesLoaded=false;filterPref
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
-  document.addEventListener('tenant-auth-pending',()=>{mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);});
+  document.addEventListener('tenant-auth-pending',()=>{mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);});
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
-  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{closeDuplicateSearch(true);closeDialogDiagnostics(false);stopRowContacts();if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);}});
+  document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{closeDuplicateSearch(true);closeDialogDiagnostics(false);stopRowContacts();if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);}});
   document.addEventListener('tenant-dialog-reauthorized',()=>{
     // A list issued before the fresh profile may still be in flight.
     listFlight=null;
