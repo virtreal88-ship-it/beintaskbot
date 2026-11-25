@@ -13,6 +13,14 @@ import (
 )
 
 const MaxMediaBytes = 10 << 20
+const MaxVideoBytes = 100 << 20
+
+type videoTransferKey struct{}
+
+// A large transport budget is available only to validated MP4 operations.
+func WithVideoTransfer(ctx context.Context) context.Context {
+	return context.WithValue(ctx, videoTransferKey{}, true)
+}
 
 var ErrMediaRestricted = errors.New("unified_media_restricted")
 var ErrMediaSize = errors.New("unified_media_size_limit")
@@ -74,22 +82,26 @@ func (t mediaTransport) RoundTrip(request *http.Request) (*http.Response, error)
 	if request.Method != http.MethodGet && request.Method != http.MethodPost && request.Method != http.MethodDelete {
 		return nil, ErrMediaRestricted
 	}
-	if request.ContentLength > t.limit {
+	limit := t.limit
+	if request.Context().Value(videoTransferKey{}) == true {
+		limit = MaxVideoBytes + 64
+	}
+	if request.ContentLength > limit {
 		return nil, ErrMediaSize
 	}
 	if request.Body != nil {
 		request = request.Clone(request.Context())
-		request.Body = &boundedMediaBody{ReadCloser: request.Body, remaining: t.limit}
+		request.Body = &boundedMediaBody{ReadCloser: request.Body, remaining: limit}
 	}
 	response, err := t.base.RoundTrip(request)
 	if err != nil {
 		return nil, ErrMediaRestricted
 	}
-	if response.ContentLength > t.limit || (response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
+	if response.ContentLength > limit || (response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity") {
 		response.Body.Close()
 		return nil, ErrMediaSize
 	}
-	response.Body = &boundedMediaBody{ReadCloser: response.Body, remaining: t.limit}
+	response.Body = &boundedMediaBody{ReadCloser: response.Body, remaining: limit}
 	return response, nil
 }
 
@@ -123,6 +135,6 @@ func NewMediaHTTPClient() *http.Client {
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, TLSHandshakeTimeout: 10 * time.Second,
 		ResponseHeaderTimeout: 15 * time.Second, MaxResponseHeaderBytes: 32 << 10, MaxConnsPerHost: 4,
 		MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second}
-	return &http.Client{Transport: mediaTransport{base: transport, limit: MaxMediaBytes + 64}, Timeout: 30 * time.Second,
+	return &http.Client{Transport: mediaTransport{base: transport, limit: MaxMediaBytes + 64}, Timeout: 110 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return ErrMediaRestricted }}
 }

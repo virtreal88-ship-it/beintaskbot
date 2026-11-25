@@ -85,7 +85,11 @@ func (r Outgoing) Validate(scope Scope) error {
 		}
 		return nil
 	}
-	if len(r.Data) == 0 || len(r.Data) > MaxMediaBytes {
+	limit := MaxMediaBytes
+	if r.Kind == "video" && r.MIME == "video/mp4" {
+		limit = MaxVideoBytes
+	}
+	if len(r.Data) == 0 || len(r.Data) > limit {
 		return ErrMediaSize
 	}
 	if (r.Kind == "voice" || r.Kind == "audio") && r.Text != "" {
@@ -172,7 +176,11 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 			case "video":
 				mediaType = whatsmeow.MediaVideo
 			}
-			upload, err := client.Upload(ctx, request.Data, mediaType)
+			uploadCtx := ctx
+			if request.Kind == "video" && len(request.Data) > MaxMediaBytes {
+				uploadCtx = WithVideoTransfer(ctx)
+			}
+			upload, err := client.Upload(uploadCtx, request.Data, mediaType)
 			if err != nil {
 				return ErrUnknown
 			}

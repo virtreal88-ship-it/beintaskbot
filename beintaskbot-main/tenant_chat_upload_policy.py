@@ -5,16 +5,20 @@ from tenant_chat_send_policy import command
 from tenant_linear_policy import TenantLinearError
 
 MAX_BYTES = 5 * 1024 * 1024
+VIDEO_MAX_BYTES = 100 * 1024 * 1024
 TYPES = {'image/jpeg': 'picture', 'image/png': 'picture', 'image/webp': 'picture',
          'application/pdf': 'file', 'audio/mpeg': 'audio', 'audio/ogg': 'audio',
          'video/mp4': 'video'}
 
 
-def prepare(data, filename, mime, content):
+def prepare(data, filename, mime, content, *, video_limit=MAX_BYTES):
+    limit = video_limit if mime == 'video/mp4' else MAX_BYTES
     if (not isinstance(filename, str) or not 0 < len(filename) <= 160
             or re.search(r'[\x00-\x1f\x7f/\\]', filename) or filename in {'.', '..'}
-            or mime not in TYPES or not isinstance(content, bytes) or not 0 < len(content) <= MAX_BYTES):
+            or mime not in TYPES or not isinstance(content, bytes) or not content):
         raise TenantLinearError('Fayl düzgün deyil (JPEG, PNG, WebP, PDF, MP3, OGG, MP4; maksimum 5 MB).')
+    if len(content)>limit:
+        raise TenantLinearError(f'Fayl {limit // (1024 * 1024)} MB-dan böyükdür.', 413)
     signatures = {
         'image/jpeg': content.startswith(b'\xff\xd8\xff'),
         'image/png': content.startswith(b'\x89PNG\r\n\x1a\n'),

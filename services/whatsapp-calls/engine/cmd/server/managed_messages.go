@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"google.golang.org/protobuf/proto"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"wacalls/internal/unified"
@@ -45,7 +47,12 @@ func (s *server) handleManagedMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind, mime, size, _ := unified.MediaFacts(&message)
-	if kind == "" || size == 0 || size > unified.MaxMediaBytes || len(mime) > 120 || strings.ContainsAny(mime, "\r\n") {
+	video := kind == "video" && mime == "video/mp4"
+	maxSize := uint64(unified.MaxMediaBytes)
+	if video {
+		maxSize = unified.MaxVideoBytes
+	}
+	if kind == "" || size == 0 || size > maxSize || len(mime) > 120 || strings.ContainsAny(mime, "\r\n") {
 		http.Error(w, "native_media_restricted", 400)
 		return
 	}
@@ -59,17 +66,65 @@ func (s *server) handleManagedMedia(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source_identity_mismatch", 409)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	timeout := 30 * time.Second
+	parent := r.Context()
+	if video && size > unified.MaxMediaBytes {
+		timeout = 110 * time.Second
+		parent = unified.WithVideoTransfer(parent)
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	content, err := session.client.DownloadAny(ctx, &message)
 	if err != nil || uint64(len(content)) != size {
 		http.Error(w, "native_media_unavailable", 503)
 		return
 	}
-	w.Header().Set("Content-Type", "application/octet-stream")
+	contentType := "application/octet-stream"
+	if video {
+		contentType = "video/mp4"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(content)))
 	w.Header().Set("Content-Disposition", "attachment")
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'")
 	w.Write(content)
+}
+
+// Binary request keeps large video bytes out of JSON and the operation journal.
+func decodeManagedOutgoing(r *http.Request, scope unified.Scope) (unified.Outgoing, error) {
+	var command unified.Outgoing
+	if r.URL.Path == "/internal/messages/video" {
+		encoded := r.Header.Get("X-Native-Video-Command")
+		if r.Header.Get("Content-Type") != "application/octet-stream" || r.Header.Get("Content-Encoding") != "" ||
+			r.ContentLength <= 0 || r.ContentLength > unified.MaxVideoBytes || len(encoded) == 0 || len(encoded) > 28000 {
+			return command, unified.ErrConfiguration
+		}
+		metadata, err := base64.StdEncoding.Strict().DecodeString(encoded)
+		if err != nil {
+			return command, unified.ErrConfiguration
+		}
+		decoder := json.NewDecoder(strings.NewReader(string(metadata)))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || command.Scope != scope ||
+			command.Kind != "video" || command.MIME != "video/mp4" || len(command.Data) != 0 {
+			return command, unified.ErrConfiguration
+		}
+		command.Data = make([]byte, int(r.ContentLength))
+		if _, err := io.ReadFull(r.Body, command.Data); err != nil {
+			return command, unified.ErrConfiguration
+		}
+		// Beintaskbot also checks the MP4 signature before dispatch.
+		if len(command.Data) <= 12 || string(command.Data[4:8]) != "ftyp" {
+			return command, unified.ErrMediaRestricted
+		}
+	} else {
+		decoder := json.NewDecoder(io.LimitReader(r.Body, 15<<20))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&command) != nil || decoder.Decode(new(any)) != io.EOF || len(command.Data) > unified.MaxMediaBytes {
+			return command, unified.ErrConfiguration
+		}
+	}
+	return command, command.Validate(scope)
 }
 
 // Called only after the existing private host/token/cookie/origin guard.
@@ -79,10 +134,8 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "native_messaging_disabled", 409)
 		return
 	}
-	var request unified.Outgoing
-	decoder := json.NewDecoder(io.LimitReader(r.Body, 15<<20))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF || request.Validate(g.cfg.Messaging.Scope) != nil {
+	request, err := decodeManagedOutgoing(r, g.cfg.Messaging.Scope)
+	if err != nil {
 		http.Error(w, "native_message_invalid", 400)
 		return
 	}
@@ -96,7 +149,11 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source_identity_mismatch", 409)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	timeout := 30 * time.Second
+	if len(request.Data) > unified.MaxMediaBytes {
+		timeout = 115 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	result, err := g.messages.Deliver(ctx, session.client, request, session.client.Store.LIDs)
 	if errors.Is(err, unified.ErrQuoteUnavailable) {

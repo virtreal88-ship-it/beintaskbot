@@ -115,10 +115,12 @@ func main() {
 	go srv.appGateway.refreshGroups(ctx)
 
 	var handler http.Handler = guard.wrap(srv.routes())
+	maxHeaderBytes := 16 << 10
 	if srv.appGateway != nil && srv.appGateway.cfg.Managed {
 		handler = managedHandler(srv, *addr, token)
+		maxHeaderBytes = 32 << 10
 	}
-	httpSrv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+	httpSrv := &http.Server{Addr: *addr, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: maxHeaderBytes}
 	go func() {
 		log.Info("HTTP server listening", "addr", *addr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

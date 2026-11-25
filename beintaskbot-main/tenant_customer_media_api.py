@@ -3,7 +3,7 @@ import asyncio
 import os
 from aiohttp import web
 from tenant_chat_upload_api import handler as upload_handler
-from tenant_customer_media_service import run,check,capability
+from tenant_customer_media_service import run,check,capability,video_upload_limit
 from tenant_linear_policy import TenantLinearError
 from tenant_read_session import require_read_session
 
@@ -17,7 +17,9 @@ def handler(member,origin,logger):
         if command.get('file',{}).get('type') not in {'picture','video','file'} or command.get('quote_message_id') or len(command.get('text',''))>4096:
             raise TenantLinearError('JPEG, PNG, WebP, MP4 və PDF dəstəklənir.',400)
         return await run(session,command,content,logger)
-    inner=upload_handler(member,origin,None,None,logger,runner=media_run)
+    async def upload_limit(session,lead):
+        return await asyncio.to_thread(video_upload_limit,session,lead)
+    inner=upload_handler(member,origin,None,None,logger,runner=media_run,video_limit=upload_limit)
     async def handle(request):
         if not enabled():return web.json_response({'success':False,'error':'Fayl göndərilməsi əlçatan deyil.','keep_request':False},status=404,headers={'Cache-Control':'no-store'})
         return await inner(request)

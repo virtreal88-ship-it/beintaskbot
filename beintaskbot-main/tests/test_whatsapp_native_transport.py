@@ -66,6 +66,21 @@ def test_quote_preflight_is_refused_before_dispatch(configured, monkeypatch, rea
     call.assert_not_called()
 
 
+def test_large_video_dispatch_uses_scoped_binary_transport(configured,monkeypatch):
+    import base64
+    _,route=configured
+    call=accepted(monkeypatch)
+    content=b'\x00\x00\x00\x18ftypmp42'+b'0'*(11*1024*1024)
+    native.submit(route,str(uuid.uuid4()),kind='video',mime='video/mp4',name='clip.mp4',content=content)
+    call.assert_called_once()
+    assert call.call_args.args[0].endswith('/messages/video')
+    options=call.call_args.kwargs
+    assert options['data'] is content and 'json' not in options
+    command=json.loads(base64.b64decode(options['headers']['X-Native-Video-Command']))
+    assert command['scope']==route['native']['scope'] and command['chat']==route['conversation_id']
+    assert command['kind']=='video' and command['data']==''
+
+
 def test_disable_native_does_not_fall_back(configured,monkeypatch):
     db,route=configured;call=accepted(monkeypatch)
     monkeypatch.delenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND')

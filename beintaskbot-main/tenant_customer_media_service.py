@@ -7,6 +7,7 @@ import re
 import uuid
 from urllib.parse import urlencode
 
+from tenant_chat_upload_policy import MAX_BYTES, VIDEO_MAX_BYTES
 from tenant_chat_send_store import dispatch_guarded, authority, finish, mark_sending, reserve
 from tenant_connect_transport import _request
 from tenant_linear_policy import TenantLinearError
@@ -213,7 +214,9 @@ def record_acceptance(session, item, receipt):
 def input_hash(file, caption, content, actor, lead_id):
     # Match JSON.stringify field order/UTF-8 in Connect exactly.
     fields=[{'picture':'image','file':'document','video':'video'}[file['type']],file['mime'],file['name'],caption,str(actor),str(lead_id)]
-    return hashlib.sha256(json.dumps(fields,ensure_ascii=False,separators=(',',':')).encode('utf-8')+b'\0'+content).hexdigest()
+    digest=hashlib.sha256(json.dumps(fields,ensure_ascii=False,separators=(',',':')).encode('utf-8')+b'\0')
+    digest.update(content)
+    return digest.hexdigest()
 
 
 async def run(session, command, content, logger):
@@ -222,7 +225,10 @@ async def run(session, command, content, logger):
     file=command.get('file') or {}
     if file.get('type') not in {'picture','video','file'} or command.get('quote_message_id') or len(command.get('text',''))>4096:
         raise TenantLinearError('JPEG, PNG, WebP, MP4 və PDF; mətn maksimum 4096 simvol.',400)
-    validated=prepare(command,file.get('name'),file.get('mime'),content)
+    limit=MAX_BYTES
+    if file.get('type')=='video' and isinstance(content,bytes) and len(content)>MAX_BYTES:
+        limit=await asyncio.to_thread(video_upload_limit,session,command['lead_id'])
+    validated=prepare(command,file.get('name'),file.get('mime'),content,video_limit=limit)
     if validated['file']!=file or validated['text']!=command.get('text'):
         raise TenantLinearError('Fayl məlumatı dəyişib.',400)
     item = await asyncio.to_thread(reserve, session, command)
@@ -240,6 +246,8 @@ async def run(session, command, content, logger):
             'media_type':{'picture':'image','file':'document','video':'video'}[command['file']['type']], 'caption':command['text'],
             'mime':command['file']['mime'],'file_name':command['file']['name'],'size_bytes':command['file']['size'],'input_hash':digest})
         route = {**route,'input_hash':digest,'author_id':item['key'][1],'crm_conversation_id':command['lead_id'],'media_type':{'picture':'image','file':'document','video':'video'}[command['file']['type']]}
+        if len(content)>MAX_BYTES and not route.get('native'):
+            raise TenantLinearError('Böyük video üçün WhatsApp bağlantısı dəyişib.',409)
         started = True
         receipt = await asyncio.to_thread(dispatch_guarded, item, route, _submit, command['request_id'], command['file'],command['text'], content)
         if receipt['provider_accepted']:
@@ -272,6 +280,33 @@ async def check(session, lead_id, request_id):
     return receipt
 
 
+def _native_video_limit(route):
+    binding=route.get('native')
+    if not binding:
+        return MAX_BYTES
+    try:
+        from tenant_call_sources import remote
+        status=remote('/v1/sources/'+binding['gateway_id'])
+        if (status.get('connected') is True and status.get('account_jid')==binding['scope']['account']
+                and status.get('messaging_generation')==binding['scope']['generation']
+                and status.get('video_max_bytes')==VIDEO_MAX_BYTES):
+            return VIDEO_MAX_BYTES
+    except Exception:
+        # A mixed-version rollout or unavailable gateway keeps the original cap.
+        pass
+    return MAX_BYTES
+
+
+def video_upload_limit(session, lead_id):
+    try:
+        lead_id=int(lead_id)
+        if not 0<lead_id<2**63:raise ValueError()
+    except (TypeError,ValueError):raise TenantLinearError('Sorğu düzgün deyil.',400) from None
+    with _connect() as conn, conn.cursor() as cur:
+        _,connection,integration=authority(cur,session,lead_id)
+    return _native_video_limit(integration['route']) if connection[0]=='connect' else MAX_BYTES
+
+
 def capability(session, lead_id):
     try:
         lead_id=int(lead_id)
@@ -287,7 +322,8 @@ def capability(session, lead_id):
         with conn.cursor() as cur:
             _,fresh,_=authority(cur,session,lead_id)
     if fresh!=connection:raise TenantLinearError('Dialoqa giriş dəyişib.',409)
-    return {'enabled':result.get('enabled') is True,'max_bytes':5*1024*1024,
+    return {'enabled':result.get('enabled') is True,'max_bytes':MAX_BYTES,
+            'video_max_bytes':_native_video_limit(route),
             'mime_types':['image/jpeg','image/png','image/webp','video/mp4','application/pdf']}
 
 

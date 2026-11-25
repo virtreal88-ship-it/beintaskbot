@@ -10,11 +10,13 @@ import re
 import uuid
 import requests
 from contextlib import contextmanager
+from tenant_chat_upload_policy import VIDEO_MAX_BYTES
 from tenant_platform import _connect, TenantPlatformError
 
 NATIVE_KEY = 'native-route-requires-dispatch'
 MEDIA_EVIDENCE_EVENTS = 4096
 MEDIA_EVIDENCE_BYTES = 16 * 1024 * 1024
+NATIVE_MEDIA_BYTES = 10 * 1024 * 1024
 
 
 def _legacy(route):
@@ -101,7 +103,8 @@ def dispatch_cursor(route):
 
 def submit(route, request_id, *, text='', kind='text', mime='', name='', content=b'', quoted_message_id=None, reaction=None):
     request_id=str(uuid.UUID(str(request_id)))
-    if not isinstance(content,bytes) or len(content)>10*1024*1024:
+    limit=VIDEO_MAX_BYTES if kind=='video' and mime=='video/mp4' else NATIVE_MEDIA_BYTES
+    if not isinstance(content,bytes) or len(content)>limit:
         raise TenantPlatformError('native_media_invalid')
     from tenant_call_sources import service
     url,token=service()
@@ -111,9 +114,10 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
             raise TenantPlatformError('native_source_changed')
         actor=route.get('native_actor_id',route.get('author_id'))
         operation=('employee:'+str(int(actor))+':' if actor is not None else 'service:')+request_id
+        large_video=len(content)>NATIVE_MEDIA_BYTES
         payload={'scope':current['native']['scope'],'operation':operation,
             'chat':route['conversation_id'],'kind':kind,'text':text,'mime':mime,'name':name,
-            'data':base64.b64encode(content).decode('ascii')}
+            'data':'' if large_video else base64.b64encode(content).decode('ascii')}
         if reaction is not None:
             payload['operation']='reaction:'+str(int(actor))+':'+request_id
             payload['reaction']=reaction
@@ -130,9 +134,17 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
         # Keep the current source locked through dispatch. Caller also holds its
         # normal actor/dialogue authorization transaction. Never retry HTTP.
         try:
-            with requests.post(url+'/v1/sources/'+current['native']['gateway_id']+'/messages',
-                    headers={'Authorization':'Bearer '+token},json=payload,
-                    timeout=(5,40),allow_redirects=False,stream=True) as response:
+            headers={'Authorization':'Bearer '+token}
+            path='/messages'
+            if large_video:
+                path+='/video'
+                headers['Content-Type']='application/octet-stream'
+                headers['X-Native-Video-Command']=base64.b64encode(json.dumps(payload,ensure_ascii=False,separators=(',',':')).encode()).decode('ascii')
+                options={'data':content,'timeout':(5,140)}
+            else:
+                options={'json':payload,'timeout':(5,40)}
+            with requests.post(url+'/v1/sources/'+current['native']['gateway_id']+path,
+                    headers=headers,allow_redirects=False,stream=True,**options) as response:
                 body=bytearray()
                 for chunk in response.iter_content(4096):
                     body.extend(chunk)
@@ -326,7 +338,7 @@ def download(route,message_id,*,max_bytes,allowed_types):
                 raise TenantPlatformError('native_video_format')
             if type(size) is not int or size<=0:
                 raise TenantPlatformError('native_video_size_unknown')
-            if size>min(max_bytes,10*1024*1024):
+            if size>min(max_bytes,VIDEO_MAX_BYTES if mime=='video/mp4' else NATIVE_MEDIA_BYTES):
                 raise TenantPlatformError('native_video_too_large')
         elif mime not in allowed_types or type(size) is not int or not 0<size<=min(max_bytes,10*1024*1024):
             raise TenantPlatformError('native_media_restricted')
@@ -334,7 +346,7 @@ def download(route,message_id,*,max_bytes,allowed_types):
         try:
             with requests.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/media',
                     headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'},json=payload,
-                    timeout=(5,40),allow_redirects=False,stream=True) as response:
+                    timeout=(5,135 if size>NATIVE_MEDIA_BYTES else 40),allow_redirects=False,stream=True) as response:
                 if rows[0]['message_type']=='video':
                     if response.status_code==404:
                         raise TenantPlatformError('native_video_expired')

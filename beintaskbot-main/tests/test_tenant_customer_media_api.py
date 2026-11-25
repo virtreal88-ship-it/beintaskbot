@@ -26,3 +26,15 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
   with patch('tenant_customer_media_api.require_read_session',return_value={}),patch('tenant_customer_media_api.check',new=AsyncMock(side_effect=RuntimeError('secret'))):
    response=await read_handler(Mock(),Mock(),receipt=True)(request)
   data=json.loads(response.body);self.assertTrue(data['keep_request']);self.assertNotIn('secret',str(data));self.assertEqual(response.status,503)
+
+ def test_native_video_capability_requires_current_gateway_binding(self):
+     from tenant_chat_upload_policy import MAX_BYTES, VIDEO_MAX_BYTES
+     from tenant_customer_media_service import _native_video_limit
+     route={'native':{'gateway_id':'synthetic','scope':{'account':'synthetic','generation':'g1'}}}
+     status={'connected':True,'account_jid':'synthetic','messaging_generation':'g1','video_max_bytes':VIDEO_MAX_BYTES}
+     with patch('tenant_call_sources.remote', return_value=status) as gateway:
+         self.assertEqual(_native_video_limit({}),MAX_BYTES)
+         gateway.assert_not_called()
+         self.assertEqual(_native_video_limit(route),VIDEO_MAX_BYTES)
+         gateway.return_value={**status,'messaging_generation':'stale'}
+         self.assertEqual(_native_video_limit(route),MAX_BYTES)
