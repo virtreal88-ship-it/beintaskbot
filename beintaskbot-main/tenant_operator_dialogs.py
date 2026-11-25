@@ -1445,9 +1445,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     if not r.get('search_overview_read_only')
                     and (not r.get('archive_read_only') or show_archive_labels)]
                 attach_list_company_names(cur,tenant,company_cards,policy=policy)
-    import os
-    primary_widget = bool(widget_channel and os.getenv('BEINSYSTEMS_WIDGET_QUEUE_ENABLED','').lower()=='primary')
-    return {**({'widget_queue_primary':True} if primary_widget else {}),**({'completion_preview':True} if completion_preview else {}),
+    return {**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,

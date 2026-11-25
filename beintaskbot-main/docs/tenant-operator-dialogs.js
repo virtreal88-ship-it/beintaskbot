@@ -1387,7 +1387,6 @@
       }
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
-      document.dispatchEvent(new CustomEvent('tenant-widget-queue',{detail:{primary:result.widget_queue_primary===true}}));
       $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
       const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
       const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
@@ -3587,7 +3586,9 @@
       const message=$('chatText'),button=$('sendChat'),reason=$('operatorSendReason');
       const surface=message.closest('.operator-composer');
       surface.dataset.widgetReply='true';
-      for(const control of surface.querySelectorAll('.operator-composer-actions button'))if(control!==button)control.hidden=true;
+      for(const control of surface.querySelectorAll('.operator-composer-actions button')){
+        if(control!==button&&!control.closest('#operatorActiveLifecycleActions'))control.hidden=true;
+      }
       const copy=({ru:['Operator отклонил авторизацию чата. Отправка из CRM недоступна.','Operator сохранил ответ.','Отправка не подтверждена. Проверьте историю перед повтором.','Operator отклонил ответ.'],
         az:['Operator çat avtorizasiyasını qəbul etmədi. CRM-dən göndəriş bağlıdır.','Operator cavabı saxladı.','Göndəriş təsdiqlənməyib. Tarixçəni yoxlayın.','Operator cavabı rədd etdi.'],
         en:['Operator rejected chat authentication. Sending from CRM is unavailable.','Operator saved the reply.','Delivery is uncertain. Check history before retrying.','Operator rejected the reply.']})[i18n.language]||[];
