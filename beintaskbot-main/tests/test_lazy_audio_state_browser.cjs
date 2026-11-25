@@ -20,6 +20,10 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js','docs/tenant-chat-attachments.js'])await page.addScriptTag({path:path.join(root,file)});
  await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-profile',{detail:window.tenantProfileSnapshot}));return window.tenantOperator.openDialog(window.testRoute);});
  const voice=()=>page.locator('[data-message-id="voice-row"]');
+ const collapsedBox=await voice().boundingBox();
+ assert(collapsedBox.width<=281,'voice bubble remains compact on mobile and desktop');
+ const nativeControls=await voice().locator('audio').boundingBox();
+ assert(nativeControls.height>=44&&nativeControls.height<=45,'native player retains a usable touch height');
  assert.match(await page.locator('.operator-client-phone').innerText(),/994500001234/);
  assert.equal(await page.evaluate(()=>window.mediaCount),0,'lazy history never downloads automatically');
  assert.equal(await voice().locator('audio').getAttribute('src'),null);
@@ -28,6 +32,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),root=path.
  assert.match(await voice().locator('[data-media-load-status]').innerText(),/не загружено|not loaded|yüklənməyib/);
  await voice().locator('[data-media-open]').evaluate(n=>n.click());await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.getAttribute('src')?.startsWith('blob:'));
  assert.equal(await page.evaluate(()=>window.mediaCount),1);
+ assert.equal(await voice().locator('[data-media-load-status]').isVisible(),false,'loaded player does not reserve an empty status row');
  assert.match(await voice().locator('[data-media-meta]').innerText(),/KB/);
  await page.evaluate(()=>{window.staleAudio=document.querySelector('audio.operator-native-audio');window.staleError=window.staleAudio.onerror;document.dispatchEvent(new CustomEvent('tenant-chat-history-reset'));document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
  await page.waitForFunction(()=>document.querySelector('audio.operator-native-audio')?.getAttribute('src')?.startsWith('blob:'));
