@@ -42,6 +42,21 @@ def dialogue_chooser_enabled(tenant_id: object) -> bool:
             and is_operator_workspace(tenant_id))
 
 
+def widget_allowed(profile, action="view"):
+    from tenant_policy import TenantPolicy
+
+    if (not is_operator_workspace(profile.get("tenant_id")) or profile.get("active") is not True
+            or profile.get("tenant_status") != "active"
+            or (action == "update" and not operator_api_allowed(profile))):
+        return False
+    policy = TenantPolicy(profile)
+    # Assigned-employee and department scopes only have verifiable sources for Connect.
+    return (policy.allows_action("operator_data", "view")
+            and policy.action_scope("operator_data", "view") in (None, "all")
+            and policy.action_scope("dialogs", action) in (None, "all")
+            and policy.allows_action("dialogs", action))
+
+
 def operator_api_allowed(profile):
     return bool(profile.get("active") and is_operator_workspace(profile.get("tenant_id"))
                 and (profile.get("role") == "owner" or "operator_api" in (profile.get("permissions") or [])))

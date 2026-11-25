@@ -164,15 +164,13 @@
     if(replacePrefix!==null&&(current!==replacePrefix||!completesPrefix(current,body,input)))return false;
     input.value=!current||replacePrefix!==null
       ?body:current+(current.endsWith('\n')?'':'\n')+body;
-    state.input.dispatchEvent(new Event('input',{bubbles:true}));
+    state.input.dispatchEvent(new CustomEvent('input',{bubbles:true,detail:{replyInserted:true}}));
     state.input.focus();
     try{state.input.setSelectionRange(state.input.value.length,state.input.value.length);}catch{}
-    state.suggestions.hidden=true;
-    state.suggestions.replaceChildren();
     return true;
   }
   function renderSuggestions(state){
-    if(!canInsert(state)){state.suggestions.hidden=true;state.suggestions.replaceChildren();return;}
+    if(!canInsert(state)||!state.showSuggestions){state.suggestions.hidden=true;state.suggestions.replaceChildren();return;}
     const language=window.tenantI18n?.language;
     const locale=language==='en'||language==='ru'?language:'az';
     const alternate=locale==='az'?'en':'az';
@@ -391,8 +389,11 @@
     button.setAttribute('aria-haspopup','dialog');button.setAttribute('aria-expanded','false');
     button.setAttribute('role','menuitem');
     const suggestions=document.createElement('div');suggestions.className='operator-reply-template-suggestions';suggestions.hidden=true;suggestions.setAttribute('role','listbox');suggestions.setAttribute('aria-label',copy('suggestions'));
-    const state={menu,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null};
-    state.onInput=()=>renderSuggestions(state);
+    const state={menu,input,root,button,suggestions,identity:owner.key,templates:[],allowed:[],loaded:false,loading:false,loadSerial:0,error:'',available:false,renderManager:null,onInput:null,showSuggestions:false};
+    state.onInput=event=>{
+      state.showSuggestions=event.detail?.replyInserted!==true;
+      renderSuggestions(state);
+    };
     state.inputObserver=new MutationObserver(()=>{
       if(state!==mounted)return;
       renderSuggestions(state);

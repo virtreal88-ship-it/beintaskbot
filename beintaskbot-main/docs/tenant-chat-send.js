@@ -15,8 +15,8 @@
     if(sent.delivery_state==='failed'&&sent.provider_message_id)return {ru:'Провайдер сообщил об ошибке доставки. Повторная отправка отключена.',az:'Provayder çatdırılma xətası bildirdi. Təkrar göndərmə söndürülüb.',en:'The provider reported a delivery failure. Resend is disabled.'}[lang];
     return quoteCopy(sent.delivery_state||'unknown');
   };
-  let activeReceiptDiagnostics=()=>{},activePrimaryObserver=null;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
+  let activeReceiptDiagnostics=()=>{},activePrimaryObserver=null,activeSend=null;
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',draftKey='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
     activeReceiptDiagnostics=()=>{};
     activePrimaryObserver?.disconnect();activePrimaryObserver=null;
     const button=document.getElementById('sendChat'),input=document.getElementById('chatText'),primary=document.getElementById('tcComposerPrimary');
@@ -92,6 +92,27 @@
       check.onclick=async()=>{if(check.disabled||!isCurrent())return;check.disabled=true;try{let saved;try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}const result=await readReceipt(saved?.quote_message_id?saved.request_id:null);if(isCurrent())showDiagnostic(result);}catch(error){if(isCurrent())receiptOutput.textContent=error.message;}finally{check.disabled=false;}};
     }
 
+    const clearSavedDraft=text=>{
+      if(draftKey&&sessionStorage.getItem(draftKey)?.trim()===text)sessionStorage.removeItem(draftKey);
+    };
+    const scope=JSON.stringify([key,provider,String(channelId),draftKey]);
+    const binding={
+      scope,
+      current:()=>input.isConnected&&isCurrent(),
+      async accepted(pending,sent){
+        if(onAccepted(pending.text)!==true){
+          clearSavedDraft(pending.text);
+          if(input.value.trim()===pending.text){
+            input.value='';
+            input.dispatchEvent(new Event('input',{bubbles:true}));
+          }
+        }
+        button.textContent=copy('send','Göndər');
+        showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));
+        await reload();
+      }
+    };
+    activeSend=binding;
     try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){button.textContent=copy('checkSend','Vəziyyəti yoxla');if(!saved.quote_message_id||isQuoteCurrent(saved))presentPending(saved);}}catch(e){button.disabled=true;}
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
@@ -124,10 +145,11 @@
           else if(isCurrent()){presentPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
           if(isCurrent()){alert(diagnostic(sent));await reload();}return;
         }
-        if(!forgetPending(pending.request_id)||!isCurrent())return;
-        const keepDraft=onAccepted(pending.text)===true;
-        if(!keepDraft&&input.value.trim()===pending.text){input.value='';input.dispatchEvent(new Event('input',{bubbles:true}));}button.textContent=copy('send','Göndər');
-        showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));await reload();
+        if(!forgetPending(pending.request_id))return;
+        // A refresh can replace the composer while this request is in flight.
+        // Settle the visible draft only for the same employee and physical dialog.
+        if(activeSend?.scope===scope&&activeSend.current())await activeSend.accepted(pending,sent);
+        else clearSavedDraft(pending.text);
       }catch(e){const discard=!checking&&e.keepRequest===false&&!pending?.quote_message_id;if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}else if(isCurrent())presentPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
       finally{button.disabled=false;button.classList.remove('loading');}
     };

@@ -18844,6 +18844,9 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     bein_api = tenant_bein_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get("/api/platform/integrations/beinsystems", bein_api)
     app_web.router.add_post("/api/platform/integrations/beinsystems", bein_api)
+    from tenant_beinsystems_operator_api import widget_handler
+    app_web.router.add_post("/api/platform/operator/widget",
+        widget_handler(_tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger))
     operator_integration_api = tenant_operator_integration_handler(
         _tenant_member_from_request, CANONICAL_WEB_ORIGIN, logger)
     app_web.router.add_get("/api/platform/integrations/beinsystems-operator", operator_integration_api)
