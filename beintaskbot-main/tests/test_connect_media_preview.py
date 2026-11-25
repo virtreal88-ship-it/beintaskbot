@@ -22,9 +22,12 @@ def clear_attachment_api_memory():
     media._media_flights.clear()
     media._media_active=0
     media._media_auto_active=0
+    media._media_video_active=0
     api.MEDIA_CACHE.clear()
     api.MEDIA_CACHE_BYTES = 0
     api.MEDIA_INFLIGHT.clear()
+    api.VIDEO_INFLIGHT.clear()
+    api.LARGE_VIDEO_CACHE.clear()
     api.REQUESTS.clear()
 
 @pytest.fixture
@@ -314,6 +317,67 @@ def test_preview_api_rechecks_authority_without_kommo_or_ai(monkeypatch):
     loader.side_effect=[current,TenantLinearError('denied',403)]
     assert run(handle(request)).status==403
     api.REQUESTS.clear()
+
+
+def test_cold_large_video_stream_keeps_light_media_and_history_responsive(monkeypatch):
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    from tenant_media_evidence import media_version
+
+    async def scenario():
+        content = b'v' * (99 * 1024 * 1024)
+        ready, release = asyncio.Event(), asyncio.Event()
+        kinds = {'video': 'video', 'photo': 'image', 'voice': 'audio'}
+        def load(_session, _lead, reference, **_scope):
+            if reference == 'denied':
+                raise TenantLinearError('Denied', 403)
+            value = item()
+            value['row']['message_type'] = kinds[reference]
+            value['message_id'] = reference
+            return value
+        async def fetch(item, **_options):
+            if item['message_id'] == 'video':
+                ready.set()
+                await release.wait()
+                return content, 'video/mp4'
+            return b'light', {'photo': 'image/png', 'voice': 'audio/ogg'}[item['message_id']]
+        provider = AsyncMock(side_effect=fetch)
+        monkeypatch.setattr(api, 'load', load)
+        monkeypatch.setattr(media, 'download_media', provider)
+        app = web.Application()
+        app.router.add_get('/attachment', api.handler(lambda _: PROFILE, AsyncMock(), Mock()))
+        async def history(_request):
+            return web.json_response({'messages': ['ordinary chat']})
+        app.router.add_get('/history', history)
+        def params(reference, phase='auto_preview'):
+            return {'expected_tenant_id': A, 'expected_user_id': '11', 'lead_id': '41',
+                    'expected_media_version': media_version({}), 'message_id': reference, phase: '1'}
+        async with TestClient(TestServer(app)) as client:
+            cold = await client.get('/attachment', params=params('video', 'cache_only'))
+            assert cold.status == 204 and provider.await_count == 0
+            waiting = asyncio.create_task(client.get('/attachment', params=params('video')))
+            try:
+                await asyncio.wait_for(ready.wait(), 1)
+                for reference in ('photo', 'voice'):
+                    async with client.get('/attachment', params=params(reference), timeout=2) as ordinary:
+                        assert ordinary.status == 200 and await ordinary.read() == b'light'
+                async with client.get('/history', timeout=2) as chat:
+                    assert (await chat.json())['messages'] == ['ordinary chat']
+                assert not waiting.done() and len(api.VIDEO_INFLIGHT) == 1
+            finally:
+                release.set()
+            async with await waiting as video:
+                assert video.status == 200 and video.content_length == len(content)
+                total = sum([len(chunk) async for chunk in video.content.iter_chunked(65536)])
+                assert total == len(content)
+            async with client.get('/attachment', params=params('video', 'cache_only'),
+                                  headers={'Range': 'bytes=10-19'}) as resumed:
+                assert resumed.status == 206 and await resumed.read() == b'v' * 10
+            async with client.get('/attachment', params=params('denied', 'cache_only')) as denied:
+                assert denied.status == 403
+            assert provider.await_count == 3 and len(api.LARGE_VIDEO_CACHE) == 1
+            assert len(api.MEDIA_CACHE) == 2
+    run(scenario())
 
 
 def test_per_actor_and_tenant_rate_limits():
