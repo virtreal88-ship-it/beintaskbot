@@ -59,8 +59,18 @@ const wait = async predicate => {
   }
   assert(d.getElementById('operatorSendReason').textContent.includes('авторизац'));
   d.querySelector('.dialog-source-tabs button:last-child').click();
-  const field=d.querySelector('.dialog-note-form textarea');field.value='staff only';field.dispatchEvent(new w.Event('input'));
-  d.querySelector('.dialog-note-form').dispatchEvent(new w.Event('submit',{cancelable:true}));
+  const assertNoteEditor = root => {
+    const field=root.querySelector('.dialog-note-composer textarea');
+    const send=root.querySelector('.dialog-note-composer button[type=submit]');
+    assert(field && send && send.parentElement===field.parentElement,'send icon is inside the input frame');
+    assert(send.querySelector('svg[aria-hidden=true]'));
+    assert.equal(send.getAttribute('aria-label'),'Сохранить комментарий');
+    assert(send.disabled,'empty notes cannot be sent');
+    return [field,send];
+  };
+  const [field,noteSend]=assertNoteEditor(d.querySelector('.dialog-note-form'));
+  field.value='staff only';field.dispatchEvent(new w.Event('input'));
+  assert(!noteSend.disabled);noteSend.click();
   await wait(()=>calls.some(c=>c.url.includes('internal-comments')));
   assert(!calls.some(c=>c.url.endsWith('/operator/widget')||c.url.includes('/crm/chat/send')));
   site.can_send=true;site.send_block_reason='';
@@ -80,6 +90,17 @@ const wait = async predicate => {
   d.querySelector('[data-operator-lifecycle=accept]').click();
   await wait(()=>!d.querySelector('[data-operator-lifecycle=accept]'));
   assert.equal(selected().textContent,'WhatsApp');
+  site.can_add_internal_comment=true;
+  await w.tenantOperator.openDialog(site);
+  d.querySelector('[data-operator-internal-comment]').click();
+  const modal=d.getElementById('operatorInternalComment');
+  const [modalField,modalSend]=assertNoteEditor(modal);
+  modalField.value='modal staff only';modalField.dispatchEvent(new w.Event('input'));
+  assert(!modalSend.disabled);modalSend.click();
+  await wait(()=>!d.getElementById('operatorInternalComment'));
+  assert.equal(calls.filter(c=>c.url.includes('internal-comments')).at(-1).data.note,'modal staff only');
+  assert.equal(calls.filter(c=>c.url.endsWith('/operator/widget')).length,1);
+  assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
   dom.window.close();
   console.log('Widget uses the regular conversation, keeps its source on acceptance, isolates notes and addresses only the selected chat.');
 })().catch(err=>{console.error(err);process.exit(1)});

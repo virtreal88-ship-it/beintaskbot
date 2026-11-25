@@ -768,7 +768,7 @@
     az:{title:'Daxili şərh',hint:'Dialoqa giriş hüququ olan əməkdaşlar görə bilər.',save:'Şərhi saxla'},
     en:{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'}
   }[i18n.language]||{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'})[key];
-  composerStyle.textContent+=`.operator-timeline-event.operator-internal-comment{display:block;text-align:start;max-width:min(90%,600px);padding:9px 12px;background:var(--paper);color:var(--ink);border-inline-start:3px solid var(--brand);border-radius:8px}.operator-internal-comment>span{font-weight:650}.operator-internal-comment p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}.operator-internal-comment time{display:block}.operator-internal-comment-modal::backdrop{background:#071d1688}.operator-internal-comment-modal textarea{display:block;width:100%;min-height:110px;box-sizing:border-box;margin:8px 0}`;
+  composerStyle.textContent+=`.operator-chat-history .operator-timeline-event.operator-internal-comment{display:grid;grid-template-columns:minmax(0,max-content) auto;align-items:baseline;max-width:min(100%,600px);background:transparent}.operator-internal-comment>span{grid-row:1;grid-column:1}.operator-internal-comment>time{grid-row:1;grid-column:2}.operator-internal-comment>[data-internal-comment-body]{grid-row:2;grid-column:1/-1;justify-self:center;max-width:100%;box-sizing:border-box;margin:0;padding:5px 9px;border-radius:8px;background:var(--paper);color:var(--ink);font-size:13px;font-weight:500;text-align:start;white-space:pre-wrap;overflow-wrap:anywhere}.operator-internal-comment-modal::backdrop{background:#071d1688}.operator-internal-comment-modal [data-note-editor]{margin:8px 0}.operator-internal-comment-modal [role=status]:empty{display:none}`;
   function showInternalComment(comment){
     retainInternalComments(currentPage,{internal_comments:[comment]});
     const chat=$('chatRows');
@@ -784,11 +784,14 @@
     modal.className='operator-complete-card operator-internal-comment-modal';modal.setAttribute('aria-labelledby','operatorInternalCommentTitle');
     modal.innerHTML=`<h2 id="operatorInternalCommentTitle">${esc(internalCommentCopy('title'))}</h2>
       <p>${esc(internalCommentCopy('hint'))}</p><form>
-      <textarea maxlength="2000" required aria-label="${esc(internalCommentCopy('title'))}"></textarea>
+      <div data-note-editor><textarea rows="2" maxlength="2000" required aria-label="${esc(internalCommentCopy('title'))}"></textarea>
+      <button type="submit" class="primary" disabled>${esc(internalCommentCopy('save'))}</button></div>
       <p role="status"></p><div class="operator-complete-actions">
-      <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button>
-      <button type="submit" class="primary">${esc(internalCommentCopy('save'))}</button></div></form>`;
+      <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button></div></form>`;
     const field=modal.querySelector('textarea'),submit=modal.querySelector('[type=submit]');
+    window.tenantStyleInternalCommentComposer?.(modal.querySelector('[data-note-editor]'),field,submit,internalCommentCopy('save'));
+    const updateSend=()=>{submit.disabled=field.readOnly||!field.value.trim();};
+    field.addEventListener('input',updateSend);
     const version=epoch,view=openRevision;
     const same=()=>version===epoch&&view===openRevision&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true;
     const dispose=()=>{modal.remove();for(const event of dismissOn)document.removeEventListener(event,dispose);};
@@ -812,7 +815,7 @@
         close();
       }catch(error){
         if(same()&&modal.isConnected)modal.querySelector('[role=status]').textContent=error.message;
-      }finally{submit.disabled=false;field.readOnly=false;}
+      }finally{field.readOnly=false;updateSend();}
     };
     document.body.append(modal);
     if(typeof modal.showModal==='function')modal.showModal();else modal.setAttribute('open','');
