@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import widget_allowed
+from tenant_linear_policy import TenantLinearError
 
 PAGE = 50
 
@@ -158,8 +159,27 @@ def handle(profile, data):
     with operator._connect() as db, db.cursor() as cur:
         current, login = _snapshot(cur, profile, credentials)
         writable = widget_allowed(current, "update")
+        from tenant_operator_widget_sync import enabled
+        managed = enabled() == tenant
+        assignments = {}
+        if managed:
+            cur.execute("""SELECT chat_id,identity,state,operator_id FROM saas_widget_dialogs
+                WHERE tenant_id=%s AND instance=%s""",(tenant,credentials["connection_instance_id"]))
+            assignments = {(r["chat_id"],r["identity"]):r for r in cur.fetchall()}
+        def access_for(i, provider_row):
+            workflow = assignments.get((i,_hash([provider_row["client_id"]]))) or {}
+            own = workflow.get("state")=="accepted" and workflow.get("operator_id")==int(profile["telegram_id"])
+            return workflow.get("state")!="accepted" or own, writable and (not managed or own)
         if action == "list":
-            return {"chats": [_card(i, r, rev, writable, login) for i, (r, rev) in routes.items()]}
+            cards = []
+            for i,(r,rev) in routes.items():
+                visible, allowed = access_for(i,r)
+                if visible:
+                    cards.append(_card(i,r,rev,allowed,login))
+            return {"chats":cards}
+        visible,writable = access_for(chat,row)
+        if not visible:
+            raise operator.OperatorError("Диалог недоступен.",403)
         messages = _messages(rows, chat, row["client_id"])
         _reconcile(cur, tenant, chat, data["revision"], rows)
         if action == "older":
@@ -189,6 +209,21 @@ def _reconcile(cur, tenant, chat, revision, rows):
             FROM jsonb_to_recordset(%s::jsonb) AS m(request_id uuid, message_id text, signature text)
             WHERE r.tenant_id=%s AND r.request_id=m.request_id AND r.signature=m.signature AND r.state='unknown'""",
             (json.dumps(observed), tenant))
+
+
+def _require_queue_owner(cur, profile, credentials, chat, row):
+    from tenant_operator_widget_sync import enabled, PROVIDER
+    if enabled() != operator._tenant(profile):
+        return
+    from tenant_operator_widget_queue import authorized
+    try:
+        route,actor,_ = authorized(cur,profile,{
+            "provider":PROVIDER,"channel_id":credentials["connection_instance_id"],"lead_id":chat,
+            "conversation_id":_hash([row["client_id"]])},update=True,lock=True)
+    except TenantLinearError as error:
+        raise operator.OperatorError(str(error),error.status) from error
+    if route["state"]!="accepted" or route["operator_id"]!=actor:
+        raise operator.OperatorError("Сначала примите диалог.",409)
 
 
 def _reply(profile, credentials, chat, data):
@@ -223,6 +258,7 @@ def _reply(profile, credentials, chat, data):
             _, login = _snapshot(cur, profile, credentials, "update")
             routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
             row = _route(routes, chat, data["revision"])
+            _require_queue_owner(cur, profile, credentials, chat, row)
             if not _can_reply(row, login):
                 raise operator.OperatorError("Диалог закрыт или закреплён за другим оператором.", 409)
         except operator.OperatorError:

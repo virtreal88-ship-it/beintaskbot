@@ -32,7 +32,7 @@
   let member, scope = '', epoch = 0, version = 0, busy = false, sending = false, timer;
   let details, heading, list, panel, status, transcript, composer, draft, send, older, original;
   let selected, more = false, messages = new Map(), request;
-  const relevant = () => member && !document.hidden && document.getElementById('view-dialogs')?.classList.contains('active');
+  const relevant = () => member && !root.hidden && !document.hidden && document.getElementById('view-dialogs')?.classList.contains('active');
   function reset() {
     ++epoch; ++version; clearTimeout(timer); member = null; scope = ''; selected = null;
     messages.clear(); busy = false; sending = false; request = null; details = null;
@@ -219,6 +219,12 @@
   document.addEventListener('tenant-view', event => {
     if (event.detail.view === 'dialogs' && member) void refresh();
     else if (details) {details.open = false; clearChat(); clearTimeout(timer);}
+  });
+  document.addEventListener('tenant-widget-queue', event => {
+    if (!member) return;
+    root.hidden = event.detail?.primary === true;
+    if (root.hidden) {details.open = false; clearChat(); clearTimeout(timer);}
+    else if (relevant()) schedule();
   });
   document.addEventListener('visibilitychange', () => {if (relevant()) void refresh(); else clearTimeout(timer);});
   document.addEventListener('tenant-language', () => {if (member) {const user = member, key = scope; reset(); scope = key; mount(user);}});

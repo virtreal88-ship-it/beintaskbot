@@ -1370,6 +1370,15 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # when searching; do not expose labels for cross-owner live rows.
             show_archive_labels = (interactive and lifecycle in {'all','completed'}
                 and dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view'))
+            widget_rows, widget_channel = [], None
+            if interactive or (all_rows and include_read_cursors and not completion_preview):
+                from tenant_operator_widget_queue import cards as widget_cards
+                widget_rows, widget_channel = widget_cards(cur,policy,lifecycle,rollout)
+                if widget_channel:
+                    channels.append(widget_channel)
+                    if unread_total is not None:
+                        unread_total += sum(w['unread_count'] for w in widget_rows if not w['archive_read_only'])
+                    rows.extend(widget_rows)
             if search:
                 query_text=str(search)[:200].casefold()
                 def matches(row):
@@ -1417,6 +1426,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     allow_mixed=bool(allow_mixed_history_card and lifecycle=='all' and rollout.enforced))
             # Adding a read-only sibling must not replace an actionable route.
             rows=_fold_group_routes(rows,prefer_actionable=owner_overview or (interactive and employee_all))
+            if widget_rows:
+                from tenant_operator_widget_queue import merge_order
+                rows = merge_order(rows)
             total_count=len(rows)
             if not all_rows:rows=rows[offset:offset+51]
             if interactive and rollout.enforced:
@@ -1433,7 +1445,9 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     if not r.get('search_overview_read_only')
                     and (not r.get('archive_read_only') or show_archive_labels)]
                 attach_list_company_names(cur,tenant,company_cards,policy=policy)
-    return {**({'completion_preview':True} if completion_preview else {}),
+    import os
+    primary_widget = bool(widget_channel and os.getenv('BEINSYSTEMS_WIDGET_QUEUE_ENABLED','').lower()=='primary')
+    return {**({'widget_queue_primary':True} if primary_widget else {}),**({'completion_preview':True} if completion_preview else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,
@@ -1444,6 +1458,9 @@ def mark_read(profile,payload):
     """Advance each retained source cursor only through messages on that source."""
     if not isinstance(payload,dict):raise TenantLinearError('Некорректный запрос.')
     provider=str(payload.get('provider') or '')
+    if provider=='operator_widget':
+        from tenant_operator_widget_queue import read
+        return read(profile,payload)
     if provider not in {'connect','kommo'}:raise TenantLinearError('Некорректный канал.')
     message_id=identifier(payload.get('message_id'));lead_id=int(payload.get('lead_id'))
     channel=str(payload.get('channel_id') or '')[:250]
@@ -1538,6 +1555,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
             include_shared_reminder_events=False,include_internal_comments=False,combine_history=False,redirect_paired_history=False,
             owner_overview=False,search_overview=False,search='',observed_operator_id=None):
+    if provider == 'operator_widget':
+        if observed_operator_id is not None or support_case_only or anchor:
+            raise TenantLinearError('Диалог недоступен в этом режиме.',403)
+        from tenant_operator_widget_queue import history as widget_history
+        return widget_history(profile,dict(provider=provider,lead_id=lead_id,channel_id=channel,conversation_id=conversation),before)
     colleague=observed_operator_id is not None
     if colleague and (support_case_only or owner_overview or search_overview or combine_history
                       or redirect_paired_history or include_operator_events or include_shared_reminder_events

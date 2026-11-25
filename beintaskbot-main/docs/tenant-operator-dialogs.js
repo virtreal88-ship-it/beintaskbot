@@ -628,6 +628,11 @@
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       // A successful receipt is authoritative even while history is refreshing.
       if(['accept','takeover','start','close'].includes(action))button.remove();
+      if(route.provider==='operator_widget'){
+        showLifecycleTimelineEvent(result.operator_event,action==='dismiss'?'no_reply':action);
+        if(action==='transfer'){closeDialog();void refresh();return;}
+        await openDialog(route,true,'',{suppressRead:true});void refresh();return;
+      }
       if(action==='accept'||action==='close'){
         applyLifecycleReceipt(route,action,result);
         return;
@@ -669,13 +674,13 @@
     az:{empty:'Əlçatan onlayn operator yoxdur.',loading:'Onlayn operatorlar yoxlanılır…',failed:'Dialoqu ötürmək olmadı. Siyahını yoxlayıb yenidən cəhd edin.',stale:'Dialoq və ya operatorun statusu dəyişib. Siyahını yeniləyin.',sending:'Dialoq ötürülür…',retry:'Siyahını yenilə'},
     en:{empty:'No eligible operators online.',loading:'Checking who is online…',failed:'Could not transfer the conversation. Check the list and try again.',stale:'The conversation or operator status changed. Refresh the list.',sending:'Transferring conversation…',retry:'Refresh list'}
   }[i18n.language]||{})[key];
-  const canSidebarTransfer=route=>route?.provider==='connect'&&!route.archive_read_only&&!route.owner_overview_read_only&&route.lifecycle?.can_transfer===true;
+  const canSidebarTransfer=route=>['connect','operator_widget'].includes(route?.provider)&&!route.archive_read_only&&!route.owner_overview_read_only&&route.lifecycle?.can_transfer===true;
   const sidebarTransferFlights=new Set();
   function mountSidebarTransfer(host,route,current){
     const menu=host?.querySelector('details');if(!menu||!canSidebarTransfer(route))return ()=>{};
     const results=menu.querySelector('[data-transfer-targets]'),status=menu.querySelector('[role=status]'),retry=menu.querySelector('[data-transfer-retry]');
     const profile=member, owner=identity(profile), revision=route.lifecycle.revision;
-    const exact={provider:'connect',channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:revision};
+    const exact={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:revision};
     const flightKey=contextKey('sidebar-transfer',route)+'.'+revision;
     const routeCurrent=()=>current()&&host.isConnected&&menu.closest('dialog')?.open&&
       canSidebarTransfer(currentDialog)&&currentDialog.lifecycle.revision===revision;
@@ -764,6 +769,15 @@
     en:{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'}
   }[i18n.language]||{title:'Internal comment',hint:'Visible to staff with access to this conversation.',save:'Save comment'})[key];
   composerStyle.textContent+=`.operator-timeline-event.operator-internal-comment{display:block;text-align:start;max-width:min(90%,600px);padding:9px 12px;background:var(--paper);color:var(--ink);border-inline-start:3px solid var(--brand);border-radius:8px}.operator-internal-comment>span{font-weight:650}.operator-internal-comment p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}.operator-internal-comment time{display:block}.operator-internal-comment-modal::backdrop{background:#071d1688}.operator-internal-comment-modal textarea{display:block;width:100%;min-height:110px;box-sizing:border-box;margin:8px 0}`;
+  function showInternalComment(comment){
+    retainInternalComments(currentPage,{internal_comments:[comment]});
+    const chat=$('chatRows');
+    if(chat){
+      const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+      placeOperatorEvents(chat,currentPage);
+      setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),true);
+    }
+  }
   function openInternalComment(route,trigger){
     if($('operatorInternalComment'))return;
     const modal=document.createElement('dialog');modal.id='operatorInternalComment';
@@ -794,13 +808,7 @@
         const {comment}=await api('dialogs/internal-comments','POST',{provider:route.provider,lead_id:route.lead_id,
           channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...attempt});
         if(!same()||!currentPage){dispose();return;}
-        retainInternalComments(currentPage,{internal_comments:[comment]});
-        const chat=$('chatRows');
-        if(chat){
-          const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
-          placeOperatorEvents(chat,currentPage);
-          setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),true);
-        }
+        showInternalComment(comment);
         close();
       }catch(error){
         if(same()&&modal.isConnected)modal.querySelector('[role=status]').textContent=error.message;
@@ -1379,6 +1387,7 @@
       }
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
+      document.dispatchEvent(new CustomEvent('tenant-widget-queue',{detail:{primary:result.widget_queue_primary===true}}));
       $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
       const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
       const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
@@ -1741,6 +1750,7 @@
           <span class="operator-row-copy"><span class="operator-row-title" data-user-content>${esc(name)}</span><span class="operator-row-sub" data-user-content>${esc(identityText)}</span></span>
           <span class="operator-row-meta"><span class="operator-row-indicators">${lifecycle}${unread?`<span class="operator-unread-count" aria-label="${unread} ${esc(({ru:'непрочитанных',az:'oxunmamış',en:'unread'})[i18n.language]||'unread')}" title="${unread}">${unread>99?'99+':unread}</span>`:''}</span>${timeText?`<time class="operator-row-time">${esc(timeText)}</time>`:''}</span>
           ${companyName?`<span class="operator-row-context"><span class="operator-state operator-row-company" title="${esc(companyName)}" data-user-content>${esc(companyName)}</span></span>`:''}
+          ${row.provider==='operator_widget'?`<span class="operator-row-preview">${esc(row.channel_name)}</span>`:''}
           ${previewMarkup}
           ${capabilities.dialog_company_binding===true?'':`<span class="operator-state operator-row-status" data-state="${esc(row.agent_status||row.display_state)}">${esc(agentModeLabel(row))}</span>`}
         </span>
@@ -2195,7 +2205,8 @@
     const mediaActions=media&&!directAudio&&!video?`<div data-media-actions ${readOnly?'':'hidden'}>${fileActuators}</div>`:'';
     const knownSize=m.media_size_bytes!==undefined&&m.media_size_bytes!==null&&m.media_size_bytes!==''&&Number.isSafeInteger(Number(m.media_size_bytes))&&Number(m.media_size_bytes)>0;
     const mediaMeta=!knownSize?'':mediaSize(m.media_size_bytes);
-    const caption=media?attachmentCaption(m):m.body;
+    const widgetAttachment=route?.provider==='operator_widget'&&m.widget_attachment===true;
+    const caption=widgetAttachment?[m.body,({ru:'Вложение',az:'Qoşma',en:'Attachment'})[i18n.language]].filter(Boolean).join(' · '):media?attachmentCaption(m):m.body;
     const label=media?attachmentLabel(m):'';
     const original=!deleted&&m.quoted_provider_message_id?(readOnly?items:currentPage?.messages||items).find(item=>item.provider_message_id===m.quoted_provider_message_id&&String(item.source_channel_id||route.channel_id)===String(m.source_channel_id||route.channel_id)):null;const quote=!deleted&&m.quoted_provider_message_id?`<button type="button" class="operator-quote" data-quote-jump="${esc(m.quoted_provider_message_id)}">${esc(original?(messageAuthor(original)+' · '+String(quotedMessagePreview(original)).slice(0,160)):({ru:'Исходное сообщение не загружено',az:'Orijinal mesaj yüklənməyib',en:'Original message is not loaded'}[i18n.language]||'Original message is not loaded'))}</button>`:'';
     const deletedLabel=deleted&&(globalThis.window?.tenantWhatsAppMessageActions?.t('messageDeleted')||({ru:'Сообщение удалено',az:'Mesaj silinib',en:'Message deleted'}[i18n.language]||'Message deleted'));
@@ -2550,7 +2561,7 @@
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
-    const hasCompany=()=>capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
+    const hasCompany=()=>route.provider!=='operator_widget'&&capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
     const hasReminder=dialog=>(capabilities.shared_dialog_reminder_creation===true||capabilities.shared_dialog_reminders===true)&&dialog?.shared_reminder?.can_schedule===true;
     const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route);
     const panelTitle=hasCompany()||(!hasTransfer&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
@@ -3225,7 +3236,21 @@
     if(actions.has('pause')&&primaryAction!=='pause')appendMenu(actionButton('switchToManual','pause'));
     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
-    if(route.can_add_internal_comment===true&&!route.case_attachment){
+    const websiteChat=route.provider==='operator_widget';
+    if(capabilities.operator_widget===true&&!route.case_attachment&&(websiteChat||
+        (route.provider==='connect'&&(route.wecall||/@(s\.whatsapp\.net|g\.us|lid)$/i.test(route.conversation_id||''))))){
+      const canComment=()=>identity(member)===who&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true;
+      window.tenantDialogSourceTabs?.({
+        source:websiteChat?'widget':'whatsapp',key:contextKey('source',route),panel:host.querySelector('.operator-composer'),
+        canComment:canComment(),save:async attempt=>{
+          if(!canComment())throw new Error(t('readOnly'));
+          const {comment}=await api('dialogs/internal-comments','POST',{provider:route.provider,lead_id:route.lead_id,
+            channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',...attempt});
+          if(canComment()&&currentPage)showInternalComment(comment);
+        }
+      });
+    }
+    if(!websiteChat&&route.can_add_internal_comment===true&&!route.case_attachment){
       const comment=document.createElement('button');comment.type='button';comment.dataset.operatorInternalComment='';
       comment.textContent=internalCommentCopy('title');
       comment.onclick=()=>{if(same()){menu.open=false;openInternalComment(route,comment);}};
@@ -3557,7 +3582,43 @@
       draftQuote={quote_message_id,quote_channel_id,quote_conversation_id};
       drawReplyQuote();
     }
-    window.tenantChatSend?.clearDiagnostics?.();if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
+    window.tenantChatSend?.clearDiagnostics?.();
+    if(websiteChat){
+      const message=$('chatText'),button=$('sendChat'),reason=$('operatorSendReason');
+      const surface=message.closest('.operator-composer');
+      surface.dataset.widgetReply='true';
+      for(const control of surface.querySelectorAll('.operator-composer-actions button'))if(control!==button)control.hidden=true;
+      const copy=({ru:['Operator отклонил авторизацию чата. Отправка из CRM недоступна.','Operator сохранил ответ.','Отправка не подтверждена. Проверьте историю перед повтором.','Operator отклонил ответ.'],
+        az:['Operator çat avtorizasiyasını qəbul etmədi. CRM-dən göndəriş bağlıdır.','Operator cavabı saxladı.','Göndəriş təsdiqlənməyib. Tarixçəni yoxlayın.','Operator cavabı rədd etdi.'],
+        en:['Operator rejected chat authentication. Sending from CRM is unavailable.','Operator saved the reply.','Delivery is uncertain. Check history before retrying.','Operator rejected the reply.']})[i18n.language]||[];
+      if(route.send_block_reason==='widget_socket_unavailable')reason.textContent=copy[0];
+      let sending=false;
+      button.onclick=async()=>{
+        const text=message.value.trim();
+        if(!same()||!sendAllowed||!text||sending)return;
+        sending=true;button.disabled=true;message.readOnly=true;
+        const key=contextKey('widget-reply',route)+'.'+route.widget_revision;
+        try{
+          const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
+          if(!same())return;
+          const hash=Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,'0')).join('');
+          const prior=JSON.parse(sessionStorage.getItem(key)||'null');
+          const attempt=prior?.hash===hash?prior:{hash,request_id:crypto.randomUUID()};
+          sessionStorage.setItem(key,JSON.stringify(attempt));
+          const result=await rawApi('/api/platform/operator/widget',{method:'POST',body:JSON.stringify({
+            action:'reply',chat_id:String(route.lead_id),revision:route.widget_revision,text,request_id:attempt.request_id,
+            expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id})},{optionalScopedRead:true});
+          if(result.state==='saved'||result.state==='rejected')sessionStorage.removeItem(key);
+          if(!same())return;
+          reason.textContent=copy[result.state==='saved'?1:result.state==='rejected'?3:2];
+          if(result.state==='saved'){message.value='';message.dispatchEvent(new Event('input',{bubbles:true}));}
+        }catch(error){if(same())reason.textContent=error.message;}
+        finally{if(same()){sending=false;message.readOnly=false;button.disabled=!sendAllowed;}}
+      };
+      message.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){
+        event.preventDefault();button.click();
+      }});
+    }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     const replyDiagnostics=$('operatorReplyDiagnostics');
     if(replyDiagnostics){replyDiagnostics.replaceChildren();window.tenantChatSend?.renderDiagnostics?.(replyDiagnostics);}
     renderHistoryMergeReadPicker();renderComposerSourcePicker();
