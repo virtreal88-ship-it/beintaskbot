@@ -98,6 +98,7 @@ def _find_exact_routes(cur,tenant,channel,phone):
 def _prepare(profile,payload):
     from tenant_connect_transport import _schema,connect_route
     from tenant_connect_identity import conflicted
+    from tenant_connect_direct_identity import lock_identities, verified_phone_jid
     from tenant_dialog_lifecycle import enabled as lifecycle_enabled
     from tenant_dialog_rollout import guard
     from tenant_dialog_presence import is_online
@@ -117,12 +118,15 @@ def _prepare(profile,payload):
 
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
                 (f'new-direct-chat:{tenant}:{payload["channel_id"]}:{payload["phone"]}',))
+            phone_jid=payload['phone']+'@s.whatsapp.net'
+            lock_identities(cur,tenant,payload['channel_id'],[phone_jid, payload['phone']+'@c.us'])
             routes=_find_exact_routes(cur,tenant,payload['channel_id'],payload['phone'])
             if len(routes)>1:
                 raise TenantLinearError('Для этого номера найдено несколько переписок в выбранном источнике. Попросите владельца проверить их.',409)
             if routes:
                 row=routes[0]
-                if conflicted(cur,tenant,payload['channel_id'],str(row['conversation_id'])):
+                if (verified_phone_jid(cur,tenant,payload['channel_id'],row['conversation_id']) != phone_jid
+                        or conflicted(cur,tenant,payload['channel_id'],str(row['conversation_id']))):
                     raise TenantLinearError('Номер связан с конфликтующими WhatsApp-идентификаторами. Откройте существующий диалог через список.',409)
                 from tenant_dialog_lifecycle import require_access
                 require_access(cur,tenant,actor,'connect',payload['channel_id'],row['conversation_id'],'view',owner=policy.profile.get('role')=='owner')

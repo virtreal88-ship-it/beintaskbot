@@ -10,7 +10,7 @@
   const language=()=>copy[window.tenantI18n?.language]||copy.az;
   const identity=()=>window.tenantOperator?.member;
   const keyFor=member=>`tenant-new-chat:${member?.tenant_id||''}:${member?.telegram_id||''}`;
-  let sources=[],loadedAt=0,dialog=null,formState=null;
+  let sources=[],loadedAt=0,sourceOwner=null,sourceLoad=null,dialog=null,formState=null;
   const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const style=document.createElement('style');
   style.textContent=`#operatorNewChat{min-height:38px;white-space:nowrap}@media(max-width:850px){#operatorNewChat{grid-column:1/-1;width:100%;min-height:44px}}.operator-new-chat-dialog{width:min(520px,calc(100vw - 24px));max-height:90dvh;overflow:auto;box-sizing:border-box;border:1px solid var(--line);border-radius:14px;padding:0;background:var(--card);color:var(--ink);box-shadow:0 24px 80px #0005}.operator-new-chat-dialog::backdrop{background:#071d1688}.operator-new-chat-dialog header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}.operator-new-chat-dialog h2{margin:0;font-size:18px}.operator-new-chat-dialog form{display:grid;gap:10px;padding:14px 16px}.operator-new-chat-dialog label{display:grid;gap:4px;color:var(--muted);font-size:13px}.operator-new-chat-dialog input,.operator-new-chat-dialog select,.operator-new-chat-dialog textarea{box-sizing:border-box;width:100%;min-width:0;border:1px solid var(--line);border-radius:8px;padding:9px 10px;background:var(--card);color:var(--ink);font:inherit}.operator-new-chat-dialog textarea{min-height:110px;resize:vertical}.operator-new-chat-dialog small{color:var(--muted)}.operator-new-chat-dialog [role=status]{min-height:1em;margin:0;color:var(--muted);overflow-wrap:anywhere}.operator-new-chat-dialog .operator-new-chat-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}.operator-new-chat-dialog button{min-height:40px}@media(max-width:440px){.operator-new-chat-dialog{width:calc(100vw - 16px)}.operator-new-chat-dialog header,.operator-new-chat-dialog form{padding-inline:12px}.operator-new-chat-dialog .operator-new-chat-actions button{flex:1;min-height:44px}}`;
@@ -26,11 +26,18 @@
   }
 
   async function loadSources(force=false){
+    const owner=keyFor(identity());
+    if(sourceOwner!==owner){sources=[];loadedAt=0;sourceLoad=null;sourceOwner=owner;}
+    if(sourceLoad)return sourceLoad;
     if(!force&&Date.now()-loadedAt<30000)return sources;
-    const result=await api();sources=Array.isArray(result.sources)?result.sources:[];loadedAt=Date.now();
-    const button=document.getElementById('operatorNewChat');
-    if(button)button.hidden=!sources.length;
-    return sources;
+    loadedAt=Date.now();
+    const request=api().then(result=>{
+      if(sourceOwner!==owner||keyFor(identity())!==owner)return [];
+      sources=Array.isArray(result.sources)?result.sources:[];
+      return sources;
+    });
+    sourceLoad=request;
+    try{return await request;}finally{if(sourceLoad===request)sourceLoad=null;}
   }
 
   function ensureDialog(){
@@ -68,7 +75,7 @@
       select.replaceChildren(...available.map(source=>{const option=document.createElement('option');option.value=source.channel_id;option.textContent=source.name||'WhatsApp';return option;}));
       const member=identity();let saved=null;try{saved=JSON.parse(sessionStorage.getItem(keyFor(member))||'null')}catch{}
       const eligible=saved&&saved.request_id&&available.some(source=>source.channel_id===saved.channel_id);
-      formState={requestId:eligible?saved.request_id:crypto.randomUUID(),submitted:eligible&&saved.submitted===true,submitting:false};
+      formState={owner:keyFor(member),requestId:eligible?saved.request_id:crypto.randomUUID(),submitted:eligible&&saved.submitted===true,submitting:false};
       node.querySelector('form').reset();
       if(eligible){select.value=saved.channel_id;node.querySelector('[data-field=phone]').value=saved.phone||'';node.querySelector('[data-field=text]').value=saved.text||'';}
       for(const field of node.querySelectorAll('[data-field]'))field.disabled=formState.submitted===true;
@@ -80,7 +87,7 @@
   }
 
   async function submit(event){
-    event.preventDefault();if(!formState||formState.submitting)return;
+    event.preventDefault();if(!formState||formState.submitting||formState.owner!==keyFor(identity()))return;
     const node=dialog,c=language(),button=node.querySelector('[data-new-chat-send]'),status=node.querySelector('[role=status]'),member=identity();
     const payload={channel_id:node.querySelector('[data-field=source]').value,phone:node.querySelector('[data-field=phone]').value.trim(),text:node.querySelector('[data-field=text]').value,request_id:formState.requestId};
     if(!payload.channel_id||!/^\+[1-9]\d{5,14}$/.test(payload.phone)||!payload.text.trim()){status.textContent=c.error;return;}
@@ -121,12 +128,12 @@
     let button=document.getElementById('operatorNewChat');
     if(!button){button=document.createElement('button');button.type='button';button.id='operatorNewChat';button.className='outline';button.hidden=true;filters.append(button);}
     if(button.textContent!==language().newChat)button.textContent=language().newChat;button.onclick=()=>void open();
-    try{await loadSources();}catch{button.hidden=true;}
+    try{const available=await loadSources();button.hidden=!available.length;}catch{button.hidden=true;}
   }
 
     const observer=new MutationObserver(()=>{void install();});
   observer.observe(root,{childList:true,subtree:true});
-  document.addEventListener('tenant-profile',()=>{sources=[];loadedAt=0;void install();});
+  document.addEventListener('tenant-profile',()=>{if(formState&&formState.owner!==keyFor(identity())){dialog?.close();formState=null;}void install();});
   document.addEventListener('tenant-language',()=>{const button=document.getElementById('operatorNewChat');if(button)button.textContent=language().newChat;if(dialog?.isConnected)localize(dialog);});
   void install();
 })();

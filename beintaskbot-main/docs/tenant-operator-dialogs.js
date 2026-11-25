@@ -3459,14 +3459,16 @@
       const reply=addButton(node,replyText('action'),()=>{if(selectReplyMessage(messageId,{focus:false}))closeReplyContextMenu(true);});reply.dataset.replyContextAction='reply';reply.disabled=!sendAllowed||!message.provider_message_id;reply.title=reply.disabled?replyText('unavailable'):'';
       const messageActions=window.tenantWhatsAppMessageActions;
       const actionApi=async(url,options={})=>rawApi(url,options,{optionalScopedRead:options.method==='GET'});
-      const reloadActionMessage=async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route,true,'',{suppressRead:true});}};
+      const actionScopeCurrent=()=>who===identity(member)&&inDialogsView()&&sameDialog(route,currentDialog)
+        &&currentDialog?.can_send===true&&!currentDialog?.colleague_read_only&&!currentDialog?.archive_read_only;
+      const reloadActionMessage=async()=>{if(actionScopeCurrent()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route,true,'',{suppressRead:true});}};
       if(messageActions?.canEdit(member,route,message)){const editAction=addButton(node,messageActions.t('edit'),()=>{
-        closeReplyContextMenu();messageActions.openEdit({member,route,message,api:actionApi,isCurrent:()=>same()&&currentPage===page,
+        closeReplyContextMenu();messageActions.openEdit({member,route,message,api:actionApi,isCurrent:actionScopeCurrent,
           reload:reloadActionMessage,getMessage:()=>currentPage?.messages?.find(row=>String(row.id)===String(message.id)),
           onSaved:text=>{if(same())$('operatorChatError').textContent=text;}});
       });editAction.dataset.replyContextAction='edit';}
       if(messageActions?.canDelete(member,route,message)){const deleteAction=addButton(node,messageActions.t('delete'),()=>{
-        closeReplyContextMenu();messageActions.openDelete({member,route,message,api:actionApi,isCurrent:()=>same()&&currentPage===page,
+        closeReplyContextMenu();messageActions.openDelete({member,route,message,api:actionApi,isCurrent:actionScopeCurrent,
           reload:reloadActionMessage,onSaved:text=>{if(same())$('operatorChatError').textContent=text;}});
       });deleteAction.dataset.replyContextAction='delete';}
       if(canReact(message)){

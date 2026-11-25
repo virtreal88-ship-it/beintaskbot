@@ -122,3 +122,23 @@ def test_client_revoke_redacts_only_exact_group_member_row(episodes, monkeypatch
     assert 'text' not in row['raw'] and 'mediaKey' not in row['raw']
     assert db.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s",(scope['tenant'],lead))[0]['n']==1
     db.commit()
+
+def test_new_number_route_reopens_only_on_selected_source(episodes, monkeypatch):
+    import uuid
+    import tenant_dialog_compose_api as compose
+    import tenant_connect_transport
+    from test_tenant_support_inbox import PROFILE
+
+    db = episodes
+    monkeypatch.setattr(compose, '_connect', lambda: db)
+    # No service credentials or provider traffic in this integration test.
+    monkeypatch.setattr(tenant_connect_transport, 'connect_route', lambda cur, tenant, lead: {'lead_id': lead})
+    db.execute("INSERT INTO saas_tenant_integrations(tenant_id,provider,status) VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING", (A,))
+    db.commit()
+    request = {'channel_id': CA, 'request_id': str(uuid.uuid4()), 'phone': '12025550188', 'text': 'synthetic hello'}
+    original = compose._prepare(PROFILE, request)
+    assert not original['existing']
+    repeated = compose._prepare(PROFILE, request)
+    assert repeated['existing'] and not repeated['recover']
+    assert repeated['route']['lead_id'] == original['route']['lead_id']
+    assert any(source['channel_id'] == CA for source in compose._channel_options(PROFILE)['sources'])
