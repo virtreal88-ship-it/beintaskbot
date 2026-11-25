@@ -113,6 +113,7 @@ def test_employee_archive_shows_exact_operator_label_with_read_grant(companies, 
         return row
 
     assert 'dialog_company_name' not in archive('all')
+    assert not _search(STAFF,'synthetic-real',search_overview=True)['dialogs']
     db.execute("""UPDATE saas_tenant_members SET permissions=permissions||'["operator_data:view"]'::jsonb
       WHERE tenant_id=%s::uuid AND telegram_id=33""",(A,))
     db.commit()
@@ -120,10 +121,16 @@ def test_employee_archive_shows_exact_operator_label_with_read_grant(companies, 
         row=archive(mode)
         assert row['dialog_company_name']=='synthetic-real'
         assert 'company_binding' not in row and 'last_message_text' not in row
+    match, = _search(STAFF,'SYnthetic-real',search_overview=True)['dialogs']
+    assert match['lead_id']==41 and match['archive_read_only'] and not match['can_send']
+    assert match['dialog_company_name']=='synthetic-real'
+    assert 'company_binding' not in match and 'last_message_text' not in match
+    assert not _search(STAFF,'wrong-route',search_overview=True)['dialogs']
     assert not dialogs.listing(STAFF,lifecycle='active')['dialogs']
     db.execute("DELETE FROM saas_dialog_source_members WHERE tenant_id=%s::uuid AND employee_id=33",(A,))
     db.commit()
     assert not dialogs.listing(STAFF,lifecycle='all')['dialogs']
+    assert not _search(STAFF,'synthetic-real',search_overview=True)['dialogs']
 
 
 def test_kommo_company_lookup_requires_the_full_visible_route_tuple(companies, monkeypatch):
