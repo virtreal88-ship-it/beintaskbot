@@ -80,11 +80,12 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
             },
         )
 
-    assert page()["dialog"]["archive_read_only"]
+    with pytest.raises(TenantLinearError):
+        page()
     send(2, start + timedelta(seconds=1))
     send(2, start + timedelta(seconds=1))
     page1 = page()
-    assert len(page1["messages"]) == 2
+    assert len(page1["messages"]) == 1
     assert page1["dialog"]["lifecycle"]["state"] == "waiting"
     _, _, policy = queue.access(cur, PROFILE)
     rows, channel = queue.cards(cur, policy, "active", queue.guard(cur, A))
@@ -180,13 +181,13 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     assert page()["dialog"]["lifecycle"]["state"] == "closed"
     send(3, start + timedelta(seconds=5))
     assert page()["dialog"]["lifecycle"]["state"] == "waiting"
-    assert [m["id"] for m in page()["messages"]] == ["1", "2", "3"]
+    assert [m["id"] for m in page()["messages"]] == ["2", "3"]
     assert len(queue.cards(cur, policy, "active", queue.guard(cur, A))[0]) == 1
     with pytest.raises(TenantLinearError):
         queue.history(PROFILE, {**params, "conversation_id": "other"})
 
 
-def test_incremental_worker_restarts_and_paused_backfill(db, monkeypatch):
+def test_worker_skips_dormant_history_and_resumes_new_pages(db, monkeypatch):
     monkeypatch.setattr(op, "_connect", lambda: db)
     monkeypatch.setattr(op, "_credentials", lambda tenant: CREDENTIALS)
     cur = db.cursor()
@@ -199,9 +200,13 @@ def test_incremental_worker_restarts_and_paused_backfill(db, monkeypatch):
     ids = list(range(1, 77))
     start = datetime.now(timezone.utc)
 
+    updated = start - timedelta(days=1)
+    calls = []
+
     def upstream(path, data, credentials):
         if path == "/chat/getActiveChats":
-            return [{**CHAT, "updated_at": str(ids[-1])}]
+            return [{**CHAT, "updated_at": updated.isoformat()}]
+        calls.append(data.copy())
         assert path == "/chat/getMessages" and data["chat_id"] == 15
         chosen = [mid for mid in ids if mid < data.get("before_id", 10**6)][-sync.PAGE :]
         return [
@@ -218,13 +223,20 @@ def test_incremental_worker_restarts_and_paused_backfill(db, monkeypatch):
 
     monkeypatch.setattr(sync, "_post", upstream)
     sync.sync_once(A)
-    ids.append(77)  # A fresh event arrives while the historical page is pending.
+    assert calls == []
+    cur.execute("SELECT count(*) AS n FROM saas_widget_dialogs WHERE tenant_id=%s", (A,))
+    assert cur.fetchone()["n"] == 0
+    updated = start + timedelta(days=1)
+    ids.extend(range(77, 77 + sync.PAGE + 2))  # Multiple new pages after activation.
+    sync.sync_once(A)
+    ids.append(ids[-1] + 1)  # A new arrival during pagination is picked up after restart.
     for _ in range(4):
         sync.sync_once(A)
     cur.execute(
         "SELECT count(*) AS total,count(*) FILTER(WHERE fresh) AS unread FROM saas_widget_messages WHERE tenant_id=%s",
         (A,),
     )
-    assert cur.fetchone() == {"total": 77, "unread": 1}
+    assert cur.fetchone() == {"total": sync.PAGE + 3, "unread": sync.PAGE + 3}
+    assert not any(req.get("before_id", 77) < 77 for req in calls)
     cur.execute("SELECT state,latest_in,high_id FROM saas_widget_dialogs WHERE tenant_id=%s", (A,))
-    assert cur.fetchone() == {"state": "waiting", "latest_in": 77, "high_id": 77}
+    assert cur.fetchone() == {"state": "waiting", "latest_in": ids[-1], "high_id": ids[-1]}

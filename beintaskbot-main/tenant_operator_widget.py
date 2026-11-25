@@ -146,9 +146,20 @@ def handle(profile, data):
     if action == "reply":
         return _reply(profile, credentials, chat, data)
     routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
+    from tenant_operator_widget_sync import enabled, PROVIDER
+    managed = enabled() == tenant
     socket_ready = False
     if action != "list":
         row = _route(routes, chat, data["revision"])
+        if managed:
+            from tenant_linear_policy import TenantLinearError
+            from tenant_operator_widget_queue import authorized
+            with operator._connect() as db, db.cursor() as cur:
+                try:
+                    authorized(cur, profile, {"provider": PROVIDER, "channel_id": credentials["connection_instance_id"],
+                                              "lead_id": chat, "conversation_id": _hash([row["client_id"]])})
+                except TenantLinearError:
+                    raise operator.OperatorError("Диалог недоступен.", 403) from None
         query = {"chat_id": chat, "client_id": row["client_id"], "limit": PAGE}
         if action == "older":
             query["before_id"] = _positive(data["before_id"])
@@ -159,15 +170,15 @@ def handle(profile, data):
     with operator._connect() as db, db.cursor() as cur:
         current, login = _snapshot(cur, profile, credentials)
         writable = widget_allowed(current, "update")
-        from tenant_operator_widget_sync import enabled
-        managed = enabled() == tenant
         assignments = {}
         if managed:
             cur.execute("""SELECT chat_id,identity,state,operator_id FROM saas_widget_dialogs
-                WHERE tenant_id=%s AND instance=%s""",(tenant,credentials["connection_instance_id"]))
+                WHERE tenant_id=%s AND instance=%s AND visible AND latest_in IS NOT NULL""",(tenant,credentials["connection_instance_id"]))
             assignments = {(r["chat_id"],r["identity"]):r for r in cur.fetchall()}
         def access_for(i, provider_row):
             workflow = assignments.get((i,_hash([provider_row["client_id"]]))) or {}
+            if managed and not workflow:
+                return False, False
             own = workflow.get("state")=="accepted" and workflow.get("operator_id")==int(profile["telegram_id"])
             return workflow.get("state")!="accepted" or own, writable and (not managed or own)
         if action == "list":
