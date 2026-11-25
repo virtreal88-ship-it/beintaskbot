@@ -1281,6 +1281,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Preparation must not initialize read cursors or mark anything read.
             unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),
                 [r for r in rows if not r.get('archive_read_only')])
+            from tenant_beinsystems_operator_access import dialogue_chooser_enabled
+            # A company label is already visible in the source-scoped archive
+            # with the independent Operator read grant. Keep the same rule
+            # when searching; do not expose labels for cross-owner live rows.
+            show_archive_labels = (interactive and lifecycle in {'all','completed'}
+                and dialogue_chooser_enabled(tenant) and policy.allows_action('operator_data','view'))
             if search:
                 query_text=str(search)[:200].casefold()
                 def matches(row):
@@ -1301,7 +1307,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 from tenant_dialog_company_binding import list_route_key, matching_list_company_routes
                 search_rows=[(r,matches_text(r)) for r in rows]
                 company_matches=matching_list_company_routes(cur,tenant,policy,
-                    [r for r,match in search_rows if not match],query_text) if interactive else set()
+                    [r for r,match in search_rows if not match],query_text,
+                    show_archive_labels=show_archive_labels) if interactive else set()
                 rows=[r for r,match in search_rows if match or (company_matches and list_route_key(r) in company_matches)]
             if channel:rows=[r for r in rows if str(r.get('provider') or '')+':'+str(r.get('channel_id') or '')==str(channel)[:250]]
             if agent or state:
@@ -1339,13 +1346,6 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 _attach_verified_phones(cur,tenant,contact_cards,check_conflicts=True)
                 from tenant_contact_phone import attach_list_source_revisions
                 attach_list_source_revisions(cur,tenant,contact_cards)
-                from tenant_beinsystems_operator_access import dialogue_chooser_enabled
-                # Archive cards may show a verified Operator label only with
-                # its independent read grant. Keep legacy and search-only
-                # archive metadata behind its original boundary.
-                show_archive_labels = (interactive and lifecycle in {'all','completed'}
-                    and not search_overview and dialogue_chooser_enabled(tenant)
-                    and policy.allows_action('operator_data','view'))
                 company_cards = cards if owner else [r for r in cards
                     if not r.get('search_overview_read_only')
                     and (not r.get('archive_read_only') or show_archive_labels)]

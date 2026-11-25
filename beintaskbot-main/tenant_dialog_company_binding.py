@@ -251,7 +251,7 @@ def _listed_companies(cur, tenant, keys):
     return companies
 
 
-def matching_list_company_routes(cur, tenant, policy, rows, query):
+def matching_list_company_routes(cur, tenant, policy, rows, query, *, show_archive_labels=False):
     """Return matching keys, never company metadata or an extra directory grant."""
     if (not rows or not query.strip() or not is_operator_workspace(tenant)
             or policy.profile.get('tenant_status') != 'active'):
@@ -260,7 +260,8 @@ def matching_list_company_routes(cur, tenant, policy, rows, query):
         return set()
     owner = policy.profile.get('role') == 'owner'
     keys = {key for row in rows
-            if (owner or not (row.get('archive_read_only') or row.get('search_overview_read_only')))
+            if (owner or (not row.get('search_overview_read_only')
+                          and (not row.get('archive_read_only') or show_archive_labels)))
             if (key := list_route_key(row)) is not None}
     return {key for key, (_, name) in _listed_companies(cur, tenant, keys).items()
             if query in name.casefold()}
