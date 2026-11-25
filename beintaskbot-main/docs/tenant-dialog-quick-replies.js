@@ -53,7 +53,7 @@
     panel.hidden=true;
     input.before(panel);
     const lifetime=new AbortController();
-    let pending=null,timer=null,revision=0,inserted=false;
+    let pending=null,timer=null,revision=0;
 
     function current(){
       const latest=identity();
@@ -106,10 +106,9 @@
         use.onclick=()=>{
           if(!relevant(prefix,version))return;
           input.value=item.body;
-          inserted=true;
           input.focus();
           input.setSelectionRange(input.value.length,input.value.length);
-          input.dispatchEvent(new Event('input',{bubbles:true}));
+          input.dispatchEvent(new CustomEvent('input',{bubbles:true,detail:{replyInserted:true}}));
         };
         hideButton.onclick=async()=>{
           if(!relevant(prefix,version)||hideButton.disabled)return;
@@ -139,7 +138,7 @@
     }
     function search(event){
       hide();
-      if(inserted){inserted=false;return;}
+      if(event?.detail?.replyInserted===true)return;
       const prefix=input.value.trimStart();
       if(event?.isComposing||!current()||prefix.trimEnd().length<2||prefix.length>180)return;
       const version=revision;
