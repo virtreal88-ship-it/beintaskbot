@@ -16,8 +16,9 @@ def item(tenant='tenant-a', channel='channel-a', message='photo-a', version=1, k
 @pytest.fixture(autouse=True)
 def isolated_process_state():
     media._media_budgets.clear(); media._media_flights.clear(); media._media_active=0;media._media_auto_active=0
+    media._media_video_active=0
     yield
-    assert media._media_active==media._media_auto_active==0 and not media._media_flights
+    assert media._media_active==media._media_auto_active==media._media_video_active==0 and not media._media_flights
 
 
 async def released(event):
@@ -26,6 +27,37 @@ async def released(event):
 
 async def started(event):
     assert await asyncio.to_thread(event.wait,1)
+
+
+def test_cold_video_reserves_separate_provider_capacity_and_does_not_block_light_media(monkeypatch):
+    async def scenario():
+        ready, release = threading.Event(), threading.Event()
+        async def acquire(item, **_kwargs):
+            kind = item['row']['message_type']
+            if kind == 'video':
+                ready.set()
+                await released(release)
+            return kind.encode(), kind
+        transport = AsyncMock(side_effect=acquire)
+        monkeypatch.setattr(media, '_download_media', transport)
+        video = item(message='slow', kind='video')
+        cold = asyncio.create_task(media.download_media(video, automatic_photo=True))
+        try:
+            await started(ready)
+            with pytest.raises(TenantLinearError) as error:
+                await media.download_media(item(message='second', kind='video'), automatic_photo=True)
+            assert error.value.status == 429
+            for kind in ('image', 'audio'):
+                result = await asyncio.wait_for(media.download_media(item(message=kind, kind=kind), automatic_photo=True), 1)
+                assert result == (kind.encode(), kind)
+            joined = asyncio.create_task(media.download_media(video))
+            await asyncio.sleep(0)
+            assert not cold.done()
+        finally:
+            release.set()
+        assert await cold == await joined == (b'video', 'video')
+        assert transport.await_count == 3
+    asyncio.run(scenario())
 
 
 def test_ai_and_multiple_preview_waiters_share_exact_source_and_survive_waiter_abort(monkeypatch):

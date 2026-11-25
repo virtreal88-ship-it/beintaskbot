@@ -66,6 +66,7 @@ class Supervisor:
         self.message_slots=asyncio.Semaphore(2)
         self.avatar_slots=asyncio.Semaphore(2)
         self.video_slots=asyncio.Semaphore(1)
+        self.video_read_slots=asyncio.Semaphore(1)
 
     async def start(self,app):
         # Linux volume fencing: two replicas/processes must never restore the
@@ -303,10 +304,11 @@ class Supervisor:
         if entry['data'].get('disabled'):raise web.HTTPConflict(text='source_stopped')
         data=entry['data'];cfg=data.get('messaging');b=data['binding']
         if not cfg:raise web.HTTPConflict(text='native_messaging_disabled')
-        slots=self.avatar_slots if request.path.endswith('/avatar') else self.message_slots
+        video=request.path.endswith('/media') and request.headers.get('X-Native-Media-Kind')=='video'
+        slots=self.video_read_slots if video else self.avatar_slots if request.path.endswith('/avatar') else self.message_slots
         if slots.locked():raise web.HTTPTooManyRequests(text='native_messaging_busy')
         async with slots:
-            return await self._messages(request,source,entry,cfg,b)
+            return await self._messages(request,source,entry,cfg,b,video=video)
 
     async def send_video(self,request):
         _,entry=self.entry(request)
@@ -341,7 +343,7 @@ class Supervisor:
                 return web.Response(body=b''.join(chunks),status=upstream.status,content_type='application/json',
                     headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
-    async def _messages(self,request,source,entry,cfg,b):
+    async def _messages(self,request,source,entry,cfg,b,*,video=False):
         data=entry['data']
         raw=await request.clone(client_max_size=15*1024*1024).read()
         if len(raw)>15*1024*1024:raise web.HTTPRequestEntityTooLarge(max_size=15*1024*1024,actual_size=len(raw))
@@ -353,8 +355,10 @@ class Supervisor:
         suffix=next((part for part in ('/media','/status','/group','/avatar','/contact') if request.path.endswith(part)),'')
         if self.client is None:raise web.HTTPServiceUnavailable(text='calls_service_unavailable')
         # No retries: a lost response may follow an accepted provider send.
+        headers={'Authorization':'Bearer '+data['http_token'],'Content-Type':'application/json'}
+        if video:headers['X-Native-Media-Kind']='video'
         async with self.client.post(f'http://127.0.0.1:{data["port"]}/internal/messages'+suffix,
-                data=raw,headers={'Authorization':'Bearer '+data['http_token'],'Content-Type':'application/json'},
+                data=raw,headers=headers,
                 allow_redirects=False,timeout=ClientTimeout(total=125 if suffix=='/media' else 35)) as upstream:
             if suffix=='/media' and upstream.status==200 and upstream.content_type=='video/mp4':
                 length=upstream.content_length

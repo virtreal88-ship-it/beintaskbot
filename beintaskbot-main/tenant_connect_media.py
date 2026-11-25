@@ -19,15 +19,18 @@ IMAGE_TYPES = {'image/jpeg', 'image/png', 'image/gif', 'image/webp'}
 AUDIO_TYPES = {'audio/ogg', 'application/ogg', 'audio/mpeg', 'audio/mp3', 'audio/mp4',
                'audio/opus', 'audio/x-m4a', 'audio/m4a', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/flac', 'audio/x-flac', 'audio/aac'}
 
-# All callers (human previews, automatic photos/audio and AI preparation), including
-# other event loops in this worker, share Connect's two resolution slots.
+# Human and AI consumers across event loops share the provider budget and
+# single-flight map. A cold video has a dedicated bounded resolution slot.
 _media_lock = threading.Lock()
 _media_active = 0
 _media_auto_active = 0
+_media_video_active = 0
 _media_budgets = {}
 _media_flights = {}
 _media_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='connect-media')
+_video_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='connect-video')
 _MEDIA_FLIGHT_TIMEOUT = 35
+_VIDEO_FLIGHT_TIMEOUT = 150
 
 
 def _media_scope(route):
@@ -52,8 +55,9 @@ def _run_media(item, max_bytes, preview_documents):
     # Acquisition outlives every caller's task AND event loop (AI uses asyncio.run).
     # This is a coroutine deadline, not a hard wall clock: asyncio.run must join
     # default-executor DNS threads. The physical slot stays held until it returns.
+    timeout = _VIDEO_FLIGHT_TIMEOUT if item['row']['message_type'] == 'video' else _MEDIA_FLIGHT_TIMEOUT
     async def acquire():
-        async with asyncio.timeout(_MEDIA_FLIGHT_TIMEOUT):
+        async with asyncio.timeout(timeout):
             return await _download_media(item, max_bytes=max_bytes, preview_documents=preview_documents)
     try:
         return asyncio.run(acquire())
@@ -62,9 +66,10 @@ def _run_media(item, max_bytes, preview_documents):
 
 
 async def download_media(item, *, max_bytes=None, preview_documents=False, automatic_photo=False):
-    global _media_active, _media_auto_active
+    global _media_active, _media_auto_active, _media_video_active
     item = deepcopy(item)
     route = item['route']; kind = item['row']['message_type']
+    video = kind == 'video'
     raw = item['row'].get('raw') or {}
     digest = hashlib.sha256(json.dumps(raw, sort_keys=True, default=str).encode()).hexdigest()
     cap = media_limit(kind)
@@ -81,30 +86,43 @@ async def download_media(item, *, max_bytes=None, preview_documents=False, autom
             for old, (_count, until, cooldown) in list(_media_budgets.items()):
                 if max(until, cooldown) <= now: _media_budgets.pop(old, None)
             count, until, cooldown = _media_budgets.get(scope, (0, now + 60, 0))
-            wait = max(cooldown - now, until - now if count >= 20 else 0,
-                       1 if _media_active >= 2 or automatic_photo and _media_auto_active >= 1 else 0)
+            busy = _media_video_active if video else _media_active >= 2 or automatic_photo and _media_auto_active >= 1
+            wait = max(cooldown - now, until - now if count >= 20 else 0, 1 if busy else 0)
             if wait > 0 or len(_media_budgets) >= 2000 and scope not in _media_budgets:
                 raise _media_limited(max(1, int(wait + .999)))
             _media_budgets[scope] = (count + 1, until, cooldown)
-            _media_active += 1
-            _media_auto_active += bool(automatic_photo)
+            executor = _video_executor if video else _media_executor
+            if video:
+                _media_video_active += 1
+            else:
+                _media_active += 1
+                _media_auto_active += bool(automatic_photo)
             try:
-                future = _media_executor.submit(_run_media, item, max_bytes, preview_documents)
+                future = executor.submit(_run_media, item, max_bytes, preview_documents)
             except RuntimeError:
-                _media_active -= 1; _media_auto_active -= bool(automatic_photo)
+                if video:
+                    _media_video_active -= 1
+                else:
+                    _media_active -= 1
+                    _media_auto_active -= bool(automatic_photo)
                 _media_budgets[scope] = (count, until, cooldown)
                 raise TenantLinearError('WhatsApp faylı hazırda əlçatan deyil.', 503) from None
             _media_flights[key] = future
     if owner:
         def settled(done):
-            global _media_active, _media_auto_active
+            global _media_active, _media_auto_active, _media_video_active
             error = None if done.cancelled() else done.exception()
             with _media_lock:
-                if isinstance(error, TenantLinearError) and error.status == 429:
+                if (isinstance(error, TenantLinearError) and error.status == 429
+                        and getattr(error, 'code', None) != 'native_video_busy'):
                     now = time.monotonic()
                     count, until, cooldown = _media_budgets.get(scope, (0, now + 60, 0))
                     _media_budgets[scope] = (count, until, max(cooldown, now + getattr(error, 'retry_after', 60)))
-                _media_active -= 1; _media_auto_active -= bool(automatic_photo)
+                if video:
+                    _media_video_active -= 1
+                else:
+                    _media_active -= 1
+                    _media_auto_active -= bool(automatic_photo)
                 if _media_flights.get(key) is done: _media_flights.pop(key, None)
         future.add_done_callback(settled)
     waiter = asyncio.wrap_future(future)
@@ -206,7 +224,9 @@ async def _download_media(item, *, max_bytes=None, preview_documents=False):
             if not isinstance(error,TenantPlatformError):
                 raise
             if code=='native_video_busy':
-                raise _media_limited(getattr(error,'retry_after',5)) from None
+                busy = _media_limited(getattr(error,'retry_after',5))
+                busy.code = code
+                raise busy from None
             message,status={
                 'native_video_too_large':('Video faylı çox böyükdür.',413),
                 'native_video_format':('Video formatı dəstəklənmir.',415),
@@ -243,8 +263,9 @@ async def _download_media(item, *, max_bytes=None, preview_documents=False):
     url = (CONNECT_URL.rstrip('/') + '/v1/channels/' + channel + '/messages/' + message +
            '/media?' + urlencode({'conversationId': route['conversation_id']}))
     try:
+        timeout = aiohttp.ClientTimeout(total=140, connect=5, sock_read=130) if kind == 'video' else aiohttp.ClientTimeout(total=30, connect=5, sock_read=25)
         async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(resolver=PublicResolver()),
-                timeout=aiohttp.ClientTimeout(total=30, connect=5, sock_read=25),
+                timeout=timeout,
                 auto_decompress=False, trust_env=False) as session:
             async with session.get(url, allow_redirects=False, headers={
                     'x-api-key': route['api_key'], 'Accept': ', '.join(sorted(types)),

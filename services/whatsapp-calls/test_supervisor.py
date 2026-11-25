@@ -274,3 +274,49 @@ async def test_video_binary_proxy_checks_scope_and_streams_to_engine(tmp_path):
             assert observed==[(content,'application/octet-stream',encoded)]
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_slow_video_read_has_own_slot_and_preserves_normal_messaging(tmp_path):
+    import asyncio
+    from aiohttp import ClientSession, web
+
+    ready, release = asyncio.Event(), asyncio.Event()
+    async def upstream(request):
+        if request.headers.get('X-Native-Media-Kind') == 'video':
+            ready.set()
+            await release.wait()
+            return web.Response(body=b'video', content_type='video/mp4')
+        if request.path.endswith('/media'):
+            return web.Response(body=b'photo', content_type='application/octet-stream')
+        return web.json_response({'confirmed': True})
+
+    engine = web.Application()
+    engine.router.add_post('/internal/messages/media', upstream)
+    engine.router.add_post('/internal/messages/status', upstream)
+    supervisor, client = await client_for(tmp_path)
+    endpoint = '/v1/sources/' + SOURCE
+    headers = {'Authorization': 'Bearer ' + TOKEN}
+    video_headers = {**headers, 'X-Native-Media-Kind': 'video'}
+    scope = {'tenant': BINDING['tenant_id'], 'source': BINDING['channel_id'],
+             'account': BINDING['account_jid'], 'generation': 'g1'}
+    payload = {'scope': scope}
+    try:
+        assert (await client.post(endpoint, json={**BINDING, 'messaging_generation': 'g1'}, headers=headers)).status == 200
+        async with TestServer(engine) as engine_server, ClientSession() as proxy:
+            supervisor.client = proxy
+            supervisor.sources[SOURCE]['data']['port'] = engine_server.port
+            video = asyncio.create_task(client.post(endpoint + '/messages/media', json=payload, headers=video_headers))
+            try:
+                await asyncio.wait_for(ready.wait(), 1)
+                assert (await client.post(endpoint + '/messages/media', json=payload, headers=video_headers)).status == 429
+                photo = await client.post(endpoint + '/messages/media', json=payload, headers=headers, timeout=2)
+                receipt = await client.post(endpoint + '/messages/status', json=payload, headers=headers, timeout=2)
+                assert await photo.read() == b'photo'
+                assert (await receipt.json(content_type=None))['confirmed']
+                assert not video.done()
+            finally:
+                release.set()
+            assert await (await video).read() == b'video'
+    finally:
+        await client.close()

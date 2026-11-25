@@ -344,8 +344,11 @@ def download(route,message_id,*,max_bytes,allowed_types):
             raise TenantPlatformError('native_media_restricted')
         payload={'scope':scope,'event_id':event_id,'chat':evidence['chat']}
         try:
+            headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'}
+            if rows[0]['message_type']=='video':
+                headers['X-Native-Media-Kind']='video'
             with requests.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/media',
-                    headers={'Authorization':'Bearer '+token,'Accept-Encoding':'identity'},json=payload,
+                    headers=headers,json=payload,
                     timeout=(5,135 if size>NATIVE_MEDIA_BYTES else 40),allow_redirects=False,stream=True) as response:
                 if rows[0]['message_type']=='video':
                     if response.status_code==404:
