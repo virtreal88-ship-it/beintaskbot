@@ -1453,7 +1453,7 @@ def _linked_support_case(cur, tenant, policy, channel, conversation_ids):
 
 def history(profile,provider,lead_id,channel='',conversation='',before=None,anchor=None,
             *,support_case_only=False,include_operator_events=False,operator_events_revision=None,
-            include_shared_reminder_events=False,combine_history=False,redirect_paired_history=False,
+            include_shared_reminder_events=False,include_internal_comments=False,combine_history=False,redirect_paired_history=False,
             owner_overview=False,search_overview=False,search=''):
     if support_case_only and provider=='connect':
         # Unlike ordinary history shortcuts, case display always names the
@@ -1465,6 +1465,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     requested_route={'provider':provider,'lead_id':lead_id,'channel_id':str(channel),'conversation_id':str(conversation)}
     operator_timeline={}
     shared_reminder_timeline={}
+    internal_comment_timeline={}
     with _connect() as conn:
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
@@ -1765,6 +1766,16 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 shared_reminder_timeline=timeline_page(conn,cur,tenant,channel,conversation,lead_id,
                     messages=messages,before=identifier(before) if before else None,history_leads=history_leads,
                     history_channel=row['history_channel'],group_channels=group_channels)
+            if include_internal_comments and not anchor and requested_route==history_scope['canonical_route']:
+                from tenant_dialog_internal_comments import page as comments_page
+                internal_comment_timeline=comments_page(conn,cur,tenant,provider,channel,conversation,lead_id,
+                    messages=messages,before=identifier(before) if before else None,history_leads=history_leads,
+                    history_channel=row['history_channel'],group_channels=group_channels,
+                    authorized_before_stamp=merge_timeline_boundary.get('before_stamp'))
+                dialog['can_add_internal_comment']=bool('internal_comments' in internal_comment_timeline
+                    and action_capabilities.get('update') and not shared_archive
+                    and (not dialog.get('lifecycle_enabled') or workflow and workflow['state']=='accepted'
+                         and workflow['operator_id']==actor))
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.
@@ -1779,7 +1790,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     dialog['test_recording_import_allowed']=not shared_archive and offer_import({**profile,'role':policy.profile.get('role')},dialog)
     from tenant_browser_calls import offer as offer_browser_call
     dialog['browser_call_available']=not shared_archive and offer_browser_call(profile,dialog)
-    return {**operator_timeline,**shared_reminder_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {**operator_timeline,**shared_reminder_timeline,**internal_comment_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '',
                                          contact_route=str(dialog.get('conversation_id') or ''))
                                         for r in reversed(messages[:50])],

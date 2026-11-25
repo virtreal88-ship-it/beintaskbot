@@ -88,7 +88,7 @@ def handler(member_from_request,origin,logger,resource):
                     # selects staff timeline metadata, even with both flags.
                     if case_only:
                         options={'support_case_only':True}
-                    elif query.get('operator_events')=='1' or query.get('shared_reminder_events')=='1':
+                    elif any(query.get(flag)=='1' for flag in ('operator_events','shared_reminder_events','internal_comments')):
                         _expected(query,profile)
                         if options.get('combine_history') and query.get('paired_history_redirect')=='1':
                             options['redirect_paired_history']=True
@@ -96,6 +96,8 @@ def handler(member_from_request,origin,logger,resource):
                             options.update(include_operator_events=True,operator_events_revision=query.get('operator_events_revision'))
                         if query.get('shared_reminder_events')=='1':
                             options['include_shared_reminder_events']=True
+                        if query.get('internal_comments')=='1':
+                            options['include_internal_comments']=True
                     if not case_only and query.get('owner_overview')=='1':
                         _expected(query,profile)
                         options['owner_overview']=True
@@ -122,7 +124,7 @@ def handler(member_from_request,origin,logger,resource):
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','dialog_history_merges','quick_replies'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','dialog_history_merges','quick_replies','internal_comments'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -144,6 +146,10 @@ def handler(member_from_request,origin,logger,resource):
                     action={'dialog_duplicate_preview':preview,
                             'contact_display_phone':save_phone}[resource]
                     return web.json_response({'success':True,'result':await asyncio.to_thread(action,profile,payload)},headers=headers)
+                if resource=='internal_comments':
+                    from tenant_dialog_internal_comments import save as save_comment
+                    result=await asyncio.to_thread(save_comment,profile,payload)
+                    return web.json_response({'success':True,'result':result},headers=headers)
                 if resource=='quick_replies':
                     from tenant_dialog_quick_replies import quick_replies
                     result=await asyncio.to_thread(quick_replies,profile,payload)

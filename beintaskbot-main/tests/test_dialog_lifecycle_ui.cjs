@@ -2,7 +2,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
 const {JSDOM}=require(process.env.SUPPORT_CASES_JSDOM||'jsdom');
 const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0));
 (async()=>{
- await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();await verifyOwnerOverview();await verifySidebarTransfer();
+ await verifyInternalComment();await verifyImmediateListState(false);await verifyImmediateListState(true);await verifyCompanyCompletion();await verifyOwnerOverview();await verifySidebarTransfer();
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
  const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true,support:true}}};
  let route={provider:'connect',lead_id:41,channel_id:'channel',conversation_id:'client',agent_id:'agent',agent_name:'Agent',state:'human',can_send:false,send_block_reason:'dialog_accept_required',controls_allowed:true,available_actions:['resume'],lifecycle_enabled:true,lifecycle:{id:'episode',state:'waiting',revision:1,can_accept:true,last_inbound_id:'latest-inbound'}};
@@ -361,4 +361,55 @@ async function verifySidebarTransfer(){
  assert(!d.querySelector('#operatorTransferConfirmation'));
  assert.equal(d.querySelector('#operatorDialogs').dataset.conversationOpen,'false');
  dom.window.close();
+}
+
+async function verifyInternalComment(){
+ const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://example.test/app?view=dialogs',runScripts:'outside-only'}),w=dom.window,d=w.document;
+ const profile={member:{tenant_id:'tenant',telegram_id:33,role:'owner',active:true},capabilities:{modules:{dialogs:true}}};
+ let route={provider:'connect',lead_id:41,channel_id:'a',conversation_id:'test',can_send:true,lifecycle_enabled:true,
+  can_add_internal_comment:true,lifecycle:{id:'episode',state:'accepted',operator_id:33,revision:1,can_close:true}};
+ const receipts=[],posts=[];let fail=true;
+ w.tenantProfileSnapshot=profile;w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
+ w.fetch=async(value,opt={})=>{
+  const url=new URL(String(value),w.location.origin);
+  const ok=result=>({ok:true,status:200,json:async()=>({success:true,result})});
+  if(url.pathname.endsWith('/me'))return{ok:true,json:async()=>profile};
+  if(url.pathname.endsWith('/dialogs'))return ok({dialogs:[],channels:[],agents:[]});
+  if(url.pathname.endsWith('/dialogs/history')){
+   assert.equal(url.searchParams.get('internal_comments'),'1');
+   return ok({dialog:route,messages:[],internal_comments:receipts,next_before:null});
+  }
+  if(opt.method==='POST')posts.push({path:url.pathname,...JSON.parse(opt.body)});
+  if(url.pathname.endsWith('/dialogs/internal-comments')){
+   const request=posts.at(-1);
+   if(!receipts.length)receipts.push({id:request.request_id,employee_name:'Alina',at:'2026-01-01T12:00:00Z',note:request.note});
+   if(fail)throw Error('Synthetic connection interrupted after commit');
+   return ok({comment:receipts[0]});
+  }
+  return ok({});
+ };
+ w.eval(read('docs/tenant-operator-i18n.js'));w.eval(read('docs/tenant-operator-dialogs.js'));
+ d.dispatchEvent(new w.CustomEvent('tenant-profile',{detail:profile}));await tick();
+ await w.tenantOperator.openDialog(route);
+ const action=d.querySelector('[data-operator-internal-comment]');assert(action);
+ action.click();
+ const modal=d.querySelector('#operatorInternalComment');
+ const note='<script>staff only</script>';
+ modal.querySelector('textarea').value=note;
+ const submit=()=>modal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));
+ submit();await tick();assert.match(modal.querySelector('[role=status]').textContent,/interrupted/);
+ fail=false;submit();await tick();await tick();
+ const events=()=>d.querySelectorAll('#chatRows .operator-internal-comment');
+ assert.equal(events().length,1);
+ assert.equal(events()[0].querySelector('[data-internal-comment-body]').textContent,note);
+ assert.equal(events()[0].querySelector('script'),null);
+ assert.match(events()[0].firstElementChild.textContent,/Alina/);
+ assert.equal(events()[0].querySelector('time').dateTime,receipts[0].at);
+ assert.equal(posts[0].request_id,posts[1].request_id);
+ assert(posts.every(post=>post.path.endsWith('/dialogs/internal-comments')));
+ assert.equal(d.querySelector('#chatRows [data-message-id]'),null);
+ await w.tenantOperator.openDialog(route);assert.equal(events().length,1);
+ route={...route,archive_read_only:true,can_add_internal_comment:false};
+ await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-internal-comment]'));assert.equal(events().length,1);
+ w.close();
 }
