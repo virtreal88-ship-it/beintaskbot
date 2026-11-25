@@ -106,7 +106,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
       }),true);
       await page.waitForFunction(()=>document.querySelector('.operator-customer-media strong')?.textContent==='screen.png');
       assert.equal(attachmentPosts,0);
-      await Promise.all([page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/chat/send-media')),primary.click()]);
+      await Promise.all([page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/chat/send-media')),page.locator('#operatorMediaPreviewSend').click()]);
       await page.waitForFunction(()=>document.querySelector('.operator-customer-media').hidden);
       assert.equal(attachmentPosts,1);
     }

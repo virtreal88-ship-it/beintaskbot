@@ -2,7 +2,7 @@
 (()=>{
   if(!window.createTenantVoiceStore)return;
   const store=window.createTenantVoiceStore(window.indexedDB,'media');
-  const words={ru:{add:'Прикрепить файл',photo:'Фото',video:'Видео',file:'PDF',cancel:'Убрать файл',send:'Отправить вложение',check:'Проверить отправку',unknown:'Результат неизвестен. Не отправляйте повторно; проверьте статус.',accepted:'Провайдер принял сообщение. Доставка ещё не подтверждена.',limit:'JPEG, PNG, WebP, MP4 или PDF, до 5 МБ.',videoLimit:'Видео MP4 — до {mb} МБ.',error:'Не удалось подготовить файл или проверить отправку.',disabled:'Отправка вложений недоступна.',caption:'Подпись',saving:'Сохраняем файл…'},az:{add:'Fayl əlavə et',photo:'Şəkil',video:'Video',file:'PDF',cancel:'Faylı sil',send:'Əlavəni göndər',check:'Göndərməni yoxla',unknown:'Nəticə məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Çatdırılma hələ təsdiqlənməyib.',limit:'JPEG, PNG, WebP, MP4 və ya PDF, 5 MB-dək.',videoLimit:'MP4 video — {mb} MB-dək.',error:'Faylı hazırlamaq və ya göndərməni yoxlamaq mümkün olmadı.',disabled:'Əlavə göndərilməsi əlçatan deyil.',caption:'Başlıq',saving:'Fayl saxlanılır…'}};
+  const words={ru:{add:'Прикрепить файл',photo:'Фото',video:'Видео',file:'PDF',cancel:'Убрать файл',send:'Отправить вложение',check:'Проверить отправку',unknown:'Результат неизвестен. Не отправляйте повторно; проверьте статус.',accepted:'Провайдер принял сообщение. Доставка ещё не подтверждена.',limit:'JPEG, PNG, WebP, MP4 или PDF, до 5 МБ.',videoLimit:'Видео MP4 — до {mb} МБ.',error:'Не удалось подготовить файл или проверить отправку.',disabled:'Отправка вложений недоступна.',caption:'Подпись',preview:'Открыть предпросмотр',addCaption:'Добавьте подпись',close:'Закрыть предпросмотр',unavailable:'Предпросмотр недоступен.',sending:'Отправляем…',checkText:'Проверьте статус предыдущей отправки в чате.',saving:'Сохраняем файл…'},az:{add:'Fayl əlavə et',photo:'Şəkil',video:'Video',file:'PDF',cancel:'Faylı sil',send:'Əlavəni göndər',check:'Göndərməni yoxla',unknown:'Nəticə məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.',accepted:'Provayder qəbul etdi. Çatdırılma hələ təsdiqlənməyib.',limit:'JPEG, PNG, WebP, MP4 və ya PDF, 5 MB-dək.',videoLimit:'MP4 video — {mb} MB-dək.',error:'Faylı hazırlamaq və ya göndərməni yoxlamaq mümkün olmadı.',disabled:'Əlavə göndərilməsi əlçatan deyil.',caption:'Başlıq',preview:'Önizləməni aç',addCaption:'Açıqlama əlavə edin',close:'Önizləməni bağla',unavailable:'Önizləmə əlçatan deyil.',sending:'Göndərilir…',checkText:'Çatda əvvəlki göndərişin vəziyyətini yoxlayın.',saving:'Fayl saxlanılır…'},en:{add:'Attach a file',photo:'Photo',video:'Video',file:'PDF',cancel:'Remove file',send:'Send attachment',check:'Check send status',unknown:'Send status is unknown. Check it before resending.',accepted:'The provider accepted the message. Delivery is still unconfirmed.',limit:'JPEG, PNG, WebP, MP4 or PDF, up to 5 MB.',videoLimit:'MP4 video, up to {mb} MB.',error:'Could not prepare the file or check its send status.',disabled:'Attachment sending is unavailable.',caption:'Caption',preview:'Open preview',addCaption:'Add a caption',close:'Close preview',unavailable:'Preview unavailable.',sending:'Sending…',checkText:'Check the previous send status in the chat.',saving:'Saving file…'}};
   const t=k=>(words[window.tenantI18n?.language]||words.az)[k];
   const receiptNotice=r=>r?.state==='unknown'?t('unknown'):r?.state==='accepted'?!['sent','delivered','read'].includes(r.deliveryState)?t(r.deliveryState==='failed'?'error':'unknown'):'':'';
   const types={photo:'image/jpeg,image/png,image/webp',video:'video/mp4',file:'application/pdf'};
@@ -13,9 +13,105 @@
   const query=s=>new URLSearchParams({lead_id:s.scope.lead,expected_tenant_id:s.scope.tenant,expected_user_id:s.scope.user});
   const voiceBusy=()=>!!document.querySelector('.operator-customer-voice[data-voice-busy="true"]');
   const changed=()=>document.dispatchEvent(new Event('tenant-composer-media'));
-  function stop(){revision++;if(active){if(active.url)URL.revokeObjectURL(active.url);active.plus.remove();active.menu.remove();active.host.remove();active=null;}changed();}
+  function stop(){revision++;if(active){closePreview(active);active.plus.remove();active.menu.remove();active.host.remove();active=null;}changed();}
   function node(tag,label){const n=document.createElement(tag);if(label)n.textContent=t(label);if(tag==='button')n.type='button';return n;}
-  function draw(s){if(!same(s))return;const draft=s.entry?.state==='draft';s.plus.disabled=!s.enabled||s.busy||!!s.entry||s.receipt?.state==='unknown'||voiceBusy();s.cancel.hidden=!draft;s.cancel.disabled=s.busy;s.caption.disabled=!draft||s.busy;s.caption.hidden=!draft;s.name.textContent=s.entry?.name||s.receipt?.name||'';s.status.textContent=s.message||(!draft&&s.entry?t('unknown'):receiptNotice(s.receipt));s.host.hidden=!s.entry&&!s.status.textContent;changed();}
+  const previewable=entry=>!!entry?.blob&&(entry.mime?.startsWith('image/')||entry.mime==='video/mp4');
+  const textNeedsCheck=()=>document.getElementById('sendChat')?.textContent.trim()===(window.tenantI18n?.t?.('checkSend')||'Vəziyyəti yoxla');
+
+  function closePreview(s,focus=false){
+    const preview=s.preview;
+    if(!preview)return;
+    s.preview=null;
+    preview.dialog.close();
+    preview.dialog.remove();
+    URL.revokeObjectURL(preview.url);
+    s.name.after(s.caption);
+    s.caption.placeholder=t('caption');
+    s.caption.setAttribute('aria-label',t('caption'));
+    s.caption.hidden=previewable(s.entry);
+    if(focus&&same(s)){
+      const primary=document.getElementById('operatorComposerPrimary');
+      (primary?.dataset.action==='media'&&!primary.disabled?primary:s.cancel).focus({preventScroll:true});
+    }
+  }
+
+  function openPreview(s){
+    if(!same(s)||s.preview||s.busy||s.entry?.state!=='draft'||!previewable(s.entry))return;
+    const entry=s.entry,video=entry.mime==='video/mp4';
+    const dialog=node('dialog'),header=node('header'),title=node('h2',video?'video':'photo');
+    const close=node('button'),stage=node('div'),media=node(video?'video':'img'),fallback=node('p','unavailable');
+    const captionRow=node('div'),footer=node('footer'),fileDetails=node('div'),filename=node('strong'),sendButton=node('button');
+    const status=node('p');
+    dialog.className='operator-media-preview';
+    title.id='operatorMediaPreviewTitle';
+    dialog.setAttribute('aria-labelledby',title.id);
+    header.className='operator-media-preview__header';
+    close.className='operator-media-preview__close';
+    close.textContent='×';
+    close.title=t('close');
+    close.setAttribute('aria-label',t('close'));
+    close.autofocus=true;
+    close.onclick=()=>closePreview(s,true);
+    dialog.addEventListener('cancel',event=>{
+      event.preventDefault();
+      if(!s.busy)closePreview(s,true);
+    });
+    header.append(title,close);
+    stage.className='operator-media-preview__stage';
+    fallback.hidden=true;
+    media.addEventListener('error',()=>{
+      media.hidden=true;
+      fallback.hidden=false;
+    },{once:true});
+    if(video){media.controls=true;media.playsInline=true;media.preload='metadata';}
+    else media.alt=entry.name;
+    const url=URL.createObjectURL(entry.blob);
+    media.src=url;
+    stage.append(media,fallback);
+    captionRow.className='operator-media-preview__caption';
+    s.caption.placeholder=t('addCaption');
+    s.caption.setAttribute('aria-label',t('addCaption'));
+    captionRow.append(s.caption);
+    footer.className='operator-media-preview__footer';
+    fileDetails.className='operator-media-preview__file';
+    filename.textContent=entry.name;
+    filename.title=entry.name;
+    status.setAttribute('role','status');
+    fileDetails.append(filename,status);
+    sendButton.id='operatorMediaPreviewSend';
+    sendButton.className='operator-media-preview__send';
+    sendButton.title=t('send');
+    sendButton.setAttribute('aria-label',t('send'));
+    sendButton.innerHTML='<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m3.6 3.8 17.6 7.3a1 1 0 0 1 0 1.8L3.6 20.2a.9.9 0 0 1-1.2-1l1.3-5.4 9-1.8-9-1.8-1.3-5.4a.9.9 0 0 1 1.2-1Z"/></svg>';
+    sendButton.onclick=()=>void send(s);
+    footer.append(fileDetails,sendButton);
+    dialog.append(header,stage,captionRow,footer);
+    s.preview={dialog,close,url,status,sendButton};
+    s.host.append(dialog);
+    draw(s);
+    dialog.showModal();
+  }
+
+  function draw(s){
+    if(!same(s))return;
+    const draft=s.entry?.state==='draft',media=draft&&previewable(s.entry);
+    if(s.preview&&!s.busy&&!draft)closePreview(s);
+    s.plus.disabled=!s.enabled||s.busy||!!s.entry||s.receipt?.state==='unknown'||voiceBusy();
+    s.cancel.hidden=!draft;
+    s.cancel.disabled=s.busy;
+    s.caption.disabled=!draft||s.busy;
+    s.caption.hidden=!s.preview&&(!draft||media);
+    s.name.textContent=s.entry?.name||s.receipt?.name||'';
+    s.status.textContent=s.message||(!draft&&s.entry?t('unknown'):receiptNotice(s.receipt));
+    s.host.hidden=!s.entry&&!s.status.textContent;
+    if(s.preview){
+      const {close,status,sendButton}=s.preview;
+      close.disabled=s.busy;
+      status.textContent=s.busy?t('sending'):s.status.textContent;
+      sendButton.disabled=!draft||s.busy||!s.enabled||voiceBusy();
+    }
+    changed();
+  }
   async function json(response){try{return await response.json();}catch{return {};}}
   async function capability(s){try{const response=await fetch('/api/platform/crm/chat/media-capability?'+query(s),{credentials:'same-origin',cache:'no-store'}),body=await json(response);if(!same(s))return false;s.enabled=response.ok&&body.enabled===true;s.videoMax=body.video_max_bytes===100*1024*1024?body.video_max_bytes:5*1024*1024;return s.enabled;}catch{if(same(s))s.enabled=false;return false;}}
   async function load(s){s.entry=await store.get(s.scope.key)||null;if(s.entry?.state==='draft'&&same(s))s.caption.value=s.entry.caption||'';s.receipt=await store.latestReceipt(s.scope.key);if(s.entry?.state==='sending'){await store.markUnknown(s.scope.key,s.entry.request_id);s.entry=await store.get(s.scope.key)||null;s.receipt=await store.latestReceipt(s.scope.key);}draw(s);}
@@ -23,7 +119,28 @@
   async function stage(s,file){
     if(!file||!canStage(s))return;
     const max=file.type==='video/mp4'?s.videoMax:5*1024*1024;
-    if(!Object.values(types).join(',').split(',').includes(file.type)||!file.size||file.size>max||file.name.length>160||/[\x00-\x1f\x7f/\\]/.test(file.name)){s.message=file.type==='video/mp4'?t('videoLimit').replace('{mb}',String(max/(1024*1024))):t('limit');draw(s);return;}s.busy=true;s.message=t('saving');draw(s);try{const epoch=await store.activeEpoch(s.scope.tenant,s.scope.user);if(!same(s))return;const entry={key:s.scope.key,request_id:crypto.randomUUID(),state:'draft',blob:file,name:file.name,mime:file.type,createdAt:Date.now()};if(!await store.createScopedDraft(entry,s.scope.tenant,s.scope.user,epoch))throw Error();await load(s);if(same(s)){s.caption.value='';s.message='';}}catch{if(same(s))s.message=t('error');}finally{s.busy=false;draw(s);}
+    if(!Object.values(types).join(',').split(',').includes(file.type)||!file.size||file.size>max||file.name.length>160||/[\x00-\x1f\x7f/\\]/.test(file.name)){
+      s.message=file.type==='video/mp4'?t('videoLimit').replace('{mb}',String(max/(1024*1024))):t('limit');
+      draw(s);
+      return;
+    }
+    s.busy=true;
+    s.message=t('saving');
+    draw(s);
+    let showPreview=false;
+    try{
+      const epoch=await store.activeEpoch(s.scope.tenant,s.scope.user);
+      if(!same(s))return;
+      const entry={key:s.scope.key,request_id:crypto.randomUUID(),state:'draft',blob:file,name:file.name,mime:file.type,createdAt:Date.now()};
+      if(!await store.createScopedDraft(entry,s.scope.tenant,s.scope.user,epoch))throw Error();
+      await load(s);
+      if(same(s)){
+        s.message='';
+        showPreview=s.entry?.request_id===entry.request_id&&previewable(s.entry);
+      }
+    }catch{if(same(s))s.message=t('error');}
+    finally{s.busy=false;draw(s);}
+    if(showPreview)openPreview(s);
   }
   function choose(s,kind){
     if(!canStage(s))return;
@@ -48,18 +165,205 @@
   document.addEventListener('paste',paste);
   async function accepted(s,id,result){await store.removeAccepted(s.scope.key,id,result.delivery_state);await load(s);if(same(s)){s.message=receiptNotice(s.receipt);draw(s);}}
   async function check(s){const r=s.receipt;if(!same(s)||!r||s.busy)return;s.busy=true;draw(s);try{const q=query(s);q.set('request_id',r.request_id);const response=await fetch('/api/platform/crm/chat/media-receipt?'+q,{credentials:'same-origin',cache:'no-store'}),result=await json(response);if(response.ok&&result.success&&result.provider_accepted===true)await accepted(s,r.request_id,result);else if(same(s))s.message=t('unknown');}catch{if(same(s))s.message=t('unknown');}finally{s.busy=false;draw(s);}}
-  async function send(s){if(!same(s)||s.busy||voiceBusy()||s.entry?.state!=='draft')return;const entry=s.entry,caption=s.caption.value;s.busy=true;draw(s);try{if(!await capability(s)||!same(s)){s.message=t('disabled');return;}if(entry.mime==='video/mp4'&&entry.blob.size>s.videoMax){s.message=t('videoLimit').replace('{mb}',String(s.videoMax/(1024*1024)));return;}const epoch=await store.activeEpoch(s.scope.tenant,s.scope.user);if(!same(s))return;if(!await store.claimScoped(s.scope.key,entry.request_id,s.scope.tenant,s.scope.user,epoch,caption)){await load(s);return;}if(!same(s)||voiceBusy()){await store.releaseDraft(s.scope.key,entry.request_id,crypto.randomUUID());return;}s.entry={...entry,state:'sending'};draw(s);const data=new FormData();data.append('command',JSON.stringify({request_id:entry.request_id,lead_id:Number(s.scope.lead),expected_tenant_id:s.scope.tenant,expected_user_id:s.scope.user,text:caption}));data.append('file',entry.blob,entry.name);
-      let response,result;try{response=await fetch('/api/platform/crm/chat/send-media',{method:'POST',credentials:'same-origin',body:data});result=await json(response);}catch{await store.markUnknown(s.scope.key,entry.request_id);await load(s);return;}
-      if(response.ok&&result.success&&result.provider_accepted===true){await accepted(s,entry.request_id,result);return;}
-      if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(s.scope.key,entry.request_id,crypto.randomUUID());await load(s);s.message=result.error||t('error');return;}
+  async function send(s){
+    if(!same(s)||s.busy||voiceBusy()||s.entry?.state!=='draft')return;
+    if(s.preview&&textNeedsCheck()){s.message=t('checkText');draw(s);return;}
+    const entry=s.entry,caption=s.caption.value;
+    s.message='';
+    s.busy=true;
+    draw(s);
+    try{
+      if(!await capability(s)||!same(s)){s.message=t('disabled');return;}
+      if(s.preview&&textNeedsCheck()){s.message=t('checkText');return;}
+      if(entry.mime==='video/mp4'&&entry.blob.size>s.videoMax){
+        s.message=t('videoLimit').replace('{mb}',String(s.videoMax/(1024*1024)));
+        return;
+      }
+      const epoch=await store.activeEpoch(s.scope.tenant,s.scope.user);
+      if(!same(s))return;
+      if(!await store.claimScoped(s.scope.key,entry.request_id,s.scope.tenant,s.scope.user,epoch,caption)){
+        await load(s);
+        return;
+      }
+      if(!same(s)||voiceBusy()||(s.preview&&textNeedsCheck())){
+        await store.releaseDraft(s.scope.key,entry.request_id,crypto.randomUUID());
+        if(same(s)){
+          await load(s);
+          if(textNeedsCheck())s.message=t('checkText');
+        }
+        return;
+      }
+      s.entry={...entry,state:'sending'};
+      draw(s);
+      const data=new FormData();
+      data.append('command',JSON.stringify({
+        request_id:entry.request_id,lead_id:Number(s.scope.lead),
+        expected_tenant_id:s.scope.tenant,expected_user_id:s.scope.user,text:caption
+      }));
+      data.append('file',entry.blob,entry.name);
+      let response,result;
+      try{
+        response=await fetch('/api/platform/crm/chat/send-media',{method:'POST',credentials:'same-origin',body:data});
+        result=await json(response);
+      }catch{
+        await store.markUnknown(s.scope.key,entry.request_id);
+        await load(s);
+        return;
+      }
+      if(response.ok&&result.success&&result.provider_accepted===true){
+        await accepted(s,entry.request_id,result);
+        return;
+      }
+      if(!response.ok&&response.status<500&&result.keep_request===false){
+        await store.releaseDraft(s.scope.key,entry.request_id,crypto.randomUUID());
+        await load(s);
+        s.message=result.error||t('error');
+        return;
+      }
       // An uncertain rejection is retained as a no-resend receipt here. The
       // server is authoritative; no optimistic release after a lost response.
-      await store.markUnknown(s.scope.key,entry.request_id);await load(s);
-    }catch{if(same(s))s.message=t('error');}finally{s.busy=false;draw(s);}}
-  async function attach(){const route=scope(),actions=document.querySelector('.operator-composer-actions'),composer=document.querySelector('.operator-composer');if(!route||!actions||!composer){stop();return;}if(active?.scope.key===route.key&&active.scope.policy===route.policy){actions.prepend(active.plus);composer.append(active.host);actions.append(active.menu);draw(active);return;}stop();const rev=revision;try{const version=await store.ownerVersion();if(!await store.activate(route.tenant,route.user,version)||rev!==revision)return;const s={scope:route,host:node('section'),plus:node('button'),menu:node('div'),caption:node('input'),cancel:node('button','cancel'),name:node('strong'),status:node('p'),enabled:false,busy:true};active=s;lastUser=route;s.host.hidden=true;s.plus.disabled=true;s.plus.textContent='+';s.plus.id='operatorMediaAdd';s.plus.title=t('add');s.plus.setAttribute('aria-label',t('add'));s.plus.setAttribute('aria-expanded','false');s.menu.hidden=true;s.menu.className='operator-media-menu';s.host.className='operator-customer-media';s.caption.placeholder=t('caption');s.caption.setAttribute('aria-label',t('caption'));s.caption.maxLength=4000;s.caption.oninput=()=>{if(s.entry?.state==='draft'&&!s.busy)void store.updateDraftCaption(s.scope.key,s.entry.request_id,s.caption.value).catch(()=>{s.message=t('error');draw(s);});};s.status.setAttribute('role','status');s.status.setAttribute('aria-live','polite');for(const kind of Object.keys(types)){const b=node('button',kind);b.onclick=()=>void choose(s,kind);s.menu.append(b);}s.plus.onclick=()=>{s.menu.hidden=!s.menu.hidden;s.plus.setAttribute('aria-expanded',String(!s.menu.hidden));};s.cancel.onclick=async()=>{if(!same(s)||s.busy||voiceBusy()||s.entry?.state!=='draft')return;s.busy=true;draw(s);try{await store.removeDraft(s.scope.key,s.entry.request_id);await load(s);s.message='';}catch{s.message=t('error');}finally{s.busy=false;draw(s);}};s.host.append(s.name,s.caption,s.cancel,s.status);actions.prepend(s.plus);actions.append(s.menu);composer.append(s.host);await load(s);await capability(s);s.busy=false;draw(s);}catch{stop();}}
-  window.tenantCustomerMedia={action(){const s=active;if(!s||!same(s))return null;if(s.entry?.state==='draft')return {label:t('send'),disabled:s.busy||!s.enabled||voiceBusy(),run:()=>void send(s)};if(s.receipt?.state==='unknown'||s.entry)return {label:t('check'),disabled:s.busy||!s.receipt,run:()=>void check(s)};return null;}};
+      await store.markUnknown(s.scope.key,entry.request_id);
+      await load(s);
+    }catch{if(same(s))s.message=t('error');}
+    finally{s.busy=false;draw(s);}
+  }
+
+  async function attach(){
+    const route=scope(),actions=document.querySelector('.operator-composer-actions'),composer=document.querySelector('.operator-composer');
+    if(!route||!actions||!composer){stop();return;}
+    if(active?.scope.key===route.key&&active.scope.policy===route.policy){
+      if(active.host.parentElement!==composer){closePreview(active);composer.append(active.host);}
+      if(active.plus.parentElement!==actions)actions.prepend(active.plus);
+      if(active.menu.parentElement!==actions)actions.append(active.menu);
+      draw(active);
+      return;
+    }
+    stop();
+    const rev=revision;
+    try{
+      const version=await store.ownerVersion();
+      if(!await store.activate(route.tenant,route.user,version)||rev!==revision)return;
+      const s={
+        scope:route,host:node('section'),plus:node('button'),menu:node('div'),caption:node('input'),
+        cancel:node('button','cancel'),name:node('strong'),status:node('p'),enabled:false,busy:true
+      };
+      active=s;
+      lastUser=route;
+      s.host.hidden=true;
+      s.host.className='operator-customer-media';
+      s.plus.disabled=true;
+      s.plus.textContent='+';
+      s.plus.id='operatorMediaAdd';
+      s.plus.title=t('add');
+      s.plus.setAttribute('aria-label',t('add'));
+      s.plus.setAttribute('aria-expanded','false');
+      s.menu.hidden=true;
+      s.menu.className='operator-media-menu';
+      s.caption.placeholder=t('caption');
+      s.caption.setAttribute('aria-label',t('caption'));
+      s.caption.maxLength=4000;
+      s.caption.oninput=()=>{
+        if(s.entry?.state==='draft'&&!s.busy){
+          void store.updateDraftCaption(s.scope.key,s.entry.request_id,s.caption.value).catch(()=>{s.message=t('error');draw(s);});
+        }
+      };
+      s.status.setAttribute('role','status');
+      s.status.setAttribute('aria-live','polite');
+      for(const kind of Object.keys(types)){
+        const button=node('button',kind);
+        button.onclick=()=>choose(s,kind);
+        s.menu.append(button);
+      }
+      s.plus.onclick=()=>{
+        s.menu.hidden=!s.menu.hidden;
+        s.plus.setAttribute('aria-expanded',String(!s.menu.hidden));
+      };
+      s.cancel.onclick=async()=>{
+        if(!same(s)||s.busy||voiceBusy()||s.entry?.state!=='draft')return;
+        s.busy=true;
+        draw(s);
+        try{
+          await store.removeDraft(s.scope.key,s.entry.request_id);
+          await load(s);
+          s.message='';
+        }catch{s.message=t('error');}
+        finally{s.busy=false;draw(s);}
+      };
+      s.host.append(s.name,s.caption,s.cancel,s.status);
+      actions.prepend(s.plus);
+      actions.append(s.menu);
+      composer.append(s.host);
+      await load(s);
+      if(!same(s))return;
+      await capability(s);
+      s.busy=false;
+      draw(s);
+    }catch{if(rev===revision)stop();}
+  }
+
+  window.tenantCustomerMedia={
+    action(){
+      const s=active;
+      if(!s||!same(s))return null;
+      if(s.entry?.state==='draft'){
+        const preview=previewable(s.entry);
+        return {preview,label:t(preview?'preview':'send'),disabled:s.busy||!s.enabled||voiceBusy(),run:()=>preview?openPreview(s):void send(s)};
+      }
+      if(s.receipt?.state==='unknown'||s.entry)return {label:t('check'),disabled:s.busy||!s.receipt,run:()=>void check(s)};
+      return null;
+    }
+  };
   const forget=async()=>{const old=lastUser;lastUser=null;stop();if(old)await store.purgeUser(old.tenant,old.user);};
-  document.addEventListener('tenant-chat-attachments-ready',()=>void attach());document.addEventListener('tenant-chat-close',stop);document.addEventListener('tenant-auth-invalid',()=>void forget().catch(()=>{}));document.addEventListener('tenant-profile',()=>{const next=scope();if(lastUser&&(!next||next.tenant!==lastUser.tenant||next.user!==lastUser.user))void forget().catch(()=>{});else if(active&&next?.policy!==active.scope.policy)stop();});document.addEventListener('tenant-view',e=>{if(e.detail?.view!=='dialogs')stop();});
+  document.addEventListener('tenant-chat-attachments-ready',()=>void attach());document.addEventListener('tenant-chat-close',stop);document.addEventListener('tenant-auth-pending',stop);document.addEventListener('tenant-auth-invalid',()=>void forget().catch(()=>{}));document.addEventListener('tenant-profile',()=>{const next=scope();if(lastUser&&(!next||next.tenant!==lastUser.tenant||next.user!==lastUser.user))void forget().catch(()=>{});else if(active&&next?.policy!==active.scope.policy)stop();});document.addEventListener('tenant-view',e=>{if(e.detail?.view!=='dialogs')stop();});
   document.addEventListener('pointerdown',e=>{if(active&&!active.menu.contains(e.target)&&!active.plus.contains(e.target)){active.menu.hidden=true;active.plus.setAttribute('aria-expanded','false');}});document.addEventListener('keydown',e=>{if(e.key==='Escape'&&active&&!active.menu.hidden){e.preventDefault();e.stopImmediatePropagation();active.menu.hidden=true;active.plus.setAttribute('aria-expanded','false');active.plus.focus();}},true);
-  const style=node('style');style.textContent='.operator-media-menu{position:absolute;bottom:100%;left:8px;z-index:26;background:var(--card);border:1px solid var(--line);padding:8px;border-radius:10px;display:flex;gap:6px}.operator-media-menu[hidden],.operator-customer-media[hidden]{display:none}.operator-customer-media{display:grid;gap:6px;overflow-wrap:anywhere}.operator-composer-actions #operatorMediaAdd{min-width:44px;min-height:44px;font-size:24px}';document.head.append(style);void attach();
+  const style=node('style');
+  style.textContent=`
+.operator-media-menu{position:absolute;bottom:100%;left:8px;z-index:26;background:var(--card);border:1px solid var(--line);padding:8px;border-radius:10px;display:flex;gap:6px}
+.operator-media-menu[hidden],.operator-customer-media[hidden],.operator-media-preview [hidden]{display:none}
+.operator-customer-media{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;overflow-wrap:anywhere}
+.operator-customer-media>input,.operator-customer-media>p{grid-column:1/-1}
+.operator-customer-media>p:empty{display:none}
+.operator-composer-actions #operatorMediaAdd{min-width:44px;min-height:44px;font-size:24px}
+dialog.operator-media-preview{
+  position:fixed;inset:0;margin:auto;padding:0;box-sizing:border-box;
+  width:min(640px,calc(100% - 24px));max-height:calc(100dvh - 24px);overflow:auto;
+  border:1px solid var(--line,#e1e4e8);border-radius:18px;
+  background:var(--card,#fff);color:var(--ink,#14171a);box-shadow:0 20px 60px #0004;
+}
+.operator-media-preview::backdrop{background:#10182078}
+.operator-media-preview__header,.operator-media-preview__footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px}
+.operator-media-preview__header h2{font-size:16px;font-weight:650;line-height:1.3;margin:0}
+.operator-media-preview button.operator-media-preview__close,.operator-media-preview button.operator-media-preview__send{
+  display:grid;place-items:center;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;
+  padding:0;border:0;border-radius:50%;box-shadow:none;
+}
+.operator-media-preview button.operator-media-preview__close{font-size:25px;background:transparent;color:inherit}
+.operator-media-preview button.operator-media-preview__close:hover{background:var(--paper,#f5f6f7)}
+.operator-media-preview button.operator-media-preview__send{background:var(--ink,#14171a);color:var(--card,#fff)}
+.operator-media-preview button:disabled{opacity:.5}
+.operator-media-preview button:focus-visible{outline:2px solid var(--brand,#0086bf);outline-offset:2px}
+.operator-media-preview__send svg{width:22px;height:22px;pointer-events:none}
+.operator-media-preview__stage{
+  display:grid;grid-template:minmax(0,1fr)/minmax(0,1fr);place-items:center;height:clamp(100px,43dvh,340px);margin:0 16px;padding:8px;
+  border-radius:12px;box-sizing:border-box;background:var(--paper,#f5f6f7);
+}
+.operator-media-preview__stage :is(img,video){display:block;width:auto;height:auto;max-width:100%;max-height:100%;min-height:0;object-fit:contain;border-radius:6px}
+.operator-media-preview__stage p{margin:0;text-align:center;color:var(--muted,#64717d)}
+.operator-media-preview__caption{padding:12px 16px}
+.operator-media-preview__caption>input{
+  width:100%;min-height:42px;box-sizing:border-box;border:1px solid var(--line,#e1e4e8);
+  border-radius:10px;padding:8px 12px;background:var(--paper,#f5f6f7);color:inherit;font:inherit;font-size:16px;
+}
+.operator-media-preview__footer{border-top:1px solid var(--line,#e1e4e8)}
+.operator-media-preview__file{min-width:0;color:var(--muted,#64717d);font-size:13px}
+.operator-media-preview__file strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.operator-media-preview__file p{margin:4px 0 0;overflow-wrap:anywhere}
+.operator-media-preview__file p:empty{display:none}
+@media(max-width:480px){
+  .operator-media-preview__header,.operator-media-preview__footer,.operator-media-preview__caption{padding-inline:12px}
+  .operator-media-preview__stage{margin-inline:12px}
+}
+`;
+  document.head.append(style);
+  void attach();
 })();

@@ -3,6 +3,7 @@
   const labels={ru:{ai:'Действия AI',voice:'Записать голосовое',unavailable:'Голосовая отправка недоступна',send:'Отправить',check:'Проверить отправку',emoji:'Эмодзи'},az:{ai:'AI əməliyyatları',voice:'Səsli mesaj yaz',unavailable:'Səsli göndərmə əlçatan deyil',send:'Göndər',check:'Göndərməni yoxla',emoji:'Emojilər'},en:{ai:'AI actions',voice:'Record voice message',unavailable:'Voice sending unavailable',send:'Send',check:'Check send',emoji:'Emoji'}};
   const copy=key=>(labels[window.tenantI18n?.language]||labels.az)[key];
   const icons={
+    preview:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3Z" fill="currentColor" stroke="none"/></svg>',
     send:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m3.6 3.8 17.6 7.3a1 1 0 0 1 0 1.8L3.6 20.2a.9.9 0 0 1-1.2-1l1.3-5.4 9-1.8-9-1.8-1.3-5.4a.9.9 0 0 1 1.2-1Z"/></svg>',
     emoji:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path stroke-linejoin="round" d="M9.5 3.5h5A5.5 5.5 0 0 1 20 9v3a4 4 0 0 1-1.2 2.8l-3.5 3.5a4 4 0 0 1-2.8 1.2h-3A5.5 5.5 0 0 1 4 14V9a5.5 5.5 0 0 1 5.5-5.5Z"/><circle cx="9.2" cy="9.4" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.8" cy="9.4" r="1.1" fill="currentColor" stroke="none"/><path d="M8.5 13a3.7 3.7 0 0 0 3.3 2M14 19v-3.4a2 2 0 0 1 2-2h3.5"/></svg>',
     voice:'<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21m-2.5 0h5"/></svg>',
@@ -84,8 +85,7 @@
     const emoji=createEmojiPicker(input,()=>close(false));
     primary.before(emoji.trigger);
     actions.append(emoji.panel);
-    function setPrimary(action,label,disabled){
-      const icon=action==='voice'?'voice':'send';
+    function setPrimary(action,label,disabled,icon=action==='voice'?'voice':'send'){
       if(primary.dataset.icon!==icon){primary.dataset.icon=icon;primary.innerHTML=icons[icon];}
       primary.dataset.action=action;
       primary.title=label;primary.setAttribute('aria-label',label);primary.disabled=disabled;
@@ -98,7 +98,7 @@
       if(emojiDisabled&&!emoji.panel.hidden)emoji.close(false);
       const mic=actions.querySelector('.operator-voice-mic');if(mic&&mic.dataset.composerDelegate!=='true')mic.dataset.composerDelegate='true';
       const media=!hasPending(send)&&window.tenantCustomerMedia?.action();
-      if(media){setPrimary('media',media.label,media.disabled);return;}
+      if(media){setPrimary('media',media.label,media.disabled,media.preview?'preview':'send');return;}
       const pending=hasPending(send);
       const useSend=!!input.value.trim()||pending;
       const label=useSend?(pending?copy('check'):copy('send')):(mic?copy('voice'):copy('unavailable'));
