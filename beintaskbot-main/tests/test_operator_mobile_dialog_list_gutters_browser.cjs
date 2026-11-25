@@ -68,6 +68,8 @@ const server = http.createServer((req, res) => {
       await page.evaluate(() => window.tenantOperator.refresh());
       await page.locator('.operator-row').waitFor();
       await page.evaluate(() => { const nav = document.querySelector('#nativeCrmNav'); if (nav) nav.open = false; });
+      // The production shell's Chakra reset removes user-agent dialog margins.
+      await page.addStyleTag({ content: '@layer reset { * { margin: 0; } }' });
       await page.addScriptTag({ path: path.join(docs, 'tenant-dialog-new-chat.js') });
       const newChat = page.locator('#operatorNewChat');
       const search = page.locator('#operatorSearch');
@@ -83,6 +85,10 @@ const server = http.createServer((req, res) => {
       await (width <= 430 ? newChat.tap() : newChat.press('Enter'));
       const newChatDialog = page.locator('.operator-new-chat-dialog');
       await newChatDialog.waitFor();
+      const dialogBox = await newChatDialog.boundingBox();
+      const viewport = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+      assert.ok(Math.abs(2 * dialogBox.x + dialogBox.width - viewport.width) <= 2, 'new chat is centered horizontally');
+      assert.ok(Math.abs(2 * dialogBox.y + dialogBox.height - viewport.height) <= 2, 'new chat is centered vertically');
       assert.equal(await newChatDialog.locator('select').inputValue(), route.channel_id);
       await newChatDialog.locator('[data-new-chat-cancel]').click();
       await newChatDialog.waitFor({ state: 'hidden' });
