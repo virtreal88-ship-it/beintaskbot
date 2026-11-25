@@ -36,7 +36,7 @@ const wait = async predicate => {
     else if(url.includes('dialogs?'))result={dialogs:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:1};
     else if(url.includes('dialogs/read'))result={updated:true};
     else if(url.includes('dialogs/internal-comments'))result={comment:{id:'n',note:data.note,at:new Date().toISOString(),employee_name:'Tester'}};
-    else if(url.endsWith('/operator/widget'))return {ok:true,status:200,json:async()=>({success:true,state:'saved'})};
+    else if(url.endsWith('/operator/widget'))return {ok:true,status:200,json:async()=>({success:true,state:'pending'})};
     else throw Error('Unexpected '+url);
     return {ok:true,status:200,json:async()=>({success:true,result})};
   };
@@ -79,6 +79,8 @@ const wait = async predicate => {
   const input=d.getElementById('chatText');input.value='test reply';
   d.getElementById('sendChat').click();
   await wait(()=>calls.some(c=>c.url.endsWith('/operator/widget')));
+  await wait(()=>input.value==='');
+  assert(d.getElementById('operatorSendReason').textContent.includes('Ответ доставлен'));
   const reply=calls.find(c=>c.url.endsWith('/operator/widget')).data;
   assert.deepEqual([reply.chat_id,reply.text,reply.revision,reply.action],['15','test reply',site.widget_revision,'reply']);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));

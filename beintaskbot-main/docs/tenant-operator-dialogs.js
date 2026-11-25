@@ -3641,9 +3641,9 @@
       for(const control of surface.querySelectorAll('.operator-composer-actions button')){
         if(control!==button&&!control.closest('#operatorActiveLifecycleActions'))control.hidden=true;
       }
-      const copy=({ru:['Operator отклонил авторизацию чата. Отправка из CRM недоступна.','Operator сохранил ответ.','Отправка не подтверждена. Проверьте историю перед повтором.','Operator отклонил ответ.'],
-        az:['Operator çat avtorizasiyasını qəbul etmədi. CRM-dən göndəriş bağlıdır.','Operator cavabı saxladı.','Göndəriş təsdiqlənməyib. Tarixçəni yoxlayın.','Operator cavabı rədd etdi.'],
-        en:['Operator rejected chat authentication. Sending from CRM is unavailable.','Operator saved the reply.','Delivery is uncertain. Check history before retrying.','Operator rejected the reply.']})[i18n.language]||[];
+      const copy=({ru:['Operator отклонил авторизацию чата. Отправка из CRM недоступна.','Operator сохранил ответ.','Отправка не подтверждена. Проверьте историю перед повтором.','Operator отклонил ответ.','Ответ доставлен. Operator сохраняет его в истории.','Диалог ведёт другой оператор'],
+        az:['Operator çat avtorizasiyasını qəbul etmədi. CRM-dən göndəriş bağlıdır.','Operator cavabı saxladı.','Göndəriş təsdiqlənməyib. Tarixçəni yoxlayın.','Operator cavabı rədd etdi.','Cavab çatdırıldı. Operator onu tarixçədə saxlayır.','Söhbəti başqa operator aparır'],
+        en:['Operator rejected chat authentication. Sending from CRM is unavailable.','Operator saved the reply.','Delivery is uncertain. Check history before retrying.','Operator rejected the reply.','Reply delivered. Operator is saving it to history.','Another operator is handling this chat']})[i18n.language]||[];
       if(route.send_block_reason==='widget_socket_unavailable')reason.textContent=copy[0];
       let sending=false;
       button.onclick=async()=>{
@@ -3661,10 +3661,15 @@
           const result=await rawApi('/api/platform/operator/widget',{method:'POST',body:JSON.stringify({
             action:'reply',chat_id:String(route.lead_id),revision:route.widget_revision,text,request_id:attempt.request_id,
             expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id})},{optionalScopedRead:true});
-          if(result.state==='saved'||result.state==='rejected')sessionStorage.removeItem(key);
+          if(['saved','rejected','pending'].includes(result.state))sessionStorage.removeItem(key);
           if(!same())return;
-          reason.textContent=copy[result.state==='saved'?1:result.state==='rejected'?3:2];
-          if(result.state==='saved'){message.value='';message.dispatchEvent(new Event('input',{bubbles:true}));}
+          const statuses={saved:copy[1],unknown:copy[2],rejected:copy[3],pending:copy[4]};
+          reason.textContent=result.reason==='chat_not_owned'
+            ? copy[5]+(result.operator?' · '+result.operator:'.')
+            : statuses[result.state]||copy[2];
+          if(result.state==='saved'||result.state==='pending'){
+            message.value='';message.dispatchEvent(new Event('input',{bubbles:true}));
+          }
         }catch(error){if(same())reason.textContent=error.message;}
         finally{if(same()){sending=false;message.readOnly=false;button.disabled=!sendAllowed;}}
       };

@@ -1,4 +1,4 @@
-"""Authenticated Socket.IO operations observed in Operator's support chat client."""
+"""Authenticated Socket.IO operations for the Operator support chat."""
 from contextlib import contextmanager
 import hashlib
 from threading import Event, Lock
@@ -54,10 +54,10 @@ def socket_available(credentials):
 def send_reply(credentials, row, text, request_id):
     from tenant_operator_widget import _positive
     temp_id = "temp-" + request_id
-    result = ("unknown", None)
+    result = {"state": "unknown"}
     finished = Event()
     emitted = False
-    pending = Event()
+    outcome_lock = Lock()
 
     def matches(event):
         return (isinstance(event, dict) and event.get("temp_id") == temp_id
@@ -66,18 +66,27 @@ def send_reply(credentials, row, text, request_id):
     def saved(event):
         nonlocal result
         if matches(event) and (mid := _positive(event.get("message_id"))):
-            result = ("saved", str(mid))
-            finished.set()
+            with outcome_lock:
+                result = {"state": "saved", "message_id": str(mid)}
+                finished.set()
 
     def delivered_pending(event):
-        if matches(event):
-            pending.set()
+        nonlocal result
+        with outcome_lock:
+            if matches(event) and result["state"] == "unknown":
+                result = {"state": "pending"}
 
     def rejected(event):
         nonlocal result
-        if (matches(event) and not finished.is_set() and not pending.is_set()
-                and (event.get("operator") or event.get("reason") == "delivery_failed")):
-            result = ("rejected", None)
+        if not matches(event) or event.get("reason") not in ("chat_not_owned", "claim_failed", "delivery_failed"):
+            return
+        with outcome_lock:
+            if result["state"] != "unknown":
+                return
+            result = {"state": "rejected", "reason": event["reason"]}
+            owner = event.get("operator")
+            if event["reason"] == "chat_not_owned" and isinstance(owner, str):
+                result["operator"] = owner[:240]
             finished.set()
 
     try:
@@ -87,12 +96,13 @@ def send_reply(credentials, row, text, request_id):
             client.on("operator_message_pending", delivered_pending)
             client.on("operator_message_error", rejected)
             # A pending event can mean already delivered. Wait for persistence and never resend on timeout.
+            client.emit("register_operator", {})
             emitted = True
             client.emit("operator_message", {"client_id": row["client_id"], "channel": "widget",
-                        "client_name": row.get("client_name"), "account": row.get("account"),
+                        "client_name": row.get("client_name") or row["client_id"], "account": row.get("account"),
                         "text": text, "temp_id": temp_id})
             finished.wait(8)
     except (OperatorError, socketio.exceptions.SocketIOError, OSError, ValueError):
         if not emitted:
-            return "rejected", None
+            return {"state": "rejected"}
     return result

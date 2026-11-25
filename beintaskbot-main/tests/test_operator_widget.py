@@ -95,7 +95,8 @@ def test_foreign_history_and_provider_assignment():
     assert not widget._can_reply({**CHAT, "status": "closed"}, "integration")
 
 
-def test_widget_projection_and_durable_dispatch(db, monkeypatch):
+@pytest.mark.parametrize("initial_state", ["unknown", "pending"])
+def test_widget_projection_and_durable_dispatch(db, monkeypatch, initial_state):
     monkeypatch.setenv("BEINSYSTEMS_OPERATOR_TENANT_ID", A)
     monkeypatch.setattr(operator, "_connect", lambda: db)
     monkeypatch.setattr(operator, "_ensure_schema", lambda conn: None)
@@ -122,7 +123,7 @@ def test_widget_projection_and_durable_dispatch(db, monkeypatch):
     monkeypatch.setattr(widget, "_post", post)
     def dispatch(credentials, row, text, request_id):
         sent.append((row["id"], text))
-        return "unknown", None
+        return {"state": initial_state}
     monkeypatch.setattr(wire, "send_reply", dispatch)
     result = widget.handle(PROFILE, {"action":"list"})
     assert [r["id"] for r in result["chats"]] == ["15"]
@@ -131,9 +132,9 @@ def test_widget_projection_and_durable_dispatch(db, monkeypatch):
     assert page["chat"]["can_reply"] is False and page["chat"]["reply_in_operator"] is True
     key = str(uuid.uuid4())
     command = {"action": "reply", **route, "request_id": key, "text": "test reply"}
-    assert widget.handle(PROFILE, command)["state"] == "unknown"
-    assert widget.handle(PROFILE, command)["state"] == "unknown"
-    assert widget.handle(PROFILE, {**command, "request_id": str(uuid.uuid4())})["state"] == "unknown"
+    assert widget.handle(PROFILE, command)["state"] == initial_state
+    assert widget.handle(PROFILE, command)["state"] == initial_state
+    assert widget.handle(PROFILE, {**command, "request_id": str(uuid.uuid4())})["state"] == initial_state
     with pytest.raises(operator.OperatorError):
         widget.handle(PROFILE, {**command, "text": "different"})
     assert sent == [(15, "test reply")]
@@ -160,15 +161,23 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
         def log_message(self, *args):
             pass
 
-    provider = socketio.Server(async_mode="threading", ping_interval=1, ping_timeout=2)
+    provider = socketio.Server(async_mode="threading", async_handlers=False, ping_interval=1, ping_timeout=2)
     events = []
+    registered = set()
 
     @provider.event
     def connect(sid, environ, auth):
         return auth == {"role":"operator","token":"synthetic"}
 
+    @provider.on("register_operator")
+    def register(sid, data):
+        assert data == {}
+        registered.add(sid)
+
     @provider.on("operator_message")
     def reply(sid, data):
+        if sid not in registered:
+            return
         events.append(data)
         provider.emit("operator_message_saved", {"temp_id":"another", "message_id":100}, to=sid)
         provider.emit("operator_message_pending", {"temp_id":data["temp_id"]}, to=sid)
@@ -181,9 +190,42 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
             monkeypatch.setattr(wire, "SOCKET_ORIGIN", f"http://127.0.0.1:{http.server_port}")
             request_id = str(uuid.uuid4())
             assert wire.socket_available(CREDENTIALS)
-            assert wire.send_reply(CREDENTIALS, CHAT, "hello", request_id) == ("saved", "37")
+            assert wire.send_reply(CREDENTIALS, CHAT, "hello", request_id) == {"state": "saved", "message_id": "37"}
             assert events == [{"client_id":CHAT["client_id"], "client_name":"Demo","channel":"widget",
                                "text":"hello","temp_id":"temp-"+request_id,"account":"synthetic-account"}]
         finally:
             http.shutdown()
             thread.join(timeout=5)
+
+@pytest.mark.parametrize(("events", "expected"), [
+    ([("operator_message_pending", {}), ("operator_message_error", {"reason": "delivery_failed"})],
+     {"state": "pending"}),
+    ([("operator_message_error", {"reason": "chat_not_owned", "operator": "Demo"})],
+     {"state": "rejected", "reason": "chat_not_owned", "operator": "Demo"}),
+    ([("operator_message_error", {"reason": "claim_failed"})],
+     {"state": "rejected", "reason": "claim_failed"}),
+])
+def test_provider_outcome_without_saved(monkeypatch, events, expected):
+    from contextlib import contextmanager
+    from unittest.mock import Mock
+    client = Mock()
+    handlers = {}
+    client.on.side_effect = handlers.__setitem__
+    emitted = []
+
+    def emit(event, data):
+        emitted.append(event)
+        if event == "operator_message":
+            for name, details in events:
+                handlers[name]({"temp_id": data["temp_id"], **details})
+
+    client.emit.side_effect = emit
+
+    @contextmanager
+    def socket(credentials):
+        yield client
+
+    monkeypatch.setattr(wire, "_socket", socket)
+    monkeypatch.setattr(wire.Event, "wait", lambda self, timeout: self.is_set())
+    assert wire.send_reply(CREDENTIALS, CHAT, "hello", "test") == expected
+    assert emitted == ["register_operator", "operator_message"]
