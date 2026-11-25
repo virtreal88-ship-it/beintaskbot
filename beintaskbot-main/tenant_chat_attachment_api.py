@@ -154,7 +154,12 @@ def handler(member_from_request, request_provider, logger):
             lead, message = request.query.get('lead_id'), request.query.get('message_id')
             scope={'channel_id':request.query.get('channel_id') or None,
                    'conversation_id':request.query.get('conversation_id') or None}
-            if all(scope.values()) and not {'case_id','case_message_id'} & request.query.keys():
+            from tenant_operator_access import observed_operator
+            colleague=observed_operator(request.query,incompatible=('owner_overview','search_overview',
+                'case_id','case_message_id','case_version'))
+            if colleague is not None:
+                scope['observed_operator_id']=colleague
+            elif all(scope.values()) and not {'case_id','case_message_id'} & request.query.keys():
                 scope['allow_closed_archive']=True
                 if request.query.get('owner_overview')=='1' and request.query.get('auto_preview')!='1':
                     scope['owner_overview']=True
