@@ -237,6 +237,18 @@ def _require_queue_owner(cur, profile, credentials, chat, row):
         raise operator.OperatorError("Сначала примите диалог.",409)
 
 
+def _reply_receipt(row):
+    state = row["state"]
+    result = {"state": state, "message_id": row["message_id"]}
+    if state == "unknown" and row["provider_status"] == "pending":
+        result["state"] = "pending"
+    if state == "rejected" and row["provider_status"]:
+        result["reason"] = row["provider_status"]
+        if row["assigned_operator"]:
+            result["operator"] = row["assigned_operator"]
+    return result
+
+
 def _reply(profile, credentials, chat, data):
     from tenant_operator_widget_transport import send_reply
     tenant, actor = operator._tenant(profile), int(profile["telegram_id"])
@@ -250,19 +262,19 @@ def _reply(profile, credentials, chat, data):
             (tenant_id, request_id, actor, signature, state) VALUES (%s,%s,%s,%s,'unknown')
             ON CONFLICT DO NOTHING RETURNING request_id""", (*key, actor, signature))
         if not cur.fetchone():
-            cur.execute("""SELECT actor,signature,state,message_id FROM saas_operator_widget_replies
+            cur.execute("""SELECT actor,signature,state,message_id,provider_status,assigned_operator FROM saas_operator_widget_replies
                            WHERE tenant_id=%s AND request_id=%s""", key)
             receipt = cur.fetchone()
             if not receipt:
-                cur.execute("""SELECT request_id, actor FROM saas_operator_widget_replies
+                cur.execute("""SELECT request_id,actor,state,message_id,provider_status,assigned_operator FROM saas_operator_widget_replies
                     WHERE tenant_id=%s AND signature=%s AND state='unknown'""", (tenant, signature))
                 pending = cur.fetchone()
                 if pending and pending["actor"] == actor:
-                    return {"state": "unknown", "request_id": str(pending["request_id"])}
+                    return {**_reply_receipt(pending), "request_id": str(pending["request_id"])}
                 raise operator.OperatorError("Такой ответ уже отправляли. Проверьте историю в Operator.", 409)
             if receipt["actor"] != actor or receipt["signature"] != signature:
                 raise operator.OperatorError("Идентификатор отправки уже используется.", 409)
-            return {"state": receipt["state"], "message_id": receipt["message_id"]}
+            return _reply_receipt(receipt)
     # Keep the local grant and exact credential instance locked during the single dispatch.
     with operator._connect() as db, db.cursor() as cur:
         try:
@@ -276,12 +288,17 @@ def _reply(profile, credentials, chat, data):
             cur.execute("UPDATE saas_operator_widget_replies SET state='rejected' WHERE tenant_id=%s AND request_id=%s", key)
             db.commit()
             raise
-        state, mid = send_reply(credentials, row, text, data["request_id"])
-        cur.execute("""UPDATE saas_operator_widget_replies SET state=%s,message_id=%s
-            WHERE tenant_id=%s AND request_id=%s AND state='unknown' RETURNING state,message_id""",
-            (state, mid, *key))
+        outcome = send_reply(credentials, row, text, data["request_id"])
+        state = outcome["state"]
+        # Pending delivery still needs the existing unique reservation until history confirms it.
+        pending = state == "pending"
+        cur.execute("""UPDATE saas_operator_widget_replies SET state=%s,message_id=%s,
+                provider_status=%s,assigned_operator=%s
+            WHERE tenant_id=%s AND request_id=%s AND state='unknown' RETURNING state,message_id,provider_status,assigned_operator""",
+            ("unknown" if pending else state, outcome.get("message_id"),
+             "pending" if pending else outcome.get("reason"), outcome.get("operator"), *key))
         receipt = cur.fetchone()
         if not receipt:  # A parallel history read already reconciled this exact send.
-            cur.execute("SELECT state,message_id FROM saas_operator_widget_replies WHERE tenant_id=%s AND request_id=%s", key)
+            cur.execute("SELECT state,message_id,provider_status,assigned_operator FROM saas_operator_widget_replies WHERE tenant_id=%s AND request_id=%s", key)
             receipt = cur.fetchone()
-        return {"state": receipt["state"], "message_id": receipt["message_id"]}
+        return _reply_receipt(receipt)

@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import configured_workspace_id
-from tenant_operator_widget import _can_reply, _hash, _messages, _post, _routes, _string, PAGE
+from tenant_operator_widget import _can_reply, _hash, _messages, _reconcile, _post, _routes, _string, PAGE
 
 PROVIDER = "operator_widget"
 SOURCE = "Чат сайта BeinSystems"
@@ -185,6 +185,7 @@ def sync_once(tenant):
                     if route["before_id"] and any(int(m["id"]) >= route["before_id"] for m in msgs):
                         raise ValueError("Invalid widget pagination")
                     ingest(cur, route, msgs, len(raw) >= PAGE)
+                    _reconcile(cur, tenant, route["chat_id"], route["revision"], raw)
                     db.commit()
                 except (operator.OperatorError, ValueError):
                     db.rollback()

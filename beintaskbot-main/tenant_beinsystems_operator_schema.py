@@ -60,6 +60,9 @@ def migrate_operator_identity_links(cur) -> None:
       request_id UUID NOT NULL, actor BIGINT NOT NULL, signature TEXT NOT NULL,
       state TEXT NOT NULL CHECK(state IN ('unknown','saved','rejected')), message_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,request_id))""")
+    cur.execute("""ALTER TABLE saas_operator_widget_replies
+        ADD COLUMN IF NOT EXISTS provider_status TEXT,
+        ADD COLUMN IF NOT EXISTS assigned_operator TEXT""")
     cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS operator_widget_reply_uncertain
       ON saas_operator_widget_replies(tenant_id,signature) WHERE state='unknown'""")
     migrate_customer_links(cur)
