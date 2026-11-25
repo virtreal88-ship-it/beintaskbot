@@ -12,11 +12,27 @@
     .dialog-source-tabs button[aria-pressed=true]{color:var(--accent,#2676bb);border-bottom-color:currentColor;font-weight:600}
     .dialog-source-tabs button:disabled{opacity:.52;cursor:default}
     .dialog-channel-muted,.dialog-note-form[hidden]{display:none!important}
-    .dialog-note-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 10px;background:var(--card,#fff);border-inline-start:3px solid #b37827}
-    .dialog-note-form textarea{box-sizing:border-box;flex:1 1 100%;min-width:0;resize:vertical}
+    .dialog-note-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px max(6px,env(safe-area-inset-bottom));background:var(--card,#fff)}
+    .dialog-note-composer{box-sizing:border-box;display:flex;align-items:flex-end;gap:4px;width:100%;min-width:0;padding:4px 6px;border:1px solid var(--line,#888);border-radius:13px;background:var(--card,#fff)}
+    .dialog-note-composer:focus-within{border-color:var(--brand,#2676bb)}
+    .dialog-note-composer textarea.dialog-note-input,.dialog-note-composer textarea.dialog-note-input:focus,.dialog-note-composer textarea.dialog-note-input:focus-visible{box-sizing:border-box;min-width:0;width:100%;flex:1;min-height:44px;max-height:120px;margin:0;padding:8px 7px;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;color:var(--ink);font:inherit;resize:none}
+    .dialog-note-composer button.dialog-note-send{display:grid;place-items:center;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;margin:0;padding:0;border:0;border-radius:50%;background:var(--ink,#132621);color:var(--card,#fff)}
+    .dialog-note-send svg{width:22px;height:22px;pointer-events:none}
+    .dialog-note-composer button.dialog-note-send:focus-visible{outline:2px solid var(--brand,#2676bb);outline-offset:2px}
+    .dialog-note-send:disabled{opacity:.5}
+    @media(max-width:900px){.dialog-note-composer textarea.dialog-note-input{font-size:16px}}
     .dialog-note-form small{flex:1}.dialog-note-form [role=status]:empty{display:none}
   `;
   document.head.append(style);
+  // Shared appearance for the comment tab and its menu dialog. Each keeps its own submit handler.
+  window.tenantStyleInternalCommentComposer = (composer, field, submit, label) => {
+    composer.classList.add('dialog-note-composer');
+    field.classList.add('dialog-note-input');
+    submit.className = 'primary dialog-note-send';
+    submit.title = label;
+    submit.setAttribute('aria-label',label);
+    submit.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m3.6 3.8 17.6 7.3a1 1 0 0 1 0 1.8L3.6 20.2a.9.9 0 0 1-1.2-1l1.3-5.4 9-1.8-9-1.8-1.3-5.4a.9.9 0 0 1 1.2-1Z"/></svg>';
+  };
   let session = '';
   let last;
   function reset() { session = ''; last = undefined; }
@@ -34,12 +50,13 @@
     const bar = document.createElement('div'), form = document.createElement('form');
     bar.className = 'dialog-source-tabs'; bar.setAttribute('role','group'); bar.setAttribute('aria-label',labels[3]);
     form.className = 'dialog-note-form';
-    const field = document.createElement('textarea'), hint = document.createElement('small');
+    const editor = document.createElement('div'), field = document.createElement('textarea'), hint = document.createElement('small');
     const submit = document.createElement('button'), status = document.createElement('span');
     field.maxLength = 2000; field.rows = 2; field.required = true; field.value = state.text;
     field.placeholder = labels[5]; field.setAttribute('aria-label',labels[5]); hint.textContent = labels[7];
-    submit.type = 'submit'; submit.textContent = labels[6]; status.setAttribute('role','status');
-    form.append(field,hint,submit,status);
+    submit.type = 'submit'; status.setAttribute('role','status');
+    window.tenantStyleInternalCommentComposer(editor,field,submit,labels[6]);
+    editor.append(field,submit); form.append(editor,hint,status);
     panel.before(bar); panel.after(form);
     let allowed = canComment;
     const kinds = ['widget','whatsapp','comment'];
@@ -59,9 +76,9 @@
       panel.classList.toggle('dialog-channel-muted',comment); form.hidden = !comment;
       buttons[2].disabled = !allowed;
       buttons.forEach((btn,i) => btn.setAttribute('aria-pressed',String(kinds[i] === state.active)));
-      field.readOnly = !allowed || !!state.busy; submit.disabled = field.readOnly;
+      field.readOnly = !allowed || !!state.busy; submit.disabled = field.readOnly || !field.value.trim();
     }
-    field.oninput = () => {state.text = field.value;};
+    field.oninput = () => {state.text = field.value; paint();};
     state.sync = () => {field.value = state.text; paint();};
     form.onsubmit = async event => {
       event.preventDefault();
