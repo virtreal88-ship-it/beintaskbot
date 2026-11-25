@@ -401,7 +401,14 @@ async function verifyInternalComment(){
  fail=false;submit();await tick();await tick();
  const events=()=>d.querySelectorAll('#chatRows .operator-internal-comment');
  assert.equal(events().length,1);
- assert.equal(events()[0].querySelector('[data-internal-comment-body]').textContent,note);
+ const row=events()[0],body=row.querySelector('[data-internal-comment-body]');
+ assert.equal(body.textContent,note);
+ assert(row.classList.contains('operator-timeline-event'));
+ assert.equal(row.firstElementChild.tagName,'SPAN','the author remains a normal timeline label');
+ assert.equal(row.lastElementChild.tagName,'TIME');
+ assert.equal(w.getComputedStyle(row).borderInlineStartWidth,'');
+ assert.equal(w.getComputedStyle(body).whiteSpace,'pre-wrap');
+ assert.equal(w.getComputedStyle(body).fontSize,'13px');
  assert.equal(events()[0].querySelector('script'),null);
  assert.match(events()[0].firstElementChild.textContent,/Alina/);
  assert.equal(events()[0].querySelector('time').dateTime,receipts[0].at);
