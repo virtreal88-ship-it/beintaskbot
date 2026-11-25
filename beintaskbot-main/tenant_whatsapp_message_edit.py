@@ -64,11 +64,11 @@ def _provider_id(value):
     return isinstance(value, str) and PROVIDER_ID.fullmatch(value)
 
 
-def _original(row, actor, channel, conversation, *, action='edit'):
+def _original(row, actor, channel, conversation, *, action='edit', allow_deleted=False):
     raw = row.get('raw') or {}
     provider = raw.get('externalMessageId')
     chat = raw.get('_crm_provider_conversation_id') or raw.get('conversationId')
-    if (row.get('direction') != 'outgoing' or raw.get('message_deleted') is True
+    if (row.get('direction') != 'outgoing' or (not allow_deleted and raw.get('message_deleted') is True)
             or (action == 'edit' and row.get('message_type') != 'text') or
             raw.get('fromMe') is not True or raw.get('_crm_native_send_receipt') is not True
             or str(raw.get('verified_employee_id')) != str(actor)
@@ -106,7 +106,7 @@ def attach_capabilities(rows, dialog, actor):
                 row['wa_delete_until'] = (sent + DELETE_WINDOW).isoformat()
 
 
-def _authorize(cur, session, lead, message_id, *, action='edit'):
+def _authorize(cur, session, lead, message_id, *, action='edit', allow_deleted=False):
     if not message_actions_enabled():
         raise TenantLinearError('edit_source_unavailable', 409)
     access(cur, session, action='update')
@@ -131,7 +131,7 @@ def _authorize(cur, session, lead, message_id, *, action='edit'):
       FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid AND kommo_lead_id=%s AND channel=%s
       FOR UPDATE""", (tenant, message_id, lead, 'connect:'+channel))
     row = cur.fetchone()
-    proof = _original(row, actor, channel, conversation, action=action) if row else None
+    proof = _original(row, actor, channel, conversation, action=action, allow_deleted=allow_deleted) if row else None
     if not proof:
         raise TenantLinearError('edit_message_unavailable', 404)
     target = {'scope': scope, 'gateway': route['native']['gateway_id'], 'chat': proof[0], 'provider_id': proof[1]}
@@ -231,8 +231,7 @@ def save(session, lead, message_id, request_id, version, text):
             if current != target:
                 raise TenantLinearError('edit_source_unavailable', 409)
             at = _edit_at(cur, key, lead, row, version, text)
-            submit(route, key[2], kind='edit', text=text, edit={'id': target['provider_id'], 'original_ms': at},
-                   quoted_message_id=(row.get('raw') or {}).get('quotedExternalMessageId') or None)
+            submit(route, key[2], kind='edit', text=text, edit={'id': target['provider_id'], 'original_ms': at})
     except ConnectPreflightError as error:
         state, code = 'rejected', {
             'native_edit_expired': 'edit_expired',
@@ -256,7 +255,7 @@ def delete(session, lead, message_id, request_id, version):
     key = _key(session, request_id)
     digest = fingerprint({'version': version, 'action': 'delete'})
     with _connect() as conn, conn.cursor() as cur:
-        row, target, _ = _authorize(cur, session, lead, message_id, action='delete')
+        row, target, _ = _authorize(cur, session, lead, message_id, action='delete', allow_deleted=True)
         saved = _operation(cur, key, action='delete', lock=True)
         if saved:
             if (str(saved['message_id']) != message_id or saved['lead_id'] != lead
@@ -301,10 +300,10 @@ def status(session, lead, message_id, request_id, action='edit'):
         raise ValueError()
     key = _key(session, request_id)
     with _connect() as conn, conn.cursor() as cur:
-        _, target, _ = _authorize(cur, session, lead, message_id, action=action)
+        _, target, _ = _authorize(cur, session, lead, message_id, action=action, allow_deleted=True)
         row = _operation(cur, key, action=action)
         if not row or str(row['message_id']) != message_id or row['lead_id'] != lead or row['target'] != target:
-            raise TenantLinearError('edit_request_unavailable', 404)
+            raise TenantLinearError(action+'_request_unavailable', 404)
         return _result(row)
 
 
@@ -356,6 +355,8 @@ def observe(cur, scope, payload):
         return False
     row = rows[0]
     raw = row['raw']
+    if raw.get('message_deleted') is True:
+        return False
     original_chat = raw.get('_crm_provider_conversation_id') or raw.get('conversationId')
     if not _address(original_chat) or _current_route(cur, tenant, channel, original_chat) != conversation:
         return False

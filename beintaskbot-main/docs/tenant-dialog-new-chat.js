@@ -19,7 +19,7 @@
   async function api(method='GET',payload){
     const member=identity();if(!member)throw Error(language().error);
     const query=new URLSearchParams({expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)});
-    const response=await fetch('/api/platform/operator/dialogs/new?'+query,{method,credentials:'same-origin',cache:'no-store',headers:method==='POST'?{'Content-Type':'application/json'}:undefined,body:method==='POST'?JSON.stringify({...payload,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id}):undefined});
+    const response=await fetch('/api/platform/ai/dialogs/new?'+query,{method,credentials:'same-origin',cache:'no-store',headers:method==='POST'?{'Content-Type':'application/json'}:undefined,body:method==='POST'?JSON.stringify({...payload,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id}):undefined});
     let result;try{result=await response.json()}catch{throw Error(language().error)}
     if(!response.ok||result.success!==true)throw Object.assign(Error(result.error||language().error),{status:response.status,keep_request:result.keep_request===true});
     return result.result;
@@ -69,6 +69,7 @@
       const member=identity();let saved=null;try{saved=JSON.parse(sessionStorage.getItem(keyFor(member))||'null')}catch{}
       const eligible=saved&&saved.request_id&&available.some(source=>source.channel_id===saved.channel_id);
       formState={requestId:eligible?saved.request_id:crypto.randomUUID(),submitted:eligible&&saved.submitted===true,submitting:false};
+      node.querySelector('form').reset();
       if(eligible){select.value=saved.channel_id;node.querySelector('[data-field=phone]').value=saved.phone||'';node.querySelector('[data-field=text]').value=saved.text||'';}
       for(const field of node.querySelectorAll('[data-field]'))field.disabled=formState.submitted===true;
       node.querySelector('[role=status]').textContent=formState.submitted?c.unknown:'';node.querySelector('[data-new-chat-send]').disabled=false;node.querySelector('[data-new-chat-send]').textContent=formState.submitted?c.check:c.send;
@@ -84,7 +85,9 @@
     const payload={channel_id:node.querySelector('[data-field=source]').value,phone:node.querySelector('[data-field=phone]').value.trim(),text:node.querySelector('[data-field=text]').value,request_id:formState.requestId};
     if(!payload.channel_id||!/^\+[1-9]\d{5,14}$/.test(payload.phone)||!payload.text.trim()){status.textContent=c.error;return;}
     formState.submitting=true;formState.submitted=true;button.disabled=true;button.textContent=c.sending;status.textContent='';
+    for(const field of node.querySelectorAll('[data-field]'))field.disabled=true;
     try{
+      sessionStorage.setItem(keyFor(member),JSON.stringify({...payload,submitted:true}));
       const result=await api('POST',payload);
       if(result.existing){
         status.textContent=c.openExisting;
@@ -103,7 +106,8 @@
       if(member)try{sessionStorage.setItem(keyFor(member),JSON.stringify({...payload,submitted:true}));}catch{}
     }catch(error){
       status.textContent=error.keep_request?c.unknown:(error.status===503?c.unknown:error.message||c.error);
-      const uncertain=error.keep_request===true||error.status===503;
+      const uncertain=error.keep_request===true||!error.status||error.status>=500;
+      if(uncertain)status.textContent=c.unknown;
       formState.submitted=uncertain;
       if(!uncertain){formState.requestId=crypto.randomUUID();for(const field of node.querySelectorAll('[data-field]'))field.disabled=false;}
       if(member)try{sessionStorage.setItem(keyFor(member),JSON.stringify({...payload,request_id:formState.requestId,submitted:uncertain}));}catch{}

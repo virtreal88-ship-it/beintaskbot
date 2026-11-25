@@ -160,6 +160,9 @@ def _prepare(profile,payload):
                 routes=_find_exact_routes(cur,tenant,payload['channel_id'],payload['phone'])
                 if len(routes)!=1:raise TenantLinearError('Переписка с этим номером уже создаётся. Обновите список диалогов.',409)
                 row=routes[0]
+                from tenant_dialog_lifecycle import require_access
+                require_access(cur,tenant,actor,'connect',payload['channel_id'],row['conversation_id'],'view',owner=policy.profile.get('role')=='owner')
+                return {'route':_display_route(row),'existing':True,'recover':False}
             row={**row,'channel_name':channel_row['name']}
             route=_display_route(row)
             if conflicted(cur,tenant,payload['channel_id'],conversation):

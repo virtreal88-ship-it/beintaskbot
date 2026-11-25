@@ -151,25 +151,29 @@ func observeMessageControl(event *events.Message, out *Envelope) {
 		return
 	}
 	if change := event.Message.GetProtocolMessage(); change != nil {
-		if change.GetType() == waE2E.ProtocolMessage_REVOKE {
+		if change.Type != nil && change.GetType() == waE2E.ProtocolMessage_REVOKE {
 			key := change.GetKey()
-			if key == nil || key.FromMe == nil || !validProviderID(key.GetID()) || !messagePeer.MatchString(key.GetRemoteJID()) {
+			if key == nil || key.FromMe == nil || !validProviderID(key.GetID()) || !key.GetFromMe() {
 				return
 			}
-			target, err := types.ParseJID(key.GetRemoteJID())
-			if err != nil || target.Device != 0 ||
-				(target.String() != out.Chat && !reactionChatAlias(event.Info.Chat, event.Info.RecipientAlt, target.String())) {
-				return
-			}
+			// The key is relative to its sender. Only accept self-revokes.
+			// In a DM the authenticated outer chat identifies the other party,
+			// while its inner key can identify this device's account.
+			chat, sender := event.Info.Chat, event.Info.Sender.ToNonAD()
 			participant := ""
-			if target.Server == types.GroupServer && !key.GetFromMe() {
-				parsed, err := types.ParseJID(key.GetParticipant())
-				if err != nil || parsed.Device > 255 {
+			if out.FromMe {
+				if key.GetRemoteJID() != out.Chat && !reactionChatAlias(chat, event.Info.RecipientAlt, key.GetRemoteJID()) {
 					return
 				}
-				participant = parsed.ToNonAD().String()
+			} else if chat.Server == types.GroupServer {
+				if key.GetRemoteJID() != out.Chat || !reactionUser(sender) {
+					return
+				}
+				participant = sender.String()
+			} else if !reactionUser(chat) || (sender != chat && event.Info.SenderAlt.ToNonAD() != chat) {
+				return
 			}
-			out.Revoke = &MessageRevoke{ID: key.GetID(), Chat: target.ToNonAD().String(), FromMe: key.GetFromMe(), Participant: participant}
+			out.Revoke = &MessageRevoke{ID: key.GetID(), Chat: out.Chat, FromMe: out.FromMe, Participant: participant}
 			return
 		}
 	}

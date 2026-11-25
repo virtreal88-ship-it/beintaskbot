@@ -133,7 +133,7 @@ func TestRevokeEnvelopeCarriesExactTargetAndIgnoresLocalDeleteForMe(t *testing.T
 	message := &waE2E.Message{ProtocolMessage: &waE2E.ProtocolMessage{
 		Type: waE2E.ProtocolMessage_REVOKE.Enum(),
 		Key: &waCommon.MessageKey{RemoteJID: proto.String(chat.String()), ID: proto.String("TARGET_MESSAGE"),
-			FromMe: proto.Bool(false), Participant: proto.String(participant.String())},
+			FromMe: proto.Bool(true)},
 	}}
 	event := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: participant},
 		ID: "REVOKE_EVENT", Timestamp: time.Unix(1700000000, 0)}, Message: message}
@@ -144,6 +144,18 @@ func TestRevokeEnvelopeCarriesExactTargetAndIgnoresLocalDeleteForMe(t *testing.T
 		t.Fatalf("revoke target lost or became a chat message: %+v %v", envelope, err)
 	}
 
+	// On the customer's phone the target is "from me" and the remote
+	// address is ours. In the CRM this is an incoming row in the customer's DM.
+	event.Info.Chat = participant
+	message.ProtocolMessage.Key.RemoteJID = proto.String("15550000009@s.whatsapp.net")
+	_, direct, _, _ := MessageEnvelope(event)
+	if direct.Revoke == nil || direct.Revoke.FromMe || direct.Revoke.Chat != participant.String() {
+		t.Fatal("customer revoke was not bound to its incoming DM")
+	}
+	message.ProtocolMessage.Key.FromMe = proto.Bool(false)
+	if _, other, _, _ := MessageEnvelope(event); other.Revoke != nil {
+		t.Fatal("a remote participant cannot revoke another author's row")
+	}
 	j := journal(t, database(t, filepath.Join(t.TempDir(), "local-delete.db")), testScope)
 	if !j.Capture(context.Background(), &events.DeleteForMe{ChatJID: chat, MessageID: "LOCAL_ONLY"}, nil) {
 		t.Fatal("local DeleteForMe event should be safely ignored")
