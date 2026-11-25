@@ -1458,6 +1458,29 @@
     try{const latest=await api('dialogs/history?'+(historyMergeId(page)?timelineHistoryQuery(route):dialogueHistoryQuery(route)));if(serial!==historyUpdateSerial||version!==epoch||page!==currentPage||!chat?.isConnected||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route))return;if(applyHistoryMergeChange(route,latest))return;updateDeliveryEvidence(latest,route);updateAudioEvidence(latest,route,sourceIds);updateVisualEvidence(latest,route,sourceIds);}
     catch(error){if(serial===historyUpdateSerial&&version===epoch&&page===currentPage&&sameDialog(route,currentDialog)){const status=$('operatorChatError');if(status)status.textContent=error.message;}}
   }
+  function reconcileGroupCopies(current, latest, chat, route) {
+    const sourceKey=source=>JSON.stringify([source.channel_id,String(source.lead_id),source.external_id]);
+    const canonicalBySource=new Map();
+    for(const message of latest.messages||[]){
+      if(message.sources?.length>1)for(const source of message.sources){
+        if(source.channel_id&&source.lead_id&&source.external_id)canonicalBySource.set(sourceKey(source),message);
+      }
+    }
+    if(!canonicalBySource.size)return;
+    const messages=current.messages||[], ids=new Set(messages.map(message=>String(message.id)));
+    const articles=new Map([...chat.querySelectorAll('.operator-message[data-message-id]')].map(node=>[node.dataset.messageId,node]));
+    current.messages=messages.flatMap(message=>{
+      const source={channel_id:message.source_channel_id,lead_id:message.source_lead_id,external_id:message.external_id};
+      const canonical=canonicalBySource.get(sourceKey(source));
+      if(!canonical||String(canonical.id)===String(message.id))return [message];
+      const article=articles.get(String(message.id));
+      if(ids.has(String(canonical.id))){article?.remove();return [];}
+      article?.insertAdjacentHTML('beforebegin',messageMarkup([canonical],route));
+      article?.remove();
+      ids.add(String(canonical.id));
+      return [canonical];
+    });
+  }
   async function appendNewMessages(route,suppressRead=false,namesOnly=false){
     if(route?.colleague_read_only)return openColleagueDialog(route,true);
     const chat=$('chatRows'),page=currentPage,version=epoch,revision=openRevision,readSerial=dialogReadSerial,serial=++historyUpdateSerial;if(!chat||!page||!sameDialog(route,currentDialog))return;
@@ -1491,6 +1514,7 @@
         rememberDialogPage(route,page);
         return;
       }
+      reconcileGroupCopies(page,latest,chat,route);
       patchDirectDialogNames(latest,page,chat);
       updateDeliveryEvidence(latest,route);
       updateAudioEvidence(latest,route);
@@ -3171,6 +3195,7 @@
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
     currentPage=old;old.messages ||= [];
     const follow=atBottom(chat),top=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
+    reconcileGroupCopies(old,latest,chat,latest.dialog);
     patchDirectDialogNames(latest,old,chat);
     // Only a complete, unanchored history proves absence. A newest-page read
     // must not remove older messages explicitly loaded by the employee.
@@ -3510,14 +3535,16 @@
       const actionApi=async(url,options={})=>rawApi(url,options,{optionalScopedRead:options.method==='GET'});
       const actionScopeCurrent=()=>who===identity(member)&&inDialogsView()&&sameDialog(route,currentDialog)
         &&currentDialog?.can_send===true&&!currentDialog?.colleague_read_only&&!currentDialog?.archive_read_only;
+      const actionAnchor=()=>article.isConnected?article:[...($('chatRows')?.querySelectorAll('[data-message-id]')||[])]
+        .find(row=>row.dataset.messageId===String(messageId));
       const reloadActionMessage=async()=>{if(actionScopeCurrent()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route,true,'',{suppressRead:true});}};
       if(messageActions?.canEdit(member,route,message)){const editAction=addButton(node,messageActions.t('edit'),()=>{
-        closeReplyContextMenu();messageActions.openEdit({member,route,message,api:actionApi,isCurrent:actionScopeCurrent,
+        closeReplyContextMenu();messageActions.openEdit({member,route,message,anchor:actionAnchor,api:actionApi,isCurrent:actionScopeCurrent,
           reload:reloadActionMessage,getMessage:()=>currentPage?.messages?.find(row=>String(row.id)===String(message.id)),
           onSaved:text=>{if(same())$('operatorChatError').textContent=text;}});
       });editAction.dataset.replyContextAction='edit';}
       if(messageActions?.canDelete(member,route,message)){const deleteAction=addButton(node,messageActions.t('delete'),()=>{
-        closeReplyContextMenu();messageActions.openDelete({member,route,message,api:actionApi,isCurrent:actionScopeCurrent,
+        closeReplyContextMenu();messageActions.openDelete({member,route,message,anchor:actionAnchor,api:actionApi,isCurrent:actionScopeCurrent,
           reload:reloadActionMessage,onSaved:text=>{if(same())$('operatorChatError').textContent=text;}});
       });deleteAction.dataset.replyContextAction='delete';}
       if(canReact(message)){
