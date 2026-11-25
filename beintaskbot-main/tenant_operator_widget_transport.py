@@ -1,6 +1,7 @@
 """Authenticated Socket.IO operations for the Operator support chat."""
 from contextlib import contextmanager
 import hashlib
+import logging
 from threading import Event, Lock
 from time import monotonic
 
@@ -16,13 +17,28 @@ SOCKET_ORIGIN = "https://operator.beinsystems.az"
 def _socket(credentials):
     with _NoRedirectRequestsSession() as http:
         http.trust_env = False
-        client = socketio.Client(http_session=http, reconnection=False, request_timeout=5)
-        try:
-            # Both sites are fixed. The Socket.IO endpoint lives on the UI origin, not the REST origin.
-            client.connect(SOCKET_ORIGIN, transports=["polling"],
-                           auth={"role": "operator", "token": credentials["token"]}, wait_timeout=5)
-        except (socketio.exceptions.SocketIOError, OSError, ValueError):
-            raise OperatorError("Не удалось подключиться к чату Operator.", 502) from None
+        for transport in ("websocket", "polling"):
+            denied = False
+
+            def connect_error(detail=None):
+                nonlocal denied
+                message = detail.get("message") if isinstance(detail, dict) else detail
+                denied = isinstance(message, str) and message.strip().lower() in {
+                    "authentication required", "unauthorized", "invalid token", "token expired", "forbidden"
+                }
+
+            client = socketio.Client(http_session=http, reconnection=False, request_timeout=5,
+                                     websocket_extra_options={"redirect_limit": 0})
+            client.on("connect_error", connect_error)
+            try:
+                client.connect(SOCKET_ORIGIN, transports=[transport], wait_timeout=5,
+                               auth={"role": "operator", "token": credentials["token"]})
+                break
+            except (socketio.exceptions.SocketIOError, OSError, ValueError):
+                if denied:
+                    raise OperatorError("Operator отклонил авторизацию чата.", 401) from None
+        else:
+            raise OperatorError("Не удалось подключиться к чату Operator.", 502)
         try:
             yield client
         finally:
@@ -34,7 +50,7 @@ _availability_lock = Lock()
 _availability = None
 
 
-def socket_available(credentials):
+def socket_block_reason(credentials):
     """A valid REST credential can still be denied by chat. Probe authentication only."""
     global _availability
     key = (credentials["connection_instance_id"], credentials["generation"],
@@ -44,11 +60,13 @@ def socket_available(credentials):
             return _availability[2]
         try:
             with _socket(credentials):
-                ready = True
-        except (OperatorError, socketio.exceptions.SocketIOError, OSError, ValueError):
-            ready = False
-        _availability = (key, monotonic() + 120, ready)
-        return ready
+                reason = ""
+        except OperatorError as exc:
+            reason = "widget_socket_auth_denied" if exc.status == 401 else "widget_socket_unavailable"
+        if not _availability or _availability[0] != key or _availability[2] != reason:
+            logging.getLogger(__name__).info("Operator widget realtime check: %s", reason or "connected")
+        _availability = (key, monotonic() + (30 if reason else 120), reason)
+        return reason
 
 
 def send_reply(credentials, row, text, request_id):

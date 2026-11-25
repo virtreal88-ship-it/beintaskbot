@@ -57,7 +57,8 @@ const wait = async predicate => {
     assert(control,'expected '+action+' on the accepted dialogue');
     assert(!control.closest('[hidden]'),action+' must be visible even when provider sending is blocked');
   }
-  assert(d.getElementById('operatorSendReason').textContent.includes('авторизац'));
+  assert(d.getElementById('operatorSendReason').textContent.includes('Нет соединения'));
+  assert.equal(d.getElementById('chatText').disabled,false);
   d.querySelector('.dialog-source-tabs button:last-child').click();
   const assertNoteEditor = root => {
     const field=root.querySelector('.dialog-note-composer textarea');

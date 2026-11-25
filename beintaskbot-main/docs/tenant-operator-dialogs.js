@@ -3644,7 +3644,15 @@
       const copy=({ru:['Operator отклонил авторизацию чата. Отправка из CRM недоступна.','Operator сохранил ответ.','Отправка не подтверждена. Проверьте историю перед повтором.','Operator отклонил ответ.','Ответ доставлен. Operator сохраняет его в истории.','Диалог ведёт другой оператор'],
         az:['Operator çat avtorizasiyasını qəbul etmədi. CRM-dən göndəriş bağlıdır.','Operator cavabı saxladı.','Göndəriş təsdiqlənməyib. Tarixçəni yoxlayın.','Operator cavabı rədd etdi.','Cavab çatdırıldı. Operator onu tarixçədə saxlayır.','Söhbəti başqa operator aparır'],
         en:['Operator rejected chat authentication. Sending from CRM is unavailable.','Operator saved the reply.','Delivery is uncertain. Check history before retrying.','Operator rejected the reply.','Reply delivered. Operator is saving it to history.','Another operator is handling this chat']})[i18n.language]||[];
-      if(route.send_block_reason==='widget_socket_unavailable')reason.textContent=copy[0];
+      const socketBlocked=['widget_socket_unavailable','widget_socket_auth_denied'].includes(route.send_block_reason);
+      if(socketBlocked){
+        if(hasRight('dialogs')&&route.lifecycle?.can_close)message.disabled=false;
+        reason.textContent=route.send_block_reason==='widget_socket_auth_denied'?copy[0]:({
+          ru:'Нет соединения с чатом Operator. Черновик можно сохранить.',
+          az:'Operator çatı ilə bağlantı yoxdur. Qaralamanı saxlaya bilərsiniz.',
+          en:'Operator chat is unavailable. You can save a draft.'
+        }[i18n.language]||'Operator chat is unavailable.');
+      }
       let sending=false;
       button.onclick=async()=>{
         const text=message.value.trim();
@@ -3673,7 +3681,7 @@
         }catch(error){if(same())reason.textContent=error.message;}
         finally{if(same()){sending=false;message.readOnly=false;button.disabled=!sendAllowed;}}
       };
-      message.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){
+      message.addEventListener('keydown',event=>{if(sendAllowed&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing){
         event.preventDefault();button.click();
       }});
     }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');

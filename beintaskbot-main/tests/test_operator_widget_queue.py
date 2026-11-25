@@ -24,7 +24,7 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     monkeypatch.setattr(op, "_credentials", lambda tenant: CREDENTIALS)
     import tenant_operator_widget_transport as transport
 
-    monkeypatch.setattr(transport, "socket_available", lambda _: False)
+    monkeypatch.setattr(transport, "socket_block_reason", lambda _: "widget_socket_unavailable")
     cur = db.cursor()
     lifecycle.migrate(cur)
     comments.provision_schema(cur)

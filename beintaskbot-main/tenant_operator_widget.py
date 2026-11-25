@@ -165,8 +165,8 @@ def handle(profile, data):
             query["before_id"] = _positive(data["before_id"])
         rows = _post("/chat/getMessages", query, credentials)
         if widget_allowed(current, "update") and _can_reply(row, login):
-            from tenant_operator_widget_transport import socket_available
-            socket_ready = socket_available(credentials)
+            from tenant_operator_widget_transport import socket_block_reason
+            socket_ready = not socket_block_reason(credentials)
     with operator._connect() as db, db.cursor() as cur:
         current, login = _snapshot(cur, profile, credentials)
         writable = widget_allowed(current, "update")
