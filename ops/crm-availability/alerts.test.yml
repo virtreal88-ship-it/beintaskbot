@@ -1,0 +1,29 @@
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{job="crm-public",instance="localhost:9115"}'
+        values: '1 0 0 1 0 0 0 0 0 1'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: CRMUnavailable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: CRMUnavailable
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations: {summary: "Public CRM health check failed for one minute"}
+      - eval_time: 2m15s
+        alertname: CRMUnavailable
+        exp_alerts: []
+  - interval: 15s
+    input_series:
+      - series: 'up{job="crm-public",instance="localhost:9115"}'
+        values: '0+0x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CRMProbeMissing
+        exp_alerts:
+          - exp_labels: {severity: critical, job: crm-public}
+            exp_annotations: {summary: "External CRM health observer has no probe result"}

@@ -1,0 +1,29 @@
+name: Worker HTTP incident diagnostics
+on:
+  pull_request:
+    paths:
+      - beintaskbot-main/worker_http_diagnostics.py
+      - beintaskbot-main/bot.py
+      - beintaskbot-main/tests/test_worker_http_diagnostics.py
+      - ops/crm-availability/**
+      - .github/workflows/worker-http-witness.yml
+permissions:
+  contents: read
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exercise listener and loop locally
+        working-directory: beintaskbot-main
+        run: |
+          python -m pip install aiohttp
+          python -m unittest discover -s tests -p test_worker_http_diagnostics.py
+      - name: Validate external probe and alert transitions
+        working-directory: ops/crm-availability
+        run: |
+          docker run --rm -v "$PWD:/config:ro" quay.io/prometheus/blackbox-exporter:v0.27.0 --config.file=/config/blackbox.yml --config.check
+          for command in 'check config prometheus.yml' 'test rules alerts.test.yml'; do
+            docker run --rm -v "$PWD:/config:ro" -w /config --entrypoint /bin/promtool quay.io/prometheus/prometheus:v3.5.0 $command
+          done
