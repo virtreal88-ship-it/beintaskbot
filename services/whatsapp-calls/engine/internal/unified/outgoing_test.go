@@ -1,27 +1,34 @@
 package unified
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/types"
 	"google.golang.org/protobuf/proto"
-	"path/filepath"
-	"testing"
 )
 
 type outgoingClient struct {
+	mediaType whatsmeow.MediaType
+	mediaBytes []byte
 	uploads, sends int
 	fail           bool
 	message        *waE2E.Message
 }
 
 func (c *outgoingClient) GenerateMessageID() types.MessageID { return "SYNTHETIC_ID" }
-func (c *outgoingClient) Upload(_ context.Context, b []byte, _ whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
+func (c *outgoingClient) Upload(_ context.Context, b []byte, mediaType whatsmeow.MediaType) (whatsmeow.UploadResponse, error) {
 	c.uploads++
+	c.mediaType, c.mediaBytes = mediaType, append([]byte(nil), b...)
 	return whatsmeow.UploadResponse{FileLength: uint64(len(b))}, nil
 }
 func (c *outgoingClient) SendMessage(_ context.Context, _ types.JID, m *waE2E.Message, x ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error) {
@@ -52,7 +59,12 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 		t.Fatal("conflict reached provider")
 	}
 }
-func TestOutgoingAudioMIMEOnlyDeclaresOpusForVoiceNotes(t *testing.T) {
+func TestOutgoingAudioMIMEAndDurationOnlyForVoiceNotes(t *testing.T) {
+	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	for _, tc := range []struct {
 		kind, wireMIME string
 		ptt           bool
@@ -64,7 +76,7 @@ func TestOutgoingAudioMIMEOnlyDeclaresOpusForVoiceNotes(t *testing.T) {
 			ctx := context.Background()
 			j := journal(t, database(t, filepath.Join(t.TempDir(), "audio.db")), testScope)
 			client := &outgoingClient{}
-			req := Outgoing{Scope: testScope, Operation: "audio-op", Chat: "15550000002@s.whatsapp.net", Kind: tc.kind, MIME: "audio/ogg", Data: []byte("synthetic")}
+			req := Outgoing{Scope: testScope, Operation: "audio-op", Chat: "15550000002@s.whatsapp.net", Kind: tc.kind, MIME: "audio/ogg", Data: voice}
 			for i := 0; i < 2; i++ {
 				if _, err := j.Deliver(ctx, client, req, nil); err != nil {
 					t.Fatal(err)
@@ -75,7 +87,56 @@ func TestOutgoingAudioMIMEOnlyDeclaresOpusForVoiceNotes(t *testing.T) {
 				audio.GetPTT() != tc.ptt || audio.GetMimetype() != tc.wireMIME {
 				t.Fatal("unexpected wire audio format or duplicate send")
 			}
+			if client.mediaType != whatsmeow.MediaAudio || !bytes.Equal(client.mediaBytes, voice) ||
+				audio.GetFileLength() != uint64(len(voice)) {
+				t.Fatal("unexpected audio encryption/upload category or changed bytes")
+			}
+			if (tc.ptt && audio.GetSeconds() != 2) || (!tc.ptt && audio.Seconds != nil) {
+				t.Fatalf("unexpected wire duration: %v", audio.Seconds)
+			}
+			events, err := j.Events(ctx, 0, 10)
+			if err != nil || len(events) != 1 {
+				t.Fatalf("expected one scoped history entry: %v", err)
+			}
+			var envelope Envelope
+			var retained waE2E.Message
+			if err := json.Unmarshal(events[0].Payload, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if err := proto.Unmarshal(envelope.Proto, &retained); err != nil {
+				t.Fatal(err)
+			}
+			if !envelope.AppDispatch || !envelope.FromMe || envelope.Chat != req.Chat ||
+				envelope.MediaKind != "audio" || envelope.MediaSize != uint64(len(voice)) ||
+				!proto.Equal(audio, retained.GetAudioMessage()) {
+				t.Fatal("authorized retained event does not match sent audio")
+			}
 		})
+	}
+}
+
+func TestOutgoingVoiceWithoutProvenDurationDoesNotReachUpload(t *testing.T) {
+	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "invalid-audio.db")), testScope)
+	client := &outgoingClient{}
+	last := bytes.LastIndex(voice, []byte("OggS"))
+	if last < 0 {
+		t.Fatal("invalid fixture")
+	}
+	overlong, wrongSequence := bytes.Clone(voice), bytes.Clone(voice)
+	binary.LittleEndian.PutUint64(overlong[last+6:], 48000*121)
+	binary.LittleEndian.PutUint32(wrongSequence[last+18:], 999)
+	for _, data := range [][]byte{[]byte("non-ogg"), voice[:len(voice)-1], append(bytes.Clone(voice), voice...), overlong, wrongSequence} {
+		req := Outgoing{Scope: testScope, Operation: "invalid-audio", Chat: "15550000002@s.whatsapp.net", Kind: "voice", MIME: "audio/ogg", Data: data}
+		if _, err := j.Deliver(context.Background(), client, req, nil); !errors.Is(err, ErrMediaRestricted) {
+			t.Fatalf("invalid recording was not rejected before dispatch: %v", err)
+		}
+	}
+	if client.uploads != 0 || client.sends != 0 {
+		t.Fatal("bad voice reached provider")
 	}
 }
 

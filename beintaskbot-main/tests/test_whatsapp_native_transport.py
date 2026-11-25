@@ -376,3 +376,64 @@ def test_native_group_and_consultation_dispatch_do_not_reach_connect(configured,
     result=transport.send_consultation_with_receipt(route,'synthetic',str(uuid.uuid4()))
     assert result['state']=='sent' and result['external_message_id']=='PROVIDER_12345'
     assert call.call_count==2
+
+
+def test_browser_recording_round_trips_as_scoped_native_voice(configured, monkeypatch, tmp_path):
+    import base64
+    import shutil
+    import subprocess
+    from tenant_customer_voice_service import prepare, _submit
+    from test_whatsapp_native_projection import message
+    from test_whatsapp_native_inbox import delivery, store
+    import tenant_whatsapp_native_projection as projection
+    import tenant_whatsapp_native_inbox as inbox
+
+    if not shutil.which('ffmpeg'):
+        pytest.skip('ffmpeg required for authentic recording fixture')
+    db, route = configured
+    route = {**route, 'author_id': 11, 'crm_conversation_id': 41}
+    room = route['conversation_id']
+    request_id = str(uuid.uuid4())
+    source = tmp_path / 'browser.webm'
+    subprocess.run(['ffmpeg','-nostdin','-v','error','-f','lavfi','-i',
+                    'sine=frequency=440:duration=1.2','-c:a','libopus',str(source)],
+                   check=True,capture_output=True,timeout=20)
+    command, uploaded = prepare({'request_id':request_id,'lead_id':41,
+        'expected_tenant_id':A,'expected_user_id':11}, 'audio/webm;codecs=opus', source.read_bytes())
+    send = accepted(monkeypatch)
+    receipt = _submit(route, request_id, command['file']['mime'], uploaded)
+    assert receipt['provider_accepted'] and not receipt['delivered']
+    payload = send.call_args.kwargs['json']
+    assert payload['scope'] == route['native']['scope']
+    assert payload['chat'] == room and payload['kind'] == 'voice' and payload['mime'] == 'audio/ogg'
+    assert send.call_count == 1
+    opus = base64.b64decode(payload['data'],validate=True)
+
+    monkeypatch.setattr(projection,'_fernet',inbox._fernet)
+    event = delivery()
+    event['event']['payload'] = message(sender_alt='',from_me=True,provider_id=receipt['provider_message_id'],
+        message_type='audio',media_kind='audio',media_mime='audio/ogg; codecs=opus',media_size=len(opus))
+    store(event)
+    row_id = receipt['message_id']
+    db.execute('UPDATE saas_connect_conversations SET conversation_id=%s WHERE tenant_id=%s AND connect_channel_id=%s',(room,A,CA))
+    db.execute("""UPDATE saas_crm_messages SET external_id=%s,message_type='audio',direction='outgoing',raw=%s::jsonb
+                  WHERE tenant_id=%s AND external_id='m1'""",
+               ('connect:'+row_id,json.dumps({'externalMessageId':receipt['provider_message_id'],
+               'nativeEventId':'a'*64,'conversationId':room}),A));db.commit()
+    response = Mock(status_code=200,headers={'Content-Encoding':'identity'})
+    response.iter_content.return_value = [opus]
+    response.__enter__=Mock(return_value=response)
+    response.__exit__=Mock(return_value=False)
+    fetch=Mock(return_value=response)
+    monkeypatch.setattr(native.requests,'post',fetch)
+    restored, mime = native.download(route,row_id,max_bytes=1024**2,allowed_types={'audio/ogg'})
+    assert mime == 'audio/ogg' and restored == opus
+    assert fetch.call_args.kwargs['json'] == {'scope':route['native']['scope'],'event_id':'a'*64,'chat':room}
+    pcm = subprocess.run(['ffmpeg','-nostdin','-v','error','-f','ogg','-i','pipe:0',
+                          '-ac','1','-ar','48000','-f','s16le','pipe:1'],input=restored,
+                         check=True,capture_output=True,timeout=20).stdout
+    assert len(pcm) == 2 * 57600 and any(pcm)
+    fetch.reset_mock()
+    with pytest.raises(TenantPlatformError):
+        native.download({**route,'conversation_id':'15550009999@s.whatsapp.net'},row_id,max_bytes=1024**2,allowed_types={'audio/ogg'})
+    fetch.assert_not_called()

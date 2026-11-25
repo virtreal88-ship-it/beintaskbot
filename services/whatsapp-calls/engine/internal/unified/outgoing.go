@@ -112,6 +112,14 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	if err := request.Validate(j.binding); err != nil {
 		return Result{}, err
 	}
+	var seconds uint32
+	if request.Kind == "voice" {
+		var err error
+		seconds, err = pttSeconds(request.Data)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	chat, err := types.ParseJID(request.Chat)
 	if err != nil || chat.Device != 0 {
 		return Result{}, ErrConfiguration
@@ -180,6 +188,9 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 					mime = "audio/ogg; codecs=opus"
 				}
 				msg = &waE2E.Message{AudioMessage: &waE2E.AudioMessage{URL: &upload.URL, DirectPath: &upload.DirectPath, MediaKey: upload.MediaKey, FileSHA256: upload.FileSHA256, FileEncSHA256: upload.FileEncSHA256, FileLength: &upload.FileLength, Mimetype: &mime, PTT: proto.Bool(ptt)}}
+				if ptt {
+					msg.AudioMessage.Seconds = proto.Uint32(seconds)
+				}
 			case "video":
 				msg = &waE2E.Message{VideoMessage: &waE2E.VideoMessage{URL: &upload.URL, DirectPath: &upload.DirectPath, MediaKey: upload.MediaKey, FileSHA256: upload.FileSHA256, FileEncSHA256: upload.FileEncSHA256, FileLength: &upload.FileLength, Mimetype: &request.MIME, Caption: &request.Text}}
 			default:
