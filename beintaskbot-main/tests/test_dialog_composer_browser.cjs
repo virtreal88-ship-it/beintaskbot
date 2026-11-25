@@ -10,7 +10,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),args:['--no-sandbox']});
  try{
   for(const [width,height,language] of [[320,760,'ru'],[320,760,'az'],[360,800,'ru'],[360,800,'az'],[390,844,'ru'],[390,844,'az'],[430,900,'ru'],[430,900,'az'],[1280,900,'ru'],[1280,900,'az']]){
-   const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];let mediaRequests=0,mediaStatus=503,mediaGate=null,releaseMedia=null;
+   const page=await browser.newPage({viewport:{width,height}}),errors=[],calls=[];let attachmentPosts=0,mediaRequests=0,mediaStatus=503,mediaGate=null,releaseMedia=null;
    const testsEnter=language==='ru'&&(width===390||width===1280);
    let finishSend;
    const sendGate=new Promise(resolve=>{finishSend=resolve;});
@@ -29,6 +29,13 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     if(name==='/api/platform/crm/chat/send'&&request.method()==='POST'){
      if(testsEnter)await sendGate;
      return route.fulfill({json:{success:true,state:'accepted'}});
+    }
+    if(name.endsWith('/crm/chat/media-capability'))return route.fulfill({json:{success:true,enabled:width===1280&&language==='ru'}});
+    if(name.endsWith('/crm/chat/send-media')){
+     attachmentPosts++;
+     assert.match(request.postData(),/filename="screen.png"/);
+     assert.match(request.postData(),/"lead_id":41/);
+     return route.fulfill({json:{success:true,provider_accepted:true,delivery_state:'sent'}});
     }
     if(name.endsWith('/crm/chat/voice-capability'))return route.fulfill({json:{success:true,enabled:true,recovery_enabled:true}});
     let result={};
@@ -88,6 +95,20 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
       assert.equal(sendCalls().length,1,'a second Enter while sending cannot submit twice');
       assert.equal(JSON.parse(sendCalls()[0].body).text,'First line\nSecond line');
       finishSend();await page.waitForFunction(()=>document.querySelector('#chatText').value==='');
+    }
+    if(width===1280&&language==='ru'){
+      await page.waitForFunction(()=>document.querySelector('#operatorMediaAdd')?.disabled===false);
+      assert.equal(await input.evaluate(el=>{
+        const clipboardData=new DataTransfer();
+        const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2ioAAAAASUVORK5CYII=';
+        clipboardData.items.add(new File([Uint8Array.from(atob(png),x=>x.charCodeAt(0))],'screen.png',{type:'image/png'}));
+        return !el.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}));
+      }),true);
+      await page.waitForFunction(()=>document.querySelector('.operator-customer-media strong')?.textContent==='screen.png');
+      assert.equal(attachmentPosts,0);
+      await Promise.all([page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/chat/send-media')),primary.click()]);
+      await page.waitForFunction(()=>document.querySelector('.operator-customer-media').hidden);
+      assert.equal(attachmentPosts,1);
     }
     assert.deepEqual(errors,[]);assert.equal(sendCalls().length,Number(testsEnter));
     console.log('PASS compact composer '+width+' '+language);
