@@ -3,7 +3,9 @@ package unified
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -33,6 +35,18 @@ type Outgoing struct {
 	QuoteID     string          `json:"quote_id,omitempty"`
 	LegacyQuote *LegacyQuote    `json:"legacy_quote,omitempty"`
 	Reaction    *ReactionTarget `json:"reaction,omitempty"`
+	Edit        *EditTarget     `json:"edit,omitempty"`
+	Delete      *DeleteTarget   `json:"delete,omitempty"`
+}
+
+type EditTarget struct {
+	ID         string `json:"id"`
+	OriginalMS int64  `json:"original_ms"`
+}
+
+type DeleteTarget struct {
+	ID         string `json:"id"`
+	OriginalMS int64  `json:"original_ms"`
 }
 
 // LegacyQuote comes only from the authenticated Worker's exact historical row.
@@ -47,10 +61,13 @@ type LegacyQuote struct {
 type MessageClient interface {
 	GenerateMessageID() types.MessageID
 	Upload(context.Context, []byte, whatsmeow.MediaType) (whatsmeow.UploadResponse, error)
+	BuildEdit(types.JID, types.MessageID, *waE2E.Message) *waE2E.Message
+	BuildRevoke(types.JID, types.JID, types.MessageID) *waE2E.Message
 	SendMessage(context.Context, types.JID, *waE2E.Message, ...whatsmeow.SendRequestExtra) (whatsmeow.SendResponse, error)
 }
 
 var messagePeer = regexp.MustCompile(`^[1-9][0-9]{4,29}(?:-[0-9]{5,20})?@(s\.whatsapp\.net|lid|g\.us)$`)
+var messageActionOperation = regexp.MustCompile(`^(edit|delete):[1-9][0-9]{0,18}:[0-9a-f-]{36}$`)
 
 func (r Outgoing) Validate(scope Scope) error {
 	if r.Scope != scope || r.Operation == "" || len(r.Operation) > 128 || !messagePeer.MatchString(r.Chat) ||
@@ -58,7 +75,7 @@ func (r Outgoing) Validate(scope Scope) error {
 		return ErrConfiguration
 	}
 	if r.Kind == "reaction" {
-		if r.Reaction == nil || !r.Reaction.valid(r.Chat) || !validReactionText(r.Text) ||
+		if r.Reaction == nil || r.Edit != nil || r.Delete != nil || !r.Reaction.valid(r.Chat) || !validReactionText(r.Text) ||
 			len(r.Data) != 0 || r.MIME != "" || r.Name != "" ||
 			r.QuoteEvent != "" || r.QuoteID != "" || r.LegacyQuote != nil {
 			return ErrConfiguration
@@ -66,6 +83,22 @@ func (r Outgoing) Validate(scope Scope) error {
 		return nil
 	}
 	if r.Reaction != nil {
+		return ErrConfiguration
+	}
+	if (r.Kind == "edit") != (r.Edit != nil) || (r.Kind == "delete") != (r.Delete != nil) ||
+		(r.Edit != nil && r.Delete != nil) {
+		return ErrConfiguration
+	}
+	if r.Edit != nil && (!controlMessageID.MatchString(r.Edit.ID) || r.Edit.OriginalMS <= 0 ||
+		!messageActionOperation.MatchString(r.Operation) || !strings.HasPrefix(r.Operation, "edit:") ||
+		len(r.Text) > 32000 || len(r.Data) != 0 || r.MIME != "" || r.Name != "" ||
+		r.QuoteEvent != "" || r.QuoteID != "" || r.LegacyQuote != nil) {
+		return ErrConfiguration
+	}
+	if r.Delete != nil && (!controlMessageID.MatchString(r.Delete.ID) || r.Delete.OriginalMS <= 0 ||
+		!messageActionOperation.MatchString(r.Operation) || !strings.HasPrefix(r.Operation, "delete:") ||
+		r.Text != "" || len(r.Data) != 0 || r.MIME != "" || r.Name != "" ||
+		r.QuoteEvent != "" || r.QuoteID != "" || r.LegacyQuote != nil) {
 		return ErrConfiguration
 	}
 	if ((r.QuoteEvent == "" && r.LegacyQuote == nil) != (r.QuoteID == "")) || (r.QuoteEvent != "" && (len(r.QuoteEvent) != 64 || r.LegacyQuote != nil)) {
@@ -79,7 +112,10 @@ func (r Outgoing) Validate(scope Scope) error {
 			return ErrConfiguration
 		}
 	}
-	if r.Kind == "text" {
+	if r.Kind == "delete" {
+		return nil
+	}
+	if r.Kind == "text" || r.Kind == "edit" {
 		if strings.TrimSpace(r.Text) == "" || len(r.Data) != 0 || r.MIME != "" || r.Name != "" {
 			return ErrConfiguration
 		}
@@ -128,6 +164,30 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 	if err != nil || chat.Device != 0 {
 		return Result{}, ErrConfiguration
 	}
+	if request.Edit != nil {
+		if result, found, lookupErr := j.existingAction(ctx, request.Operation, request.Chat); found || lookupErr != nil {
+			return result, lookupErr
+		}
+		age := time.Since(time.UnixMilli(request.Edit.OriginalMS))
+		if age < 0 || age >= 15*time.Minute {
+			return Result{}, ErrEditExpired
+		}
+		if err := j.ownSentMessage(ctx, request.Chat, request.Edit.ID); err != nil {
+			return Result{}, ErrActionOriginal
+		}
+	}
+	if request.Delete != nil {
+		if result, found, lookupErr := j.existingAction(ctx, request.Operation, request.Chat); found || lookupErr != nil {
+			return result, lookupErr
+		}
+		age := time.Since(time.UnixMilli(request.Delete.OriginalMS))
+		if age < 0 || age >= 48*time.Hour {
+			return Result{}, ErrDeleteExpired
+		}
+		if err := j.ownSentMessage(ctx, request.Chat, request.Delete.ID); err != nil {
+			return Result{}, ErrActionOriginal
+		}
+	}
 	var quote *waE2E.ContextInfo
 	if q := request.LegacyQuote; q != nil {
 		quote = &waE2E.ContextInfo{StanzaID: &q.ProviderID, Participant: &q.Sender, RemoteJID: &q.Chat, QuotedMessage: &waE2E.Message{Conversation: &q.Text}}
@@ -158,6 +218,12 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		if quote != nil {
 			msg = &waE2E.Message{ExtendedTextMessage: &waE2E.ExtendedTextMessage{Text: &request.Text, ContextInfo: quote}}
 		}
+		if request.Edit != nil {
+			msg = client.BuildEdit(chat, types.MessageID(request.Edit.ID), &waE2E.Message{Conversation: proto.String(request.Text)})
+		}
+		if request.Delete != nil {
+			msg = client.BuildRevoke(chat, types.EmptyJID, types.MessageID(request.Delete.ID))
+		}
 		if target := request.Reaction; target != nil {
 			msg = &waE2E.Message{ReactionMessage: &waE2E.ReactionMessage{
 				Key: &waCommon.MessageKey{
@@ -166,7 +232,7 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 				},
 				Text: proto.String(request.Text), SenderTimestampMS: proto.Int64(time.Now().UnixMilli()),
 			}}
-		} else if request.Kind != "text" {
+		} else if request.Kind != "text" && request.Kind != "edit" && request.Kind != "delete" {
 			mediaType := whatsmeow.MediaDocument
 			switch request.Kind {
 			case "image":
@@ -223,6 +289,33 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		if err != nil || response.ID != id {
 			return ErrUnknown
 		}
+		if request.Edit != nil || request.Delete != nil {
+			stamp := response.Timestamp
+			if stamp.IsZero() {
+				stamp = time.Now()
+			}
+			sender, _ := types.ParseJID(j.binding.Account)
+			identity, envelope, retained, err := MessageEnvelope(&events.Message{
+				Info:    types.MessageInfo{MessageSource: types.MessageSource{Chat: chat, Sender: sender, IsFromMe: true}, ID: id, Timestamp: stamp},
+				Message: msg,
+			})
+			if err != nil || !retained {
+				return ErrUnknown
+			}
+			envelope.AppDispatch = true
+			if request.Edit != nil && envelope.Edit != nil {
+				envelope.Edit.Operation = request.Operation
+			}
+			if request.Delete != nil && envelope.Revoke != nil {
+				envelope.Revoke.Operation = request.Operation
+			}
+			payload, err := json.Marshal(envelope)
+			if err != nil {
+				return ErrUnknown
+			}
+			_, err = j.Append(ctx, "app-action:"+identity, payload)
+			return err
+		}
 		if request.Kind == "text" {
 			return nil
 		}
@@ -250,6 +343,30 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 		_, err = j.Append(ctx, identity, payload)
 		return err
 	})
+}
+
+func (j *Journal) existingAction(ctx context.Context, operation, peer string) (Result, bool, error) {
+	result, err := j.Lookup(ctx, operation, peer)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Result{}, false, nil
+	}
+	if err != nil {
+		return Result{}, false, err
+	}
+	if result.State == "unknown" {
+		return result, true, ErrUnknown
+	}
+	return result, true, nil
+}
+
+func (j *Journal) ownSentMessage(ctx context.Context, peer, providerID string) error {
+	var state string
+	err := j.db.QueryRowContext(ctx, `SELECT state FROM unified_sends WHERE scope=? AND provider_id=? AND peer_hash=?`,
+		j.operationScope, providerID, j.digestForScope(j.operationScope, "peer", peer)).Scan(&state)
+	if err != nil || state != "accepted" {
+		return ErrActionOriginal
+	}
+	return nil
 }
 
 func quoteChatMatches(ctx context.Context, e Envelope, chat string, lids store.LIDStore) bool {

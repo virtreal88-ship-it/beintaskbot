@@ -177,7 +177,10 @@ FACTORIES += ('reminders_handler','employee_work_status_handler')
 FACTORIES += ('call_recordings_handler','browser_calls_handler','call_sources_handler')
 FACTORIES += ('whatsapp_integration_handler',)
 EXPECTED_API += (('GET','/api/platform/integrations/whatsapp'),('POST','/api/platform/integrations/whatsapp'))
-FACTORIES += ('native_whatsapp_handler',)
+FACTORIES += ('native_whatsapp_handler','dialog_compose_handler','whatsapp_message_actions_handler')
+EXPECTED_ASSETS += ['/assets/tenant-dialog-new-chat.js','/assets/tenant-whatsapp-message-actions.js']
+EXPECTED_API += tuple((method,path) for method in ('GET','POST') for path in (
+    '/api/platform/ai/dialogs/new','/api/platform/crm/chat/edit-message','/api/platform/crm/chat/delete-message'))
 EXPECTED_ASSETS += ['/assets/tenant-browser-calls.js','/assets/browser-call-audio.js','/assets/tenant-call-sources.js','/assets/tenant-connect-pairing.js']
 EXPECTED_API += (('GET','/api/platform/call-sources/{channel_id}'),('POST','/api/platform/call-sources/{channel_id}'),('GET','/api/platform/browser-calls/{call_id}/audio'))
 EXPECTED_API += (('GET','/api/platform/browser-calls'),('POST','/api/platform/browser-calls'),('POST','/api/platform/call-gateway/sync'),('POST','/api/platform/call-gateway/recording'))

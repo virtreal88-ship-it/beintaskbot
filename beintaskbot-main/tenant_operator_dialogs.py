@@ -320,6 +320,14 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     audio_diagnostic=value.pop('_saved_audio_diagnostic',None)
     receipt_diagnostic=value.pop('_saved_audio_receipt_diagnostic',None)
     raw = value.pop('raw', None) or {}
+    if isinstance(raw, dict) and raw.get('_crm_text_edit'):
+        value['wa_edited'] = True
+    if isinstance(raw, dict) and raw.get('message_deleted') is True:
+        value['message_deleted'] = True
+        value['message_delete_source'] = raw.get('message_delete_source') or 'whatsapp'
+        value['message_deleted_at'] = raw.get('message_deleted_at')
+        value['body'] = ''
+        value['media_url'] = ''
     direction = str(value.get('direction') or '')
     if direction not in {'incoming', 'outgoing'}:
         direction = 'system'
@@ -385,7 +393,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     value.pop('delivery_state', None)
     if value.get('message_type') in {'call_missed', 'call_rejected', 'call_invalidated', 'call_observed'}:
         value['call_is_video'] = isinstance(raw, dict) and raw.get('isVideo') is True
-    if value['source'] == 'connect':
+    if value['source'] == 'connect' and not value.get('message_deleted'):
         # Display only a persisted provider/receipt status; viewing a dialog or
         # an outgoing row alone never proves delivery or customer readership.
         if direction == 'outgoing':
@@ -1814,6 +1822,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
                 search_observer=search_observer or colleague,
                 _can_update=not colleague and action_capabilities.get('update',False),_policy=policy)
+            if provider=='connect' and not shared_archive and not colleague and dialog.get('wecall'):
+                from tenant_whatsapp_message_edit import attach_capabilities as attach_message_actions
+                attach_message_actions(messages[:50],dialog,actor)
             if colleague:
                 dialog={key:dialog[key] for key in (
                     'provider','lead_id','channel_id','channel_name','conversation_id','customer_kind',
