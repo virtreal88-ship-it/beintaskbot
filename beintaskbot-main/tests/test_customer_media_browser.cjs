@@ -81,6 +81,10 @@ const shell=`<!doctype html><meta charset="utf-8"><style>.operator-composer{marg
  assert(modalBounds.x>=0&&modalBounds.x+modalBounds.width<=360);
  assert(modalBounds.y>=0&&modalBounds.y+modalBounds.height<=640);
  const caption=preview.getByRole('textbox',{name:'Добавьте подпись'});
+ assert.equal(await caption.inputValue(),'','a newly selected file has an empty caption');
+ assert.deepEqual(await caption.evaluate(field=>({
+   kind:field.tagName,autocomplete:field.getAttribute('autocomplete'),hasForm:!!field.form
+ })),{kind:'TEXTAREA',autocomplete:'off',hasForm:false});
  await caption.fill('Test caption');
  await select({});
  assert.equal(await preview.isVisible(),true,'refreshing the same dialog keeps the preview open');
