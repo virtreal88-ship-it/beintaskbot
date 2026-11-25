@@ -115,7 +115,8 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 	// If content accompanies the key, retain its existing original identity.
 	keyOnly := out.MessageType == "unsupported" &&
 		(event.Message.GetSenderKeyDistributionMessage() != nil || event.Message.GetFastRatchetKeySenderKeyDistributionMessage() != nil)
-	if event.IsEdit || event.Message.GetEditedMessage() != nil || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil || keyOnly {
+	secretEdit := event.Message.GetSecretEncryptedMessage().GetSecretEncType() == waE2E.SecretEncryptedMessage_MESSAGE_EDIT
+	if secretEdit || event.IsEdit || event.Message.GetEditedMessage() != nil || event.Message.GetProtocolMessage() != nil || event.Message.GetReactionMessage() != nil || keyOnly {
 		hash := sha256.Sum256(data)
 		variant = hex.EncodeToString(hash[:])
 		// Do not project an edit/reaction/protocol payload as a fresh user turn.
@@ -177,10 +178,7 @@ func observeMessageControl(event *events.Message, out *Envelope) {
 			return
 		}
 	}
-	change := event.Message.GetProtocolMessage()
-	if change == nil {
-		change = event.Message.GetEditedMessage().GetMessage().GetProtocolMessage()
-	}
+	change := editProtocol(event.Message)
 	key := change.GetKey()
 	if !out.FromMe || change.GetType() != waE2E.ProtocolMessage_MESSAGE_EDIT ||
 		key == nil || !key.GetFromMe() || !validProviderID(key.GetID()) || !messagePeer.MatchString(key.GetRemoteJID()) ||
@@ -192,16 +190,30 @@ func observeMessageControl(event *events.Message, out *Envelope) {
 		(target.String() != out.Chat && !reactionChatAlias(event.Info.Chat, event.Info.RecipientAlt, target.String())) {
 		return
 	}
+	attachEditContent(out, change)
+	if out.Edit != nil {
+		out.Chat = target.ToNonAD().String()
+	}
+}
+
+func editProtocol(message *waE2E.Message) *waE2E.ProtocolMessage {
+	if wrapped := message.GetEditedMessage().GetMessage(); wrapped != nil {
+		return wrapped.GetProtocolMessage()
+	}
+	return message.GetProtocolMessage()
+}
+
+func attachEditContent(out *Envelope, change *waE2E.ProtocolMessage) {
 	content := change.GetEditedMessage()
 	text := content.GetConversation()
 	if extended := content.GetExtendedTextMessage(); extended != nil {
 		text = extended.GetText()
 	}
-	if strings.TrimSpace(text) == "" || len(text) > 32000 || strings.ContainsRune(text, 0) {
+	if strings.TrimSpace(text) == "" || (out.FromMe && len(text) > 32000) || strings.ContainsRune(text, 0) {
 		return
 	}
-	out.Chat, out.Timestamp, out.Text = target.ToNonAD().String(), change.GetTimestampMS(), text
-	out.Edit = &MessageEdit{ID: key.GetID()}
+	out.Timestamp, out.Text = change.GetTimestampMS(), text
+	out.Edit = &MessageEdit{ID: change.GetKey().GetID()}
 }
 
 func validProviderID(value string) bool {

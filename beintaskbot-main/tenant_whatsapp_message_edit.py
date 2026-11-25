@@ -14,7 +14,7 @@ from tenant_connect_transport import ConnectPreflightError
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
 from tenant_platform import TenantPlatformError, _connect
-from tenant_whatsapp_native_projection import DIRECT, GROUP, PROVIDER_ID
+from tenant_whatsapp_native_projection import DIRECT, GROUP, PROVIDER_ID, _jid
 from tenant_whatsapp_native_transport import message_actions_enabled, submit
 
 
@@ -315,17 +315,32 @@ def observe(cur, scope, payload):
     """Project a verified text correction in place. It cannot create a message or run."""
     tenant, channel = scope['tenant'], scope['source']
     edit = payload.get('edit')
+    from_me = payload.get('from_me')
     chat, update_id, stamp = payload.get('chat'), payload.get('provider_id'), payload.get('timestamp')
     if (not isinstance(edit, dict) or not set(edit) <= {'id','operation'} or not _provider_id(edit.get('id'))
-            or payload.get('from_me') is not True or not _address(chat) or not _provider_id(update_id)
+            or type(from_me) is not bool or not _address(chat) or not _provider_id(update_id)
             or type(stamp) is not int or not 0 < stamp <= int(datetime.now(timezone.utc).timestamp()*1000)+300_000):
         return False
-    try:
-        # Phone edits keep the provider's exact text, including its whitespace.
-        text = payload.get('text')
-        _text(text)
-    except TenantLinearError:
+    text = payload.get('text')
+    # A received WhatsApp text uses the same limit as an incoming original.
+    if not isinstance(text, str) or not text.strip() or '\x00' in text:
         return False
+    if (from_me and len(text.strip()) > 8000) or (not from_me and len(text) > 65536):
+        return False
+    authors = set()
+    if not from_me:
+        if payload.get('app_dispatch', False) is not False:
+            return False
+        try:
+            sender = _jid(payload.get('sender'), participant=True)
+            alternate = _jid(payload.get('sender_alt'), optional=True, participant=True)
+        except TenantLinearError:
+            return False
+        authors.add(sender)
+        if alternate and alternate.split('@')[1] != sender.split('@')[1]:
+            authors.add(alternate)
+        if not GROUP.fullmatch(chat) and chat not in authors:
+            return False
     operation = edit.get('operation')
     own_edit = payload.get('app_dispatch') is True
     match = OPERATION.fullmatch(operation) if isinstance(operation, str) else None
@@ -346,18 +361,23 @@ def observe(cur, scope, payload):
     original_id = edit['id']
     cur.execute("""SELECT id,kommo_lead_id,created_at,happened_at,body,raw FROM saas_crm_messages
       WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=ANY(%s::bigint[])
-        AND direction='outgoing' AND message_type='text'
-        AND raw->>'externalMessageId'=%s AND raw->>'channelId'=%s AND raw->>'fromMe'='true'
+        AND direction=%s AND message_type='text'
+        AND raw->>'externalMessageId'=%s AND raw->>'channelId'=%s AND raw->'fromMe'=%s::jsonb
         AND COALESCE(raw->>'conversationIdentityConflict','false')<>'true'
-      LIMIT 2 FOR UPDATE""", (tenant, 'connect:'+channel, leads, original_id, channel))
+      LIMIT 2 FOR UPDATE""", (tenant, 'connect:'+channel, leads, 'outgoing' if from_me else 'incoming',
+                              original_id, channel, json.dumps(from_me)))
     rows = cur.fetchall()
     if len(rows) != 1:
         return False
     row = rows[0]
     raw = row['raw']
+    if not from_me and GROUP.fullmatch(chat) and authors.isdisjoint((raw.get('participantJid'), raw.get('participantAlt'))):
+        return False
     if raw.get('message_deleted') is True:
         return False
     original_chat = raw.get('_crm_provider_conversation_id') or raw.get('conversationId')
+    if not from_me and GROUP.fullmatch(chat) and chat != original_chat:
+        return False
     if not _address(original_chat) or _current_route(cur, tenant, channel, original_chat) != conversation:
         return False
     # Use small skew tolerance for provider time versus local ingestion time.
@@ -382,8 +402,9 @@ def observe(cur, scope, payload):
     previous = raw.get('_crm_text_edit') or {}
     if stamp > previous.get('timestamp_ms', 0):
         edit_info = {'timestamp_ms': stamp, 'provider_id': update_id}
-        cur.execute("""UPDATE saas_crm_messages SET body=%s,raw=raw||jsonb_build_object('_crm_text_edit',%s::jsonb)
-          WHERE tenant_id=%s::uuid AND id=%s::uuid""", (text, json.dumps(edit_info), tenant, row['id']))
+        cur.execute("""UPDATE saas_crm_messages SET body=%s,raw=raw||%s::jsonb
+          WHERE tenant_id=%s::uuid AND id=%s::uuid""",
+            (text, json.dumps({'_crm_text_edit': edit_info, **({'text': text} if 'text' in raw else {})}), tenant, row['id']))
     if key:
         superseded = stamp <= previous.get('timestamp_ms', 0) and previous.get('provider_id') != update_id
         _update(cur, key, 'accepted', 'edit_superseded' if superseded else '', action='edit')

@@ -6,7 +6,7 @@ pytest_plugins = ('test_tenant_support_inbox',)
 import tenant_operator_dialogs
 import tenant_whatsapp_message_edit as actions
 from test_dialog_lifecycle_pglite import episodes
-from test_tenant_support_inbox import A, CA
+from test_tenant_support_inbox import A, B, CA, CB
 
 TENANT = A
 CHANNEL = CA
@@ -142,3 +142,59 @@ def test_new_number_route_reopens_only_on_selected_source(episodes, monkeypatch)
     assert repeated['existing'] and not repeated['recover']
     assert repeated['route']['lead_id'] == original['route']['lead_id']
     assert any(source['channel_id'] == CA for source in compose._channel_options(PROFILE)['sources'])
+
+
+@pytest.mark.parametrize('chat', [CHAT, '120363405555555555@g.us'])
+def test_customer_text_edit_updates_only_the_original_in_its_source(episodes, monkeypatch, chat):
+    import json
+    import uuid
+    import tenant_connect_transport
+    import tenant_whatsapp_native_rollout
+
+    db = episodes
+    with db.cursor() as cur:
+        tenant_connect_transport._schema(db)
+        tenant_whatsapp_native_rollout.migrate(cur)
+    is_group = chat.endswith('@g.us')
+    alternate = '123456789012@lid'
+    provider_id = 'SYNTHETIC_CUSTOMER_TEXT'
+    scope = {'tenant': A, 'source': CA}
+    ids = []
+    for tenant, channel in ((A, CA), (A, str(uuid.uuid4())), (B, CB)):
+        db.execute("""INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name)
+          VALUES(%s::uuid,%s::uuid,'WhatsApp') ON CONFLICT DO NOTHING""", (tenant, channel))
+        lead = db.execute("""INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,
+          conversation_kind) VALUES(%s::uuid,%s::uuid,%s,%s) RETURNING lead_id""",
+            (tenant, channel, chat, 'group' if is_group else 'direct'))[0]['lead_id']
+        raw = {'externalMessageId': provider_id, 'channelId': channel, 'conversationId': chat,
+               'participantJid': CHAT, 'text': 'original', 'fromMe': False}
+        ids.append(str(uuid.uuid4()))
+        db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,
+          body,message_type,happened_at,raw) VALUES(%s::uuid,%s::uuid,%s,%s,%s,'incoming','original','text',now(),%s::jsonb)""",
+            (ids[-1], tenant, lead, 'connect:'+ids[-1], 'connect:'+channel, json.dumps(raw)))
+    db.commit()
+    # PGlite's Python bridge serializes postgres timestamptz as ISO strings.
+    monkeypatch.setattr(actions, '_sent_at', lambda row: datetime.fromisoformat(row['happened_at']))
+    stamp = int(datetime.now(timezone.utc).timestamp()*1000)
+    payload = {'kind': 'message', 'variant': 'control', 'from_me': False, 'sender': alternate,
+               'sender_alt': CHAT, 'chat': chat, 'provider_id': 'SYNTHETIC_CONTROL',
+               'text': 'corrected', 'timestamp': stamp, 'edit': {'id': provider_id}}
+    with db.cursor() as cur:
+        assert not actions.observe(cur, scope, {**payload, 'sender': '12025550102@s.whatsapp.net', 'sender_alt': ''})
+        assert not actions.observe(cur, scope, {**payload, 'from_me': True})
+        assert not actions.observe(cur, scope, {**payload, 'app_dispatch': True})
+        assert not actions.observe(cur, scope, {**payload, 'edit': {'id': provider_id, 'operation': 'invalid'}})
+        assert actions.observe(cur, scope, payload)
+        assert actions.observe(cur, scope, payload)
+        assert actions.observe(cur, scope, {**payload, 'text': 'old', 'timestamp': stamp-1})
+    rows = db.execute("SELECT id,body,raw,direction FROM saas_crm_messages WHERE raw->>'externalMessageId'=%s", (provider_id,))
+    assert len(rows) == 3
+    for row in rows:
+        original = str(row['id']) == ids[0]
+        assert row['body'] == row['raw']['text'] == ('corrected' if original else 'original')
+        assert row['direction'] == 'incoming'
+        assert ('_crm_text_edit' in row['raw']) == original
+    db.execute("UPDATE saas_crm_messages SET body='',raw=raw||'{\"message_deleted\":true}'::jsonb WHERE id=%s::uuid", (ids[0],))
+    with db.cursor() as cur:
+        assert not actions.observe(cur, scope, {**payload, 'timestamp': stamp+1})
+    db.commit()
