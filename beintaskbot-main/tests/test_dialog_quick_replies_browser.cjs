@@ -6,8 +6,11 @@ const assert = require('node:assert/strict');
 const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-deps/node_modules/playwright');
 const {docs, assets, appHtml, installNotificationCaseFixture} = require('./notification_case_targets_fixture.cjs');
 
-const asset = 'tenant-dialog-quick-replies.js';
-assets.push(asset, 'tenant-dialog-composer.js', 'tenant-dialog-reply-templates.js');
+const composerAsset = 'tenant-dialog-composer.js';
+const app = fs.readFileSync(path.join(docs,'tenant-app.html'),'utf8');
+const composerSrc = app.match(/src="(\/assets\/tenant-dialog-composer\.js[^"]*)"/)[1];
+assets.push('tenant-dialog-quick-replies.js','tenant-dialog-reply-templates.js',
+  composerAsset,path.basename(composerSrc));
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (url.pathname === '/app') {

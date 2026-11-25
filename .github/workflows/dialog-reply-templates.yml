@@ -14,7 +14,6 @@ on:
       - 'beintaskbot-main/docs/tenant-dialog-reply-templates.js'
       - 'beintaskbot-main/docs/tenant-dialog-quick-replies.js'
       - 'beintaskbot-main/docs/tenant-chat-send.js'
-      - 'beintaskbot-main/tests/notification_case_targets_fixture.cjs'
       - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
       - 'beintaskbot-main/tests/test_dialog_reply_templates.py'
       - 'beintaskbot-main/tests/test_dialog_quick_replies*'
