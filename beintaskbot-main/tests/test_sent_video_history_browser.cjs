@@ -31,17 +31,19 @@ async function scenario(browser,recover){
   const file=f.page.waitForEvent('filechooser');
   await f.page.locator('.operator-media-menu button').nth(1).click();
   await (await file).setFiles({name:'clip.mp4',mimeType:'video/mp4',buffer:Buffer.from('synthetic video fixture')});
-  await f.page.locator('.operator-customer-media input').fill('Video caption');
-  const send=f.page.locator('#operatorComposerPrimary[data-action="media"]');
-  await send.click();await submitted.promise;
-  assert.match(await f.page.locator('.operator-customer-media [role=status]').textContent(),/Отправляем|göndərilir|Sending/);
+  const preview=f.page.locator('.operator-media-preview');
+  await preview.getByRole('textbox').fill('Video caption');
+  await preview.locator('#operatorMediaPreviewSend').click();
+  await submitted.promise;
+  assert.match(await preview.getByRole('status').textContent(),/Отправляем|göndərilir|Sending/);
   assert.equal(await f.card(externalId).count(),0);
   const previousReads=reads;
   confirm.release();
   if(recover){
    await f.page.waitForFunction(()=>/Проверить|yoxla/i.test(document.querySelector('#operatorComposerPrimary')?.title||''));
    assert.equal(await f.card(externalId).count(),0);
-   await send.click();
+   await preview.waitFor({state:'detached'});
+   await f.page.locator('#operatorComposerPrimary[data-action="media"]').click();
   }
   await f.card(externalId).waitFor();
   assert.equal(await f.card(externalId).count(),1);

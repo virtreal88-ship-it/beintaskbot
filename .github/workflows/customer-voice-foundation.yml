@@ -5,6 +5,7 @@ on:
       - "beintaskbot-main/tenant_customer_media*.py"
       - "beintaskbot-main/docs/tenant-customer-media-ui.js"
       - "beintaskbot-main/tests/test_customer_media_browser.cjs"
+      - "beintaskbot-main/tests/test_sent_video_history_browser.cjs"
       - "beintaskbot-main/tests/test_tenant_customer_media*.py"
       - '.github/workflows/customer-voice-foundation.yml'
       - 'beintaskbot-main/docs/tenant-voice-recorder.js'
@@ -75,3 +76,4 @@ jobs:
       - run: node tests/test_dialog_composer_browser.cjs
       - run: python -m unittest discover -s tests -p "test_tenant_customer_media*.py" -v
       - run: node tests/test_customer_media_browser.cjs
+      - run: node tests/test_sent_video_history_browser.cjs
