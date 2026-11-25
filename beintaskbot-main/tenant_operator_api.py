@@ -5,7 +5,7 @@ from functools import partial
 from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
-from tenant_operator_dialogs import listing,history,save_display_name,mark_read,mark_all_read
+from tenant_operator_dialogs import listing,history,colleague_options,save_display_name,mark_read,mark_all_read
 from tenant_ai_group_coordination import configure as configure_group, register_employee, legacy_resolution_preview
 from tenant_operator_assignment import options as assignment_options, assign as assign_agent, bulk_preview as assignment_bulk_preview, bulk_apply as assignment_bulk_apply
 from tenant_operator_continuation import options as continuation_options, grant as grant_continuation
@@ -14,6 +14,7 @@ from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
 from tenant_group_participants import get_participants
 from tenant_read_timing import ReadTiming
+from tenant_operator_access import observed_operator
 from tenant_dialog_access import sources as dialog_sources
 from tenant_dialog_lifecycle import mutate as dialog_lifecycle
 from tenant_dialog_presence import get_status as presence_status, set_status as presence_set_status
@@ -67,7 +68,16 @@ def handler(member_from_request,origin,logger,resource):
                     return web.Response(body=content,content_type=mime,headers={
                         'Cache-Control':'private, max-age=3600',
                         'X-Content-Type-Options':'nosniff','Vary':'Cookie'})
+                elif resource=='dialogs' and query.get('colleague_options')=='1':
+                    _expected(query,profile)
+                    if 'observed_operator_id' in query:
+                        raise TenantLinearError('Некорректный режим просмотра.',400)
+                    result=await timing.run(colleague_options,profile)
                 elif resource=='dialogs':
+                    colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
+                        'completion_preview','paired_history','mixed_history_card'))
+                    if colleague is not None:
+                        _expected(query,profile)
                     options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     if options and query.get('mixed_history_card')=='1':
                         options['allow_mixed_history_card']=True
@@ -79,9 +89,16 @@ def handler(member_from_request,origin,logger,resource):
                     if query.get('owner_overview')=='1':
                         _expected(query,profile)
                         options['owner_overview']=True
+                    if colleague is not None:
+                        options['observed_operator_id']=colleague
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif resource=='history':
+                    colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
+                        'support_case_only','paired_history','paired_history_redirect','anchor',
+                        'operator_events','shared_reminder_events','internal_comments'))
+                    if colleague is not None:
+                        _expected(query,profile)
                     case_only=query.get('support_case_only')=='1'
                     options={'combine_history':True} if query.get('paired_history')=='1' else {}
                     # The compact right-panel read never enriches messages or
@@ -104,6 +121,8 @@ def handler(member_from_request,origin,logger,resource):
                     if not case_only and query.get('search_overview')=='1' and query.get('search','').strip():
                         _expected(query,profile)
                         options.update(search_overview=True,search=query.get('search',''))
+                    if colleague is not None:
+                        options['observed_operator_id']=colleague
                     read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
@@ -134,6 +153,8 @@ def handler(member_from_request,origin,logger,resource):
                 if not isinstance(data,dict): raise TenantLinearError('Некорректный запрос.')
                 _expected(data,profile)
                 payload={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
+                if 'observed_operator_id' in payload:
+                    raise TenantLinearError('Режим просмотра не допускает изменений.',403)
                 if resource=='dialog_history_merges':
                     from tenant_dialog_history_merge_jobs import action as history_merge_action
                     return web.json_response({'success':True,'result':{'job':await asyncio.to_thread(history_merge_action,profile,payload)}},headers=headers)

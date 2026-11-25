@@ -6,12 +6,15 @@ from tenant_ai_agent_access import tenant_status_allows_management
 from tenant_linear_policy import TenantLinearError
 
 
-def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False, owner_overview=False, search_overview=False, search='') -> dict:
+def load(session: dict, lead_id: object, message_id: object, *, channel_id=None, conversation_id=None, _audio_aliases=False, allow_closed_archive=False, owner_overview=False, search_overview=False, search='', observed_operator_id=None) -> dict:
     tenant = str(uuid.UUID(str(session['tenant_id'])))
     actor, lead = int(session['telegram_id']), int(str(lead_id))
     if not 0 < lead < 2**63 or not isinstance(message_id, str) or not 0 < len(message_id) <= 500:
         raise ValueError('Invalid attachment identity')
     is_connect = message_id.startswith('connect:')
+    if observed_operator_id is not None and (not is_connect or not channel_id or not conversation_id
+            or allow_closed_archive or owner_overview or search_overview):
+        raise TenantLinearError('Fayl bu dialoqda mövcud deyil.',404)
     with _connect() as conn:
         with conn.cursor() as cur:
             from tenant_dialog_rollout import guard
@@ -69,11 +72,16 @@ def load(session: dict, lead_id: object, message_id: object, *, channel_id=None,
                 from tenant_dialog_lifecycle import require_access
                 # Preserve raw route identity so the locked check can detect a
                 # concurrent merge/rollback instead of checking only its old target.
-                require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'],
-                               allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id),
-                               owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'),
-                               search_overview=bool(search_overview and channel_id and conversation_id),
-                               owner=member.get('role')=='owner')
+                if observed_operator_id is not None:
+                    from tenant_operator_access import assert_route
+                    assert_route(cur,tenant,policy,'connect',str(conversation_id),str(channel_id),lead,
+                                 observed_operator_id=observed_operator_id)
+                else:
+                    require_access(cur,tenant,actor,'connect',route['channel_id'],route['conversation_id'],
+                                   allow_closed_archive=allow_closed_archive and bool(channel_id and conversation_id),
+                                   owner_overview=bool(owner_overview and channel_id and conversation_id and member.get('role')=='owner'),
+                                   search_overview=bool(search_overview and channel_id and conversation_id),
+                                   owner=member.get('role')=='owner')
                 row=dict(row)
                 row['message_type']=kind
                 raw = row.get('raw') if isinstance(row.get('raw'), dict) else {}

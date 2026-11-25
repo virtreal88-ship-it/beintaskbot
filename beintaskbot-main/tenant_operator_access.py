@@ -64,18 +64,55 @@ def _resolve_connect_route(cur,tenant,conversation='',channel='',lead_id=None,*,
     return dict(rows[0])
 
 
-def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False,action='view',allow_closed_archive=False,owner_overview=False,search_overview=False):
+def observed_operator(query, *, incompatible=()):
+    value=query.get('observed_operator_id')
+    if value is None:
+        return None
+    if (not isinstance(value,str) or not 1<=len(value)<=19 or not value.isascii()
+            or not value.isdecimal() or not 0<int(value)<2**63
+            or any(key in query for key in incompatible)):
+        raise TenantLinearError('Некорректный режим просмотра.',400)
+    return int(value)
+
+
+def authorize_observer(cur,tenant,policy,operator_id):
+    from tenant_beinsystems_operator_access import is_operator_workspace
+    from tenant_scoped_access_store import read_access_profile
+
+    if (not is_operator_workspace(tenant) or policy.profile.get('role')!='operator'
+            or type(operator_id) is not int or not 0<operator_id<2**63
+            or operator_id==int(policy.profile['telegram_id'])):
+        raise TenantLinearError('Диалог недоступен.',404)
+    target=read_access_profile(cur,tenant,operator_id,lock=True)
+    if not target or target.get('role')!='operator':
+        raise TenantLinearError('Диалог недоступен.',404)
+    target_policy=TenantPolicy({**target,'tenant_id':tenant})
+    scope=target_policy.action_scope('dialogs','view')
+    if not (scope!='none' if scope is not None else target_policy.legacy_allows('dialogs')):
+        raise TenantLinearError('Диалог недоступен.',404)
+    return target_policy
+
+
+def assert_route(cur,tenant,policy,provider,conversation='',channel='',lead_id=None,*,allow_merged=False,action='view',allow_closed_archive=False,owner_overview=False,search_overview=False,observed_operator_id=None):
     if policy is None: raise TenantLinearError('Нет доступа.',403)
+    if observed_operator_id is not None and (
+            provider!='connect' or action!='view' or not (channel and conversation and lead_id)):
+        raise TenantLinearError('Диалог недоступен.',404)
     if provider=='connect':
         route=_resolve_connect_route(cur,tenant,conversation,channel,lead_id,allow_merged=allow_merged)
         from tenant_dialog_access import require_source
         require_source(cur,tenant,policy,'connect',str(route['connect_channel_id']),action)
         from tenant_dialog_lifecycle import require_access
         exact=(channel==str(route['connect_channel_id']) and conversation==route['conversation_id'] and lead_id==route['lead_id'])
+        if observed_operator_id is not None:
+            if not exact:
+                raise TenantLinearError('Диалог недоступен.',404)
+            target_policy=authorize_observer(cur,tenant,policy,observed_operator_id)
+            require_source(cur,tenant,target_policy,'connect',str(route['connect_channel_id']),'view')
         protected = require_access(cur,tenant,int(policy.profile['telegram_id']),'connect',str(route['connect_channel_id']),route['conversation_id'],action,
             allow_closed_archive=allow_closed_archive,owner_overview=bool(owner_overview and exact and policy.profile.get('role')=='owner'),
             search_overview=bool(search_overview and exact and action=='view'),
-            owner=policy.profile.get('role')=='owner')
+            owner=policy.profile.get('role')=='owner',observed_operator_id=observed_operator_id)
         if protected:
             # Retain the caller's raw proof: rollback may detach it while the
             # canonical route remains valid. Never authorize that stale proof.

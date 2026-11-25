@@ -230,8 +230,11 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     return f"({visible} OR {search_visible})" if search_overview else visible
 
 
-def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False, search_overview=False, owner=False):
-    if not enabled(cur, tenant) or provider != 'connect': return
+def require_access(cur, tenant, actor, provider, channel, conversation, action='view', *, allow_closed_archive=False, owner_overview=False, search_overview=False, owner=False, observed_operator_id=None):
+    if not enabled(cur, tenant) or provider != 'connect':
+        if observed_operator_id is not None:
+            raise TenantLinearError('Диалог недоступен.',404)
+        return
     # Serialize the final permission check with accept/close/transfer. The caller
     # retains this transaction until its protected read or network dispatch ends.
     from tenant_ai_dialog_scope import lock_dialog
@@ -248,6 +251,14 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
     if not cur.fetchone():
         raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
     row = _row(cur, tenant, channel, conversation)
+    if observed_operator_id is not None:
+        # A selected colleague is a narrowing condition, not a fallback to
+        # normal ownership, archive, or keyword access after a transfer.
+        if (action!='view' or original_conversation!=conversation or not row
+                or row['state'] not in {'accepted','closed','dismissed'}
+                or row.get('operator_id')!=observed_operator_id):
+            raise TenantLinearError('Диалог недоступен.',404)
+        return True
     overview_read=(action=='view' and owner_overview and original_conversation==conversation)
     search_read=(action=='view' and search_overview and original_conversation==conversation
                  and row and row.get('state')=='accepted' and row.get('operator_id')!=int(actor))
