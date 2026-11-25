@@ -90,3 +90,49 @@ def test_close_evidence_never_exposes_exception_or_unknown_peer_code():
     ]:
         socket=Mock(close_code=code);socket.exception.return_value=error
         assert close_evidence(socket)==expected
+
+
+def test_managed_relay_carries_pcm_past_old_cutoff_and_closes_at_bound(monkeypatch):
+    import tenant_call_sources_api as api
+
+    async def run():
+        tenant='00000000-0000-0000-0000-000000000001'
+        call='00000000-0000-0000-0000-000000000002'
+        profile={'tenant_id':tenant,'telegram_id':11};logger=Mock()
+        started=asyncio.Event()
+        scale=.0005  # Scale only the relay deadline, not I/O or auth rechecks.
+        seen=[]
+        async def accelerated(tasks,*,timeout,return_when):
+            seen.append(timeout)
+            started.set()
+            return await asyncio.wait(tasks,timeout=timeout*scale,return_when=return_when)
+        monkeypatch.setattr(api,'_wait_relay_tasks',accelerated)
+        async def engine(request):
+            socket=web.WebSocketResponse();await socket.prepare(request)
+            async for message in socket:
+                if message.type!=WSMsgType.BINARY:break
+                await socket.send_bytes(message.data)
+            return socket
+
+        private=web.Application();private.router.add_get('/v1/sources/g/audio/p/{call}',engine)
+        async with TestServer(private) as upstream:
+            monkeypatch.setattr(sources,'service',lambda:(str(upstream.make_url('')).rstrip('/'),'x'*48))
+            monkeypatch.setattr(sources,'audio_authority',lambda *a:('g','p',call))
+            app=web.Application();app.router.add_get('/calls/{call_id}/audio',handler(lambda _:profile,'https://app.invalid',logger,'audio'))
+            async with TestClient(TestServer(app)) as client:
+                url=f'/calls/{call}/audio?expected_tenant_id={tenant}&expected_user_id=11&request_id=synthetic'
+                async with client.ws_connect(url,headers={'Origin':'https://app.invalid'}) as socket:
+                    await asyncio.wait_for(started.wait(),1)
+                    for delay,value in ((0,12),(950*scale,34)):
+                        await asyncio.sleep(delay)
+                        raw=bytes([0,value,0,192])*100
+                        await socket.send_bytes(raw)
+                        message=await asyncio.wait_for(socket.receive(),1)
+                        assert message.type==WSMsgType.BINARY and message.data==raw
+                    ended=await asyncio.wait_for(socket.receive(),3)
+                    assert ended.type in {WSMsgType.CLOSE,WSMsgType.CLOSED}
+        assert seen==[3610]
+        logger.info.assert_any_call(
+            'call_audio_relay_end stage=stream code=%s input_received=%s output_received=%s',
+            'duration_limit',True,True)
+    asyncio.run(run())
