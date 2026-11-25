@@ -5,8 +5,8 @@
   const words={
     ru:{mic:'Записать голосовое',stop:'Остановить',cancel:'Отменить',discard:'Удалить запись',retrySave:'Сохранить запись снова',send:'Отправить голосовое',check:'Проверить статус',manualSeen:'Нашёл в WhatsApp',manualNotSeen:'Не вижу в WhatsApp',manualUnsure:'Не уверен',manualSaved:'Ручная проверка сохранена отдельно от статуса провайдера.',manualValue_seen:'Вы отметили: сообщение найдено в WhatsApp.',manualValue_not_seen:'Вы отметили: сообщение не найдено.',manualValue_unsure:'Вы отметили: результат ручной проверки неясен.',
       requesting:'Ожидаем разрешение на микрофон…',recording:'Запись',saving:'Сохраняем запись на устройстве…',draft:'Прослушайте запись перед отправкой. Она хранится на устройстве до отправки, удаления или выхода из аккаунта.',
-      sending:'Отправляем…',unknown:'Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.',accepted:'Провайдер принял сообщение. Доставка клиенту пока не подтверждена.',
-      delivered:'Доставка подтверждена.',read:'Сообщение прочитано.',failed:'Провайдер сообщил об ошибке доставки. Проверьте историю.',
+      sending:'Отправляем…',unknown:'Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.',
+      failed:'Провайдер сообщил об ошибке доставки. Проверьте историю.',
       denied:'Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.',
       unavailable:'Микрофон недоступен. Проверьте устройство и разрешения браузера.',unsupported:'Этот браузер не поддерживает безопасную запись. Попробуйте обновить браузер.',
       busy:'Микрофон уже используется в другой вкладке или голосовом режиме.',storage:'Не удалось сохранить запись на устройстве. Отправка недоступна.',limit:'Превышен размер записи. Запишите более короткое сообщение.',error:'Не удалось записать или проверить голосовое сообщение.',
@@ -15,8 +15,8 @@
       voice_attribution_unresolved:'Отправка не выполнена: в этом диалоге ещё не разрешён статус предыдущего голосового сообщения. Запись сохранена.'},
     az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',manualSeen:'WhatsApp-da tapdım',manualNotSeen:'WhatsApp-da görünmür',manualUnsure:'Əmin deyiləm',manualSaved:'Əl ilə yoxlama provayder statusundan ayrı saxlanıldı.',manualValue_seen:'Qeyd etdiniz: mesaj WhatsApp-da tapıldı.',manualValue_not_seen:'Qeyd etdiniz: mesaj tapılmadı.',manualValue_unsure:'Qeyd etdiniz: əl ilə yoxlamanın nəticəsi aydın deyil.',
       requesting:'Mikrofon icazəsi gözlənilir…',recording:'Yazılır',saving:'Yazı cihazda saxlanılır…',draft:'Göndərməzdən əvvəl dinləyin. Yazı göndərilənə, silinənə və ya hesabdan çıxana qədər cihazda saxlanılır.',
-      sending:'Göndərilir…',unknown:'Nəticə məlum deyil. WhatsApp çatını əl ilə yoxlayın və mesajı təkrar göndərməyin.',accepted:'Provayder qəbul etdi. Müştəriyə çatdırılma hələ təsdiqlənməyib.',
-      delivered:'Çatdırılma təsdiqləndi.',read:'Mesaj oxunub.',failed:'Provayder çatdırılma xətası bildirdi. Tarixçəni yoxlayın.',
+      sending:'Göndərilir…',unknown:'Nəticə məlum deyil. WhatsApp çatını əl ilə yoxlayın və mesajı təkrar göndərməyin.',
+      failed:'Provayder çatdırılma xətası bildirdi. Tarixçəni yoxlayın.',
       denied:'Mikrofon icazəsi verilməyib. Brauzerdə sayt üçün mikrofon icazəsini açıb yenidən yoxlayın.',
       unavailable:'Mikrofon əlçatan deyil. Cihazı və brauzer icazələrini yoxlayın.',unsupported:'Bu brauzer təhlükəsiz səs yazısını dəstəkləmir. Brauzeri yeniləyin.',
       busy:'Mikrofon başqa vərəqdə və ya səs rejimində istifadə olunur.',storage:'Yazını cihazda saxlamaq mümkün olmadı. Göndərmə əlçatan deyil.',limit:'Yazının ölçüsü böyükdür. Daha qısa səs yazın.',error:'Səsi yazmaq və ya vəziyyətini yoxlamaq mümkün olmadı.',
@@ -25,8 +25,8 @@
       voice_attribution_unresolved:'Göndərilmədi: bu dialoqda əvvəlki səs mesajının vəziyyəti hələ aydın deyil. Yazı saxlanılıb.'},
     en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',manualSeen:'I found it in WhatsApp',manualNotSeen:'I do not see it',manualUnsure:'Not sure',manualSaved:'Your manual check is stored separately from provider status.',manualValue_seen:'You marked the message as found in WhatsApp.',manualValue_not_seen:'You marked the message as not found.',manualValue_unsure:'You marked the manual check as inconclusive.',
       requesting:'Waiting for microphone permission…',recording:'Recording',saving:'Saving recording on this device…',draft:'Listen before sending. The recording stays on this device until sent, deleted or you sign out.',
-      sending:'Sending…',unknown:'The outcome is unknown. Check the WhatsApp chat manually; do not resend.',accepted:'The provider accepted the message. Customer delivery is not yet confirmed.',
-      delivered:'Delivery confirmed.',read:'Message read.',failed:'The provider reported a delivery failure. Check the history.',
+      sending:'Sending…',unknown:'The outcome is unknown. Check the WhatsApp chat manually; do not resend.',
+      failed:'The provider reported a delivery failure. Check the history.',
       denied:'Microphone access is blocked. Allow the microphone in your browser’s site settings and try again.',
       unavailable:'Microphone unavailable. Check the device and browser permissions.',unsupported:'This browser cannot record safely. Try updating your browser.',
       busy:'The microphone is already in use in another tab or voice mode.',storage:'The recording could not be saved on this device. Sending is unavailable.',limit:'The recording is too large. Record a shorter message.',error:'Could not record or check the voice message.',
@@ -36,6 +36,8 @@
   };
   const lang=()=>words[window.tenantI18n?.language]||words.en;
   const text=key=>lang()[key]||lang().error;
+  // Successful delivery states are represented by the message's existing checkmarks.
+  const acceptedNotice=state=>state==='failed'?text('failed'):'';
   const operator=()=>window.tenantOperator;
   function scope(){
     const member=operator()?.member, route=operator()?.currentDialog;
@@ -72,7 +74,7 @@
     session.duration.textContent=entry?duration(entry.durationMs):receipt?duration(receipt.durationMs):snap.state==='recording'?duration(snap.durationMs):'';
     session.status.textContent=session.message || (session.saving?text('saving'):snap.state==='requesting'?text('requesting'):
       snap.state==='recording'?text('recording'):entry?.state==='draft'?text('draft'):receipt?.manualConfirmation?.outcome?text('manualValue_'+receipt.manualConfirmation.outcome):receipt?.state==='unknown'?text('unknown'):
-      receipt?.state==='accepted'?text(receipt.deliveryState==='read'?'read':receipt.deliveryState==='delivered'?'delivered':'accepted'):'');
+      receipt?.state==='accepted'?acceptedNotice(receipt.deliveryState):'');
     session.status.hidden=!session.status.textContent;
     session.voiceActions.hidden=[...session.voiceActions.children].every(node=>node.hidden||node===session.duration&&!node.textContent);
     session.host.hidden=session.audio.hidden&&session.voiceActions.hidden&&session.status.hidden;
@@ -175,7 +177,7 @@
   async function accepted(session,entry,result){
     await store.removeAccepted(session.scope.key,entry.request_id,result.delivery_state);
     session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.recorder.cancel();
-    session.message=text(result.delivery_state==='read'?'read':result.delivery_state==='delivered'?'delivered':result.delivery_state==='failed'?'failed':'accepted');
+    session.message=acceptedNotice(result.delivery_state);
     draw(session);if(same(session))await operator()?.openDialog?.({...operator().currentDialog},true);
   }
   async function send(session){
