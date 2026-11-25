@@ -450,6 +450,9 @@ def transfer_candidates(profile, params):
     from tenant_dialog_access import require_source
     from tenant_platform import _connect
 
+    if params.get('provider') == 'operator_widget':
+        from tenant_operator_widget_queue import transfer_candidates as widget_targets
+        return widget_targets(profile,params)
     channel, conversation = params.get('channel_id'), params.get('conversation_id')
     if params.get('provider') != 'connect' or not channel or not conversation:
         raise TenantLinearError('Выберите источник Connect.',400)
@@ -644,6 +647,9 @@ def mutate(profile, payload):
     authorization/CAS checks with the SAME request ID and original tokens.
     This tolerates a startup-DDL collision; it does not solve migration ordering.
     """
+    if payload.get('provider') == 'operator_widget':
+        from tenant_operator_widget_queue import mutate as widget_mutate
+        return widget_mutate(profile,payload)
     from psycopg.errors import DeadlockDetected
     attempts=3 if payload.get('action') in {'close','dismiss'} else 1
     for attempt in range(attempts):

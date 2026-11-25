@@ -303,6 +303,8 @@ def register_feature_routes(app: web.Application, context: TenantWebContext) -> 
     install_voice_shutdown(app)
     from tenant_whatsapp_contact_refresh import install as install_contact_refresh
     install_contact_refresh(app, context.logger)
+    from tenant_operator_widget_sync import install as install_widget_queue
+    install_widget_queue(app, context.logger)
     for method, path, handle in feature_routes(context):
         # AI agent CRUD also needs PATCH and DELETE; register explicitly so
         # every module route is mounted instead of silently becoming POST-only.

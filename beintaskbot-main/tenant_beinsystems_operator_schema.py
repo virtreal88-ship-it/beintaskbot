@@ -24,7 +24,36 @@ def migrate_company_actions(cur):
       ON saas_operator_company_actions(tenant_id, fingerprint) WHERE state='unconfirmed'""")
 
 
+def migrate_widget_queue(cur):
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_sources (
+        tenant_id uuid NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE, instance uuid NOT NULL,
+        started_at timestamptz NOT NULL DEFAULT clock_timestamp(), refreshed_at timestamptz,
+        generation text NOT NULL, PRIMARY KEY(tenant_id,instance))""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_dialogs (
+        tenant_id uuid NOT NULL, instance uuid NOT NULL, chat_id bigint NOT NULL, identity text NOT NULL,
+        revision text NOT NULL, title text NOT NULL, upstream_at text NOT NULL, fetched_at text,
+        visible boolean NOT NULL, writable boolean NOT NULL, checked_at timestamptz,
+        active_snapshot bigint, before_id bigint, high_id bigint NOT NULL DEFAULT 0,
+        latest_in bigint, latest_at timestamptz, closed_at timestamptz, marked_in bigint,
+        state text NOT NULL DEFAULT 'archive' CHECK(state IN ('archive','waiting','accepted','closed')),
+        operator_id bigint, version bigint NOT NULL DEFAULT 0,
+        PRIMARY KEY(tenant_id,instance,chat_id,identity),
+        FOREIGN KEY(tenant_id,instance) REFERENCES saas_widget_sources(tenant_id,instance) ON DELETE CASCADE)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_messages (
+        tenant_id uuid NOT NULL, instance uuid NOT NULL, chat_id bigint NOT NULL, identity text NOT NULL,
+        mid bigint NOT NULL, sender text NOT NULL, author text NOT NULL, body text NOT NULL,
+        attachment boolean NOT NULL, at timestamptz NOT NULL, fresh boolean NOT NULL,
+        PRIMARY KEY(tenant_id,instance,chat_id,identity,mid),
+        FOREIGN KEY(tenant_id,instance,chat_id,identity) REFERENCES saas_widget_dialogs ON DELETE CASCADE)""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_reads (
+        tenant_id uuid NOT NULL, instance uuid NOT NULL, chat_id bigint NOT NULL, identity text NOT NULL,
+        actor bigint NOT NULL, through_id bigint NOT NULL,
+        PRIMARY KEY(tenant_id,instance,chat_id,identity,actor),
+        FOREIGN KEY(tenant_id,instance,chat_id,identity) REFERENCES saas_widget_dialogs ON DELETE CASCADE)""")
+
+
 def migrate_operator_identity_links(cur) -> None:
+    migrate_widget_queue(cur)
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_widget_replies (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       request_id UUID NOT NULL, actor BIGINT NOT NULL, signature TEXT NOT NULL,

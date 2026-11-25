@@ -14,7 +14,7 @@ def provision_schema(cur):
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_dialog_internal_comments (
         tenant_id UUID NOT NULL,
         id UUID NOT NULL,
-        provider TEXT NOT NULL CHECK (provider IN ('connect', 'kommo')),
+        provider TEXT NOT NULL CONSTRAINT dialog_comments_source_check CHECK (provider IN ('connect', 'kommo', 'operator_widget')),
         channel_id TEXT NOT NULL,
         conversation_id TEXT NOT NULL,
         lead_id BIGINT NOT NULL,
@@ -24,6 +24,16 @@ def provision_schema(cur):
         created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
         PRIMARY KEY (tenant_id, id)
     )""")
+    cur.execute("""DO $$ BEGIN
+        IF EXISTS (SELECT FROM pg_constraint
+            WHERE conrelid='saas_dialog_internal_comments'::regclass
+              AND conname='saas_dialog_internal_comments_provider_check') THEN
+            ALTER TABLE saas_dialog_internal_comments
+              DROP CONSTRAINT saas_dialog_internal_comments_provider_check,
+              ADD CONSTRAINT dialog_comments_source_check
+                CHECK (provider IN ('connect', 'kommo', 'operator_widget'));
+        END IF;
+    END $$""")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_dialog_internal_comments_route_idx
         ON saas_dialog_internal_comments
         (tenant_id, provider, channel_id, conversation_id, lead_id, created_at DESC, id DESC)""")
@@ -51,6 +61,17 @@ def save(profile, data):
     lead = int(data['lead_id'])
     ident = str(UUID(data['request_id']))
     note = data['note'].strip() if isinstance(data['note'], str) else ''
+    if provider == 'operator_widget':
+        from tenant_operator_widget_queue import authorized
+        if not note or len(note)>MAX_LENGTH or '\x00' in note or any(0xD800<=ord(c)<=0xDFFF for c in note):
+            raise TenantLinearError('Укажите корректный комментарий до 2000 символов.',400)
+        with _connect() as conn, conn.cursor() as cur:
+            row,actor,policy=authorized(cur,profile,data,update=True,lock=True)
+            if row['state']!='accepted' or row['operator_id']!=actor:
+                raise TenantLinearError('Сначала примите диалог.',409)
+            keys=(str(row['tenant_id']),provider,str(row['instance']),row['identity'],row['chat_id'])
+            name=str(policy.profile.get('display_name') or '').strip()[:120]
+            return {'comment':save_authorized(cur,keys,ident,actor,name,note)}
     if (provider not in ('connect', 'kommo') or not isinstance(channel, str) or not isinstance(conversation, str)
             or provider == 'connect' and (not channel or not conversation)
             or len(channel) > 200 or len(conversation) > 220 or lead <= 0 or not 0 < len(note) <= MAX_LENGTH
@@ -72,23 +93,28 @@ def save(profile, data):
                 raise TenantLinearError('Диалог недоступен.', 404)
         keys = _scope(tenant, provider, channel, conversation, lead)
         name = str(policy.profile.get('display_name') or '').strip()[:120]
-        cur.execute("""INSERT INTO saas_dialog_internal_comments
-            (tenant_id, provider, channel_id, conversation_id, lead_id, id, actor_id, author_name, note)
-            VALUES (%s::uuid,%s,%s,%s,%s,%s::uuid,%s,%s,%s)
-            ON CONFLICT (tenant_id,id) DO NOTHING RETURNING id,author_name,note,created_at""",
-            (*keys, ident, actor, name, note))
-        row = cur.fetchone()
-        if row is None:
-            cur.execute("""SELECT id,author_name,note,created_at FROM saas_dialog_internal_comments
-                WHERE tenant_id=%s::uuid AND provider=%s AND channel_id=%s AND conversation_id=%s
-                AND lead_id=%s AND id=%s::uuid AND actor_id=%s AND note=%s""",
-                (*keys, ident, actor, note))
-            row = cur.fetchone()
-            if row is None:
-                raise TenantLinearError('Запрос уже использован.', 409)
-        result = _event(row)
+        result = save_authorized(cur, keys, ident, actor, name, note)
         conn.commit()
     return {'comment': result}
+
+
+def save_authorized(cur, keys, ident, actor, name, note):
+    """Insert or recover a note after the caller has authorized its exact route."""
+    cur.execute("""INSERT INTO saas_dialog_internal_comments
+        (tenant_id, provider, channel_id, conversation_id, lead_id, id, actor_id, author_name, note)
+        VALUES (%s::uuid,%s,%s,%s,%s,%s::uuid,%s,%s,%s)
+        ON CONFLICT (tenant_id,id) DO NOTHING RETURNING id,author_name,note,created_at""",
+        (*keys, ident, actor, name, note))
+    row = cur.fetchone()
+    if row is None:
+        cur.execute("""SELECT id,author_name,note,created_at FROM saas_dialog_internal_comments
+            WHERE tenant_id=%s::uuid AND provider=%s AND channel_id=%s AND conversation_id=%s
+            AND lead_id=%s AND id=%s::uuid AND actor_id=%s AND note=%s""",
+            (*keys, ident, actor, note))
+        row = cur.fetchone()
+        if row is None:
+            raise TenantLinearError('Запрос уже использован.', 409)
+    return _event(row)
 
 
 def page(conn, cur, tenant, provider, channel, conversation, lead, **window):

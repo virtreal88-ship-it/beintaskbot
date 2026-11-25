@@ -70,7 +70,7 @@
   function clear(){close(false);active?.emoji.close(false);active?.observer.disconnect();active=null;}
   function attach(){
     const actions=document.querySelector('.operator-composer-actions'),input=document.getElementById('chatText'),send=document.getElementById('sendChat');
-    if(!actions||!input||!send){clear();return;}
+    if(!actions||!input||!send||actions.closest('[data-widget-reply="true"]')){clear();return;}
     if(active?.actions===actions){active.refresh();return;}
     clear();
     const ai=document.createElement('button');ai.type='button';ai.id='operatorAIActionMenu';ai.className='outline operator-composer-ai';ai.textContent='AI';ai.title=copy('ai');ai.setAttribute('aria-label',copy('ai'));ai.setAttribute('aria-expanded','false');ai.setAttribute('aria-controls','operatorAIActionChoices');

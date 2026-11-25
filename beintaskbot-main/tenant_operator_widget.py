@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import widget_allowed
+from tenant_linear_policy import TenantLinearError
 
 PAGE = 50
 
@@ -191,6 +192,21 @@ def _reconcile(cur, tenant, chat, revision, rows):
             (json.dumps(observed), tenant))
 
 
+def _require_queue_owner(cur, profile, credentials, chat, row):
+    from tenant_operator_widget_sync import enabled, PROVIDER
+    if enabled() != operator._tenant(profile):
+        return
+    from tenant_operator_widget_queue import authorized
+    try:
+        route,actor,_ = authorized(cur,profile,{
+            "provider":PROVIDER,"channel_id":credentials["connection_instance_id"],"lead_id":chat,
+            "conversation_id":_hash([row["client_id"]])},update=True,lock=True)
+    except TenantLinearError as error:
+        raise operator.OperatorError(str(error),error.status) from error
+    if route["state"]!="accepted" or route["operator_id"]!=actor:
+        raise operator.OperatorError("Сначала примите диалог.",409)
+
+
 def _reply(profile, credentials, chat, data):
     from tenant_operator_widget_transport import send_reply
     tenant, actor = operator._tenant(profile), int(profile["telegram_id"])
@@ -223,6 +239,7 @@ def _reply(profile, credentials, chat, data):
             _, login = _snapshot(cur, profile, credentials, "update")
             routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
             row = _route(routes, chat, data["revision"])
+            _require_queue_owner(cur, profile, credentials, chat, row)
             if not _can_reply(row, login):
                 raise operator.OperatorError("Диалог закрыт или закреплён за другим оператором.", 409)
         except operator.OperatorError:

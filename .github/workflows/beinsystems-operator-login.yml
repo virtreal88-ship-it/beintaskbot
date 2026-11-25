@@ -6,6 +6,7 @@ on:
       - '.github/workflows/beinsystems-operator-login.yml'
       - 'beintaskbot-main/tenant_operator_widget*.py'
       - 'beintaskbot-main/docs/tenant-operator-widget.js'
+      - 'beintaskbot-main/docs/tenant-dialog-source-tabs.js'
       - 'beintaskbot-main/tests/test_operator_widget*'
       - 'beintaskbot-main/tenant_beinsystems_operator.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_company_import.py'
@@ -61,9 +62,10 @@ jobs:
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save jsdom@26.1.0 @electric-sql/pglite@0.6.0
       - name: Run Operator Python and PostgreSQL regressions
-        run: python -m pytest -q tests/test_operator_widget.py tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_beinsystems_operator_first_batch.py tests/test_beinsystems_operator_first_batch_postgres.py tests/test_tenant_web_routes.py
+        run: python -m pytest -q tests/test_operator_widget.py tests/test_operator_widget_queue.py tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_beinsystems_operator_first_batch.py tests/test_beinsystems_operator_first_batch_postgres.py tests/test_tenant_web_routes.py
       - name: Run Operator settings UI regression
         run: |
           node tests/test_operator_widget_ui.cjs
+          node tests/test_operator_widget_queue_ui.cjs
           node tests/test_beinsystems_operator_ui.cjs
           node tests/test_app_loading_performance.cjs
