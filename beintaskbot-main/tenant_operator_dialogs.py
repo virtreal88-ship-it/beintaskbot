@@ -1382,8 +1382,10 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             if search:
                 query_text=str(search)[:200].casefold()
                 def matches(row):
-                    return any(query_text in str(row.get(key) or '').casefold()
-                               for key in ('customer_name','phone','conversation_id'))
+                    fields=('customer_name','phone','conversation_id')
+                    if row['provider']=='operator_widget':
+                        fields+=('operator_account','dialog_company_name')
+                    return any(query_text in str(row.get(key) or '').casefold() for key in fields)
 
                 # A card may keep the workflow under a private WhatsApp ID.
                 # Search its phone route only if both routes passed visibility.

@@ -6,6 +6,7 @@ import uuid
 
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import widget_allowed
+from tenant_crm_native_access import scoped_sql
 from tenant_dialog_presence import is_online
 from tenant_dialog_rollout import guard
 from tenant_linear_policy import TenantLinearError
@@ -43,7 +44,7 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     cur.execute(
         "SELECT * FROM saas_widget_dialogs WHERE "
         + KEY
-        + " AND visible"
+        + " AND visible AND latest_in IS NOT NULL"
         + (" FOR UPDATE" if lock else " FOR SHARE"),
         key,
     )
@@ -53,6 +54,31 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     if update and not row["writable"]:
         raise TenantLinearError("Operator ограничил действия в этом чате.", 403)
     return row, actor, policy
+
+
+def attach_companies(cur, policy, instance, rows):
+    """Read confirmed links in one query under the same CRM company ACL as the company card."""
+    accounts = sorted({row["operator_account"] for row in rows if row["operator_account"]})
+    if not accounts or not policy.allows_action("companies", "view"):
+        return
+    where, params = scoped_sql(policy.profile, "companies", "view", "c")
+    cur.execute(
+        f"""SELECT l.external_id, c.id::text AS company_id, c.name
+            FROM saas_widget_sources s JOIN saas_beinsystems_operator_links l
+              ON l.tenant_id=s.tenant_id AND l.connection_instance_id=s.instance
+              AND l.connection_generation=s.generation
+            JOIN saas_crm_native_companies c ON c.tenant_id=l.tenant_id AND c.id=l.local_entity_id
+            WHERE s.tenant_id=%s AND s.instance=%s AND l.external_id=ANY(%s::text[])
+              AND l.local_entity_type='company' AND l.external_entity_type='account'
+              AND l.external_scope_id='' AND l.revoked_at IS NULL AND c.archived_at IS NULL AND ({where})""",
+        [str(policy.profile["tenant_id"]), instance, accounts, *params],
+    )
+    # A unique index enforces one active CRM company per account and generation.
+    companies = {c["external_id"]: c for c in cur.fetchall()}
+    for row in rows:
+        if company := companies.get(row["operator_account"]):
+            row["crm_company_id"] = company["company_id"]
+            row["crm_company_name"] = company["name"]
 
 
 def card(row, actor, writable, rollout, online):
@@ -83,6 +109,9 @@ def card(row, actor, writable, rollout, online):
         "lead_id": row["chat_id"],
         "customer_name": row["title"],
         "customer_kind": "contact",
+        "operator_account": row["operator_account"],
+        "dialog_company_name": row.get("crm_company_name") or row["operator_account"],
+        "crm_company_id": row.get("crm_company_id"),
         "can_use_copilot": False,
         "controls_allowed": False,
         "lifecycle_enabled": True,
@@ -125,12 +154,13 @@ def cards(cur, policy, mode, rollout):
        LEFT JOIN LATERAL (SELECT m.body,m.mid,m.sender FROM saas_widget_messages m
            WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
            ORDER BY m.mid DESC LIMIT 1) last ON true
-       WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND (state<>'accepted' OR operator_id=%s)
+       WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
         (actor, tenant, instance, actor, mode, mode),
     )
     rows = cur.fetchall()
+    attach_companies(cur, policy, instance, rows)
     writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
     return [card(row, actor, writable and row["writable"], rollout, online) for row in rows], {
@@ -165,6 +195,7 @@ def history(profile, params, before=None):
         rollout = guard(cur, key[0])
         if not rollout.enforced:
             raise TenantLinearError("Очередь недоступна.", 409)
+        attach_companies(cur, policy, key[1], [row])
         dialog = card(
             row,
             actor,

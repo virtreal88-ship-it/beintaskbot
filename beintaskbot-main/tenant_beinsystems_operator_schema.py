@@ -39,6 +39,7 @@ def migrate_widget_queue(cur):
         operator_id bigint, version bigint NOT NULL DEFAULT 0,
         PRIMARY KEY(tenant_id,instance,chat_id,identity),
         FOREIGN KEY(tenant_id,instance) REFERENCES saas_widget_sources(tenant_id,instance) ON DELETE CASCADE)""")
+    cur.execute("ALTER TABLE saas_widget_dialogs ADD COLUMN IF NOT EXISTS operator_account text")
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_messages (
         tenant_id uuid NOT NULL, instance uuid NOT NULL, chat_id bigint NOT NULL, identity text NOT NULL,
         mid bigint NOT NULL, sender text NOT NULL, author text NOT NULL, body text NOT NULL,
