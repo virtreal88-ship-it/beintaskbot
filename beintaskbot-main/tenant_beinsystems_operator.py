@@ -921,7 +921,7 @@ def _record_operator_request(profile, endpoint, payload):
         actor = int(profile.get("telegram_id"))
     except (TypeError, ValueError, AttributeError):
         raise OperatorError("Нет доступа.") from None
-    limits = {"me": 12, "accounts": 12, "account_info": 30, "profile_users": 20, "task_list": 20}
+    limits = {"me": 12, "accounts": 12, "account_info": 30, "profile_users": 20, "task_list": 20, "widget": 30}
     # Keep public-link reads in the existing task-domain rate-limit bucket.
     bucket = "task_list" if endpoint in {"dialog_company_public_link","company_tasks","company_modules","company_history"} else endpoint
     if bucket not in limits:

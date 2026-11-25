@@ -366,6 +366,10 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
             capabilities = context.capabilities(profile)
             from tenant_dialog_company_binding import feature_for as dialog_company_feature_for
+            from tenant_beinsystems_operator_access import widget_allowed
+            if widget_allowed(profile) and any(r.get("provider") == "beinsystems_operator" and
+                                               r.get("status") == "connected" for r in integrations):
+                capabilities["operator_widget"] = True
             if dialog_company_feature_for(profile):
                 capabilities["dialog_company_binding"] = True
             from tenant_dialog_history_merge_jobs import available as history_merge_available, enabled as history_merge_enabled

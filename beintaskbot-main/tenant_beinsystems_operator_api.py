@@ -73,6 +73,27 @@ def _json_response(data, *, status=200):
                              headers={"Cache-Control": "no-store", "Vary": "Cookie"})
 
 
+def widget_handler(member: Callable, origin: str, logger):
+    async def endpoint(request):
+        from tenant_operator_widget import handle
+        try:
+            profile = _profile(member, request)
+            if not profile:
+                raise operator.OperatorError("Источник недоступен.", 404)
+            data = await _body(request, profile, origin)
+            return _json_response(await asyncio.to_thread(handle, profile, data))
+        except operator.OperatorError as error:
+            headers = {"Cache-Control": "no-store"}
+            if error.upstream_http_status:
+                headers["X-Tenant-Auth-Source"] = "operator"
+            return web.json_response({"success": False, "error": str(error)}, status=error.status, headers=headers)
+        except Exception:
+            logger.error("Operator widget request failed")
+            return web.json_response({"success": False, "error": "Не удалось получить результат от Operator."},
+                                     status=503, headers={"Cache-Control": "no-store"})
+    return endpoint
+
+
 def integration_handler(member: Callable, origin: str, logger):
     async def endpoint(request: web.Request):
         profile = _profile(member, request)

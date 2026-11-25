@@ -25,6 +25,13 @@ def migrate_company_actions(cur):
 
 
 def migrate_operator_identity_links(cur) -> None:
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_widget_replies (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      request_id UUID NOT NULL, actor BIGINT NOT NULL, signature TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('unknown','saved','rejected')), message_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,request_id))""")
+    cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS operator_widget_reply_uncertain
+      ON saas_operator_widget_replies(tenant_id,signature) WHERE state='unknown'""")
     migrate_customer_links(cur)
     migrate_company_actions(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_dialog_accounts (
@@ -96,7 +103,7 @@ def migrate_operator_identity_links(cur) -> None:
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_rate_limits (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       actor_telegram_id BIGINT NOT NULL CHECK(actor_telegram_id>0),
-      endpoint TEXT NOT NULL CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login')),
+      endpoint TEXT NOT NULL CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login','widget')),
       bucket_start TIMESTAMPTZ NOT NULL,
       request_count INTEGER NOT NULL CHECK(request_count>0),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -104,13 +111,13 @@ def migrate_operator_identity_links(cur) -> None:
     )''')
     # The table may already exist from an earlier release with a narrower
     # endpoint constraint. Keep startup migration idempotent while allowing
-    # the credential login limiter to record its own endpoint.
+    # separate buckets for credential login and widget reads/replies.
     cur.execute('''DO $$ BEGIN
       IF EXISTS (
         SELECT 1 FROM pg_constraint
         WHERE conrelid='saas_beinsystems_operator_rate_limits'::regclass
           AND conname='saas_beinsystems_operator_rate_limits_endpoint_check'
-          AND pg_get_constraintdef(oid) NOT LIKE '%auth_login%'
+          AND pg_get_constraintdef(oid) NOT LIKE '%widget%'
       ) THEN
         ALTER TABLE saas_beinsystems_operator_rate_limits
           DROP CONSTRAINT saas_beinsystems_operator_rate_limits_endpoint_check;
@@ -119,11 +126,11 @@ def migrate_operator_identity_links(cur) -> None:
         SELECT 1 FROM pg_constraint
         WHERE conrelid='saas_beinsystems_operator_rate_limits'::regclass
           AND conname='saas_beinsystems_operator_rate_limits_endpoint_check'
-          AND pg_get_constraintdef(oid) LIKE '%auth_login%'
+          AND pg_get_constraintdef(oid) LIKE '%widget%'
       ) THEN
         ALTER TABLE saas_beinsystems_operator_rate_limits
           ADD CONSTRAINT saas_beinsystems_operator_rate_limits_endpoint_check
-          CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login'));
+          CHECK(endpoint IN ('me','accounts','account_info','profile_users','task_list','auth_login','widget'));
       END IF;
     END $$''')
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_beinsystems_operator_pending_auth (
