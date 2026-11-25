@@ -145,6 +145,8 @@ def sync_once(tenant):
             db.commit()
             cur.execute(
                 """SELECT * FROM saas_widget_dialogs WHERE tenant_id=%s AND instance=%s AND visible
+                AND (checked_at IS NULL OR before_id IS NOT NULL OR fetched_at IS DISTINCT FROM upstream_at
+                     OR checked_at < now() - CASE WHEN writable THEN interval '45 seconds' ELSE interval '5 minutes' END)
                 ORDER BY (fetched_at IS DISTINCT FROM upstream_at OR before_id IS NOT NULL) DESC,
                 (checked_at IS NULL) DESC, checked_at NULLS FIRST, upstream_at DESC LIMIT 12""",
                 (tenant, instance),

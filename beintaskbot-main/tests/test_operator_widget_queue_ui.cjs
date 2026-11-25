@@ -62,6 +62,14 @@ const wait = async predicate => {
   const reply=calls.find(c=>c.url.endsWith('/operator/widget')).data;
   assert.deepEqual([reply.chat_id,reply.text,reply.revision,reply.action],['15','test reply',site.widget_revision,'reply']);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
+  Object.assign(site,{provider:'connect',channel_id:'wa',conversation_id:'994123456789@s.whatsapp.net',
+    lead_id:29,can_send:false,can_add_internal_comment:false,send_block_reason:'dialog_accept_required',
+    lifecycle:{state:'waiting',revision:1,last_inbound_id:'5',can_accept:true}});
+  await w.tenantOperator.openDialog(site);
+  assert.equal(selected().textContent,'WhatsApp');
+  d.querySelector('[data-operator-lifecycle=accept]').click();
+  await wait(()=>!d.querySelector('[data-operator-lifecycle=accept]'));
+  assert.equal(selected().textContent,'WhatsApp');
   dom.window.close();
   console.log('Widget uses the regular conversation, keeps its source on acceptance, isolates notes and addresses only the selected chat.');
 })().catch(err=>{console.error(err);process.exit(1)});

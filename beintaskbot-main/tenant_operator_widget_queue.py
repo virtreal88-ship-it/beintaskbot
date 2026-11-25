@@ -97,7 +97,13 @@ def card(row, actor, writable, rollout, online):
         "unread_count": 0 if state in {"closed", "archive"} else row.get("unread", 0),
         "display_state": "human",
         "agent_status": "manual",
+        "last_message_id": str(row["preview_id"]) if row.get("preview_id") else None,
+        "last_message_direction": {"client": "incoming", "operator": "outgoing"}.get(
+            row.get("preview_sender"), "system"
+        ),
+        "last_message_type": "text",
         "last_message_text": row.get("preview") or "",
+        "last_message_preview": row.get("preview") or "",
         "archive_read_only": state in {"archive", "closed"},
     }
 
@@ -113,11 +119,12 @@ def cards(cur, policy, mode, rollout):
        (SELECT count(*) FROM saas_widget_messages m WHERE
            (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
            AND m.sender='client' AND m.fresh AND m.mid>COALESCE(r.through_id,0)) AS unread,
-       (SELECT body FROM saas_widget_messages m WHERE
-           (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
-           ORDER BY mid DESC LIMIT 1) AS preview
+       last.body AS preview,last.mid AS preview_id,last.sender AS preview_sender
        FROM saas_widget_dialogs d LEFT JOIN saas_widget_reads r ON
          (d.tenant_id,d.instance,d.chat_id,d.identity)=(r.tenant_id,r.instance,r.chat_id,r.identity) AND r.actor=%s
+       LEFT JOIN LATERAL (SELECT m.body,m.mid,m.sender FROM saas_widget_messages m
+           WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
+           ORDER BY m.mid DESC LIMIT 1) last ON true
        WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND (state<>'accepted' OR operator_id=%s)
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",

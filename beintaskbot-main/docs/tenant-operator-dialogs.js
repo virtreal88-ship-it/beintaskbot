@@ -680,7 +680,7 @@
     const menu=host?.querySelector('details');if(!menu||!canSidebarTransfer(route))return ()=>{};
     const results=menu.querySelector('[data-transfer-targets]'),status=menu.querySelector('[role=status]'),retry=menu.querySelector('[data-transfer-retry]');
     const profile=member, owner=identity(profile), revision=route.lifecycle.revision;
-    const exact={provider:'connect',channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:revision};
+    const exact={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:revision};
     const flightKey=contextKey('sidebar-transfer',route)+'.'+revision;
     const routeCurrent=()=>current()&&host.isConnected&&menu.closest('dialog')?.open&&
       canSidebarTransfer(currentDialog)&&currentDialog.lifecycle.revision===revision;
