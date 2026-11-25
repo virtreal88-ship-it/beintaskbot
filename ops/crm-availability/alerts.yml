@@ -1,0 +1,16 @@
+groups:
+  - name: crm-availability
+    interval: 15s
+    rules:
+      - alert: CRMUnavailable
+        expr: max(probe_success{job="crm-public"}) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "Public CRM health check failed for one minute"
+      - alert: CRMProbeMissing
+        expr: absent(probe_success{job="crm-public"})
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "External CRM health observer has no probe result"

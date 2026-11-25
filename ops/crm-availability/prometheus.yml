@@ -1,0 +1,19 @@
+# Standalone example for an observer outside Railway. Merge the job and rules
+# into the production observer and use its actual Alertmanager address.
+global:
+  evaluation_interval: 15s
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['localhost:9093']
+rule_files: ['alerts.yml']
+scrape_configs:
+  - job_name: crm-public
+    scrape_interval: 15s
+    scrape_timeout: 8s
+    metrics_path: /probe
+    params:
+      module: [crm_health]
+      target: [https://crm.pro.az/health]
+    static_configs:
+      - targets: ['localhost:9115']

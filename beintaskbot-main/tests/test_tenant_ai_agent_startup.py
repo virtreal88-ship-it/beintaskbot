@@ -1,3 +1,4 @@
+import logging
 import unittest
 import ast
 import asyncio
@@ -185,10 +186,11 @@ class TenantAiAgentStartupTests(unittest.TestCase):
     def test_direct_http_entry_checks_readiness_before_constructing_listener(self):
         module=ast.parse((Path(__file__).resolve().parents[1]/'bot.py').read_text())
         server=next(node for node in module.body if isinstance(node,ast.AsyncFunctionDef) and node.name=='start_webhook_server')
-        calls=[node.func.id if isinstance(node.func,ast.Name) else node.func.attr for node in ast.walk(server.body[1]) if isinstance(node,ast.Call)]
-        self.assertIn('to_thread',calls)
-        self.assertTrue(any(isinstance(node,ast.Name) and node.id=='require_database_ready' for node in ast.walk(server.body[1])))
-        self.assertIsInstance(server.body[2],ast.Assign)
+        startup = [node for node in server.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
+        self.assertIsInstance(startup[0], ast.Expr)
+        self.assertEqual(ast.unparse(startup[0].value), 'await asyncio.to_thread(require_database_ready)')
+        self.assertIsInstance(startup[1], ast.Assign)
+        self.assertEqual(ast.unparse(startup[1].value.func), 'web.Application')
 
     def test_worker_readiness_failure_creates_no_background_task(self):
         app={};events=[]
@@ -322,6 +324,8 @@ class RailwayStartupReadinessTests(unittest.TestCase):
                 self.assertNotIn('Location',response.headers)
                 self.assertFalse(response.cookies)
                 self.assertIn('Bot is running',response.text)
+                self.assertEqual(response.headers['X-Beintaskbot-Health'], 'worker')
+                self.assertEqual(response.headers['Cache-Control'], 'no-store')
         # The new check does not remove the established public-host redirect.
         request=make_mocked_request('GET','/health',headers={'Host':namespace['LEGACY_RAILWAY_HOST']})
         with self.assertRaises(web.HTTPPermanentRedirect):asyncio.run(dispatch(request))
@@ -338,7 +342,10 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         events=[]
         async def setup():events.append('setup')
         async def listen():events.append('listen')
-        def application(**kwargs):events.append('application');return object()
+        cleanup_ctx = []
+        def application(**kwargs):
+            events.append('application')
+            return SimpleNamespace(cleanup_ctx=cleanup_ctx)
         def runner(app, **kwargs):
             events.append(('runner', kwargs.get('shutdown_timeout')))
             return SimpleNamespace(setup=setup)
@@ -346,7 +353,7 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         namespace={'asyncio':asyncio,'web':SimpleNamespace(Application=application,AppRunner=runner,TCPSite=site),
             'cors_middleware':None,'canonical_web_origin_middleware':None,'telegram_auth_middleware':None,
             '_register_legacy_web_routes':lambda app:None,'_register_tenant_web_routes':lambda app:None,
-            'WEBHOOK_PORT':49157}
+            'WEBHOOK_PORT':49157,'logger':logging.getLogger(__name__)}
         exec(compile(program,'readiness-http-bootstrap','exec'),namespace)
         with patch('tenant_ai_agent_startup.require_database_ready',side_effect=_InvalidMigration):
             with self.assertRaises(_InvalidMigration):asyncio.run(namespace['start_webhook_server']())
@@ -354,6 +361,10 @@ class RailwayStartupReadinessTests(unittest.TestCase):
         with patch('tenant_ai_agent_startup.require_database_ready',side_effect=lambda:events.append('ready')), \
              patch('tenant_ai_agent_startup.install_history_merge_worker_cleanup',side_effect=lambda app:events.append('cleanup hook')):
             asyncio.run(namespace['start_webhook_server']())
+        from worker_http_diagnostics import HTTPWitness
+        self.assertEqual(len(cleanup_ctx), 1)
+        self.assertIs(cleanup_ctx[0].__func__, HTTPWitness.lifecycle)
+        self.assertEqual(cleanup_ctx[0].__self__.port, 49157)
         self.assertEqual(events,['ready','application','cleanup hook',('runner',30),'setup',('site','0.0.0.0',49157),'listen'])
 
     def test_listener_port_uses_railway_port_with_existing_default(self):

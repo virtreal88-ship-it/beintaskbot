@@ -5995,7 +5995,10 @@ async def health_check(request: web.Request) -> web.Response:
     lead_part = f" lead={lead}" if lead else ""
     sub = str(_WA_LAST_HOOK.get("sub") or "").strip()
     sub_part = f" sub={sub}" if sub else ""
-    return web.Response(status=200, text=f"Bot is running v252 {hook} {incoming}{lead_part}{sub_part}")
+    return web.Response(
+        status=200, text=f"Bot is running v252 {hook} {incoming}{lead_part}{sub_part}",
+        headers={"X-Beintaskbot-Health": "worker", "Cache-Control": "no-store"},
+    )
 
 
 async def handle_get_pending_actions(request: web.Request) -> web.Response:
@@ -18939,8 +18942,10 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
 
 async def start_webhook_server():
     from tenant_ai_agent_startup import install_history_merge_worker_cleanup, require_database_ready
+    from worker_http_diagnostics import HTTPWitness
     await asyncio.to_thread(require_database_ready)
     app_web = web.Application(middlewares=[cors_middleware, canonical_web_origin_middleware, telegram_auth_middleware])
+    app_web.cleanup_ctx.append(HTTPWitness(WEBHOOK_PORT, logger).lifecycle)
     install_history_merge_worker_cleanup(app_web)
     _register_legacy_web_routes(app_web)
     _register_tenant_web_routes(app_web)
