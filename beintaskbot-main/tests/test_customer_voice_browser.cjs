@@ -8,7 +8,7 @@ const { chromium, firefox, webkit } = require('playwright');
 const docs = path.resolve(__dirname, '../docs');
 const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
 const appShell = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8');
-const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=${['tenant-customer-voice-store.js','tenant-customer-voice-ui.js'].includes(s)?2:1}`)]
+const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=${s==='tenant-customer-voice-ui.js'?3:s==='tenant-customer-voice-store.js'?2:1}`)]
   .map(src=>appShell.indexOf(`<script src="${src}"></script>`));
 assert(appScripts.every(position=>position>=0) && appScripts.every((position,index)=>index===0||appScripts[index-1]<position),
   'app shell must load the recorder dependencies after dialog setup, in order');
@@ -35,7 +35,7 @@ async function main(){
   let browser;
   try{browser=await browserType.launch({headless:true,timeout:15000,...(executablePath?{executablePath}:{}),...(engine==='chromium'?{args:['--no-sandbox']}:{})});}
   catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
-  let posts=0,checks=0,capabilityCalls=0,accepted=false,enabled=true,capabilityDenied=false,capabilityStalled=false,holdSend=false,holdReceipt=false,releaseSend,releaseReceipt;
+  let posts=0,checks=0,capabilityCalls=0,accepted=false,enabled=true,capabilityDenied=false,capabilityStalled=false,holdSend=false,holdReceipt=false,directDelivery=null,releaseSend,releaseReceipt;
   const context=await browser.newContext();
   await context.route('**/api/platform/crm/chat/**',async route=>{
     const url=new URL(route.request().url());
@@ -45,7 +45,7 @@ async function main(){
       return capabilityDenied?route.fulfill({status:403,json:{success:false}}):route.fulfill({json:{success:true,enabled,recovery_enabled:true}});
     }
     if(url.pathname.endsWith('/voice-status'))return route.fulfill({json:{success:true,delivery_state:'read'}});
-    if(url.pathname.endsWith('/send-voice')){posts++;if(holdSend){await new Promise(resolve=>{releaseSend=resolve;});return route.fulfill({status:401,json:{success:false,keep_request:false}});}return route.abort('connectionfailed');}
+    if(url.pathname.endsWith('/send-voice')){posts++;if(holdSend){await new Promise(resolve=>{releaseSend=resolve;});return route.fulfill({status:401,json:{success:false,keep_request:false}});}if(directDelivery)return route.fulfill({json:{success:true,state:'accepted',provider_accepted:true,delivery_state:directDelivery}});return route.abort('connectionfailed');}
     if(url.pathname.endsWith('/voice-receipt')){checks++;if(holdReceipt){await new Promise(resolve=>{releaseReceipt=resolve;});return route.fulfill({status:409,json:{success:false,error_code:'voice_identity_changed'}});}return route.fulfill({json:accepted?
       {success:true,state:'accepted',provider_accepted:true,delivery_state:'sent',delivered:false}:
       {success:true,state:'unknown',provider_accepted:false,retry_safe:false}});}
@@ -92,8 +92,30 @@ async function main(){
     assert.equal(await page.getByRole('button',{name:'Отправить голосовое'}).isVisible(),false,'unknown receipt remains non-sendable after reload');
     await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);assert.equal(posts,1,'unknown check is read-only');assert.equal(checks,1);
     accepted=true;await Promise.all([page.waitForResponse(r=>r.url().includes('/voice-receipt?')),page.getByRole('button',{name:'Проверить статус'}).click()]);
-    await page.getByText('Провайдер принял сообщение. Доставка клиенту пока не подтверждена.').waitFor({state:'visible'});
+    await page.waitForFunction(()=>window.reloads===1);
+    const receiptCaption=page.locator('.operator-customer-voice [role="status"]');
+    assert.equal(await receiptCaption.isVisible(),false,'resolved send has no extra caption');
+    await page.reload();await page.locator('.operator-voice-mic').waitFor({state:'visible'});
+    await receiptCaption.waitFor({state:'hidden'});
     assert.equal(posts,1);assert.equal(checks,2);
+    for(const [lead,state] of [[31,'sent'],[32,'failed']]){
+      directDelivery=state;
+      const direct=await context.newPage();await direct.goto(origin+'/?lead='+lead);
+      await direct.locator('.operator-voice-mic').click();
+      await direct.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+      await direct.waitForTimeout(350);
+      await direct.getByRole('button',{name:'Остановить'}).click();
+      await direct.getByRole('button',{name:'Отправить голосовое'}).click();
+      await direct.waitForFunction(()=>window.reloads===1);
+      const directCaption=direct.locator('.operator-customer-voice [role="status"]');
+      if(state==='failed'){
+        await direct.getByText('Провайдер сообщил об ошибке доставки. Проверьте историю.').waitFor({state:'visible'});
+        await direct.reload();
+        await direct.getByText('Провайдер сообщил об ошибке доставки. Проверьте историю.').waitFor({state:'visible'});
+      }else await directCaption.waitFor({state:'hidden'});
+      await direct.close();
+    }
+    directDelivery=null;
 
     await page.evaluate(()=>{window.denyMicrophone=true;});await page.locator('.operator-voice-mic').click();
     await page.getByText('Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.').waitFor({state:'visible'});
