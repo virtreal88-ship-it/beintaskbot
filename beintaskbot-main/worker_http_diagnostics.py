@@ -103,7 +103,11 @@ class HTTPWitness:
         self.owner = threading.current_thread()
         self.tick()
         monitor = threading.Thread(target=self.observe, name="http-witness", daemon=True)
-        monitor.start()
+        try:
+            monitor.start()
+        except RuntimeError:
+            self.timer.cancel()
+            self.logger.warning("worker_http_witness observer_start_failed")
         try:
             yield
         finally:
