@@ -91,6 +91,16 @@ def _connect_receipt(route, request_id):
     return _checked_receipt(value, route, request_id)
 
 
+def _delivery_audio(route, mime, content):
+    """Finish local encoding before the final authorization and provider step."""
+    if not route.get('native'):
+        return mime, content
+    try:
+        return 'audio/ogg', native_opus(content, mime)
+    except VoiceError:
+        raise TenantLinearError('Səs göndərilmədi: yazını hazırlamaq mümkün olmadı.', 422) from None
+
+
 def _submit(route, request_id, mime, content):
     if route.get('native'):
         from tenant_whatsapp_native_transport import media_receipt
@@ -309,14 +319,8 @@ async def run(session, command, content, logger):
         _, route = await asyncio.to_thread(mark_sending, item, {'origin':'connect','voice_protocol':True,
                                                                'channel_id':channel,'conversation_id':conversation})
         route = {**route, 'author_id':item['key'][1], 'crm_conversation_id':command['lead_id']}
-        mime = command['file']['mime']
-        if route.get('native'):
-            try:
-                content = await asyncio.to_thread(native_opus, content, mime)
-            except VoiceError:
-                raise TenantLinearError('Səs göndərilmədi: yazını hazırlamaq mümkün olmadı.', 422) from None
-            mime = 'audio/ogg'
-        receipt = await asyncio.to_thread(dispatch_guarded, item, route, submit, command['request_id'], mime, content)
+        mime, audio = await asyncio.to_thread(_delivery_audio, route, command['file']['mime'], content)
+        receipt = await asyncio.to_thread(dispatch_guarded, item, route, submit, command['request_id'], mime, audio)
         if receipt['provider_accepted']:
             await asyncio.to_thread(record_acceptance, session, {**item, 'lead_id': command['lead_id']}, receipt)
         else:

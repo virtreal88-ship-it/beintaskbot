@@ -420,7 +420,7 @@ def test_browser_recording_round_trips_as_scoped_native_voice(configured, monkey
     import base64
     import shutil
     import subprocess
-    from tenant_customer_voice_service import prepare, _submit
+    from tenant_customer_voice_service import prepare, _delivery_audio, _submit
     from test_whatsapp_native_projection import message
     from test_whatsapp_native_inbox import delivery, store
     import tenant_whatsapp_native_projection as projection
@@ -438,8 +438,9 @@ def test_browser_recording_round_trips_as_scoped_native_voice(configured, monkey
                    check=True,capture_output=True,timeout=20)
     command, uploaded = prepare({'request_id':request_id,'lead_id':41,
         'expected_tenant_id':A,'expected_user_id':11}, 'audio/webm;codecs=opus', source.read_bytes())
+    mime, converted = _delivery_audio(route, command['file']['mime'], uploaded)
     send = accepted(monkeypatch)
-    receipt = _submit(route, request_id, command['file']['mime'], uploaded)
+    receipt = _submit(route, request_id, mime, converted)
     assert receipt['provider_accepted'] and not receipt['delivered']
     payload = send.call_args.kwargs['json']
     assert payload['scope'] == route['native']['scope']
