@@ -10,8 +10,7 @@ import socketio
 from tenant_beinsystems_operator import OperatorError, _NoRedirectRequestsSession
 
 
-SOCKET_ORIGIN = "https://operator.beinsystems.az"
-DIAGNOSTIC_SOCKET_ORIGIN = "https://operator-realtime.beinsystems.az"
+SOCKET_ORIGIN = "https://operator-realtime.beinsystems.az"
 
 
 @contextmanager
@@ -72,13 +71,13 @@ def socket_block_reason(credentials):
 
 
 def probe_realtime_origin(credentials):
-    """One auth-only probe on the alternate Operator origin. Never emit events."""
+    """Check the send endpoint without registering or emitting a message."""
     try:
-        with _socket(credentials, origin=DIAGNOSTIC_SOCKET_ORIGIN):
+        with _socket(credentials, origin=SOCKET_ORIGIN):
             outcome = "connected"
     except OperatorError as exc:
         outcome = "auth_denied" if exc.status == 401 else "unavailable"
-    logging.getLogger(__name__).info("Operator alternate realtime auth probe: %s", outcome)
+    logging.getLogger(__name__).info("Operator realtime auth probe: %s", outcome)
     return outcome
 
 
