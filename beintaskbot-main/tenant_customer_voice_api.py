@@ -28,6 +28,7 @@ def read_session(request, member_from_request):
 
 def error_data(error,keep_request):
     return {'success':False,'error':str(error),'keep_request':keep_request,
+            **({'delivery_phase':error.delivery_phase} if getattr(error,'delivery_phase',None) else {}),
             **({'error_code':error.error_code} if getattr(error,'error_code',None) else {})}
 
 

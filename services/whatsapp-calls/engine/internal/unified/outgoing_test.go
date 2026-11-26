@@ -265,6 +265,59 @@ func TestOutgoingAudioMIMEAndDurationOnlyForVoiceNotes(t *testing.T) {
 	}
 }
 
+func TestGroupVoiceUsesPTTAndChecksMembershipAfterUpload(t *testing.T) {
+	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, refusal := range []error{ErrGroupMembership, ErrGroupSession, ErrGroupCheckUnavailable} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			j := journal(t, database(t, filepath.Join(t.TempDir(), "group-voice.db")), testScope)
+			client := &outgoingClient{}
+			req := Outgoing{Scope: testScope, Operation: "group-voice", Chat: "120363123456789@g.us",
+				Kind: "voice", MIME: "audio/ogg", Data: voice, VerifyGroupMembership: true}
+
+			_, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				if client.uploads != 1 || client.sends != 0 {
+					t.Fatal("voice membership proof did not run after upload and before SendMessage")
+				}
+				return refusal
+			})
+			if !errors.Is(err, refusal) || client.sends != 0 {
+				t.Fatalf("unverified group voice reached SendMessage: %v", err)
+			}
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			audio := client.message.GetAudioMessage()
+			if audio == nil || !audio.GetPTT() || audio.GetSeconds() != 2 || audio.GetMimetype() != "audio/ogg; codecs=opus" {
+				t.Fatal("group message is not a WhatsApp voice note with the expected duration")
+			}
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				t.Fatal("accepted voice replay reached a fresh membership check")
+				return nil
+			}); err != nil || client.sends != 1 || client.uploads != 2 {
+				t.Fatalf("accepted group voice replay was not idempotent: %v", err)
+			}
+
+			req.Operation = "group-voice-lost"
+			client.id = "SYNTHETIC_LOST"
+			client.fail = true
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error { return nil }); !errors.Is(err, ErrUnknown) {
+				t.Fatalf("provider timeout was reported as a refusal: %v", err)
+			}
+			client.fail = false
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				t.Fatal("unknown voice replay reached a fresh membership check")
+				return nil
+			}); !errors.Is(err, ErrUnknown) || client.sends != 2 || client.uploads != 3 {
+				t.Fatalf("unknown group voice was retried: %v", err)
+			}
+		})
+	}
+}
+
 func TestOutgoingVoiceWithoutProvenDurationDoesNotReachUpload(t *testing.T) {
 	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
 	if err != nil {

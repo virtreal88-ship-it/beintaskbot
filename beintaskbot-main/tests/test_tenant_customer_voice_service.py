@@ -4,9 +4,10 @@ import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from tenant_linear_policy import TenantLinearError
-from tenant_customer_voice_service import _checked_receipt, run
+from tenant_customer_voice_service import _checked_receipt, _voice_supported, run
 from tenant_connect_transport import ConnectPreflightError, _request
 from tenant_operator_dialogs import _message
+from tenant_whatsapp_native_groups import membership_error
 
 TENANT = 'a9c11a16-01d5-469a-a6c1-9a726975ae42'
 CHANNEL = '9644b2f2-786c-43f4-b58e-2b9b5f69d554'
@@ -14,6 +15,7 @@ REQUEST = '79d6467b-3ca6-4557-9e12-b9da059c0611'
 MESSAGE = '6b9f1ac1-d693-4f9f-a400-d9b8372306f8'
 OPERATION = '7d92af34-d4db-4983-a1a7-56e8249c6e6e'
 JID = '994500000000@s.whatsapp.net'
+GROUP = '123456789012345@g.us'
 SESSION = {'tenant_id': TENANT, 'telegram_id': 20}
 COMMAND = {'request_id': REQUEST, 'lead_id': 7, 'text': '', 'file': {'mime': 'audio/ogg'}}
 ROUTE = {'channel_id': CHANNEL, 'conversation_id': JID, 'api_key': 'synthetic','author_id':20,'crm_conversation_id':7}
@@ -47,18 +49,29 @@ class ReceiptContract(unittest.TestCase):
         self.assertEqual(_checked_receipt({**RECEIPT, 'providerAccepted': False}, ROUTE, REQUEST)['state'], 'unknown')
         self.assertEqual(_checked_receipt({**RECEIPT, 'status': 'read', 'delivered': False}, ROUTE, REQUEST)['delivery_state'], 'sent')
 
+    def test_group_receipt_requires_the_bound_sender(self):
+        route = {**ROUTE, 'conversation_id': GROUP, 'native': {'scope': {'account': JID}}}
+        receipt = {**RECEIPT, 'conversationId': GROUP, 'participantJid': JID}
+        self.assertEqual(_checked_receipt(receipt, route, REQUEST)['participant_jid'], JID)
+        with self.assertRaisesRegex(ValueError, 'sender mismatch'):
+            _checked_receipt({**receipt, 'participantJid': '994500000001@s.whatsapp.net'}, route, REQUEST)
+
 
 class VoiceService(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.item = {'key': (TENANT, 20, REQUEST), 'command': COMMAND, 'connection': ['connect', CHANNEL, JID]}
         self.receipt = _checked_receipt(RECEIPT, ROUTE, REQUEST)
         patch('tenant_customer_voice_service.dispatch_guarded',side_effect=lambda item,credentials,callback,*args,**kwargs:callback(credentials,*args,**kwargs)).start()
-        self.reserve = patch('tenant_customer_voice_service.reserve', return_value=self.item).start()
+        self.reserve = patch('tenant_customer_voice_service.reserve', side_effect=self.reserve_authorized).start()
         self.mark = patch('tenant_customer_voice_service.mark_sending', return_value=(SESSION, ROUTE)).start()
         self.send = patch('tenant_customer_voice_service._submit', return_value=self.receipt).start()
         self.record = patch('tenant_customer_voice_service.record_acceptance').start()
         self.finish = patch('tenant_customer_voice_service.finish').start()
         self.addCleanup(patch.stopall)
+
+    def reserve_authorized(self, session, command, *, validate_route):
+        validate_route(self.item['connection'], {'route': self.mark.return_value[1]}, command)
+        return self.item
 
     async def test_confirmed_send_persists_scoped_receipt_once(self):
         result = await run(SESSION, COMMAND, b'synthetic', logging.getLogger('synthetic'))
@@ -107,14 +120,40 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TenantLinearError):
             await run(SESSION, COMMAND, b'synthetic', logging.getLogger('synthetic'))
         self.send.assert_not_called(); self.mark.assert_not_called()
-        self.finish.assert_called_once_with(self.item, 'blocked')
+        self.finish.assert_not_called()
 
-    async def test_group_voice_fails_closed_before_ai_handoff_or_submission(self):
-        self.item['connection']=['connect',CHANNEL,'123456789012345@g.us']
+    async def test_unverified_group_voice_is_blocked_before_ai_handoff_or_submission(self):
+        self.item['connection']=['connect',CHANNEL,GROUP]
         with self.assertRaises(TenantLinearError):
             await run(SESSION,COMMAND,b'synthetic',logging.getLogger('synthetic'))
         self.mark.assert_not_called();self.send.assert_not_called();self.record.assert_not_called()
-        self.finish.assert_called_once_with(self.item,'blocked')
+        self.finish.assert_not_called()
+
+    async def test_group_voice_requires_the_selected_source_in_the_recording_command(self):
+        self.item['connection'] = ['connect', CHANNEL, GROUP]
+        self.mark.return_value = (SESSION, {**ROUTE, 'conversation_id': GROUP,
+            'native': {'scope': {'account': JID}}, 'group_participant_id': 'test-participant', 'verify_group_membership': True})
+        self.assertTrue(_voice_supported(self.item['connection'], {'route': self.mark.return_value[1]}))
+        with self.assertRaises(TenantLinearError):
+            await run(SESSION, {**COMMAND, 'expected_channel_id': REQUEST, 'expected_conversation_id': GROUP},
+                      b'synthetic', logging.getLogger('synthetic'))
+        self.mark.assert_not_called()
+        self.send.assert_not_called()
+
+    async def test_explicit_wecall_refusal_keeps_draft_retryable(self):
+        self.item['connection'] = ['connect', CHANNEL, GROUP]
+        self.mark.return_value = (SESSION, {**ROUTE, 'conversation_id': GROUP,
+            'native': {'scope': {'account': JID}}, 'group_participant_id': 'test-participant', 'verify_group_membership': True})
+        self.send.side_effect = membership_error('native_group_membership_unconfirmed', sending=True)
+        with patch('tenant_customer_voice_service.native_opus', return_value=b'synthetic opus'):
+            with self.assertRaises(TenantLinearError) as raised:
+                await run(SESSION, {**COMMAND, 'expected_channel_id': CHANNEL, 'expected_conversation_id': GROUP},
+                          b'synthetic', logging.getLogger('synthetic'))
+        self.assertEqual(raised.exception.error_code, 'native_group_membership_unconfirmed')
+        self.assertEqual(raised.exception.delivery_phase, 'not_sent')
+        self.assertFalse(raised.exception.keep_request)
+        self.finish.assert_called_once_with(self.item, 'blocked')
+        self.record.assert_not_called()
 
     async def test_uppercase_or_unverified_routes_fail_closed(self):
         for route in ('123456789012345@G.US','not-a-jid','123456789012345@broadcast','994500000000@c.us'):
@@ -125,6 +164,7 @@ class VoiceService(unittest.IsolatedAsyncioTestCase):
         self.mark.assert_not_called();self.send.assert_not_called();self.record.assert_not_called()
 
     async def test_accepted_replay_checks_receipt_without_sending(self):
+        self.reserve.side_effect = None
         self.reserve.return_value = {'cached_result': {'state':'accepted'}}
         with patch('tenant_customer_voice_service.check', new=AsyncMock(return_value=self.receipt)) as check:
             self.assertTrue((await run(SESSION, COMMAND, b'synthetic', logging.getLogger('synthetic')))['provider_accepted'])

@@ -12,10 +12,10 @@ const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/as
   .map(src=>appShell.indexOf(`<script src="${src}"></script>`));
 assert(appScripts.every(position=>position>=0) && appScripts.every((position,index)=>index===0||appScripts[index-1]<position),
   'app shell must load the recorder dependencies after dialog setup, in order');
-const html = `<!doctype html><meta charset="utf-8"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
+const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
  <textarea id="chatText"></textarea><div class="operator-composer-actions"><button id="sendChat">send</button></div></div></div>
- <script>window.tenantI18n={language:'ru'};const lead=new URLSearchParams(location.search).get('lead')||'7';
- window.fixtureRoute={provider:'connect',lead_id:Number(lead),channel_id:'channel',conversation_id:'chat-'+lead};
+ <script>window.tenantI18n={language:'ru'};const parameters=new URLSearchParams(location.search),lead=parameters.get('lead')||'7';
+ window.fixtureRoute={provider:'connect',lead_id:Number(lead),channel_id:parameters.get('channel')||'channel',conversation_id:parameters.get('group')||'chat-'+lead};
  window.tenantOperator={member:{tenant_id:'tenant',telegram_id:20},get currentDialog(){return window.fixtureRoute},openDialog:async()=>{window.reloads=(window.reloads||0)+1},updateCustomerVoiceDelivery:(id,state)=>{window.deliveryUpdate={id,state}}};
  const contexts=[];Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:async()=>{if(window.denyMicrophone)throw new DOMException('denied','NotAllowedError');const c=new AudioContext(),o=c.createOscillator(),d=c.createMediaStreamDestination();o.connect(d);o.start();contexts.push([c,o]);return d.stream;}});</script>
  ${scripts.map(s=>`<script src="/assets/${s}"></script>`).join('')}
@@ -36,6 +36,9 @@ async function main(){
   try{browser=await browserType.launch({headless:true,timeout:15000,...(executablePath?{executablePath}:{}),...(engine==='chromium'?{args:['--no-sandbox']}:{})});}
   catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
   let posts=0,checks=0,capabilityCalls=0,accepted=false,enabled=true,capabilityDenied=false,capabilityStalled=false,holdSend=false,holdReceipt=false,directDelivery=null,releaseSend,releaseReceipt;
+  const group='120363000000700000@g.us',firstChannel='9644b2f2-786c-43f4-b58e-2b9b5f69d554',secondChannel='ed4b1adb-22f4-4f64-ab37-0f0a7267aa35';
+  let groupRefusal=null;
+  const groupCommands=[];
   const context=await browser.newContext();
   await context.route('**/api/platform/crm/chat/**',async route=>{
     const url=new URL(route.request().url());
@@ -45,7 +48,19 @@ async function main(){
       return capabilityDenied?route.fulfill({status:403,json:{success:false}}):route.fulfill({json:{success:true,enabled,recovery_enabled:true}});
     }
     if(url.pathname.endsWith('/voice-status'))return route.fulfill({json:{success:true,delivery_state:'read'}});
-    if(url.pathname.endsWith('/send-voice')){posts++;if(holdSend){await new Promise(resolve=>{releaseSend=resolve;});return route.fulfill({status:401,json:{success:false,keep_request:false}});}if(directDelivery)return route.fulfill({json:{success:true,state:'accepted',provider_accepted:true,delivery_state:directDelivery}});return route.abort('connectionfailed');}
+    if(url.pathname.endsWith('/send-voice')){
+      posts++;
+      const [,encoded] = route.request().postDataBuffer().toString().match(/\r\n\r\n(\{[^\r\n]+\})\r\n/) || [];
+      const command=JSON.parse(encoded);
+      if(command.expected_conversation_id===group){
+        groupCommands.push(command);
+        if(groupRefusal)return route.fulfill(groupRefusal);
+        return route.fulfill({json:{success:true,state:'accepted',provider_accepted:true,delivery_state:'sent'}});
+      }
+      if(holdSend){await new Promise(resolve=>{releaseSend=resolve;});return route.fulfill({status:401,json:{success:false,keep_request:false}});}
+      if(directDelivery)return route.fulfill({json:{success:true,state:'accepted',provider_accepted:true,delivery_state:directDelivery}});
+      return route.abort('connectionfailed');
+    }
     if(url.pathname.endsWith('/voice-receipt')){checks++;if(holdReceipt){await new Promise(resolve=>{releaseReceipt=resolve;});return route.fulfill({status:409,json:{success:false,error_code:'voice_identity_changed'}});}return route.fulfill({json:accepted?
       {success:true,state:'accepted',provider_accepted:true,delivery_state:'sent',delivered:false}:
       {success:true,state:'unknown',provider_accepted:false,retry_safe:false}});}
@@ -116,6 +131,59 @@ async function main(){
       await direct.close();
     }
     directDelivery=null;
+
+    for(const [width,lead,channel,status,notice] of [
+      [1280,41,firstChannel,403,'Права на отправку в этой группе изменились. Запись сохранена.'],
+      [390,42,secondChannel,409,'Не удалось подтвердить участие выбранного номера в группе. Запись сохранена.']
+    ]){
+      const groupPage=await context.newPage();
+      await groupPage.setViewportSize({width,height:844});
+      await groupPage.goto(origin+'/?'+new URLSearchParams({lead,channel,group}));
+      await groupPage.locator('.operator-voice-mic').click();
+      await groupPage.getByRole('button',{name:'Остановить'}).waitFor({state:'visible'});
+      await groupPage.waitForTimeout(350);
+      await groupPage.getByRole('button',{name:'Остановить'}).click();
+      const sendVoice=groupPage.getByRole('button',{name:'Отправить голосовое'});
+      const preview=groupPage.locator('.operator-customer-voice audio');
+      await preview.waitFor({state:'visible'});
+      assert.ok(await preview.evaluate(async audio=>{audio.muted=true;await audio.play();return !audio.paused;}),'recording plays before send');
+      assert.ok((await preview.boundingBox()).width<=width,'voice preview fits the composer');
+
+      if(status===409){
+        const pick=async (lead,channel)=>groupPage.evaluate(({lead,channel})=>{
+          document.dispatchEvent(new CustomEvent('tenant-chat-close'));
+          window.fixtureRoute={...window.fixtureRoute,lead_id:lead,channel_id:channel};
+          document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
+        },{lead,channel});
+        await pick(41,firstChannel);
+        await groupPage.locator('.operator-voice-mic').waitFor({state:'visible'});
+        assert.equal(await preview.isVisible(),false,'the other group source cannot use this draft');
+        await pick(lead,channel);
+        await sendVoice.waitFor({state:'visible'});
+      }
+
+      const prior=groupCommands.length;
+      groupRefusal={status,json:{success:false,keep_request:false,error_code:status===409?'native_group_membership_unconfirmed':'permission_denied'}};
+      await sendVoice.click();
+      await groupPage.getByText(notice).waitFor({state:'visible'});
+      assert.equal(groupCommands.length,prior+1);
+      const refused=groupCommands[prior];
+      assert.equal(refused.expected_channel_id,channel);
+      await preview.waitFor({state:'visible'});
+      if(status===403)await sendVoice.waitFor({state:'hidden'});
+
+      await groupPage.reload();
+      await sendVoice.waitFor({state:'visible'});
+      await preview.waitFor({state:'visible'});
+      groupRefusal=null;
+      await sendVoice.click();
+      await groupPage.waitForFunction(()=>window.reloads===1);
+      assert.equal(groupCommands.length,prior+2,'one new request after explicit retry');
+      const sent=groupCommands[prior+1];
+      assert.equal(sent.expected_channel_id,channel);
+      assert.notEqual(sent.request_id,refused.request_id,'a confirmed refusal releases the same audio as a fresh draft');
+      await groupPage.close();
+    }
 
     await page.evaluate(()=>{window.denyMicrophone=true;});await page.locator('.operator-voice-mic').click();
     await page.getByText('Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.').waitFor({state:'visible'});
@@ -197,7 +265,7 @@ async function main(){
     releaseReceipt();holdReceipt=false;await stale.waitForTimeout(300);
     assert.equal(await stale.getByRole('button',{name:'Отправить голосовое'}).isVisible(),true,'stale receipt identity failure cannot close current dialog');
     assert.ok(await stale.evaluate(async()=>await createTenantVoiceStore().get(JSON.stringify(['tenant','20','18','channel','chat-18']))),'stale receipt cannot erase current draft');
-    console.log('PASS '+engine+': cancellation, two-tab exclusion, preview, dialog isolation, unknown recovery, permission error, disabled feature');
+    console.log('PASS '+engine+': personal voice regression; group preview and draft recovery on desktop and 390 px, with exact source isolation');
   }finally{await context.close();await browser.close();await new Promise(resolve=>server.close(resolve));}
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
