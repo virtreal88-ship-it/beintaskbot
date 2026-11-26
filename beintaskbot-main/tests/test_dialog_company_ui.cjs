@@ -38,7 +38,12 @@ const read=p=>fs.readFileSync(p,'utf8');
         if(delayTab)await new Promise(resolve=>{releaseTab=resolve;});
         return{ok:true,json:async()=>({success:true,company_section:{state:'available',rows:[{company_tasks:['BUG-1',q.action+' for '+q.expected_company_id,'In progress'],company_modules:[q.action+' for '+q.expected_company_id],company_history:['2026-11-03','0.00 AZN',q.action+' for '+q.expected_company_id]}[q.action]]}})};
       }
-      if(q.action==='company_profile')return{ok:true,json:async()=>({success:true,company_profile:{state:'not_linked'}})};
+      if(q.action==='company_profile'){
+        assert.equal(q.expected_company_id,bindings.get(route.lead_id).company_id);
+        const company_profile=q.expected_company_id==='uniset-binding'
+          ?{state:'available',partner_name:'Rasim'}:{state:'not_linked'};
+        return{ok:true,json:async()=>({success:true,company_profile})};
+      }
       if(body&&'operator_search' in q){
         if(delaySearch)await new Promise(resolve=>{releaseSearch=resolve;});
         if(holdOperator)await new Promise(resolve=>{releaseOperator=resolve;});
@@ -245,11 +250,17 @@ const read=p=>fs.readFileSync(p,'utf8');
   assert.equal(calls.filter(c=>!c.body&&c.path.endsWith('/dialog-company')).length,priorReads,'no follow-up company GET for an authorized snapshot');
   bindings.set(46,{company_id:null,can_manage:true,can_search_operator:true});
   await w.tenantOperator.openDialog(freshCandidate);await tick();
+  assert($('#operatorDialogPartnerName').hidden);
   openSearch();type('acct');await debounce();
   w.confirm=()=>{throw Error('Operator selection must not open a confirmation');};
   remote().click();await tick();await tick();
   assert.equal(value(),'UniSet');
+  assert.equal($('#operatorDialogPartnerName').textContent,'Rasim','partner comes from the profile of the newly bound company');
+  assert(!$('#operatorDialogPartnerName').hidden);
   assert.equal(calls.filter(c=>c.body?.lead_id==='46'&&c.body?.operator_account).length,1);
+  w.confirm=()=>true;
+  await unbind();
+  assert($('#operatorDialogPartnerName').hidden&&$('#operatorDialogPartnerName').textContent==='','unlink clears the partner immediately');
   assert(!calls.some(c=>c.path.includes('/send')));
   d.dispatchEvent(new w.CustomEvent('tenant-auth-pending'));assert(!section(),'auth transition immediately clears company');
   w.close();console.log('PASS: Company field and Operator chooser, exact Kommo/group routes, debounce, explicit bind, fallback, stale guards');

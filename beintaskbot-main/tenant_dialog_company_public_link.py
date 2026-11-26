@@ -283,8 +283,7 @@ def copy_link(profile, *, provider, lead_id, channel_id, conversation_id, expect
 
 
 def _company_profile_fields(response, account):
-    # Reuse exact account validation and project only the panel fields. Partner
-    # PIN, personal names, email and other account metadata stay upstream.
+    # Verify the returned account before projecting its company details.
     operator.account_info_payload(response, account)
     data = response.get('data', response)
     if not isinstance(data, dict):
@@ -296,7 +295,13 @@ def _company_profile_fields(response, account):
     balance = data.get('balance')
     if type(balance) not in (int, float) or not -10**12 <= balance <= 10**12 or not math.isfinite(balance):
         balance = None
-    return {'registration_phone':phone, 'balance':balance}
+    result = {'registration_phone':phone, 'balance':balance}
+    name = data.get('partner_name')
+    if isinstance(name, str):
+        name = re.sub(r'[\x00-\x1f\x7f]+',' ',name).strip()[:240].rstrip()
+        if name:
+            result['partner_name'] = name
+    return result
 
 
 _SECTIONS = {'company_tasks': ('/task/list', ('linear_id','title','status')),

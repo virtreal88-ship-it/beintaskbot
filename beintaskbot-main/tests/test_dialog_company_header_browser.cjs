@@ -96,7 +96,8 @@ async function assertArchivedHeader(browser){
       if(data.action==='company_profile'){
        if(data.expected_company_id!==fixtures[data.channel_id]?.company_id)throw Error('Inexact company profile');
        window.profilePosts.push(data.channel_id);
-       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',registration_phone:'+994501234567',balance:0,actions:{task:true,credit:true},action_binding:'b'.repeat(64),task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}}})};
+       const partner_name=data.channel_id==='a'?'Uniset':'Rasim';
+       return {ok:true,json:async()=>({success:true,company_profile:{state:'available',partner_name,registration_phone:'+994501234567',balance:0,actions:{task:true,credit:true},action_binding:'b'.repeat(64),task_options:{account:'verified-account',projects:['Umumi'],priorities:[2,3,4]}}})};
       }
       if(data.action==='company_tasks'||data.action==='company_history')return {ok:true,json:async()=>({success:true,company_section:{
         state:'available',rows:data.action==='company_history'?[['2026-11-03','4.50 AZN','credit'],['2026-11-02','-2.00','daily_expense']]:[]}})};
@@ -143,8 +144,11 @@ async function assertArchivedHeader(browser){
   await page.evaluate(()=>{window.tenantI18n.setLanguage('en');return window.tenantOperator.refresh();});
   await page.locator('.operator-row').first().click();
   const name=page.locator('#operatorDialogCompanyName'),head=page.locator('#operatorConversationHeader');
+  const partner=head.locator('#operatorDialogPartnerName');
   await page.waitForFunction(()=>Boolean(window.releases.a));
   assert(!await name.isVisible());
+  assert(!await partner.isVisible(),'partner requires a confirmed binding');
+  assert.deepEqual(await page.evaluate(()=>window.profilePosts),[]);
   assert.equal(await name.textContent(),'');
   assert.equal(await name.getAttribute('title'),null);
   const height=await head.evaluate(n=>n.offsetHeight);
@@ -153,6 +157,9 @@ async function assertArchivedHeader(browser){
   assert.equal(await name.textContent(),alpha,'stored name is preserved as literal text');
   assert.equal(await name.locator('b').count(),0);
   assert.equal(await name.getAttribute('title'),alpha);
+  await partner.waitFor();
+  assert.equal(await partner.textContent(),'Uniset');
+  assert(await partner.evaluate(el=>el.nextElementSibling.id==='operatorMoreActions'),'partner sits directly before the dialogue menu');
   assert.equal(await head.evaluate(n=>n.offsetHeight),height,'the tag never adds a header row');
   assert(await name.evaluate(n=>n.parentElement.matches('[data-header-meta]')),'company name stays in the compact metadata row');
   assert(await name.evaluate(n=>n.getBoundingClientRect().top>=document.querySelector('#operatorDialogTitleSlot').getBoundingClientRect().bottom),
@@ -181,7 +188,7 @@ async function assertArchivedHeader(browser){
   assert.equal(await transferSection.getByText('Source',{exact:true}).count(),0,'the transfer section does not repeat the header source');
   assert.equal(await transferSection.getByText('Source a',{exact:true}).count(),0);
   assert.equal(await panel.isVisible(),width>900,'desktop details stay open; mobile starts with the overlay closed');
-  assert.deepEqual(await page.evaluate(()=>window.profilePosts),width<=900?[]:['a'],'company profile loads only when the details panel is visible');
+  assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a'],'the header and closed mobile panel share one company profile read');
   const pane=page.locator('#operatorConversationPane');
   const corners=el=>{const c=getComputedStyle(el);return [c.borderTopLeftRadius,c.borderTopRightRadius,c.borderBottomLeftRadius,c.borderBottomRightRadius];};
   const originalPaneCorners=await pane.evaluate(corners);
@@ -411,11 +418,14 @@ async function assertArchivedHeader(browser){
   await page.waitForFunction(()=>window.bindingGets.at(-1)==='b');
   await page.evaluate(()=>window.releases.a());
   assert(!await name.isVisible()&&await name.textContent()==='','masked source and delayed previous source cannot populate the header');
+  assert(!await partner.isVisible()&&await partner.textContent()==='','the old partner name clears when the source changes');
   assert.equal(await card.locator('[data-client-case-field]').count(),0,'old case does not cross source');
   assert(!((await head.textContent())+(await card.textContent())).includes('Other chat-only person'));
   await reauthorize('visible','b');
   await name.waitFor();
   assert.equal(await name.textContent(),beta,'visible company does not require edit permission');
+  await partner.waitFor();
+  assert.equal(await partner.textContent(),'Rasim');
   const badge=await name.evaluate(el=>{
     const range=document.createRange(),style=getComputedStyle(el);
     range.selectNodeContents(el);
@@ -434,7 +444,11 @@ async function assertArchivedHeader(browser){
   else assert(await panel.isVisible(),'desktop read-only details remain visible without a toggle');
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
-  if(width<=900){await panelClose.tap();await panel.waitFor({state:'hidden'});}
+  if(width<=900){
+    await panelClose.tap();
+    await panel.waitFor({state:'hidden'});
+    assert.equal(await partner.textContent(),'Rasim','closing company details keeps the partner in the header');
+  }
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'tasks'}})));
   if(width>900)await panel.waitFor({state:'hidden'});
   assert(!await name.isVisible()&&!(await name.textContent()),'leaving Dialogs clears company name');
@@ -452,6 +466,7 @@ async function assertArchivedHeader(browser){
   assert.equal(await card.locator('[data-client-case-field]').count(),0,'fresh null case remains absent');
   await page.evaluate(()=>document.dispatchEvent(new Event('tenant-auth-pending')));
   assert(!await name.isVisible()&&!(await name.textContent()),'identity transition clears company name');
+  assert(!await partner.isVisible()&&!(await partner.textContent()),'identity transition clears the partner name');
   await page.close();
  }
  await assertArchivedHeader(browser);
