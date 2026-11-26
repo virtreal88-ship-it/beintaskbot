@@ -48,8 +48,8 @@ jobs:
             printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu %s main restricted universe multiverse\n' "$VERSION_CODENAME" > "$RUNNER_TEMP/ci-ubuntu.list"
             printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://archive.ubuntu.com/ubuntu %s-updates main restricted universe multiverse\n' "$VERSION_CODENAME" >> "$RUNNER_TEMP/ci-ubuntu.list"
             printf 'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] https://security.ubuntu.com/ubuntu %s-security main restricted universe multiverse\n' "$VERSION_CODENAME" >> "$RUNNER_TEMP/ci-ubuntu.list"
-            apt_options=(-o "Dir::Etc::sourcelist=$RUNNER_TEMP/ci-ubuntu.list" -o 'Dir::Etc::sourceparts=-' -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
-            sudo timeout 120s apt-get "${apt_options[@]}" update
+            apt_options=(-o "Dir::Etc::sourcelist=$RUNNER_TEMP/ci-ubuntu.list" -o 'Dir::Etc::sourceparts=-' -o Acquire::Languages=none -o Acquire::Retries=2 -o Acquire::https::Timeout=20)
+            sudo timeout 180s apt-get "${apt_options[@]}" update
             sudo timeout 300s env DEBIAN_FRONTEND=noninteractive apt-get \
               "${apt_options[@]}" \
               install --yes --no-install-recommends "${packages[@]}"
