@@ -17,6 +17,8 @@ function installSearchServer() {
     if (!nativeRead && pathname !== '/api/platform/crm/deals') return base(url, options);
     const search = (searchParams.get('search') || '').toLowerCase();
     window.searchRequests.push({pathname, search});
+    if (window.failDealRead) return new Response('{}', {status: 503});
+    if (search === 'delay') await new Promise(resolve => { window.finishOldSearch = resolve; });
     // A matched Kommo company can be present only in the provider snapshot.
     const candidates = nativeRead ? native : [{...external, company_name: 'Juniper'}];
     const rows = candidates.filter(row => row.company_name.toLowerCase().includes(search)).slice(0,50);
@@ -54,6 +56,23 @@ function installSearchServer() {
           await result.waitFor();
         }
       }
+      await page.fill('#dealSearch', 'delay');
+      await page.waitForFunction(() => typeof finishOldSearch === 'function');
+      await page.fill('#dealSearch', 'Juniper');
+      await page.waitForFunction(p => searchRequests.some(r => r.pathname === p && r.search === 'juniper'), path);
+      await result.waitFor();
+      await page.evaluate(() => finishOldSearch());
+      const notice = source === 'native' ? '#nativeDealsNotice' : '#dealsNotice';
+      await page.evaluate(source => {
+        window.failDealRead = true;
+        document.dispatchEvent(new CustomEvent(source === 'native' ? 'tenant-crm-cache-refresh' : 'tenant-crm-sync-complete', {
+          detail: {tenant_id: taskFlowFixture.A, expected_user_id: String(taskFlowFixture.profile.member.telegram_id),
+                   resource: 'leads', resources: ['leads']},
+        }));
+      }, source);
+      await page.waitForFunction(selector => document.querySelector(selector)?.textContent.trim(), notice, {timeout: 5000});
+      assert(await result.isVisible(), 'failed refresh must retain the previously matched row');
+      await page.evaluate(() => { window.failDealRead = false; });
       const kept = await page.evaluate(() => {
         Object.defineProperty(document, 'hidden', {configurable: true, value: true});
         document.dispatchEvent(new Event('visibilitychange'));
@@ -63,7 +82,7 @@ function installSearchServer() {
         return {count, search};
       });
       assert.match(kept.count, /1/);
-      assert.equal(kept.search, 'UniPeR');
+      assert.equal(kept.search, 'Juniper');
       await result.waitFor();
       console.log('PASS', source, 'server query and visible matched deal', title);
       await page.close();
