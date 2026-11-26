@@ -32,6 +32,7 @@ import tenant_task_completion as completion
 import tenant_task_view_preferences as task_view_preferences
 from tenant_task_view_api import TaskViewContext, handler as task_view_handler
 import tenant_task_approvals as approvals
+import tenant_crm_sync_schema as sync_schema
 import tenant_crm_sync_store as sync_store
 from tenant_platform_core import TenantPlatformError
 from tenant_policy import TenantPolicy
@@ -98,6 +99,9 @@ def _production_sync():
 @pytest.fixture
 def task_flow(staff, monkeypatch):
     f = staff
+    # Each PostgreSQL test gets a new schema, while the sync migration caches
+    # readiness for the lifetime of the process.
+    monkeypatch.setattr(sync_schema, '_ready', False)
     modules = ('tenant_crm_native_tasks', 'tenant_crm_native_deals', 'tenant_crm_native_contacts',
                'tenant_crm_store', 'tenant_task_commands', 'tenant_tasks', 'tenant_task_completion',
                'tenant_task_approvals', 'tenant_crm_sync_store', 'tenant_task_flow',
