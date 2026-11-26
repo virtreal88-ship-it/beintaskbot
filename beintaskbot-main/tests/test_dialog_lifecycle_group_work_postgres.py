@@ -219,10 +219,21 @@ def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collabo
     assert current['lifecycle']['id']!=episode
 
 
-def test_acceptance_is_visible_before_join_on_the_authorized_peer_source(collaboration):
+@pytest.mark.parametrize('ai_scoped', [False, True])
+def test_acceptance_is_visible_before_join_on_the_authorized_peer_source(collaboration, ai_scoped):
+    database,_,_=collaboration
+    if ai_scoped:
+        database.execute("""UPDATE saas_tenant_workflow_policies
+          SET value=jsonb_set(value,'{44,access_scopes,ai_agents}',%s::jsonb)
+          WHERE tenant_id=%s AND policy_key='members'""",
+          (json.dumps({'view':'none','update':'none'}),A))
+        database.commit()
     peer_channel,peer_lead,_=SOURCES[44]
     first=history(44,include_operator_events=True)
     assert first['operator_events']==[]
+    if ai_scoped:
+        assert first['dialog']['ai_availability']=='restricted'
+        assert 'group_assignment_preview' not in first['dialog']
     assert group_work.read_revision(profile(44),peer_channel,GROUP,peer_lead)=={
         'revision':first['dialog']['group_work_revision']}
 
@@ -232,6 +243,7 @@ def test_acceptance_is_visible_before_join_on_the_authorized_peer_source(collabo
     refreshed=group_work.read_revision(profile(44),peer_channel,GROUP,peer_lead)
     assert refreshed['revision']!=first['dialog']['group_work_revision']
     second=history(44,include_operator_events=True,operator_events_revision=first['operator_events_revision'])
+    assert second['dialog']['group_work_revision']==refreshed['revision']
     assert second['operator_events']==[accepted['operator_event']]
     assert second['dialog']['lifecycle']['group_work']['can_join']
     assert not second['dialog']['can_send']

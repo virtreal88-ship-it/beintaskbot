@@ -1012,6 +1012,9 @@ def _assignment_display(cur, tenant, policy, dialogs):
 
 def _hide_shared_ai(dialog):
     for key in list(dialog):
+        # Status refresh uses the authorized group-work revision.
+        if key == 'group_work_revision':
+            continue
         if key.startswith(('agent_', 'company_', 'latest_job_', 'group_')) or key in {
                 'handoff_event_id', 'reason', 'display_reason', 'resume_block_reason'}:
             dialog.pop(key, None)
