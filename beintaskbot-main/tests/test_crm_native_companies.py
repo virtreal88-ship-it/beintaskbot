@@ -71,3 +71,17 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
     assert response.status==200
     listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)
+
+
+def test_company_directory_pagination_is_opt_in_and_scoped():
+    import json
+    profile={'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
+        'permissions':['customers:view'],'modules':{'customers':True}}
+    handler=company_api.handler(lambda _request:profile,'https://crm.test',mock.MagicMock())
+    with mock.patch.object(company_api,'list_companies',return_value=[{'name':str(n)} for n in range(51)]) as listing:
+        response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'page':'3','search':'Acme'})))
+        data=json.loads(response.body)
+        assert len(data['companies'])==50 and data['has_more']
+        listing.assert_called_once_with('tenant-1','Acme',51,actor_id=20,offset=100)
+        invalid=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'page':'0'})))
+        assert invalid.status==400 and listing.call_count==1

@@ -16878,6 +16878,11 @@ async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYP
         logger.error('Tenant hot-order notification queue unavailable')
 
 
+async def check_operator_company_import(_context: ContextTypes.DEFAULT_TYPE) -> None:
+    from tenant_operator_company_import_jobs import deliver
+    await deliver(logger)
+
+
 async def check_tenant_crm_sync(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await asyncio.to_thread(enqueue_enabled_imports)
@@ -19962,6 +19967,7 @@ def main():
             (check_tenant_hot_order_notifications, 60, 35, {"max_instances": 1, "coalesce": True}),
             (check_tenant_linear_observer, 60, 40, {"max_instances": 1, "coalesce": True}),
             (check_tenant_news_telegram, 60, 45, {"max_instances": 1, "coalesce": True}),
+            (check_operator_company_import, 6, 10, {"max_instances": 1, "coalesce": True}),
             (check_tenant_crm_sync, 15, 10, {"max_instances": 1, "coalesce": True}),
             (check_linear_status_notifications, 60, 20, None),
             (check_task_deadlines, 900, 60, None),

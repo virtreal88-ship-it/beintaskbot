@@ -47,6 +47,15 @@ def handler(member_from_request,origin,logger):
             if request.method=='GET':
                 if not policy.allows_action('companies','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
+                if not ident and 'page' in request.query:
+                    page = request.query['page']
+                    if not page.isascii() or not page.isdecimal() or len(page)>5 or not 1<=int(page)<=10000:
+                        return web.json_response({'success':False,'error':'invalid_page'},status=400,headers={'Cache-Control':'no-store'})
+                    size = 50
+                    rows = await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),size+1,
+                        actor_id=actor,offset=(int(page)-1)*size)
+                    return web.json_response({'success':True,'companies':_jsonable(rows[:size]),
+                        'has_more':len(rows)>size and int(page)<10000},headers={'Cache-Control':'no-store'})
                 result=await asyncio.to_thread(get_company,tenant,ident,actor_id=actor) if ident else await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),50,actor_id=actor)
                 if ident and result is None:return web.json_response({'success':False,'error':'not_found'},status=404)
                 return web.json_response({'success':True,('company' if ident else 'companies'):_jsonable(result)},headers={'Cache-Control':'no-store'})
