@@ -19,9 +19,9 @@
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.',notFound:'The link has not been created yet.'}
   };
   const profileLabels={
-    ru:{phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
-    az:{phone:'Telefon',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil',empty:'Məlumat yoxdur',denied:'Şirkət məlumatlarına giriş icazəsi yoxdur',error:'Operator sorğusu uğursuz oldu'},
-    en:{phone:'Phone',balance:'Company balance',unavailable:'Operator details are unavailable',empty:'No data',denied:'Access to company details denied',error:'Operator request failed'}
+    ru:{partner:'Партнёр',phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
+    az:{partner:'Tərəfdaş',phone:'Telefon',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil',empty:'Məlumat yoxdur',denied:'Şirkət məlumatlarına giriş icazəsi yoxdur',error:'Operator sorğusu uğursuz oldu'},
+    en:{partner:'Partner',phone:'Phone',balance:'Company balance',unavailable:'Operator details are unavailable',empty:'No data',denied:'Access to company details denied',error:'Operator request failed'}
   };
   const profileText=key=>(profileLabels[window.tenantI18n?.language]||profileLabels.az)[key];
   const linkProblems={
@@ -49,6 +49,14 @@
     const active=current(s);
     paintHeaderLabel(nameHost,active?(s.binding===undefined?s.initialCompanyName:companyName(s.binding)):'');
     paintHeaderLabel(partnerHost,active?s.partnerName||'':'');
+  }
+  const desktopPartner=s=>headerHosts.get(s.section).partnerHost?.isConnected&&
+    !window.matchMedia?.('(max-width:900px)')?.matches;
+  function paintPartner(s,name){
+    s.partnerName=name;
+    s.partnerValue.textContent=name;
+    s.partnerRow.hidden=!name;
+    paintHeader(s);
   }
   // Keep the route-owned scheduling control available if Company data is absent.
   function releaseReminder(s){
@@ -325,12 +333,12 @@
     s.refreshProfileOnOpen=false;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
-    if(!keepPartner){s.partnerName='';paintHeader(s);}
+    if(!keepPartner)paintPartner(s,'');
   }
   function syncProfile(s){
     const company=s.binding?.company_id;
     const panelOpen=linkCurrent(s,company);
-    if(!profileCurrent(s,company)||(!panelOpen&&!headerHosts.get(s.section).partnerHost?.isConnected)){clearProfile(s);return;}
+    if(!profileCurrent(s,company)||(!panelOpen&&!desktopPartner(s))){clearProfile(s);return;}
     const sameCompany=s.profileCompany===company;
     if(sameCompany&&(!s.refreshProfileOnOpen||!panelOpen||s.profileRequest))return;
     clearProfile(s,sameCompany);
@@ -340,8 +348,7 @@
     void request(endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
       .then(({company_profile:profile})=>{
         if(!active())return;
-        s.partnerName=profile?.state==='available'&&typeof profile.partner_name==='string'?profile.partner_name.trim():'';
-        paintHeader(s);
+        paintPartner(s,profile?.state==='available'&&typeof profile.partner_name==='string'?profile.partner_name.trim():'');
         if(profile?.state!=='available'){
           s.profileStatus.textContent=['not_connected','not_linked'].includes(profile?.state)
             ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
@@ -354,7 +361,7 @@
           window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(profile.balance);
       },error=>{
         if(!active())return;
-        s.partnerName='';paintHeader(s);
+        paintPartner(s,'');
         s.profileStatus.textContent=profileText([401,403].includes(error.status)?'denied':'error');
       })
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
@@ -489,11 +496,13 @@
     s.profileStatus=node('p');s.profileStatus.setAttribute('role','status');
     const field=(key)=>{
       const row=node('div'),label=node('small',profileText(key)),value=node('span','—');
-      row.append(label,value);s.profileBox.append(row);return {label,value};
+      row.append(label,value);s.profileBox.append(row);return {row,label,value};
     };
-    const phone=field('phone'),balance=field('balance');
+    const partner=field('partner'),phone=field('phone'),balance=field('balance');
+    partner.row.dataset.companyPartner='';partner.row.hidden=true;partner.value.textContent='';
+    s.partnerRow=partner.row;s.partnerValue=partner.value;
     s.registrationPhone=phone.value;s.balance=balance.value;
-    s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
+    s.labelProfile=()=>{partner.label.textContent=profileText('partner');phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
     s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
@@ -567,8 +576,7 @@
     if(!current(s))return;
     const same=s.binding?.company_id===binding?.company_id;
     s.binding=binding;
-    if(!same)s.partnerName='';
-    paintHeader(s);
+    if(same)paintHeader(s);else paintPartner(s,'');
     const name=companyName(binding);
     s.value.textContent=name||t(binding?'unknown':'unavailable');
     s.value.title=s.value.textContent;
@@ -864,6 +872,8 @@
     #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
+    [data-company-profile]>[data-company-partner][hidden]{display:none}
+    @media(min-width:901px){[data-company-profile]>[data-company-partner]{display:none}}
     [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:12px;line-height:1.35}
     [data-company-profile]>p{margin:0}
     [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
@@ -891,7 +901,7 @@
     hidePublicLink(){
       if(!state)return;
       clearPublicLink(state);
-      if(headerHosts.get(state.section).partnerHost?.isConnected){
+      if(desktopPartner(state)){
         resetCompanySections(state);
         state.refreshProfileOnOpen=!state.profileRequest;
       }else clearProfile(state);

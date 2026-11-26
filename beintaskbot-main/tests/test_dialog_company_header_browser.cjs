@@ -157,8 +157,10 @@ async function assertArchivedHeader(browser){
   assert.equal(await name.textContent(),alpha,'stored name is preserved as literal text');
   assert.equal(await name.locator('b').count(),0);
   assert.equal(await name.getAttribute('title'),alpha);
-  await partner.waitFor();
-  assert.equal(await partner.textContent(),'Uniset');
+  if(width>900){
+    await partner.waitFor();
+    assert.equal(await partner.textContent(),'Uniset');
+  }else assert(!await partner.isVisible(),'mobile header has no partner label');
   assert(await partner.evaluate(el=>el.nextElementSibling.id==='operatorMoreActions'),'partner sits directly before the dialogue menu');
   assert.equal(await head.evaluate(n=>n.offsetHeight),height,'the tag never adds a header row');
   assert(await name.evaluate(n=>n.parentElement.matches('[data-header-meta]')),'company name stays in the compact metadata row');
@@ -188,7 +190,7 @@ async function assertArchivedHeader(browser){
   assert.equal(await transferSection.getByText('Source',{exact:true}).count(),0,'the transfer section does not repeat the header source');
   assert.equal(await transferSection.getByText('Source a',{exact:true}).count(),0);
   assert.equal(await panel.isVisible(),width>900,'desktop details stay open; mobile starts with the overlay closed');
-  assert.deepEqual(await page.evaluate(()=>window.profilePosts),['a'],'the header and closed mobile panel share one company profile read');
+  assert.deepEqual(await page.evaluate(()=>window.profilePosts),width<=900?[]:['a'],'a closed mobile panel does not read the profile');
   const pane=page.locator('#operatorConversationPane');
   const corners=el=>{const c=getComputedStyle(el);return [c.borderTopLeftRadius,c.borderTopRightRadius,c.borderBottomLeftRadius,c.borderBottomRightRadius];};
   const originalPaneCorners=await pane.evaluate(corners);
@@ -208,6 +210,10 @@ async function assertArchivedHeader(browser){
     assert(await panel.isVisible(),'desktop details do not depend on a toggle');
   }
   await panel.locator('[data-company-profile]').getByText('+994501234567',{exact:true}).waitFor();
+  const panelPartner=panel.locator('[data-company-partner]');
+  assert.equal(await panelPartner.isVisible(),width<=900,'the partner belongs to the details panel on mobile');
+  assert.equal(await panelPartner.locator('span').textContent(),'Uniset');
+  assert.equal(await partner.isVisible(),width>900);
   assert.match(await panel.locator('[data-company-profile]').textContent(),/0\.00/);
   assert(!await card.isVisible());
   const companyHeader=panel.locator('.operator-client-panel-header');
@@ -424,8 +430,10 @@ async function assertArchivedHeader(browser){
   await reauthorize('visible','b');
   await name.waitFor();
   assert.equal(await name.textContent(),beta,'visible company does not require edit permission');
-  await partner.waitFor();
-  assert.equal(await partner.textContent(),'Rasim');
+  if(width>900){
+    await partner.waitFor();
+    assert.equal(await partner.textContent(),'Rasim');
+  }
   const badge=await name.evaluate(el=>{
     const range=document.createRange(),style=getComputedStyle(el);
     range.selectNodeContents(el);
@@ -440,14 +448,16 @@ async function assertArchivedHeader(browser){
   assert(!await acceptedBy.isVisible(),'a source without a verified acceptance must not borrow another source’s name');
   assert.equal(await acceptedBy.locator('span').textContent(),'');
   await page.locator('#operatorCancelConversationName').click();
-  if(width<=900)await toggle.click();
-  else assert(await panel.isVisible(),'desktop read-only details remain visible without a toggle');
+  if(width<=900){
+    await toggle.click();
+    await panelPartner.getByText('Rasim',{exact:true}).waitFor();
+  }else assert(await panel.isVisible(),'desktop read-only details remain visible without a toggle');
   assert(!await search.isEditable(),'read access does not enable changing the bound company');
   assert.equal(await search.getAttribute('placeholder'),'Company selection requires access');
   if(width<=900){
     await panelClose.tap();
     await panel.waitFor({state:'hidden'});
-    assert.equal(await partner.textContent(),'Rasim','closing company details keeps the partner in the header');
+    assert(!await partner.isVisible(),'closing the mobile panel leaves the partner out of the header');
   }
   await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-view',{detail:{view:'tasks'}})));
   if(width>900)await panel.waitFor({state:'hidden'});
