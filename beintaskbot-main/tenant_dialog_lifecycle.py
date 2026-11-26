@@ -120,10 +120,11 @@ def record_message(cur, tenant, channel, conversation, message_id):
               JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
                 AND e.id::text=r.route->>'lifecycle_episode_id'
                 WHERE r.tenant_id=%s::uuid AND
-                (e.channel_id=%s::uuid OR r.route->>'group_channel_id'=%s)
-                AND e.conversation_id=%s AND r.lead_id=ANY(%s::bigint[])
+                ((e.channel_id=%s::uuid AND r.lead_id=e.lead_id)
+                 OR (r.route->>'group_channel_id'=%s AND r.lead_id=ANY(%s::bigint[])))
+                AND e.conversation_id=%s
                 AND r.message_id IN (%s,%s) LIMIT 1""",
-              (tenant,channel,channel,conversation,leads,str(message['external_id']),str(message['external_id']).removeprefix('connect:')))
+              (tenant,channel,channel,leads,conversation,str(message['external_id']),str(message['external_id']).removeprefix('connect:')))
             known=cur.fetchone()
             if known: episode_id=known['id']
         if episode_id is None:
@@ -141,9 +142,10 @@ def record_message(cur, tenant, channel, conversation, message_id):
               JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
                 AND e.id::text=r.route->>'lifecycle_episode_id'
               WHERE r.tenant_id=%s::uuid AND
-                (e.channel_id=%s::uuid OR r.route->>'group_channel_id'=%s)
-                AND e.conversation_id=%s AND r.lead_id=ANY(%s::bigint[])
-                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,channel,channel,conversation,leads))
+                ((e.channel_id=%s::uuid AND r.lead_id=e.lead_id)
+                 OR (r.route->>'group_channel_id'=%s AND r.lead_id=ANY(%s::bigint[])))
+                AND e.conversation_id=%s
+                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,channel,channel,leads,conversation))
             if cur.fetchone(): return
     if episode_id is None:
         row=_row(cur,tenant,channel,conversation)
