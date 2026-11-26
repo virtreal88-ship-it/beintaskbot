@@ -76,6 +76,8 @@ def migrate(cur):
 
     from tenant_dialog_presence import migrate as presence_migrate
     presence_migrate(cur)
+    from tenant_dialog_group_work import migrate as group_work_migrate
+    group_work_migrate(cur)
 
 
 def record_dispatch(cur, tenant, channel, conversation, request_id, result):
@@ -117,10 +119,11 @@ def record_message(cur, tenant, channel, conversation, message_id):
             cur.execute("""SELECT e.id FROM saas_chat_send_receipts r
               JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
                 AND e.id::text=r.route->>'lifecycle_episode_id'
-              WHERE r.tenant_id=%s::uuid AND e.channel_id=%s::uuid
-                AND e.conversation_id=%s AND r.lead_id=e.lead_id
+                WHERE r.tenant_id=%s::uuid AND
+                (e.channel_id=%s::uuid OR r.route->>'group_channel_id'=%s)
+                AND e.conversation_id=%s AND r.lead_id=ANY(%s::bigint[])
                 AND r.message_id IN (%s,%s) LIMIT 1""",
-              (tenant,channel,conversation,str(message['external_id']),str(message['external_id']).removeprefix('connect:')))
+              (tenant,channel,channel,conversation,leads,str(message['external_id']),str(message['external_id']).removeprefix('connect:')))
             known=cur.fetchone()
             if known: episode_id=known['id']
         if episode_id is None:
@@ -137,9 +140,10 @@ def record_message(cur, tenant, channel, conversation, message_id):
             cur.execute("""SELECT 1 FROM saas_chat_send_receipts r
               JOIN saas_dialog_episodes e ON e.tenant_id=r.tenant_id
                 AND e.id::text=r.route->>'lifecycle_episode_id'
-              WHERE r.tenant_id=%s::uuid AND e.channel_id=%s::uuid
-                AND e.conversation_id=%s AND r.lead_id=e.lead_id
-                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,channel,conversation))
+              WHERE r.tenant_id=%s::uuid AND
+                (e.channel_id=%s::uuid OR r.route->>'group_channel_id'=%s)
+                AND e.conversation_id=%s AND r.lead_id=ANY(%s::bigint[])
+                AND r.state IN ('preparing','sending','unknown') LIMIT 1""",(tenant,channel,channel,conversation,leads))
             if cur.fetchone(): return
     if episode_id is None:
         row=_row(cur,tenant,channel,conversation)
@@ -295,7 +299,10 @@ def is_owner_observer(cur, tenant, actor, channel, workflow, *, online=None):
 def ai_blocked(cur, tenant, provider, channel, conversation):
     if not enabled(cur, tenant) or provider != 'connect': return False
     row = _row(cur, tenant, channel, conversation)
-    return bool(row and row['state'] in {'accepted', 'closed', 'dismissed'})
+    if row and row['state'] in {'accepted', 'closed', 'dismissed'}:
+        return True
+    from tenant_dialog_group_work import active, snapshot
+    return active(snapshot(cur,tenant,conversation))
 
 
 def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, message_id, event_at):
@@ -304,6 +311,9 @@ def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, mess
         return False
     row = _row(cur,tenant,channel,conversation)
     if not row or row['state'] != 'accepted':
+        return False
+    from tenant_dialog_group_work import keeps_assignment
+    if keeps_assignment(cur,tenant,conversation,row):
         return False
     if is_online(cur,tenant,row['operator_id'],source_channel=channel):
         return False
@@ -340,6 +350,17 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     from tenant_connect_dialog_equivalence import canonical
     conversation=canonical(cur,tenant,channel,conversation)
     lock_dialog(cur, tenant, 'connect', channel, conversation)
+    from tenant_dialog_group_work import snapshot
+    group = snapshot(cur,tenant,conversation)
+    if group and group['closed_at'] and not group['legacy_active']:
+        # New physical routes can receive the next episode's first incoming.
+        # A late copy from the closed episode cannot reopen the shared queue.
+        cur.execute("SELECT %s::timestamptz > %s::timestamptz AS fresh",(event_at,group['closed_at']))
+        if not cur.fetchone()['fresh']:
+            return
+        cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state)
+          VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'waiting') ON CONFLICT DO NOTHING""",
+          (tenant,channel,conversation,str(uuid.uuid4())))
     if _return_unavailable_dialog_to_queue(cur,tenant,channel,conversation,message_id,event_at):
         return
     cur.execute("""UPDATE saas_dialog_workflows SET
@@ -597,7 +618,8 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
             dialog['send_block_reason']='dialog_accept_required'
             return dialog
         cur.execute("""SELECT id::text AS id,accepted_at,closed_at,case_id::text AS case_id
-          FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
+          FROM saas_dialog_episodes e WHERE tenant_id=%s::uuid
+            AND COALESCE(to_jsonb(e)->>'group_leader_channel_id',e.channel_id::text)=%s
             AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL
           ORDER BY closed_at DESC LIMIT 20""",(tenant,dialog['channel_id'],dialog['conversation_id'],actor))
         completed=[{key:(value.isoformat() if hasattr(value,'isoformat') else value)
@@ -667,9 +689,13 @@ def _mutate_once(profile, payload):
     from tenant_platform import _connect
     from tenant_operator_access import access, _resolve_connect_route
     from tenant_dialog_access import require_source
+    import tenant_dialog_group_work as group_work
     from tenant_ai_dialog_scope import lock_dialog
     action=payload.get('action')
-    if action not in {'accept','start','close','transfer','case','dismiss','takeover'}: raise TenantLinearError('Неизвестное действие.')
+    if action not in {'accept','start','close','transfer','case','dismiss','takeover'} | group_work.MEMBER_ACTIONS:
+        raise TenantLinearError('Неизвестное действие.')
+    if 'close_group_confirmed' in payload and (action!='close' or type(payload['close_group_confirmed']) is not bool):
+        raise TenantLinearError('Некорректное подтверждение завершения.',400)
     if action == 'takeover' and {'target_employee_id', 'episode_id'} & payload.keys():
         raise TenantLinearError('Некорректный запрос.',400)
     online_only=payload.get('online_only',False)
@@ -688,7 +714,7 @@ def _mutate_once(profile, payload):
             rollout = guard(cur, tenant)
             if not rollout.enforced:
                 raise TenantLinearError('Новая очередь диалогов ещё не включена.',409)
-            if action in {'accept','start','dismiss','takeover'} and not rollout.admission_enabled:
+            if action in {'accept','start','dismiss','takeover','join_group'} and not rollout.admission_enabled:
                 raise TenantLinearError('Приём новых диалогов приостановлен.',409)
             tenant,actor,policy=access(cur,profile,action='update')
             if payload.get('provider')!='connect': raise TenantLinearError('Выберите источник Connect.')
@@ -736,6 +762,14 @@ def _mutate_once(profile, payload):
                 transfer_source_active = bool(cur.fetchone())
             require_source(cur,tenant,policy,'connect',channel,'view')
             require_source(cur,tenant,policy,'connect',channel,'update')
+            peer = None
+            if action=='transfer_group':
+                observed=group_work.snapshot(cur,tenant,conversation)
+                if (not group_work.active(observed) or observed['operator_id']!=actor
+                        or observed['leader_source']!=channel
+                        or observed['id']!=payload.get('expected_group_episode_id')):
+                    raise TenantLinearError('Ведение группы изменилось. Обновите диалог.',409)
+                peer=group_work.prepare_transfer(cur,tenant,observed,payload.get('target_employee_id'))
             start_source_ready = False
             if action == 'start':
                 # Match the existing send projection without locking the
@@ -777,7 +811,30 @@ def _mutate_once(profile, payload):
             closed_episode=None
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
-            if action=='dismiss':
+            group=group_work.snapshot(cur,tenant,conversation)
+            shared=group_work.active(group)
+            configured_group=group_work.configured(tenant,conversation)
+            if configured_group and group and group['legacy_active'] and action in {'accept','start'}:
+                raise TenantLinearError('Сначала завершите ранее принятые диалоги этой группы.',409)
+            managed=bool(configured_group and not (group or {}).get('legacy_active'))
+            grouped=shared or managed and action in {'accept','start'}
+            if grouped or action in group_work.MEMBER_ACTIONS:
+                if not exact_route:
+                    raise TenantLinearError('Выберите точный источник группы.',409)
+                if managed and not group:
+                    raise TenantLinearError('Совместная работа в группе ещё недоступна.',409)
+            if shared and action in {'accept','start','takeover','transfer'}:
+                raise TenantLinearError('Группу уже ведёт сотрудник. Обновите диалог и подключитесь со своего номера.',409)
+            if shared and action=='close':
+                if (payload.get('expected_group_episode_id')!=group['id'] or actor!=group['operator_id']
+                        or channel!=group['leader_source'] or not row or str(row['id'])!=group['id']):
+                    raise TenantLinearError('Завершить общий диалог может только ведущий.',409)
+                if len(group['participants']) > 1 and payload.get('close_group_confirmed') is not True:
+                    raise TenantLinearError('Коллега ещё подключён. Передайте ведение или подтвердите завершение для всех.',409)
+            if action in group_work.MEMBER_ACTIONS:
+                group_work.transition(cur,tenant=tenant,actor=actor,policy=policy,channel=channel,
+                    conversation=conversation,lead=int(route['lead_id']),workflow=row,group=group,payload=payload,peer=peer)
+            elif action=='dismiss':
                 # Old bulk clients must never silently mark messages.
                 if payload.get('individual_no_reply') is not True:
                     raise TenantLinearError('Отметьте сообщение отдельно как «Риторический вопрос».',422)
@@ -813,6 +870,11 @@ def _mutate_once(profile, payload):
                             raise TenantLinearError('Источник недоступен.',403)
                 elif row and row['state']!='waiting':
                     raise TenantLinearError('Диалог уже принят или завершён.',409)
+                binding=None
+                if grouped:
+                    if action=='accept' and not group_work.queue_has_inbound(group,row,True):
+                        raise TenantLinearError('После завершения группы дождитесь нового входящего.',409)
+                    binding=group_work.verified_route(cur,tenant,actor,policy,channel,conversation,route['lead_id'])
                 episode_id=str(uuid.uuid4())
                 cur.execute('''INSERT INTO saas_dialog_episodes(tenant_id,id,channel_id,conversation_id,lead_id,accepted_by,operator_id)
                   VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s,%s,%s)''',(tenant,episode_id,channel,conversation,route['lead_id'],actor,actor))
@@ -823,10 +885,13 @@ def _mutate_once(profile, payload):
                   closed_at=NULL,updated_at=clock_timestamp()''',(tenant,channel,conversation,episode_id,actor))
                 # Admission + actual send recheck this episode, without touching
                 # existing group-global human/paused settings or other channels.
-                cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
-                  lease_token=NULL,lease_until=NULL,error_code='operator_accepted',updated_at=now()
-                  WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
-                    AND conversation_id=%s AND state IN ('queued','processing')''',(tenant,channel,conversation))
+                if binding:
+                    group_work.open_episode(cur,tenant,episode_id,actor,channel,conversation,binding)
+                else:
+                    cur.execute('''UPDATE saas_ai_agent_jobs SET state='skipped',revision=revision+1,
+                      lease_token=NULL,lease_until=NULL,error_code='operator_accepted',updated_at=now()
+                      WHERE tenant_id=%s::uuid AND provider='connect' AND channel_id=%s
+                        AND conversation_id=%s AND state IN ('queued','processing')''',(tenant,channel,conversation))
             else:
                 if takeover:
                     if not row or row['state']!='accepted' or row['operator_id']==actor:
@@ -850,6 +915,8 @@ def _mutate_once(profile, payload):
                     bound_on_close=require_on_close(cur,tenant,actor,channel,conversation,payload,policy=policy)
                     cur.execute("UPDATE saas_dialog_workflows SET state='closed',revision=revision+1,closed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s RETURNING closed_at",(tenant,channel,conversation))
                     closed_at=cur.fetchone()['closed_at']
+                    if shared:
+                        group_work.close_episode(cur,tenant,group,conversation,closed_at)
                     cur.execute('''UPDATE saas_dialog_episodes SET closed_at=%s WHERE tenant_id=%s::uuid AND id=%s::uuid
                       RETURNING id::text AS id,accepted_at,closed_at,case_id::text AS case_id''',(closed_at,tenant,row['id']))
                     if individual_close:
@@ -858,7 +925,9 @@ def _mutate_once(profile, payload):
                                         for key,value in episode.items()}
             current=_row(cur,tenant,channel,conversation)
             result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
-            if (action=='accept' and exact_route) or individual_close:
+            if grouped or action in group_work.MEMBER_ACTIONS:
+                result['group_changed']=True
+            elif (action=='accept' and exact_route) or individual_close:
                 result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
                                                         current,rollout,policy,closed_episode)
             audit_id = marker if action=='dismiss' else str(uuid.uuid4())
@@ -866,6 +935,16 @@ def _mutate_once(profile, payload):
             audit_episode = current['id'] if online_only or action=='dismiss' else payload.get('episode_id') or current['id']
             audit_payload = {'channel_id':channel,'conversation_id':conversation,
                              'operator_id':current['operator_id'],'revision':current['revision']}
+            if grouped or action in group_work.MEMBER_ACTIONS:
+                if shared:
+                    audit_episode=group['id']
+                else:
+                    audit_episode=current['id']
+                audit_payload['group_work']=True
+            if action in {'join_group','leave_group'}:
+                audit_payload['operator_id']=actor
+            if action=='transfer_group':
+                audit_payload['operator_id']=peer['actor_id']
             if takeover:
                 audit_payload['takeover']=True
             if action=='dismiss':
@@ -911,9 +990,10 @@ def record_reconciled_dispatch(cur,tenant,actor,lead,request_id,channel,conversa
     cur.execute("""SELECT e.id FROM saas_chat_send_receipts sr
       JOIN saas_dialog_episodes e ON e.tenant_id=sr.tenant_id AND e.id::text=sr.route->>'lifecycle_episode_id'
       WHERE sr.tenant_id=%s::uuid AND sr.actor_id=%s AND sr.lead_id=%s AND sr.request_id=%s::uuid
-        AND sr.state IN ('sending','unknown','accepted') AND e.channel_id=%s::uuid
-        AND e.conversation_id=%s AND e.lead_id=sr.lead_id FOR SHARE OF sr,e""",
-      (tenant,actor,lead,request_id,channel,conversation))
+        AND sr.state IN ('sending','unknown','accepted')
+        AND ((e.channel_id=%s::uuid AND e.lead_id=sr.lead_id) OR sr.route->>'group_channel_id'=%s)
+        AND e.conversation_id=%s FOR SHARE OF sr,e""",
+      (tenant,actor,lead,request_id,channel,channel,conversation))
     episode=cur.fetchone()
     if not episode:raise TenantLinearError('Исходное обращение отправки не найдено.',409)
     external=external.removeprefix('connect:')
@@ -925,3 +1005,5 @@ def record_reconciled_dispatch(cur,tenant,actor,lead,request_id,channel,conversa
     cur.execute("""INSERT INTO saas_dialog_episode_sends(tenant_id,episode_id,channel_id,conversation_id,request_id,external_id)
       VALUES(%s::uuid,%s::uuid,%s::uuid,%s,%s::uuid,%s) ON CONFLICT DO NOTHING""",
       (tenant,episode['id'],channel,conversation,request_id,external))
+    from tenant_dialog_group_work import record_provider_id
+    record_provider_id(cur,tenant,request_id,result)

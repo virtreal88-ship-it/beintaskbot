@@ -30,8 +30,9 @@ def _closed(cur,profile,channel,conversation,selected):
     require_source(cur,tenant,policy,'connect',channel,'view')
     require_source(cur,tenant,policy,'connect',channel,'update')
     require_access(cur,tenant,actor,'connect',channel,conversation,owner=policy.profile.get('role')=='owner')
-    cur.execute('''SELECT * FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid
-      AND channel_id=%s::uuid AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL FOR UPDATE''',
+    cur.execute('''SELECT * FROM saas_dialog_episodes e WHERE tenant_id=%s::uuid AND id=%s::uuid
+      AND COALESCE(to_jsonb(e)->>'group_leader_channel_id',e.channel_id::text)=%s
+      AND conversation_id=%s AND operator_id=%s AND closed_at IS NOT NULL FOR UPDATE''',
       (tenant,selected,channel,conversation,actor))
     episode=cur.fetchone()
     if not episode:raise TenantLinearError('Завершённое обращение недоступно.',404)
@@ -44,13 +45,17 @@ def _closed(cur,profile,channel,conversation,selected):
     if cur.fetchone():
         raise TenantLinearError('В этом диалоге осталась старая отправка с неподтверждённым результатом. Сначала проверьте её статус; анализ кейса не запущен.',409)
     cur.execute('''SELECT 1 FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid
-      AND route->>'lifecycle_episode_id'=%s AND state IN ('preparing','sending','unknown') LIMIT 1''',(tenant,selected))
+      AND route->>'lifecycle_episode_id'=%s AND state IN ('preparing','sending','unknown')
+      AND (%s IS FALSE OR lead_id=ANY(%s::bigint[])) LIMIT 1''',
+      (tenant,selected,bool(episode.get('group_leader_channel_id')),leads))
     if cur.fetchone():raise TenantLinearError('Отправка сообщения ещё проверяется. Дождитесь результата.',409)
     cur.execute('''SELECT 1 FROM saas_dialog_episode_sends ds WHERE ds.tenant_id=%s::uuid
-      AND ds.episode_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_dialog_episode_messages em
+      AND ds.episode_id=%s::uuid AND (%s IS FALSE OR ds.channel_id=%s::uuid)
+      AND NOT EXISTS(SELECT 1 FROM saas_dialog_episode_messages em
         JOIN saas_crm_messages m ON m.tenant_id=em.tenant_id AND m.id=em.message_id
         WHERE em.tenant_id=ds.tenant_id AND em.episode_id=ds.episode_id
-          AND m.external_id IN (ds.external_id,'connect:'||ds.external_id)) LIMIT 1''',(tenant,selected))
+          AND m.external_id IN (ds.external_id,'connect:'||ds.external_id)) LIMIT 1''',
+      (tenant,selected,bool(episode.get('group_leader_channel_id')),channel))
     if cur.fetchone():raise TenantLinearError('История отправленного сообщения ещё загружается. Повторите позже.',409)
     return tenant,actor,episode
 
@@ -61,11 +66,16 @@ def snapshot_rows(cur,profile,binding,chosen):
     if not selected:return None
     if binding.get('history_mode')!='channel':raise TenantLinearError('Нужен точный источник обращения.',400)
     channel,conversation=binding['channel_id'],binding['conversation_id']
-    tenant,_,_=_closed(cur,profile,channel,conversation,selected)
+    tenant,_,episode=_closed(cur,profile,channel,conversation,selected)
     from tenant_connect_dialog_equivalence import members
     from tenant_knowledge_candidates_policy import MAX_MESSAGES as MAX_SUBMISSION_MESSAGES
     leads=list(members(cur,tenant,channel,conversation).values())
-    cur.execute('''SELECT count(*) AS n FROM saas_dialog_episode_messages WHERE tenant_id=%s::uuid AND episode_id=%s::uuid''',(tenant,selected))
+    cur.execute('''SELECT count(*) AS n FROM saas_dialog_episode_messages em
+      WHERE em.tenant_id=%s::uuid AND em.episode_id=%s::uuid
+        AND (%s IS FALSE OR EXISTS(SELECT 1 FROM saas_crm_messages m
+          WHERE m.tenant_id=em.tenant_id AND m.id=em.message_id AND m.channel=%s
+            AND m.kommo_lead_id=ANY(%s::bigint[]) AND m.direction IN ('incoming','outgoing')))''',
+      (tenant,selected,bool(episode.get('group_leader_channel_id')),'connect:'+channel,leads))
     count=int(cur.fetchone()['n'])
     if count>MAX_SUBMISSION_MESSAGES:
         raise TenantLinearError(f'В обращении {count} сообщений; безопасный лимит анализа — {MAX_SUBMISSION_MESSAGES}. Обращение сохранено целиком, анализ не запускался.',413)

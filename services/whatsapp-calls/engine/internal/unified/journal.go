@@ -20,6 +20,8 @@ var (
 	ErrConfiguration    = errors.New("unified_configuration_invalid")
 	ErrConflict         = errors.New("unified_operation_conflict")
 	ErrQuoteUnavailable = errors.New("unified_quote_source_unverified")
+	ErrGroupMembership  = errors.New("native_group_membership_unconfirmed")
+	ErrGroupSession     = errors.New("native_group_session_unavailable")
 	ErrUnknown          = errors.New("unified_send_outcome_unknown")
 	ErrEditExpired      = errors.New("native_edit_expired")
 	ErrDeleteExpired    = errors.New("native_delete_expired")
@@ -298,6 +300,18 @@ func (j *Journal) Send(ctx context.Context, operation, peer string, payload []by
 	}
 	unknown := Result{ProviderID: providerID, State: "unknown"}
 	if err := send(ctx, providerID); err != nil {
+		if errors.Is(err, ErrGroupMembership) || errors.Is(err, ErrGroupSession) {
+			// These errors can only occur before SendMessage. Clear this exact
+			// reservation so a fresh membership check can safely retry it.
+			result, deleteErr := j.db.ExecContext(ctx, `DELETE FROM unified_sends
+				WHERE scope=? AND operation=? AND fingerprint=? AND provider_id=? AND state='unknown'`,
+				j.operationScope, op, fingerprint, providerID)
+			if deleteErr == nil {
+				if n, rowsErr := result.RowsAffected(); rowsErr == nil && n == 1 {
+					return Result{}, err
+				}
+			}
+		}
 		return unknown, ErrUnknown
 	}
 	result, err = j.db.ExecContext(ctx, `UPDATE unified_sends SET state='accepted' WHERE scope=? AND operation=? AND fingerprint=? AND provider_id=? AND state='unknown'`, j.operationScope, op, fingerprint, providerID)

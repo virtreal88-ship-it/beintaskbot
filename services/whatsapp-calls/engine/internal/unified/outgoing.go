@@ -23,20 +23,21 @@ import (
 // Outgoing is private Worker-to-engine data, never a browser authorization.
 // Scope is checked against the process binding before calling Deliver.
 type Outgoing struct {
-	Scope       Scope           `json:"scope"`
-	Operation   string          `json:"operation"`
-	Chat        string          `json:"chat"`
-	Kind        string          `json:"kind"`
-	Text        string          `json:"text"`
-	MIME        string          `json:"mime"`
-	Name        string          `json:"name"`
-	Data        []byte          `json:"data"`
-	QuoteEvent  string          `json:"quote_event,omitempty"`
-	QuoteID     string          `json:"quote_id,omitempty"`
-	LegacyQuote *LegacyQuote    `json:"legacy_quote,omitempty"`
-	Reaction    *ReactionTarget `json:"reaction,omitempty"`
-	Edit        *EditTarget     `json:"edit,omitempty"`
-	Delete      *DeleteTarget   `json:"delete,omitempty"`
+	Scope                 Scope           `json:"scope"`
+	Operation             string          `json:"operation"`
+	Chat                  string          `json:"chat"`
+	Kind                  string          `json:"kind"`
+	Text                  string          `json:"text"`
+	MIME                  string          `json:"mime"`
+	Name                  string          `json:"name"`
+	Data                  []byte          `json:"data"`
+	VerifyGroupMembership bool            `json:"verify_group_membership,omitempty"`
+	QuoteEvent            string          `json:"quote_event,omitempty"`
+	QuoteID               string          `json:"quote_id,omitempty"`
+	LegacyQuote           *LegacyQuote    `json:"legacy_quote,omitempty"`
+	Reaction              *ReactionTarget `json:"reaction,omitempty"`
+	Edit                  *EditTarget     `json:"edit,omitempty"`
+	Delete                *DeleteTarget   `json:"delete,omitempty"`
 }
 
 type EditTarget struct {
@@ -71,6 +72,7 @@ var messageActionOperation = regexp.MustCompile(`^(edit|delete):[1-9][0-9]{0,18}
 
 func (r Outgoing) Validate(scope Scope) error {
 	if r.Scope != scope || r.Operation == "" || len(r.Operation) > 128 || !messagePeer.MatchString(r.Chat) ||
+		(r.VerifyGroupMembership && !strings.HasSuffix(r.Chat, "@g.us")) ||
 		!utf8.ValidString(r.Text) || len(r.Text) > 65536 || strings.ContainsRune(r.Text, 0) || len(r.Name) > 200 || strings.ContainsAny(r.Name, "/\\\x00\r\n") {
 		return ErrConfiguration
 	}
@@ -145,8 +147,8 @@ func (r Outgoing) Validate(scope Scope) error {
 
 // Upload AND Send are inside one durable operation. A timeout at either step
 // remains unknown; repeating the request cannot upload/send a second time.
-func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Outgoing, lids store.LIDStore) (Result, error) {
-	if client == nil {
+func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Outgoing, lids store.LIDStore, groupCheck ...func(context.Context) error) (Result, error) {
+	if client == nil || (request.VerifyGroupMembership && (len(groupCheck) != 1 || groupCheck[0] == nil)) {
 		return Result{}, ErrConfiguration
 	}
 	if err := request.Validate(j.binding); err != nil {
@@ -283,6 +285,11 @@ func (j *Journal) Deliver(ctx context.Context, client MessageClient, request Out
 			}
 			if m := msg.GetDocumentMessage(); m != nil {
 				m.ContextInfo = quote
+			}
+		}
+		if request.VerifyGroupMembership {
+			if err := groupCheck[0](ctx); err != nil {
+				return err
 			}
 		}
 		response, err := client.SendMessage(ctx, chat, msg, whatsmeow.SendRequestExtra{ID: id})

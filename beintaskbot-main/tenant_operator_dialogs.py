@@ -338,7 +338,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         author_type = 'participant' if group else 'customer'
     else:
         author_type = 'system'
-    if direction == 'incoming' and isinstance(raw,dict) and raw.get('verified_employee_id') is not None:
+    if direction == 'incoming' and (value.get('sending_number') or isinstance(raw,dict) and raw.get('verified_employee_id') is not None):
         author_type='employee'
     if group and isinstance(raw,dict) and raw.get('ai_authored') is True:
         author_type='ai'
@@ -348,7 +348,7 @@ def _message(item, *, group=False, participant_names=None, employee_participants
         author_type='employee'
     if group and direction=='outgoing' and author in {'Operator','WhatsApp operator'} and whatsapp_name:
         author=whatsapp_name
-    if direction in {'incoming','outgoing'} and group and author_type!='ai':
+    if direction in {'incoming','outgoing'} and group and author_type!='ai' and not value.get('sending_number'):
         # Resolution is intentionally exact-JID scoped.  Do not conflate a
         # privacy LID with a phone JID, even if both are visible in one event.
         author = str((participant_names or {}).get((str(value.get('source_channel_id') or value.get('channel','').removeprefix('connect:')),participant_jid)) or (participant_names or {}).get(participant_jid) or author or whatsapp_name or '')
@@ -1020,7 +1020,7 @@ def _hide_shared_ai(dialog):
                   agent_status='restricted', agent_status_reason='ai_management_restricted')
     return dialog
 
-def _fold_group_routes(rows, *, prefer_actionable=False):
+def _fold_group_routes(rows, *, prefer_actionable=False, group_unread=None):
     """Fold authorized exact group routes after filtering, before pagination.
 
     Each selectable source keeps its own lifecycle and sending route. Never
@@ -1042,7 +1042,9 @@ def _fold_group_routes(rows, *, prefer_actionable=False):
         else:
             representative = groups[key]
             representative['group_sources'].append(dict(row))
-            if prefer_actionable and representative.get('archive_read_only') and not row.get('archive_read_only'):
+            role = (row.get('lifecycle',{}).get('group_work') or {}).get('role')
+            selected_role = (representative.get('lifecycle',{}).get('group_work') or {}).get('role')
+            if (role and not selected_role) or (prefer_actionable and representative.get('archive_read_only') and not row.get('archive_read_only')):
                 sources=representative['group_sources']
                 representative.clear()
                 representative.update(row,group_sources=sources)
@@ -1050,6 +1052,8 @@ def _fold_group_routes(rows, *, prefer_actionable=False):
                 int(representative.get('unread_count') or 0), int(row.get('unread_count') or 0))
     for row in groups.values():
         row['group_sources'].sort(key=lambda source: (str(source.get('channel_name') or ''), str(source['channel_id']), source['lead_id']))
+        if group_unread is not None and row['conversation_id'] in group_unread:
+            row['unread_count']=group_unread[row['conversation_id']]
     return result
 
 
@@ -1268,6 +1272,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             company_prelinked_for_bulk=None
             presence_online=False
             presence_sources=frozenset()
+            group_work_snapshots={}
+            group_modes={}
             if rollout.enforced:
                 # One tenant-scoped snapshot, not one lookup per visible row.
                 # Only entries matching already-authorized rows are projected.
@@ -1286,6 +1292,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 from tenant_dialog_presence import is_online, work_status_routing_sources
                 presence_online=is_online(cur,tenant,int(profile['telegram_id']))
                 presence_sources=work_status_routing_sources(tenant)
+                import tenant_dialog_group_work as group_work
+                group_work_snapshots=group_work.snapshots(cur,tenant,
+                    [r['conversation_id'] for r in rows if r['provider']=='connect'])
+                if group_work_snapshots:
+                    from tenant_whatsapp_native_rollout import modes as native_modes
+                    group_modes=native_modes(cur,tenant)
                 if completion_preview:
                     import tenant_dialog_company_completion as completion
                     if completion.enabled(tenant):
@@ -1298,10 +1310,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     apply_capabilities(cur,tenant,policy,r,_list_access=list_access,_action_capabilities=action_capabilities)
                 if rollout.enforced:
                     workflow=workflows.get((str(r['channel_id']),r['conversation_id']))
-                    online=presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources)
+                    online=policy.profile.get('role')=='owner' or presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources)
                     observer=owner_overview and r['provider']=='connect' and is_owner_observer(cur,tenant,actor,r['channel_id'],workflow,online=online)
                     search_observer=(search_overview and not observer and r['provider']=='connect' and workflow
                         and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
+                    group=group_work_snapshots.get(r['conversation_id']) if r['provider']=='connect' else None
+                    group_source=group_modes.get(r['channel_id'],{})
+                    if group and not group['legacy_active'] and group_source.get('enabled') and group_source.get('active'):
+                        r['can_send']=action_capabilities.get('update',False) and r.get('tenant_status')=='active'
                     lifecycle_decorate(cur,tenant,actor,r,details=False,allow_closed_archive=allow_closed_archive,owner_observer=observer,
                         search_observer=search_observer,
                         _rollout=rollout,_policy=policy,_can_update=action_capabilities.get('update',False),_workflow=workflow,
@@ -1309,8 +1325,15 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         _no_reply_marked=(str(r['channel_id']),r['conversation_id'],int(r['lead_id'])) in marked_inbound,
                         _has_inbound=bool(inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id'])))),
                         _last_inbound=inbound.get((str(r['channel_id']),r['conversation_id'],int(r['lead_id']))) if completion_preview else None)
+                    if group and not search_observer:
+                        group_work.decorate(r,actor,group,workflow,source=group_source,admission=rollout.admission_enabled,
+                            can_update=action_capabilities.get('update',False),online=online)
                     if completion_preview and r.get('lifecycle_enabled'):
                         row_lifecycle=r['lifecycle']
+                        if row_lifecycle.get('group_work'):
+                            # Shared closure requires a decision in the open chat.
+                            row_lifecycle.update(can_close=False,can_dismiss=False,bulk_waiting=False)
+                            continue
                         row_lifecycle['bulk_waiting']=bool(row_lifecycle['state']=='waiting' and row_lifecycle['has_inbound']
                             and (row_lifecycle['no_reply_needed'] or (rollout.admission_enabled
                                  and action_capabilities.get('update',False) is True)))
@@ -1355,7 +1378,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 # but filter physical routes before group folding and pagination.
                 rows=[r for r in rows if not (r.get('provider') == 'connect'
                       and (r.get('lifecycle') or {}).get('state') == 'waiting'
-                      and (r.get('lifecycle') or {}).get('has_inbound') is False)]
+                      and (r.get('lifecycle') or {}).get('has_inbound') is False
+                      and not (r['lifecycle'].get('group_work') or {}).get('can_join'))]
             if restricted_ai:
                 _assignment_display(cur,tenant,policy,[r for r in rows if not r.get('archive_read_only')])
                 rows=[_hide_shared_ai(r) for r in rows]
@@ -1364,6 +1388,16 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Preparation must not initialize read cursors or mark anything read.
             unread_total=None if completion_preview else _unread_counts(cur,tenant,int(profile['telegram_id']),
                 [r for r in rows if not r.get('archive_read_only')])
+            def group_readable(routes):
+                return [r for r in routes if r['provider']=='connect' and r['conversation_id'] in group_work_snapshots
+                        and not r.get('archive_read_only')]
+            group_unread={}
+            counted=group_readable(rows)
+            if counted and unread_total is not None:
+                from tenant_connect_group_history import unread_counts as count_group_events
+                group_unread={r['conversation_id']:0 for r in counted}
+                group_unread.update(count_group_events(cur,tenant,actor,counted))
+                unread_total += sum(group_unread.values()) - sum(r['unread_count'] for r in counted)
             from tenant_beinsystems_operator_access import dialogue_chooser_enabled
             # A company label is already visible in the source-scoped archive
             # with the independent Operator read grant. Keep the same rule
@@ -1427,7 +1461,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 rows=fold_completed(cur,tenant,policy,rows,history_companions,channel=merge_channel,
                     allow_mixed=bool(allow_mixed_history_card and lifecycle=='all' and rollout.enforced))
             # Adding a read-only sibling must not replace an actionable route.
-            rows=_fold_group_routes(rows,prefer_actionable=owner_overview or (interactive and employee_all))
+            if group_unread:
+                displayed=group_readable(rows)
+                if {(r['channel_id'],r['conversation_id']) for r in displayed} != {(r['channel_id'],r['conversation_id']) for r in counted}:
+                    group_unread={r['conversation_id']:0 for r in displayed}
+                    group_unread.update(count_group_events(cur,tenant,actor,displayed))
+            rows=_fold_group_routes(rows,prefer_actionable=owner_overview or (interactive and employee_all),
+                                    group_unread=group_unread)
             if widget_rows:
                 from tenant_operator_widget_queue import merge_order
                 rows = merge_order(rows)
@@ -1576,6 +1616,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     operator_timeline={}
     shared_reminder_timeline={}
     internal_comment_timeline={}
+    group_read_targets=[]
     with _connect() as conn:
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
@@ -1587,7 +1628,7 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if search_overview and not search_overview_matches(cur,tenant,policy,channel,conversation,lead_id,search):
                 raise TenantLinearError('Диалог недоступен.',404)
             transfer_targets=[]
-            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _targets, _row, is_shared_archive, is_owner_observer
+            from tenant_dialog_lifecycle import enabled as lifecycle_enabled, acceptance_enabled, _targets, _row, is_shared_archive, is_owner_observer
             if not (support_case_only or colleague) and provider=='connect' and lifecycle_enabled(cur,tenant):
                 from tenant_operator_access import _resolve_connect_route
                 candidate=_resolve_connect_route(cur,tenant,conversation,str(channel),lead_id,allow_merged=True)
@@ -1644,9 +1685,19 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 support=_linked_support_case(cur,tenant,policy,channel,history_members) if provider=='connect' else None
                 return {'dialog':{**public(row),'support_case':support}}
             dialog=decorate(row)
+            group_dialog=None
+            group_mode={}
+            group_modes={}
             if provider=='connect':
                 from tenant_whatsapp_native_rollout import modes as native_modes
-                dialog['wecall']=bool(native_modes(cur,tenant).get(channel,{}).get('enabled'))
+                group_modes=native_modes(cur,tenant)
+                group_mode=group_modes.get(channel,{})
+                dialog['wecall']=bool(group_mode.get('enabled'))
+                if not shared_archive and lifecycle_enabled(cur,tenant):
+                    import tenant_dialog_group_work as group_work
+                    group_dialog=group_work.snapshot(cur,tenant,conversation)
+                    if group_dialog and not group_dialog['legacy_active'] and group_mode.get('enabled') and group_mode.get('active'):
+                        dialog['can_send']=dialog.get('tenant_status')=='active'
             if paired_history:
                 dialog['history_pair_id']=paired_history['id']
             if history_merge:
@@ -1737,6 +1788,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                   channel_ids=group_channels,transcript_only=shared_archive)
                 for message in messages:
                     message['source_conversation_id']=conversation
+                if group_dialog:
+                    group_work.attach_senders(cur,tenant,actor,conversation,messages[:50])
+                    if not before and not anchor:
+                        from tenant_connect_group_history import read_targets
+                        group_read_targets=read_targets(cur,tenant,conversation,messages[:50])
             elif history_merge:
                 from tenant_dialog_history_merge_projection import page as merged_page
                 messages=merged_page(cur,tenant,channel,history_merge,before=identifier(before) if before else None,
@@ -1822,6 +1878,15 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
                 search_observer=search_observer or colleague,
                 _can_update=not colleague and action_capabilities.get('update',False),_policy=policy)
+            if group_dialog:
+                from tenant_dialog_presence import is_online
+                group_work.decorate(dialog,actor,group_dialog,workflow,source=group_mode,
+                    admission=acceptance_enabled(cur,tenant),can_update=action_capabilities.get('update',False),
+                    online=policy.profile.get('role')=='owner' or is_online(cur,tenant,actor,source_channel=channel))
+                group_state=dialog['lifecycle'].get('group_work')
+                if group_state and not group_state['role'] and not before and not anchor and acceptance_enabled(cur,tenant):
+                    group_state['sources']=group_work.join_options(cur,tenant,actor,policy,conversation,
+                        group_dialog,group_channels,group_modes)
             if provider=='connect' and not shared_archive and not colleague and dialog.get('wecall'):
                 from tenant_whatsapp_message_edit import attach_capabilities as attach_message_actions
                 attach_message_actions(messages[:50],dialog,actor)
@@ -1882,7 +1947,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 operator_timeline=operator_event_page(conn,cur,tenant,channel,conversation,messages=messages,
                     before=identifier(before) if before else None,history_leads=history_leads,
                     history_channel=row['history_channel'],group_channels=group_channels,
-                    authorized_before_stamp=merge_timeline_boundary.get('before_stamp'))
+                    authorized_before_stamp=merge_timeline_boundary.get('before_stamp'),
+                    group_actor=actor if group_dialog else None)
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
             if (include_shared_reminder_events and not shared_archive and provider=='connect' and not anchor
@@ -1915,7 +1981,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
     dialog['test_recording_import_allowed']=not shared_archive and offer_import({**profile,'role':policy.profile.get('role')},dialog)
     from tenant_browser_calls import offer as offer_browser_call
     dialog['browser_call_available']=not shared_archive and offer_browser_call(profile,dialog)
-    return {**operator_timeline,**shared_reminder_timeline,**internal_comment_timeline,'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
+    return {**operator_timeline,**shared_reminder_timeline,**internal_comment_timeline,
+            **({'group_read_targets':group_read_targets} if group_read_targets else {}),
+            'dialog':dialog,'history_scope':history_scope,'anchor_message_id':anchor_target,'read_through_message_id':str(read_through['id']) if read_through else None,'messages':[_message(r, group=dialog.get('customer_kind') == 'group', participant_names=participant_names,employee_participants=employee_participants,
                                          contact_name=dialog.get('customer_name') if dialog.get('customer_kind') == 'contact' else '',
                                          contact_route=str(dialog.get('conversation_id') or ''))
                                         for r in reversed(messages[:50])],

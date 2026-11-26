@@ -249,7 +249,12 @@ async def run(session, command, content, logger):
         if len(content)>MAX_BYTES and not route.get('native'):
             raise TenantLinearError('Böyük video üçün WhatsApp bağlantısı dəyişib.',409)
         started = True
-        receipt = await asyncio.to_thread(dispatch_guarded, item, route, _submit, command['request_id'], command['file'],command['text'], content)
+        try:
+            receipt = await asyncio.to_thread(dispatch_guarded, item, route, _submit, command['request_id'], command['file'],command['text'], content)
+        except TenantLinearError:
+            if route.get('verify_group_membership'):
+                started = False
+            raise
         if receipt['provider_accepted']:
             await asyncio.to_thread(record_acceptance, session, {**item, 'lead_id': command['lead_id']}, receipt)
         else:

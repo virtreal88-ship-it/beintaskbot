@@ -109,6 +109,7 @@ jobs:
           node tests/test_stable_background_refresh_browser.cjs
           node tests/test_stable_deals_refresh_browser.cjs
           node tests/test_dialog_group_cards_browser.cjs
+          node tests/test_dialog_group_work_browser.cjs
           node tests/test_dialog_tab_return_browser.cjs
           node tests/test_missed_call_attention_browser.cjs
           node tests/test_dialog_company_completion_browser.cjs

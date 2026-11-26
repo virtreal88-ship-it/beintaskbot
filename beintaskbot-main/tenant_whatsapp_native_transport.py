@@ -12,6 +12,7 @@ import requests
 from contextlib import contextmanager
 from tenant_chat_upload_policy import VIDEO_MAX_BYTES
 from tenant_platform import _connect, TenantPlatformError
+from tenant_linear_policy import TenantLinearError
 
 NATIVE_KEY = 'native-route-requires-dispatch'
 MEDIA_EVIDENCE_EVENTS = 4096
@@ -127,6 +128,8 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
         payload={'scope':current['native']['scope'],'operation':operation,
             'chat':route['conversation_id'],'kind':kind,'text':text,'mime':mime,'name':name,
             'data':'' if large_video else base64.b64encode(content).decode('ascii')}
+        if route.get('verify_group_membership'):
+            payload['verify_group_membership'] = True
         if reaction is not None:
             payload['operation']='reaction:'+str(int(actor))+':'+request_id
             payload['reaction']=reaction
@@ -176,12 +179,19 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                         and value.get('confirmed') is False and 'result' not in value):
                     from tenant_connect_transport import ConnectPreflightError
                     raise ConnectPreflightError('quoted_source_scope_conflict')
+                if (route.get('verify_group_membership') and response.status_code == 422
+                        and value.get('confirmed') is False and 'result' not in value
+                        and value.get('error') in {'native_group_membership_unconfirmed','native_group_session_unavailable'}):
+                    from tenant_whatsapp_native_groups import membership_error
+                    raise membership_error(value['error'])
                 result=value.get('result',{})
                 provider=result.get('provider_id')
                 if (response.status_code!=200 or value.get('confirmed') is not True or
                         result.get('state')!='accepted' or not isinstance(provider,str) or
                         not re.fullmatch(r'[A-Za-z0-9_-]{5,200}',provider)):
                     raise ValueError()
+        except TenantLinearError:
+            raise
         except (requests.RequestException,ValueError,TypeError,AttributeError):
             raise TenantPlatformError('native_send_unconfirmed') from None
     if reaction is not None or edit is not None or delete is not None:
@@ -189,6 +199,8 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
     from tenant_whatsapp_native_identity import message_id
     facts={'channelId':route['channel_id'],'conversationId':route['conversation_id'],
         'externalMessageId':provider,'fromMe':True,'status':'sent','_crm_native_send_receipt':True}
+    if route.get('verify_group_membership'):
+        facts['participantJid']=current['native']['scope']['account']
     return {'message_id':message_id(route['tenant_id'],route['channel_id'],route['conversation_id'],provider,True),
         'external_message_id':provider,'receipt':facts}
 
@@ -271,7 +283,8 @@ def media_receipt(route,request_id,*,kind,mime,name='',caption='',content):
         'clientMessageId':str(request_id),'authorId':str(route['author_id']),
         'crmConversationId':str(route['crm_conversation_id']),'inputHash':route.get('input_hash',''),
         'type':route.get('media_type','audio'),'status':'sent','providerAccepted':True,
-        'externalMessageId':result['external_message_id'],'delivered':False,'retrySafe':False}
+        'externalMessageId':result['external_message_id'],'delivered':False,'retrySafe':False,
+        **({'participantJid':result['receipt']['participantJid']} if route.get('verify_group_membership') else {})}
 
 
 def retained_media_evidence(cur,scope,facts,conversation,direction,kind):

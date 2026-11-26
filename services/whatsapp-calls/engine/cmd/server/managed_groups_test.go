@@ -42,3 +42,38 @@ func TestManagedGroupRejectsOtherScopeBeforeAnyProviderRead(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 }
+
+func TestGroupMembershipRequiresExactAccountInCompleteProviderRoster(t *testing.T) {
+	chat := types.NewJID("120363123456789", types.GroupServer)
+	phone := types.NewJID("15550000002", types.DefaultUserServer)
+	lid := types.NewJID("1234567890", types.HiddenUserServer)
+	other := types.NewJID("15550000003", types.DefaultUserServer)
+	entry := types.GroupParticipant{JID: lid}
+	info := &types.GroupInfo{JID: chat, ParticipantCount: 1, Participants: []types.GroupParticipant{entry}}
+	if !groupContainsAccount(info, chat, phone, lid) {
+		t.Fatal("the linked device's own LID is an exact match")
+	}
+	if groupContainsAccount(info, chat, phone, types.EmptyJID) {
+		t.Fatal("a LID without the linked device's identity proves nothing")
+	}
+	info.Participants[0].PhoneNumber = other
+	if groupContainsAccount(info, chat, phone, lid) {
+		t.Fatal("conflicting phone identity was accepted")
+	}
+	info.Participants[0] = types.GroupParticipant{JID: phone}
+	if !groupContainsAccount(info, chat, phone, lid) {
+		t.Fatal("the exact bound phone must be accepted")
+	}
+	info.ParticipantCount = 2
+	if groupContainsAccount(info, chat, phone, lid) {
+		t.Fatal("an incomplete roster was accepted")
+	}
+	info.ParticipantCount = 0
+	if groupContainsAccount(info, chat, phone, lid) {
+		t.Fatal("a roster with unconfirmed completeness was accepted")
+	}
+	info.ParticipantCount = 1
+	if groupContainsAccount(info, types.NewJID("120363123456788", types.GroupServer), phone, lid) {
+		t.Fatal("another group was accepted")
+	}
+}

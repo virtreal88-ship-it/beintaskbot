@@ -80,6 +80,34 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 	}
 }
 
+func TestGroupMembershipIsCheckedImmediatelyBeforeProviderSend(t *testing.T) {
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "group.db")), testScope)
+	ctx := context.Background()
+	client := &outgoingClient{}
+	request := Outgoing{Scope: testScope, Operation: "group1", Chat: "120363123456789@g.us",
+		Kind: "document", MIME: "text/plain", Name: "test.txt", Data: []byte("synthetic"), VerifyGroupMembership: true}
+	if _, err := j.Deliver(ctx, client, request, nil); !errors.Is(err, ErrConfiguration) {
+		t.Fatal("a verified group operation was possible without the provider check", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		if client.uploads != 1 || client.sends != 0 {
+			t.Fatal("group proof was not checked after preparation and immediately before send")
+		}
+		return ErrGroupMembership
+	}); !errors.Is(err, ErrGroupMembership) || client.sends != 0 {
+		t.Fatal("an unconfirmed group was sent a message", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error { return nil }); err != nil {
+		t.Fatal("a definitively unsent command was blocked", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		t.Fatal("an accepted command was rechecked instead of returning its stored result")
+		return nil
+	}); err != nil || client.sends != 1 {
+		t.Fatal("the group command was delivered twice", err)
+	}
+}
+
 func TestOwnTextEditAndRevokeUseWhatsmeowControlMessages(t *testing.T) {
 	ctx := context.Background()
 	for _, action := range []string{"edit", "delete"} {

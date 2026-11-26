@@ -1,7 +1,7 @@
 """Durable, tenant/actor-specific receipts reserved before external writes."""
 import json
 import uuid
-from tenant_platform import _connect, _read_tenant_workflow, _fernet
+from tenant_platform import _connect, _read_tenant_workflow, _fernet, TenantPlatformError
 from tenant_chat_send_schema import ensure_schema
 from tenant_chat_send_policy import fingerprint
 from tenant_policy import TenantPolicy
@@ -24,7 +24,18 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
     from tenant_dialog_access import require_source,scope
     if scope(policy,'update') is None and not policy.legacy_allows('dialogs') and (not policy.allows('deals') or not policy.can_access_deal(deal)):
         raise TenantLinearError('Mesaj göndərmək üçün icazəniz yoxdur.', 403)
-    connect = connect_route(cur, tenant, lead_id)
+    try:
+        connect = connect_route(cur, tenant, lead_id)
+    except TenantPlatformError as error:
+        if str(error) in {'native_source_unavailable','native_source_changed'}:
+            cur.execute("""SELECT conversation_id FROM saas_connect_conversations
+              WHERE tenant_id=%s::uuid AND lead_id=%s""",(tenant,lead_id))
+            source=cur.fetchone()
+            from tenant_dialog_group_work import active, snapshot
+            if source and active(snapshot(cur,tenant,source['conversation_id'])):
+                from tenant_whatsapp_native_groups import membership_error
+                raise membership_error('native_group_session_unavailable') from None
+        raise
     if connect:
         require_source(cur,tenant,policy,'connect',connect['channel_id'],'update')
         from tenant_dialog_lifecycle import require_access, enabled as lifecycle_enabled
@@ -36,9 +47,10 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
             cur.execute('''SELECT 1 FROM saas_chat_send_receipts sr
               JOIN saas_dialog_episodes e ON e.tenant_id=sr.tenant_id AND e.id::text=sr.route->>'lifecycle_episode_id'
               WHERE sr.tenant_id=%s::uuid AND sr.actor_id=%s AND sr.request_id=%s::uuid AND sr.lead_id=%s
-                AND sr.state IN ('sending','unknown','accepted') AND e.channel_id=%s::uuid
-                AND e.conversation_id=%s AND e.lead_id=sr.lead_id''',
-              (tenant,actor,str(uuid.UUID(str(lifecycle_status))),lead_id,connect['channel_id'],connect['conversation_id']))
+                AND sr.state IN ('sending','unknown','accepted')
+                AND ((e.channel_id=%s::uuid AND e.lead_id=sr.lead_id) OR sr.route->>'group_channel_id'=%s)
+                AND e.conversation_id=%s''',
+              (tenant,actor,str(uuid.UUID(str(lifecycle_status))),lead_id,connect['channel_id'],connect['channel_id'],connect['conversation_id']))
             if not cur.fetchone():raise TenantLinearError('Сохранённая отправка не найдена.',404)
         elif lifecycle_receipt is not None and lifecycle_enabled(cur, tenant):
             # Internal persistence only, never send/upload authority. An accepted
@@ -55,6 +67,11 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
             if not cur.fetchone():raise TenantLinearError('Подтверждённая отправка не найдена.',409)
         else:
             require_access(cur,tenant,actor,'connect',connect['channel_id'],connect['conversation_id'],'update')
+            if lifecycle_enabled(cur,tenant):
+                from tenant_dialog_group_work import send_context
+                group = send_context(cur,tenant,actor,policy,connect)
+                if group:
+                    connect={**connect,**group,'verify_group_membership':True}
         return profile, ['connect', connect['channel_id'], connect['conversation_id']], {'provider': 'connect', 'route': connect}
     cur.execute('SELECT 1 FROM saas_connect_conversations WHERE tenant_id=%s::uuid AND lead_id=%s',(tenant,lead_id))
     if cur.fetchone():
@@ -144,7 +161,12 @@ def reserve(session, command):
             rollout = guard(cur, profile['tenant_id'])
             generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
             case_reserve(cur,session,command,connection,case_binding)
-            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps({'lifecycle_generation':generation,**({'consultation_id':case_binding['consultation_id']} if case_binding else {})})))
+            prepared = {'lifecycle_generation':generation}
+            if case_binding:
+                prepared['consultation_id']=case_binding['consultation_id']
+            if integration.get('route',{}).get('group_participant_id'):
+                prepared['group_participant_id']=integration['route']['group_participant_id']
+            cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps(prepared)))
         conn.commit()
     return {'key': key, 'command': command, 'connection': connection, 'profile': profile, 'quote':quote}
 
@@ -177,6 +199,11 @@ def mark_sending(item, route):
                 raise TenantLinearError('İstinad edilən mesaj dəyişib.',409)
             if integration.get('provider') == 'connect':
                 credentials = integration['route']
+                group_participant = credentials.get('group_participant_id')
+                if (prepared.get('route') or {}).get('group_participant_id') != group_participant:
+                    raise TenantLinearError('Участие в группе изменилось. Подготовьте новую отправку.',409)
+                if group_participant:
+                    route.update(group_participant_id=group_participant,group_channel_id=connection[1])
                 from tenant_dialog_lifecycle import ai_blocked, enabled as lifecycle_enabled
                 managed=lifecycle_enabled(cur, profile['tenant_id']) and ai_blocked(cur,profile['tenant_id'],'connect',credentials['channel_id'],credentials['conversation_id'])
                 if is_group and not managed:
@@ -408,6 +435,9 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
                 if (any(str(current.get(key))!=str(expected_credentials.get(key)) for key in ('channel_id','conversation_id','api_key'))
                         or current.get('native')!=expected_credentials.get('native')):
                     raise TenantLinearError('Источник диалога изменился.',409)
+                if ((saved.get('route') or {}).get('group_participant_id') != current.get('group_participant_id')
+                        or current.get('group_participant_id') != expected_credentials.get('group_participant_id')):
+                    raise TenantLinearError('Участие в группе изменилось. Подготовьте новую отправку.',409)
             if connection[0]=='connect' and lifecycle_enabled(cur, profile['tenant_id']):
                 from tenant_dialog_lifecycle import _row as lifecycle_row
                 current_episode=lifecycle_row(cur,profile['tenant_id'],connection[1],connection[2])
@@ -420,4 +450,8 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
             if connection[0]=='connect':
                 from tenant_dialog_lifecycle import record_dispatch
                 record_dispatch(cur,profile['tenant_id'],connection[1],connection[2],item['command']['request_id'],result)
+                if (current.get('group_participant_id') and isinstance(result,dict)
+                        and result.get('provider_accepted') is not False):
+                    from tenant_dialog_group_work import record_provider_id
+                    record_provider_id(cur,profile['tenant_id'],item['command']['request_id'],result)
             return result
