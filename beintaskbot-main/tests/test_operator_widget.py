@@ -198,6 +198,10 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
             thread.join(timeout=5)
 
 @pytest.mark.parametrize(("events", "expected"), [
+    ([], {"state": "unknown"}),
+    ([("operator_message_saved", {"temp_id": "different", "message_id": 19}),
+      ("message_persisted", {"client_id": "another-client", "message_id": 19})],
+     {"state": "unknown"}),
     ([("operator_message_pending", {}), ("operator_message_error", {"reason": "delivery_failed"})],
      {"state": "pending"}),
     ([("operator_message_error", {"reason": "chat_not_owned", "operator": "Demo"})],
@@ -274,7 +278,7 @@ def test_realtime_access_uses_documented_transports_and_classifies_failure(monke
 
 
 @pytest.mark.parametrize(("status", "expected"), [(None, "connected"), (401, "auth_denied"), (502, "unavailable")])
-def test_alternate_realtime_probe_is_auth_only_and_does_not_change_send_origin(monkeypatch, caplog, status, expected):
+def test_realtime_probe_authenticates_on_send_origin_without_emitting(monkeypatch, caplog, status, expected):
     from contextlib import contextmanager
 
     hits = []
@@ -296,5 +300,6 @@ def test_alternate_realtime_probe_is_auth_only_and_does_not_change_send_origin(m
     assert hits == ["https://operator-realtime.beinsystems.az"]
     assert wire.SOCKET_ORIGIN == production_origin
     assert wire._availability is sentinel
-    assert f"Operator alternate realtime auth probe: {expected}" in caplog.text
+    assert production_origin == hits[0]
+    assert f"Operator realtime auth probe: {expected}" in caplog.text
     assert "details must not be logged" not in caplog.text

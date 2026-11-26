@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import widget_allowed
 from tenant_linear_policy import TenantLinearError
+from tenant_operator_widget_sender import widget_sender
 
 PAGE = 50
 
@@ -60,11 +61,20 @@ def _routes(rows, credentials):
     return routes
 
 
-def _snapshot(cur, profile, credentials, action="view"):
+def _snapshot(cur, profile, credentials, action="view", *, chat=None, revision=None):
     tenant = operator._tenant(profile)
     current = operator._current_profile(cur, tenant, int(profile["telegram_id"]))
     if not widget_allowed(current, "view") or not widget_allowed(current, action):
-        raise operator.OperatorError("Нет доступа к этому источнику диалогов.", 403)
+        from tenant_operator_widget_sync import enabled
+        if (not chat or not revision or enabled() != tenant or not widget_allowed(current, assigned=True)
+                or not widget_allowed(current, action, assigned=True)):
+            raise operator.OperatorError("Нет доступа к этому источнику диалогов.", 403)
+        cur.execute("""SELECT 1 FROM saas_widget_dialogs WHERE tenant_id=%s AND instance=%s AND chat_id=%s
+                    AND revision=%s AND visible AND latest_in IS NOT NULL AND state='accepted'
+                    AND operator_id=%s FOR SHARE""",
+                    (tenant,credentials["connection_instance_id"],chat,revision,int(profile["telegram_id"])))
+        if not cur.fetchone():
+            raise operator.OperatorError("Диалог недоступен.", 403)
     row = operator._operator_row(cur, tenant)
     if (not row or row["status"] != "connected" or operator._link_connection_scope(row) !=
             (credentials["generation"], credentials["connection_instance_id"])):
@@ -137,11 +147,12 @@ def _inputs(data):
 def handle(profile, data):
     action, chat = _inputs(data)
     tenant = operator._tenant(profile)
-    if not widget_allowed(profile):
+    if not widget_allowed(profile, assigned=action != "list"):
         raise operator.OperatorError("Нет доступа к этому источнику диалогов.", 403)
     credentials = operator._credentials(tenant)
     with operator._connect() as db, db.cursor() as cur:
-        current, login = _snapshot(cur, profile, credentials, "update" if action == "reply" else "view")
+        current, login = _snapshot(cur, profile, credentials, "update" if action == "reply" else "view",
+                                   chat=chat, revision=data.get("revision"))
     operator._record_operator_request(profile, "widget", {})
     if action == "reply":
         return _reply(profile, credentials, chat, data)
@@ -164,12 +175,20 @@ def handle(profile, data):
         if action == "older":
             query["before_id"] = _positive(data["before_id"])
         rows = _post("/chat/getMessages", query, credentials)
-        if widget_allowed(current, "update") and _can_reply(row, login):
+        sender = None
+        if widget_allowed(current, "update", assigned=managed):
             from tenant_operator_widget_transport import socket_block_reason
-            socket_ready = not socket_block_reason(credentials)
+            try:
+                if managed:
+                    with operator._connect() as db, db.cursor() as cur:
+                        sender = widget_sender(cur, tenant, credentials)
+                if (sender or not managed) and _can_reply(row, sender["widget_login"] if sender else login):
+                    socket_ready = not socket_block_reason(sender or credentials)
+            except operator.OperatorError:
+                socket_ready = False
     with operator._connect() as db, db.cursor() as cur:
-        current, login = _snapshot(cur, profile, credentials)
-        writable = widget_allowed(current, "update")
+        current, login = _snapshot(cur, profile, credentials, chat=chat, revision=data.get("revision"))
+        writable = widget_allowed(current, "update", assigned=managed and action != "list")
         assignments = {}
         if managed:
             cur.execute("""SELECT chat_id,identity,state,operator_id FROM saas_widget_dialogs
@@ -191,12 +210,27 @@ def handle(profile, data):
         visible,writable = access_for(chat,row)
         if not visible:
             raise operator.OperatorError("Диалог недоступен.",403)
+        if sender:
+            login = sender["widget_login"]
         messages = _messages(rows, chat, row["client_id"])
         _reconcile(cur, tenant, chat, data["revision"], rows)
+        authors = confirmed_authors(cur, tenant, data["revision"], [m["id"] for m in messages])
+        for message in messages:
+            if message["sender"] == "operator" and message["id"] in authors:
+                message["name"] = authors[message["id"]]
         if action == "older":
             messages = [m for m in messages if int(m["id"]) < _positive(data["before_id"])]
         return {"chat": _card(chat, row, data["revision"], writable, login, socket_ready),
                 "messages": messages, "has_older": bool(messages and len(rows) >= PAGE)}
+
+
+def confirmed_authors(cur, tenant, revision, message_ids):
+    if not message_ids:
+        return {}
+    cur.execute("""SELECT message_id,min(crm_author_name) AS name FROM saas_operator_widget_replies
+                WHERE tenant_id=%s AND route_revision=%s AND state='saved' AND message_id=ANY(%s::text[])
+                GROUP BY message_id HAVING count(*)=1""",(tenant,revision,message_ids))
+    return {r["message_id"]: r["name"] for r in cur.fetchall() if r["name"]}
 
 
 def _reconcile(cur, tenant, chat, revision, rows):
@@ -225,7 +259,7 @@ def _reconcile(cur, tenant, chat, revision, rows):
 def _require_queue_owner(cur, profile, credentials, chat, row):
     from tenant_operator_widget_sync import enabled, PROVIDER
     if enabled() != operator._tenant(profile):
-        return
+        return None
     from tenant_operator_widget_queue import authorized
     try:
         route,actor,_ = authorized(cur,profile,{
@@ -235,6 +269,10 @@ def _require_queue_owner(cur, profile, credentials, chat, row):
         raise operator.OperatorError(str(error),error.status) from error
     if route["state"]!="accepted" or route["operator_id"]!=actor:
         raise operator.OperatorError("Сначала примите диалог.",409)
+    sender = widget_sender(cur, operator._tenant(profile), credentials)
+    if not sender:
+        raise operator.OperatorError("Отправитель виджета не подключён.", 409)
+    return sender
 
 
 def _reply_receipt(row):
@@ -257,10 +295,12 @@ def _reply(profile, credentials, chat, data):
     key = (tenant, data["request_id"])
     # Commit an uncertain outcome before dispatch so a crash or a second worker cannot replay it.
     with operator._connect() as db, db.cursor() as cur:
-        _snapshot(cur, profile, credentials, "update")
+        current, _ = _snapshot(cur, profile, credentials, "update", chat=chat, revision=data["revision"])
         cur.execute("""INSERT INTO saas_operator_widget_replies
-            (tenant_id, request_id, actor, signature, state) VALUES (%s,%s,%s,%s,'unknown')
-            ON CONFLICT DO NOTHING RETURNING request_id""", (*key, actor, signature))
+            (tenant_id, request_id, actor, signature, state,route_revision,crm_author_name)
+            VALUES (%s,%s,%s,%s,'unknown',%s,%s)
+            ON CONFLICT DO NOTHING RETURNING request_id""",
+            (*key, actor, signature, data["revision"], current.get("display_name")))
         if not cur.fetchone():
             cur.execute("""SELECT actor,signature,state,message_id,provider_status,assigned_operator FROM saas_operator_widget_replies
                            WHERE tenant_id=%s AND request_id=%s""", key)
@@ -278,17 +318,19 @@ def _reply(profile, credentials, chat, data):
     # Keep the local grant and exact credential instance locked during the single dispatch.
     with operator._connect() as db, db.cursor() as cur:
         try:
-            _, login = _snapshot(cur, profile, credentials, "update")
+            _, login = _snapshot(cur, profile, credentials, "update", chat=chat, revision=data["revision"])
             routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
             row = _route(routes, chat, data["revision"])
-            _require_queue_owner(cur, profile, credentials, chat, row)
+            sender = _require_queue_owner(cur, profile, credentials, chat, row)
+            if sender:
+                login = sender["widget_login"]
             if not _can_reply(row, login):
                 raise operator.OperatorError("Диалог закрыт или закреплён за другим оператором.", 409)
         except operator.OperatorError:
             cur.execute("UPDATE saas_operator_widget_replies SET state='rejected' WHERE tenant_id=%s AND request_id=%s", key)
             db.commit()
             raise
-        outcome = send_reply(credentials, row, text, data["request_id"])
+        outcome = send_reply(sender or credentials, row, text, data["request_id"])
         state = outcome["state"]
         # Pending delivery still needs the existing unique reservation until history confirms it.
         pending = state == "pending"

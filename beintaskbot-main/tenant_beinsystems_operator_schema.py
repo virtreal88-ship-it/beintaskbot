@@ -40,6 +40,7 @@ def migrate_widget_queue(cur):
         PRIMARY KEY(tenant_id,instance,chat_id,identity),
         FOREIGN KEY(tenant_id,instance) REFERENCES saas_widget_sources(tenant_id,instance) ON DELETE CASCADE)""")
     cur.execute("ALTER TABLE saas_widget_dialogs ADD COLUMN IF NOT EXISTS operator_account text")
+    cur.execute("ALTER TABLE saas_widget_dialogs ADD COLUMN IF NOT EXISTS open_operator_login text")
     cur.execute("""CREATE TABLE IF NOT EXISTS saas_widget_messages (
         tenant_id uuid NOT NULL, instance uuid NOT NULL, chat_id bigint NOT NULL, identity text NOT NULL,
         mid bigint NOT NULL, sender text NOT NULL, author text NOT NULL, body text NOT NULL,
@@ -62,7 +63,12 @@ def migrate_operator_identity_links(cur) -> None:
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,request_id))""")
     cur.execute("""ALTER TABLE saas_operator_widget_replies
         ADD COLUMN IF NOT EXISTS provider_status TEXT,
-        ADD COLUMN IF NOT EXISTS assigned_operator TEXT""")
+        ADD COLUMN IF NOT EXISTS assigned_operator TEXT,
+        ADD COLUMN IF NOT EXISTS route_revision TEXT,
+        ADD COLUMN IF NOT EXISTS crm_author_name TEXT""")
+    cur.execute("""CREATE INDEX IF NOT EXISTS operator_widget_reply_author
+                   ON saas_operator_widget_replies(tenant_id,route_revision,message_id)
+                   WHERE state='saved' AND route_revision IS NOT NULL""")
     cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS operator_widget_reply_uncertain
       ON saas_operator_widget_replies(tenant_id,signature) WHERE state='unknown'""")
     migrate_customer_links(cur)
@@ -293,6 +299,10 @@ def migrate_operator_identity_links(cur) -> None:
       FOREIGN KEY(tenant_id,member_telegram_id)
         REFERENCES saas_tenant_members(tenant_id,telegram_id) ON DELETE CASCADE
     )''')
+    cur.execute("ALTER TABLE saas_beinsystems_operator_employee_links ADD COLUMN IF NOT EXISTS widget_reply_ciphertext bytea")
+    cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS operator_widget_single_sender
+        ON saas_beinsystems_operator_employee_links(tenant_id,connection_instance_id,connection_generation)
+        WHERE widget_reply_ciphertext IS NOT NULL AND revoked_at IS NULL""")
     cur.execute('''CREATE UNIQUE INDEX IF NOT EXISTS saas_operator_active_member_link_idx
       ON saas_beinsystems_operator_employee_links(tenant_id,connection_generation,member_telegram_id)
       WHERE revoked_at IS NULL''')
