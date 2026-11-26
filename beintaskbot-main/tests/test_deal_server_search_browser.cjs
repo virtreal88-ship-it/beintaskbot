@@ -29,6 +29,68 @@ function installSearchServer() {
   };
 }
 
+async function verifyTableReturn(browser) {
+  const page = await browser.newPage({viewport:{width:1280, height:720}});
+  await page.addInitScript(installFixture, {});
+  await page.addInitScript(installDeals, {saved:'kommo'});
+  await page.addInitScript(() => {
+    const original = window.fetch;
+    let version = 0;
+    window.focusTest = {holdList:true, holdProfile:false, deny:false, refresh:()=>++version};
+    window.fetch = async (url, options) => {
+      const path = new URL(url,location.origin).pathname, f = focusTest;
+      if (path === '/api/platform/me' && f.holdProfile) await new Promise(r => { f.profileReady=r; });
+      if (path !== '/api/platform/crm/deals') return original(url,options);
+      if (f.holdList) await new Promise(r => { (f.listWaiters ||= []).push(r); });
+      const rows = Array.from({length:80}, (_,i)=>({kommo_lead_id:i+1, name:'Scope Deal '+(i+1),
+        pipeline_id:1,status_id:10, stage_name:'New',contact_name:i===0 && version ? 'Fresh contact' : 'Contact'}));
+      return new Response(JSON.stringify(f.deny ? {success:false,error:'forbidden'} : {success:true,deals:rows,total:rows.length}),
+                          {status:f.deny?403:200,headers:{'Content-Type':'application/json'}});
+    };
+  });
+  await page.route('**/*', route=>route.request().isNavigationRequest()
+    ? route.fulfill({contentType:'text/html',body:html()}) : route.abort());
+  await page.goto('https://fixture.test/app?view=deals&lang=ru');
+  await page.waitForFunction(()=>focusTest.listWaiters?.length);
+  assert.match(await page.locator('#dealCount').innerText(),/Загрузка/);
+  const releaseList=()=>page.evaluate(()=>{focusTest.holdList=false;focusTest.listWaiters.splice(0).forEach(r=>r());});
+  await releaseList();
+  await page.getByRole('button',{name:'Таблица',exact:true}).click();
+  await page.fill('#dealSearch','Scope');
+  await page.waitForFunction(()=>dealCount.textContent.includes('80'));
+  await page.locator('#dealsList').getByText('Scope Deal 60',{exact:true}).first().scrollIntoViewIfNeeded();
+  await page.evaluate(()=>{
+    const list=document.getElementById('dealsList');
+    const row=Array.from(list.querySelectorAll('*')).find(e=>!e.childElementCount&&e.textContent==='Scope Deal 60');
+    let scroller=row;
+    while(scroller && scroller.scrollTop<1) scroller=scroller.parentElement;
+    if(!scroller) throw Error('Expected a scrolled production table or its page');
+    focusTest.scroll=scroller; focusTest.top=scroller.scrollTop;
+    focusTest.holdProfile=true;
+    Object.defineProperty(document,'hidden',{value:true,configurable:true});
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  const retained=()=>page.evaluate(()=>({count:dealCount.textContent,query:dealSearch.value,
+      present:dealsList.textContent.includes('Scope Deal 60'), scroll:focusTest.scroll.scrollTop, before:focusTest.top}));
+  const check=async()=>{const r=await retained();assert.match(r.count,/80/);assert.equal(r.present,true);
+    assert.equal(r.query,'Scope');assert.equal(r.scroll,r.before);};
+  await check();
+  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'));});
+  await page.waitForFunction(()=>typeof focusTest.profileReady==='function');
+  await check();
+  await page.evaluate(()=>{focusTest.refresh();focusTest.holdList=true;focusTest.holdProfile=false;focusTest.profileReady();});
+  await page.waitForFunction(()=>focusTest.listWaiters.length>0);
+  await check();
+  await releaseList();
+  await page.waitForFunction(()=>document.getElementById('dealsList').textContent.includes('Fresh contact'));
+  await check();
+  await page.evaluate(()=>{focusTest.deny=true;document.dispatchEvent(new CustomEvent('tenant-crm-reauthorized'));});
+  await page.waitForFunction(()=>!document.getElementById('dealsList').textContent.includes('Scope Deal 60'));
+  assert.equal(await page.locator('#dealsList').getByText('Scope Deal 60',{exact:true}).count(),0);
+  await page.close();
+  console.log('PASS cached Kommo table, filter and scroll through delayed profile + list, fresh data and revocation');
+}
+
 (async () => {
   const browser = await chromium.launch({executablePath: process.env.CHROMIUM_EXECUTABLE_PATH || '/usr/bin/chromium', args: ['--no-sandbox']});
   try {
@@ -87,6 +149,7 @@ function installSearchServer() {
       console.log('PASS', source, 'server query and visible matched deal', title);
       await page.close();
     }
+    await verifyTableReturn(browser);
   } finally {
     await browser.close();
   }

@@ -97,6 +97,8 @@ def _production_sync():
 
 @pytest.fixture
 def task_flow(staff, monkeypatch):
+    import tenant_crm_sync_schema
+    monkeypatch.setattr(tenant_crm_sync_schema, '_ready', False)
     f = staff
     modules = ('tenant_crm_native_tasks', 'tenant_crm_native_deals', 'tenant_crm_native_contacts',
                'tenant_crm_store', 'tenant_task_commands', 'tenant_tasks', 'tenant_task_completion',
