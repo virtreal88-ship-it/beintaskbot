@@ -21,11 +21,45 @@ from tenant_dialog_presence import get_status as presence_status, set_status as 
 from tenant_dialog_view_preferences import company_panel_preferences, preferences as dialog_view_preferences
 
 
-def handler(member_from_request,origin,logger,resource):
+class GroupWorkUpdates:
+    """Wake open group cards after an authorized lifecycle transaction commits."""
+    def __init__(self, timeout=10):
+        self.timeout=timeout
+        self.waiters={}
+
+    async def read(self, profile, conversation, known_revision, read_revision):
+        scope=(str(profile['tenant_id']),conversation)
+        actor=(scope[0],str(profile['telegram_id']))
+        if len(self.waiters)>=128 or sum(owner==actor for _,owner in self.waiters.values())>=3:
+            return await read_revision()
+        changed=asyncio.Event()
+        self.waiters[changed]=(scope,actor)
+        try:
+            # Subscribe before reading so a concurrent acceptance wakes the card.
+            result=await read_revision()
+            if result.get('revision')!=known_revision:
+                return result
+            try:
+                await asyncio.wait_for(changed.wait(),timeout=self.timeout)
+            except TimeoutError:
+                pass
+            return await read_revision()
+        finally:
+            self.waiters.pop(changed,None)
+
+    def publish(self, profile, conversation):
+        scope=(str(profile['tenant_id']),conversation)
+        for changed,(key,_) in self.waiters.items():
+            if key==scope:
+                changed.set()
+
+
+def handler(member_from_request,origin,logger,resource, *, group_work_updates=None):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         scope_verified=False
-        timing=ReadTiming(1 if resource=='dialogs' else 2,logger) if request.method=='GET' and resource in {'dialogs','history'} else None
+        revision_read=resource=='history' and request.query.get('group_work_revision')=='1'
+        timing=ReadTiming(1 if resource=='dialogs' else 2,logger) if request.method=='GET' and resource in {'dialogs','history'} and not revision_read else None
         try:
             profile=timing.authenticate(member_from_request,request) if timing else member_from_request(request)
             if not profile:raise TenantLinearError('Нет доступа.',403)
@@ -93,13 +127,25 @@ def handler(member_from_request,origin,logger,resource):
                         options['observed_operator_id']=colleague
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
-                elif resource=='history' and query.get('group_work_revision')=='1':
+                elif revision_read:
                     _expected(query,profile)
                     if query.get('provider')!='connect':
                         raise TenantLinearError('Диалог не найден.',404)
                     from tenant_dialog_group_work import read_revision
-                    result=await timing.run(read_revision,profile,query.get('channel_id'),
-                        query.get('conversation_id'),query.get('lead_id'))
+                    conversation=query.get('conversation_id')
+                    async def read_group_revision():
+                        current=member_from_request(request)
+                        if not current:
+                            raise TenantLinearError('Нет доступа.',403)
+                        _expected(query,current)
+                        return await asyncio.to_thread(read_revision,current,query.get('channel_id'),
+                            conversation,query.get('lead_id'))
+                    known=query.get('known_group_work_revision','')
+                    if group_work_updates and 0<len(known)<=80:
+                        result=await group_work_updates.read(profile,conversation,known,read_group_revision)
+                    else:
+                        result=await asyncio.to_thread(read_revision,profile,query.get('channel_id'),
+                            conversation,query.get('lead_id'))
                 elif resource=='history':
                     colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
                         'support_case_only','paired_history','paired_history_redirect','anchor',
@@ -133,7 +179,9 @@ def handler(member_from_request,origin,logger,resource):
                     read=partial(history,**options) if options else history
                     result=await timing.run(read,profile,query.get('provider',''),query.get('lead_id'),query.get('channel_id',''),query.get('conversation_id',''),
                         None if case_only else query.get('before'),None if case_only else query.get('anchor'))
-                    if not case_only and not (result.get('dialog') or {}).get('archive_read_only'):
+                    dialog=result.get('dialog') or {}
+                    group_refresh=query.get('group_work_refresh')=='1' and dialog.get('group_work_revision')
+                    if not case_only and not group_refresh and not dialog.get('archive_read_only'):
                         from tenant_message_delivery import enrich_history
                         result=await enrich_history(profile,result)
                 elif resource=='agent_assignment':
@@ -183,6 +231,8 @@ def handler(member_from_request,origin,logger,resource):
                     result=await asyncio.to_thread(quick_replies,profile,payload)
                     return web.json_response({'success':True,'result':result},headers=headers)
                 result=await asyncio.to_thread(presence_set_status if resource=='presence' else dialog_view_preferences if resource=='view_preferences' else company_panel_preferences if resource=='company_panel_preferences' else dialog_lifecycle if resource=='dialogs_lifecycle' else dialog_sources if resource=='sources' else mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
+                if group_work_updates and resource=='dialogs_lifecycle' and result.get('group_changed'):
+                    group_work_updates.publish(profile,payload.get('conversation_id'))
             return web.json_response({'success':True,'result':result},headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error),

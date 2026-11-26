@@ -248,41 +248,46 @@
   const identity=m=>m?String(m.tenant_id)+':'+String(m.telegram_id):'';
   const dialogKey=row=>[row?.provider||'connect',row?.channel_id||'',row?.conversation_id||'',row?.lead_id||''].join(':');
   const sameDialog=(a,b)=>!!a&&!!b&&dialogKey(a)===dialogKey(b);
-  let groupWorkTimer=null,groupWorkRefreshing=false;
+  let groupWorkTimer=null,groupWorkRequest=null;
   const groupWorkVisible=()=>!document.hidden&&$('view-dialogs')?.classList.contains('active');
   function stopGroupWorkRefresh(){
     clearTimeout(groupWorkTimer);
     groupWorkTimer=null;
+    groupWorkRequest?.abort();
   }
   function canRefreshGroupWork(route){
     return groupWorkVisible()&&member?.active===true&&route?.group_work_revision&&
       !route.archive_read_only&&!route.search_overview_read_only&&!route.colleague_read_only&&!route.source_message_id;
   }
-  function scheduleGroupWorkRefresh(immediate=false){
-    if(immediate||!canRefreshGroupWork(currentDialog))stopGroupWorkRefresh();
-    if(groupWorkRefreshing||groupWorkTimer!==null||!canRefreshGroupWork(currentDialog))return;
-    const delay=currentDialog.lifecycle?.group_work?.role?2500:1200;
-    groupWorkTimer=setTimeout(checkGroupWork,immediate?0:delay);
+  function scheduleGroupWorkRefresh(delay=0){
+    if(!canRefreshGroupWork(currentDialog)){stopGroupWorkRefresh();return;}
+    if(groupWorkRequest||groupWorkTimer!==null)return;
+    groupWorkTimer=setTimeout(checkGroupWork,delay);
   }
   async function checkGroupWork(){
     groupWorkTimer=null;
     const route=currentDialog,view=openRevision,version=epoch;
     const current=()=>canRefreshGroupWork(currentDialog)&&version===epoch&&view===openRevision&&sameDialog(route,currentDialog);
     const busy=()=>pendingDialogRoute||lifecycleInFlight.size;
-    if(!current()||busy()){scheduleGroupWorkRefresh();return;}
+    if(!current()||busy()){scheduleGroupWorkRefresh(300);return;}
     const query=historyQuery(route);
     query.set('group_work_revision','1');
+    query.set('known_group_work_revision',route.group_work_revision);
     query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
-    groupWorkRefreshing=true;
+    const controller=new AbortController(),started=performance.now(),timeout=setTimeout(()=>controller.abort(),15000);
+    groupWorkRequest=controller;
     try{
-      const signal=window.AbortSignal?.timeout?.(5000);
-      const {result}=await rawApi(endpoint+'dialogs/history?'+query,{method:'GET',signal},{optionalScopedRead:true});
+      const {result}=await rawApi(endpoint+'dialogs/history?'+query,{method:'GET',signal:controller.signal},{optionalScopedRead:true});
       if(current()&&!busy()&&typeof result?.revision==='string'&&result.revision!==currentDialog.group_work_revision)
-        await openDialog(currentDialog,true,'',{suppressRead:true});
+        await openDialog(currentDialog,true,'',{suppressRead:true,groupWorkRefresh:true});
     }catch(error){
       if(current()&&!busy()&&[403,404].includes(error.status))
         await openDialog(currentDialog,true,'',{suppressRead:true,revalidateAccess:true});
-    }finally{groupWorkRefreshing=false;scheduleGroupWorkRefresh();}
+    }finally{
+      clearTimeout(timeout);
+      groupWorkRequest=null;
+      scheduleGroupWorkRefresh(controller.signal.aborted?0:Math.max(0,1200-(performance.now()-started)));
+    }
   }
   function stopAutoRefresh(){clearTimeout(autoRefreshTimer);autoRefreshTimer=null;}
   function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();const backgroundNoticePolling=document.hidden&&window.Notification?.permission==='granted'&&!pushDeviceConnected;if((document.hidden&&!backgroundNoticePolling)||!hasRight('dialogs'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;void refreshClientSupportCase();try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
@@ -1931,8 +1936,9 @@
     }
     return query;
   }
-  function timelineHistoryQuery(route,knownPage=null){
+  function timelineHistoryQuery(route,knownPage=null,groupWorkRefresh=false){
     const query=dialogueHistoryQuery(route);
+    if(groupWorkRefresh)query.set('group_work_refresh','1');
     if(!route.case_attachment&&!route.source_message_id&&member?.tenant_id&&member?.telegram_id){
       query.set('internal_comments','1');
       query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
@@ -2516,7 +2522,7 @@
     if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=verifiedMergePages.delete(options.verifiedMergePage)?options.verifiedMergePage:await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(page.combined_dialog){
+    try{const page=verifiedMergePages.delete(options.verifiedMergePage)?options.verifiedMergePage:await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline,options.groupWorkRefresh));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(page.combined_dialog){
       const combined=page.combined_dialog;
       if(options.keepExactMergeRoute||historyMergeReadRoutes(route).length||options.followedCombinedDialog||route.case_attachment||route.source_message_id||combined.provider!=='connect'||combined.channel_id!==route.channel_id||sameDialog(combined,route))throw new Error(t('error'));
       return openDialog(combined,false,'',{...options,followedCombinedDialog:true});
@@ -3947,7 +3953,7 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
   document.addEventListener('tenant-auth-pending',()=>{if(currentDialog?.colleague_read_only)closeDialog(false,true);mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);});
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
-  for(const name of ['tenant-view','visibilitychange'])document.addEventListener(name,()=>scheduleGroupWorkRefresh(true));
+  for(const name of ['tenant-view','visibilitychange'])document.addEventListener(name,()=>scheduleGroupWorkRefresh());
   document.addEventListener('tenant-chat-close',stopGroupWorkRefresh);
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
@@ -3965,7 +3971,7 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
     if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}
     else if(!window.tenantRequestCoordinator){refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}
   });
-  window.addEventListener('focus',()=>{scheduleGroupWorkRefresh(true);updateBrowserNoticeButton();if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
+  window.addEventListener('focus',()=>{scheduleGroupWorkRefresh();updateBrowserNoticeButton();if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{syncDuplicateButton();closeDuplicateSearch(true);updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
