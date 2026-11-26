@@ -124,7 +124,7 @@ def quote_target(cur,tenant,command,connection):
     return value
 
 
-def reserve(session, command):
+def reserve(session, command, *, validate_route=None):
     with _connect() as conn:
         ensure_schema(conn)
         with conn.cursor() as cur:
@@ -150,6 +150,8 @@ def reserve(session, command):
                 error.keep_request = row['state'] != 'blocked'
                 conn.commit()  # Persist stale receipt transitions before returning the refusal.
                 raise error
+            if validate_route is not None:
+                validate_route(connection, integration, command)
             # A voice attempt with an unknown outcome remains non-retryable by
             # its request ID, but must not freeze unrelated conversation sends.
             cur.execute("""SELECT request_id FROM saas_chat_send_receipts WHERE tenant_id=%s::uuid AND lead_id=%s
@@ -205,6 +207,8 @@ def mark_sending(item, route):
                     raise TenantLinearError('Участие в группе изменилось. Подготовьте новую отправку.',409)
                 if group_participant:
                     route.update(group_participant_id=group_participant,group_channel_id=connection[1])
+                    if route.get('voice_protocol'):
+                        route['group_account_jid'] = credentials['native']['scope']['account']
                 from tenant_dialog_lifecycle import ai_blocked, enabled as lifecycle_enabled
                 managed=lifecycle_enabled(cur, profile['tenant_id']) and ai_blocked(cur,profile['tenant_id'],'connect',credentials['channel_id'],credentials['conversation_id'])
                 if is_group and not managed:
