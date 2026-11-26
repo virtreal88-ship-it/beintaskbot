@@ -2,100 +2,217 @@
 (() => {
   const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const labels=()=>({ru:{tasks:'Задачи',notes:'Заметки',create:'Создать задачу',emptyTasks:'В загруженной части списка задач этой сделки нет.',emptyNotes:'Заметок нет.',loading:'Загружаем…',error:'Не удалось загрузить. Повторите открытие карточки.',limited:'Показана только загруженная часть списка.',chat:'Переписка'},az:{tasks:'Tapşırıqlar',notes:'Qeydlər',create:'Tapşırıq yarat',emptyTasks:'Yüklənmiş siyahıda bu sövdələşmənin tapşırığı yoxdur.',emptyNotes:'Qeyd yoxdur.',loading:'Yüklənir…',error:'Yükləmək mümkün olmadı. Kartı yenidən açın.',limited:'Siyahının yalnız yüklənmiş hissəsi göstərilir.',chat:'Yazışma'},en:{tasks:'Tasks',notes:'Notes',create:'Create task',emptyTasks:'No tasks for this deal in the loaded list.',emptyNotes:'No notes.',loading:'Loading…',error:'Could not load. Reopen the card to retry.',limited:'Only the loaded part of the list is shown.',chat:'Conversation'}}[window.tenantI18n?.language]||{tasks:'Tapşırıqlar',notes:'Qeydlər',create:'Tapşırıq yarat',emptyTasks:'Tapşırıq yoxdur.',emptyNotes:'Qeyd yoxdur.',loading:'Yüklənir…',error:'Yükləmə xətası',limited:'Yüklənmiş hissə',chat:'Yazışma'});
-  const style=document.createElement('style');style.textContent='.kommo-deal-sections{margin-top:20px;display:grid;gap:22px}.kommo-deal-section{min-width:0}.kommo-deal-section header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}.kommo-deal-section h3{margin:0;font-size:14px;color:var(--muted);font-weight:600}.kommo-related-card{display:block;width:100%;box-sizing:border-box;text-align:left;padding:14px;margin-top:10px;border:1px solid var(--line);border-left:3px solid var(--brand);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;overflow-wrap:anywhere;white-space:pre-wrap}.kommo-related-card small{display:block;color:var(--muted);margin-bottom:8px;font-size:12px}.kommo-note-card{border-left-color:#efb957}.kommo-deal-section button{min-height:44px}.kommo-deal-chat-title{font-size:14px;color:var(--muted);margin:24px 0 12px}#dealModal .modal-card{max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;width:calc(100% - 24px);padding-bottom:max(22px,env(safe-area-inset-bottom))}#dealModal.deal-conversation{padding:0}#dealModal.deal-conversation>.modal-card{width:100%;max-width:none;height:100dvh;max-height:100dvh;border-radius:0;padding:0;display:flex;flex-direction:column;overflow:hidden}#dealModal.deal-conversation .modal-head{position:static;flex:none;display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);margin:0}#dealModal .deal-chat-identity{flex:1;min-width:0}#dealModal .deal-chat-identity h2{font-size:17px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#dealModal .deal-chat-phone{font-size:14px;margin-top:4px;overflow-wrap:anywhere}#dealModal .deal-info-toggle,#dealModal #closeModal{flex:none;min-width:44px;min-height:44px}#dealModal.deal-conversation #modalContent{flex:1;min-height:0;overflow:hidden;display:flex;flex-direction:column}#dealModal.deal-conversation .chat-placeholder{flex:1;min-height:0;display:flex;flex-direction:column;margin:0;border-radius:0;padding:0;overflow:hidden}#dealModal.deal-conversation .deal-chat-history{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 16px}#dealModal.deal-conversation #chatRows{max-height:none;overflow:visible}#dealModal.deal-conversation .chat-placeholder>div:not(.deal-chat-history){flex:none;padding:10px 16px;margin:0!important}#dealModal.deal-conversation .deal-info-panel{min-height:0;flex:1;overflow:auto;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}#dealModal.deal-conversation [hidden]{display:none!important}#dealModal.deal-conversation #chatText{min-width:0;color:var(--ink);background:var(--card)!important}#dealModal.deal-conversation .chat-placeholder{padding-bottom:env(safe-area-inset-bottom)}#dealModal.deal-conversation .chat-placeholder>.deal-chat-compose{flex:0 1 auto;min-height:0;max-height:60%;overflow:auto;overscroll-behavior:contain;box-sizing:border-box}#dealModal.deal-conversation .deal-chat-compose textarea{max-height:min(160px,20dvh);overflow-y:auto!important;min-height:44px;box-sizing:border-box}#dealModal.deal-conversation #tcAiResult{min-width:0;overflow-wrap:anywhere}#dealModal.deal-conversation .deal-chat-compose>div:first-child{min-width:0}#dealModal.deal-conversation .deal-chat-compose button{max-width:100%;white-space:normal}';document.head.append(style);
-  const stageStyle=document.createElement('style');stageStyle.textContent=`
-/* One edge-to-edge deal surface, including loading/error states. These scoped
-   rules override the general shell's rounded dialog and mobile viewport inset. */
-#dealModal{padding:0;overflow:hidden}
-#dealModal>.modal-card{box-sizing:border-box;width:100%;height:100dvh;max-width:none!important;max-height:100dvh!important;margin:0;padding:0;border:0;border-radius:0!important;box-shadow:none;display:flex;flex-direction:column;overflow:hidden;animation:none}
-#dealModal>.modal-card>.modal-head{flex:none;padding:12px 16px;margin:0}
-#dealModal>.modal-card>#modalContent{flex:1;min-height:0;overflow:auto}
-#dealModal.show>.modal-card{animation:deal-slide-in 180ms ease-out}
-@keyframes deal-slide-in{from{transform:translateX(100%)}to{transform:none}}
-@media(prefers-reduced-motion:reduce){#dealModal.show>.modal-card{animation:none}}
-
-/* Reference: 1080px capture at 3x, 812x76px pill across a 10px stage line. */
-#dealModal.deal-conversation>.modal-card{border:0}
-#dealModal.deal-conversation .modal-head{border-bottom:0}
-.deal-stage-bar{position:relative;isolation:isolate;flex:none;display:flex;align-items:center;flex-direction:column;justify-content:center;min-height:44px;padding:0;gap:0;box-sizing:border-box}
-.deal-stage-bar::before{content:"";position:absolute;z-index:-1;left:0;right:0;top:20px;height:3px;background:#fade96}
-.deal-stage-pill{display:flex;align-items:stretch;width:75.2%;max-width:520px;height:26px;box-sizing:border-box;border:1px solid #cdd1d4;border-radius:10px;background:#fff;color:#657986}
-.deal-stage-pill>.deal-pipeline-name{display:block;box-sizing:border-box;flex:0 0 39.5%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 12px;border:0;background:none;color:#657986;font:400 15px/20px Arial,sans-serif}
-#dealModal .deal-stage-trigger{position:relative;display:flex;align-items:center;gap:10px;box-sizing:border-box;flex:1;min-width:0;max-width:none;height:24px;min-height:0;padding:0 12px 0 15px;border:0;border-left:1px solid #cdd1d4;border-radius:0 9px 9px 0;background:#fade96!important;color:#363b44;font:400 15px/20px Arial,sans-serif;opacity:1}
-.deal-stage-trigger::before{content:"";position:absolute;inset:-10px 0}
-.deal-stage-trigger::after{content:"";flex:none;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg);margin:0 2px 3px 0}
-.deal-stage-trigger-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
-.deal-stage-trigger:focus-visible{outline:2px solid #363b44;outline-offset:3px}
-.deal-stage-bar>[role=status]:not(:empty){align-self:stretch;padding:6px;color:var(--ink);background:var(--card);font-size:12px;overflow-wrap:anywhere}
-.deal-stage-picker{position:absolute;inset:0;z-index:60;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
-.deal-stage-sheet{width:100%;max-width:520px;max-height:80dvh;overflow:auto;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0003}
-.deal-stage-sheet header{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
-.deal-stage-sheet select{flex:1;min-width:0;max-width:100%;font:inherit;font-weight:600;color:var(--ink);background:var(--card);border:0;min-height:44px}
-.deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;padding:16px;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
-.deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,#ffe08b)}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
-@media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
-#dealModal.deal-desktop-sidebar #modalContent{flex-direction:row-reverse;align-items:stretch}
-#dealModal.deal-desktop-sidebar .deal-info-panel{flex:0 0 clamp(300px,30vw,440px);width:clamp(300px,30vw,440px);box-sizing:border-box;border-left:1px solid var(--line);overscroll-behavior:contain}
-#dealModal.deal-desktop-sidebar .chat-placeholder{min-width:0}
-#dealModal .deal-support-caption{display:none}
-#dealModal.deal-desktop-sidebar .deal-support-caption{display:inline;margin-left:6px}
-#dealModal.deal-desktop-sidebar .deal-duplicate-action{flex:none;min-height:44px}
-`;document.head.append(stageStyle);
+  const cardCopy={
+    ru:{general:'Общее',data:'Данные',chat:'Чат',dialog:'Открыть диалог',noChat:'К сделке не привязан доступный диалог.',company:'Компания',pipeline:'Воронка',responsible:'Ответственный',description:'Описание',customer:'Клиент',deal:'Сделка',stage:'Стадия сделки',close:'Закрыть',duplicate:'Найти дубликат',contact:'Контакт',history:'История',amount:'Сумма',fields:'Сделка',send:'Отправить',compose:'Сообщение клиенту',customerMessage:'Клиент',operator:'Оператор',file:'Открыть файл',media:'Вложение'},
+    az:{general:'Ümumi',data:'Məlumat',chat:'Söhbət',dialog:'Dialoqu aç',noChat:'Sövdələşməyə əlçatan dialoq bağlanmayıb.',company:'Şirkət',pipeline:'Satış xətti',responsible:'Məsul əməkdaş',description:'Təsvir',customer:'Müştəri',deal:'Sövdələşmə',stage:'Sövdələşmə mərhələsi',close:'Bağla',duplicate:'Dublikatları tap',contact:'Əlaqə',history:'Tarixçə',amount:'Məbləğ',fields:'Sövdələşmə',send:'Göndər',compose:'Mesaj yazın',customerMessage:'Müştəri',operator:'Operator',file:'Faylı aç',media:'Qoşma'},
+    en:{general:'Overview',data:'Details',chat:'Chat',dialog:'Open conversation',noChat:'There is no accessible conversation linked to this deal.',company:'Company',pipeline:'Pipeline',responsible:'Responsible employee',description:'Description',customer:'Customer',deal:'Deal',stage:'Deal stage',close:'Close',duplicate:'Find duplicate',contact:'Contact',history:'History',amount:'Amount',fields:'Deal details',send:'Send',compose:'Message to customer',customerMessage:'Customer',operator:'Operator',file:'Open attachment',media:'Attachment'}
+  };
+  const copy=()=>cardCopy[window.tenantI18n?.language]||cardCopy.az;
+  const css=document.createElement('style');
+  css.textContent=`
+    :is(#dealModal,#nativeEntityCard[data-type=deal]){padding:0;overflow:hidden}
+    :is(#dealModal,#nativeEntityCard[data-type=deal])>.modal-card{position:relative;box-sizing:border-box;width:100%;height:100dvh;max-width:none!important;max-height:100dvh!important;margin:0;padding:0;border:0;border-radius:0!important;box-shadow:none;display:flex;flex-direction:column;overflow:hidden}
+    #dealModal.show>.modal-card{animation:deal-slide-in 180ms ease-out}
+    @keyframes deal-slide-in{from{transform:translateX(100%)}to{transform:none}}
+    @media(prefers-reduced-motion:reduce){#dealModal.show>.modal-card{animation:none}}
+    :is(#dealModal,#nativeEntityCard[data-type=deal])>.modal-card>.modal-head{position:static;flex:none;display:flex;align-items:center;gap:10px;padding:9px 18px;margin:0;border-bottom:1px solid var(--line)}
+    :is(#dealModal,#nativeEntityCard[data-type=deal]) :is(#modalContent,#nativeEntityBody){flex:1;min-height:0;min-width:0;overflow:auto}
+    .deal-conversation .deal-chat-identity{flex:1;min-width:0}
+    .deal-conversation .deal-chat-identity h2{font-size:17px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .deal-conversation .deal-chat-phone{display:flex;flex-wrap:wrap;gap:3px 9px;font-size:13px;margin-top:3px;color:var(--muted);overflow-wrap:anywhere}
+    .deal-conversation .modal-head .close{flex:none;min-width:44px;min-height:44px}
+    .deal-conversation .deal-stage-bar{flex:none;min-width:0;max-width:40%;display:grid;gap:3px}
+    .deal-conversation .deal-stage-trigger{display:flex;align-items:center;gap:9px;min-width:0;width:100%;color:var(--ink);font:inherit;background:var(--app-accent-soft,var(--paper));border:1px solid var(--line);border-radius:8px;padding:0 11px;min-height:44px}
+    .deal-conversation .deal-stage-trigger:is(select){display:block}
+    .deal-stage-trigger:is(button)::after{content:"";flex:none;width:6px;height:6px;border-right:1.5px solid;border-bottom:1.5px solid;transform:rotate(45deg);margin-bottom:3px}
+    .deal-stage-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .deal-stage-bar>[role=status]{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
+    .deal-stage-bar>[role=status]:empty{display:none}
+    .deal-stage-picker{position:absolute;inset:0;z-index:60;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
+    .deal-stage-sheet{width:100%;max-width:520px;max-height:80dvh;overflow:auto;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0003}
+    .deal-stage-sheet header{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+    .deal-stage-sheet select{flex:1;min-width:0;max-width:100%;font:inherit;color:var(--ink);background:var(--card);border:0;min-height:44px}
+    .deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
+    .deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,var(--brand))}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
+    #dealModal #modalContent.deal-card-layout,#nativeEntityCard[data-type=deal] #nativeEntityBody.deal-card-layout{display:flex;flex-direction:column;overflow:hidden}
+    .deal-card-layout [hidden],.deal-conversation .deal-stage-picker[hidden]{display:none!important}
+    .deal-card-tabs,.deal-mobile-switch{display:flex;align-items:stretch;gap:4px;padding:0 18px;border-bottom:1px solid var(--line);min-width:0;flex:none}
+    .deal-card-tabs button,.deal-mobile-switch button{border:0;background:none;color:var(--muted);font:inherit;border-radius:0;min-height:42px;max-width:100%;padding:4px 12px;white-space:normal}
+    .deal-card-tabs button[aria-selected=true],.deal-mobile-switch button[aria-pressed=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand);font-weight:600}
+    .deal-mobile-switch{display:none}
+    .deal-card-columns{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);padding:12px;gap:10px;background:var(--app-surface,var(--paper))}
+    .deal-card-layout :is(.deal-info-panel,.chat-placeholder){margin:0;min-height:0;min-width:0;border:1px solid var(--line);border-radius:12px;background:var(--card);overscroll-behavior:contain}
+    .deal-card-layout .deal-info-panel{overflow:auto;padding:16px}
+    .deal-card-layout .chat-placeholder{display:flex;flex-direction:column;overflow:hidden;padding:0}
+    .deal-chat-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 16px;min-width:0;border-bottom:1px solid var(--line);flex:none}
+    .deal-chat-header h3,.deal-data-block h3,.kommo-deal-section h3{margin:0;font-size:15px;font-weight:600;color:var(--ink)}
+    .deal-chat-header button{white-space:normal}
+    .deal-card-layout .deal-chat-history{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px 16px}
+    .deal-card-layout #chatRows{max-height:none;overflow:visible;margin:0}
+    .deal-card-layout .deal-chat-compose{flex:0 1 auto;min-height:0;max-height:60%;overflow:auto;overscroll-behavior:contain;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+    .deal-card-layout .deal-chat-compose .operator-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin:0}
+    .deal-card-layout .deal-chat-compose .operator-composer-actions{display:flex;align-items:center;gap:6px}
+    .deal-card-layout .deal-chat-compose textarea{width:100%;margin:0;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit;resize:none;max-height:min(160px,20dvh);overflow-y:auto!important;min-height:44px;min-width:0;box-sizing:border-box}
+    .deal-card-layout #tcAiResult{min-width:0;overflow-wrap:anywhere}
+    .deal-card-layout :is(.deal-card-empty,.deal-card-status){margin:0;padding:10px 0;color:var(--muted)}
+    .deal-data-block+.deal-data-block{margin-top:18px}
+    .deal-data-block dl{background:var(--app-raised,var(--paper));border:1px solid var(--line);border-radius:10px;margin:9px 0 0;padding:4px 12px}
+    .deal-data-block dl div{display:grid;grid-template-columns:minmax(92px,.7fr) minmax(0,1fr);align-items:start;gap:10px;padding:9px 0;overflow-wrap:anywhere}
+    .deal-data-block dl div+div{border-top:1px solid var(--line)}
+    .deal-data-block dt{color:var(--muted);font-size:13px}.deal-data-block dd{margin:0;white-space:pre-wrap}
+    .deal-card-data-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
+    .deal-card-data-actions:empty{display:none}
+    #nativeEntityCard.deal-conversation[data-type=deal] .crm-modal-actions{flex:none;margin:0;padding:8px 12px;border-top:1px solid var(--line)}
+    #nativeEntityCard.deal-conversation[data-type=deal] .crm-modal-actions :is([hidden],[data-native-card-close]){display:none!important}
+    #nativeEntityCard.deal-conversation[data-type=deal] .crm-modal-actions:not(:has(button:not([hidden],[data-native-card-close]))){display:none}
+    #nativeEntityCard.deal-conversation[data-type=deal] [data-native-card-status][hidden]{display:none!important}
+    .kommo-deal-section{min-width:0}.kommo-deal-section header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+    .kommo-related-card{display:block;width:100%;text-align:left;padding:12px;margin-top:9px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;overflow-wrap:anywhere;white-space:pre-wrap}
+    .kommo-related-card small{display:block;color:var(--muted);margin-bottom:5px;font-size:12px}
+    .deal-card-layout .deal-message{display:flex;margin:9px 0}.deal-card-layout .deal-message[data-direction=outgoing]{justify-content:flex-end}
+    .deal-card-layout .deal-message>div{box-sizing:border-box;min-width:0;max-width:min(90%,580px);background:var(--app-raised,var(--paper));border:1px solid var(--line);border-radius:11px;padding:9px 12px;overflow-wrap:anywhere}
+    .deal-card-layout .deal-message[data-direction=outgoing]>div{background:var(--app-accent-soft,color-mix(in srgb,var(--brand) 9%,var(--card)))!important}
+    .deal-message-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 10px;font-size:12px;color:var(--muted);margin-bottom:4px}.deal-message-meta strong{color:var(--ink)}
+    .deal-message [data-chat-body]{white-space:pre-wrap}.deal-message [data-chat-attachment] button{margin-top:6px}
+    .deal-conversation .deal-support-caption{display:none}
+    @media(min-width:900px){.deal-conversation .deal-support-caption{display:inline}}
+    @media(max-width:899px){
+      .deal-card-tabs,.deal-mobile-switch{padding:0 8px}.deal-card-tabs button{flex:0 1 auto;min-width:0;font-size:13px;padding-inline:7px;overflow-wrap:anywhere}
+      .deal-mobile-switch{display:flex}.deal-mobile-switch button{flex:1;min-height:38px}
+      .deal-card-columns{display:flex;flex-direction:column;padding:0;gap:0}
+      .deal-card-layout :is(.deal-info-panel,.chat-placeholder){flex:1;min-height:0;border:0;border-radius:0}
+      .deal-card-layout .deal-info-panel{padding:12px}.deal-chat-header,.deal-card-layout .deal-chat-history{padding-inline:12px}
+      #nativeEntityCard.deal-conversation[data-type=deal]:has([data-deal-pane=chat][aria-pressed=true]) .crm-modal-actions{display:none}
+      .deal-card-layout .deal-chat-compose textarea{font-size:16px}
+      :is(#dealModal,#nativeEntityCard[data-type=deal])>.modal-card>.modal-head{gap:6px;padding:6px 8px}
+      .deal-conversation .deal-stage-bar{max-width:36%}.deal-conversation .deal-stage-trigger{font-size:12px;padding-inline:7px}
+      .deal-conversation .deal-chat-identity h2{font-size:15px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow-wrap:anywhere}
+    }
+    @media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+  `;
+  document.head.append(css);
   const date=value=>{const d=new Date(typeof value==='number'?value*1000:value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString():'';};
-  let cleanupLayout=()=>{};
-  function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent}){
-    cleanupLayout();
-    const c=labels(),container=document.createElement('div');container.className='kommo-deal-sections';container.innerHTML=`<section class="kommo-deal-section"><header><h3>${esc(c.tasks)}</h3><button type="button" class="primary" data-related-create hidden>+ ${esc(c.create)}</button></header><div data-related-tasks role="status">${esc(c.loading)}</div></section><section class="kommo-deal-section"><header><h3>${esc(c.notes)}</h3></header><div data-related-notes role="status">${esc(c.loading)}</div></section>`;
-    const chat=host.querySelector('.chat-placeholder');host.insertBefore(container,chat);if(chat){const heading=document.createElement('h3');heading.className='kommo-deal-chat-title';heading.textContent=c.chat;chat.before(heading);}
-    // Conversation-first card: related content stays available behind Info, not above chat.
-    const modal=document.getElementById('dealModal'),head=modal.querySelector('.modal-head');
-    modal.querySelectorAll('.deal-stage-bar,.deal-stage-picker').forEach(node=>node.remove());
-    const previousTitle=document.getElementById('modalTitle');if(previousTitle&&previousTitle.parentElement!==head)head.prepend(previousTitle);
+  function overview(deal,c=copy()){
+    const block=(title,values)=>`<section class="deal-data-block"><h3>${esc(title)}</h3><dl>${values.filter(([,value])=>value!==undefined&&value!==null&&value!=='').map(([label,value,track])=>`<div><dt>${esc(label)}</dt><dd ${track?'data-deal-pipeline':''}>${esc(value)}</dd></div>`).join('')}</dl></section>`;
+    return block(c.customer,[[c.company,deal.company_name||'—'],['Email',deal.contact_email]])+block(c.fields,[
+      [c.pipeline,deal.pipeline_name||'—',true],[c.responsible,deal.responsible_name||'—'],
+      [c.amount,deal.price??deal.amount],[c.description,deal.description]])+'<div class="deal-card-data-actions"></div>';
+  }
+  function layout({host,deal,sections,chat,stage,isCurrent,actions=[]}){
+    const modal=host.closest('.modal'),head=modal.querySelector('.modal-head'),title=head.querySelector('h2'),closeButton=head.querySelector('.close'),c=copy();
+    head.prepend(title);
     head.querySelectorAll('[data-deal-header-extra]').forEach(node=>node.remove());
-    modal.classList.add('deal-conversation');modal.querySelector('.modal-card').setAttribute('role','dialog');modal.querySelector('.modal-card').setAttribute('aria-modal','true');modal.querySelector('.modal-card').setAttribute('aria-labelledby','modalTitle');
-    const title=document.getElementById('modalTitle');title.textContent=deal.contact_name||deal.name||c.chat;
-    const identity=document.createElement('div');identity.className='deal-chat-identity';identity.dataset.dealHeaderExtra='1';
+    modal.classList.add('deal-conversation');
+    title.textContent=deal.name||deal.title||c.deal;
+    modal.querySelector('.modal-card').setAttribute('role','dialog');
+    modal.querySelector('.modal-card').setAttribute('aria-modal','true');
+    modal.querySelector('.modal-card').setAttribute('aria-labelledby',title.id);
+    const identity=document.createElement('div');identity.className='deal-chat-identity';identity.dataset.dealHeaderExtra='';
     title.before(identity);identity.append(title);
-    const phone=document.createElement('div');phone.className='deal-chat-phone';phone.textContent=deal.phone||'—';identity.append(phone);
-    const info=document.createElement('section');info.id='dealInfoPanel';info.className='deal-info-panel';info.hidden=true;
-    for(const node of [...host.children])if(node!==chat&& !node.classList.contains('kommo-deal-chat-title'))info.append(node);
-    host.querySelector('.kommo-deal-chat-title')?.remove();host.prepend(info);
-    const infoButton=document.createElement('button');infoButton.type='button';infoButton.className='outline deal-info-toggle';infoButton.dataset.dealHeaderExtra='1';
-    const infoLabel=({ru:'Инфо',az:'Məlumat',en:'Info'}[window.tenantI18n?.language]||'Məlumat');
-    infoButton.textContent='ⓘ';infoButton.title=infoLabel;infoButton.setAttribute('aria-label',infoLabel);infoButton.setAttribute('aria-controls',info.id);infoButton.setAttribute('aria-expanded','false');
-    head.insertBefore(infoButton,document.getElementById('closeModal'));
-    const duplicate=info.querySelector('[data-duplicate-search]');
-    const duplicateHome=duplicate?document.createComment('duplicate-search-home'):null;
-    if(duplicate){duplicate.before(duplicateHome);duplicate.classList.add('deal-duplicate-action');duplicate.textContent=({ru:'Найти дубликат',az:'Dublikatları tap',en:'Find duplicate'}[window.tenantI18n?.language]||'Dublikatları tap');}
-    const desktop=window.matchMedia?.('(min-width:1024px)');
-    let mobileInfoOpen=false;
-    const setInfo=open=>{
-      mobileInfoOpen=open;
-      const sideBySide=desktop?.matches===true,visible=sideBySide||open;
-      modal.classList.toggle('deal-desktop-sidebar',sideBySide);
-      if(duplicate){if(sideBySide){infoButton.before(duplicate);duplicate.dataset.dealHeaderExtra='1';duplicate.dataset.duplicateAuto='true';duplicate.style.marginTop='0';}else{duplicateHome.after(duplicate);delete duplicate.dataset.dealHeaderExtra;delete duplicate.dataset.duplicateAuto;duplicate.style.marginTop='12px';}}
-      info.hidden=!visible;if(chat)chat.hidden=!sideBySide&&open;
-      infoButton.hidden=sideBySide;infoButton.setAttribute('aria-expanded',String(visible));
-      if(visible)loadRelated();
+    const client=document.createElement('div');client.className='deal-chat-phone';
+    for(const value of [deal.contact_name,deal.contact_phone||deal.phone])if(value){const span=document.createElement('span');span.textContent=value;client.append(span);}
+    if(client.children.length)identity.append(client);
+    closeButton.setAttribute('aria-label',c.close);
+    if(stage){stage.dataset.dealHeaderExtra='';head.insertBefore(stage,closeButton);}
+    const tabs=document.createElement('div');tabs.className='deal-card-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',c.data);
+    const info=document.createElement('section');info.id=host.id==='modalContent'?'dealInfoPanel':'nativeDealInfoPanel';info.className='deal-info-panel';
+    const columns=document.createElement('div');columns.className='deal-card-columns';
+    const toggle=document.createElement('div');toggle.className='deal-mobile-switch';toggle.setAttribute('role','group');toggle.setAttribute('aria-label',c.deal);
+    const choice=(name,key)=>{const button=document.createElement('button');button.type='button';button.textContent=name;button.dataset.dealPane=key;toggle.append(button);return button;};
+    const data=choice(c.data,'data'),conversation=choice(c.chat,'chat');
+    if(!chat)chat=document.createElement('div');
+    chat.classList.add('chat-placeholder');
+    const chatHeader=document.createElement('header');chatHeader.className='deal-chat-header';
+    const heading=document.createElement('h3');heading.textContent=c.chat;
+    const link=document.createElement('button');link.type='button';link.className='outline';link.dataset.dealOpenDialog='';link.textContent=c.dialog;link.hidden=true;
+    chatHeader.append(heading,link);
+    const history=document.createElement('div');history.className='deal-chat-history';
+    const composer=document.createElement('div');composer.className='deal-chat-compose';composer.hidden=true;
+    const rows=chat.querySelector('#chatRows');
+    if(rows){history.append(rows);composer.hidden=!chat.children.length;composer.append(...chat.children);}
+    else{const status=document.createElement('p');status.className='deal-card-empty';status.textContent=c.noChat;history.append(status);}
+    chat.replaceChildren(chatHeader,history,composer);
+    columns.append(info,chat);
+    host.classList.add('deal-card-layout');host.replaceChildren(tabs,toggle,columns);
+    let mobileChat=false,openedChat=false,selected=0;
+    const buttons=sections.map(({key,label,node},i)=>{
+      const tab=document.createElement('button');tab.type='button';tab.dataset.dealTab=key;tab.id=host.id+'Tab'+i;
+      tab.textContent=label;tab.setAttribute('role','tab');node.id=host.id+'Panel'+i;node.dataset.dealPanel=key;
+      node.setAttribute('role','tabpanel');node.setAttribute('aria-labelledby',tab.id);tab.setAttribute('aria-controls',node.id);
+      tabs.append(tab);info.append(node);tab.onclick=()=>select(i);return tab;
+    });
+    sections[0].node.querySelector('.deal-card-data-actions')?.append(...actions);
+    function display(){
+      const desktop=media?.matches===true;
+      info.hidden=!desktop&&mobileChat;chat.hidden=!desktop&&!mobileChat;tabs.hidden=info.hidden;
+      data.setAttribute('aria-pressed',String(!mobileChat));conversation.setAttribute('aria-pressed',String(mobileChat));
+    }
+    data.onclick=()=>{mobileChat=false;display();};
+    conversation.onclick=()=>{mobileChat=true;display();if(!openedChat&&history.querySelector('#chatRows'))history.scrollTop=history.scrollHeight;openedChat=true;};
+    function select(index){
+      if(!isCurrent())return;
+      selected=index;
+      for(const [i,section] of sections.entries()){
+        const active=i===index;section.node.hidden=!active;buttons[i].setAttribute('aria-selected',String(active));buttons[i].tabIndex=active?0:-1;
+      }
+      info.scrollTop=0;
+      sections[index].load?.();
+    }
+    tabs.onkeydown=event=>{
+      const index={ArrowLeft:(selected+buttons.length-1)%buttons.length,ArrowRight:(selected+1)%buttons.length,Home:0,End:buttons.length-1}[event.key];
+      if(index===undefined)return;event.preventDefault();select(index);buttons[index].focus();
     };
-    infoButton.onclick=()=>setInfo(info.hidden);
-    modal.onkeydown=event=>{if(event.key==='Escape'&&!desktop?.matches&&!info.hidden){event.preventDefault();event.stopPropagation();setInfo(false);infoButton.focus();}};
-    if(chat){const rows=chat.querySelector('#chatRows');if(rows){const viewport=document.createElement('div');viewport.className='deal-chat-history';rows.before(viewport);viewport.append(rows);const composer=document.createElement('div');composer.className='deal-chat-compose';for(const node of [...chat.children])if(node!==viewport)composer.append(node);chat.append(composer);}}
-    const current=()=>container.isConnected&&isCurrent()&&document.getElementById('dealModal')?.classList.contains('show');
+    const media=window.matchMedia?.('(min-width:900px)');
+    media?.addEventListener?.('change',display);
+    const cleanup=()=>media?.removeEventListener?.('change',display);
+    const observer=new MutationObserver(()=>{
+      if(host.contains(tabs))return;
+      observer.disconnect();cleanup();
+      if(!host.querySelector('.deal-card-tabs'))host.classList.remove('deal-card-layout');
+      if(modal.id==='nativeEntityCard'&&modal.dataset.type!=='deal'){
+        if(identity.contains(title))head.prepend(title);
+        identity.remove();stage?.remove();modal.classList.remove('deal-conversation');
+      }
+    });
+    observer.observe(host,{childList:true});
+    display();select(0);
+    return {link,history,composer};
+  }
+  function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent,openDialog}){
+    const c=labels(),words=copy(),general=document.createElement('section'),tasksPanel=document.createElement('section'),notesPanel=document.createElement('section');
+    general.innerHTML=overview(deal,words);
+    tasksPanel.className=notesPanel.className='kommo-deal-section';
+    tasksPanel.innerHTML=`<header><h3>${esc(c.tasks)}</h3><button type="button" class="primary" data-related-create hidden>+ ${esc(c.create)}</button></header><div data-related-tasks role="status">${esc(c.loading)}</div>`;
+    notesPanel.innerHTML=`<header><h3>${esc(c.notes)}</h3></header><div data-related-notes role="status">${esc(c.loading)}</div>`;
+    const chat=host.querySelector('.chat-placeholder'),modal=host.closest('#dealModal');
+    modal.querySelectorAll('.deal-stage-picker').forEach(node=>node.remove());
+    const duplicate=host.querySelector('[data-duplicate-search]');
+    if(duplicate){duplicate.classList.add('deal-duplicate-action');duplicate.textContent=words.duplicate;duplicate.style.marginTop='0';
+      const media=window.matchMedia?.('(min-width:900px)');
+      const syncDuplicate=()=>{if(media?.matches)duplicate.dataset.duplicateAuto='true';else delete duplicate.dataset.duplicateAuto;};
+      media?.addEventListener?.('change',syncDuplicate);syncDuplicate();
+      const observer=new MutationObserver(()=>{if(!host.contains(duplicate)){media?.removeEventListener?.('change',syncDuplicate);observer.disconnect();}});observer.observe(host,{subtree:true,childList:true});
+    }
+    const current=()=>general.isConnected&&isCurrent()&&modal.classList.contains('show');
     const flow=window.tenantTaskFlow,scope=flow?.capture();
+    const sections=[{key:'general',label:words.general,node:general}];
+    if(flow?.sourceActions?.('kommo')?.view!==false)sections.push({key:'tasks',label:c.tasks,node:tasksPanel,load:loadTasks});
+    sections.push({key:'notes',label:c.notes,node:notesPanel,load:loadNotes});
     // Reuse the board's policy catalog and immutable, receipt-verified move command.
+
+
     const stageBar=document.createElement('div');stageBar.className='deal-stage-bar';
     const stageLabel=({ru:'Этап сделки',az:'Sövdələşmə mərhələsi',en:'Deal stage'}[window.tenantI18n?.language]||'Deal stage');
-    const pipeline=document.createElement('span'),trigger=document.createElement('button'),feedback=document.createElement('span');
-    pipeline.className='deal-pipeline-name';pipeline.textContent=deal.pipeline_name||stageLabel;pipeline.title=pipeline.textContent;
-    trigger.type='button';trigger.className='deal-stage-trigger';trigger.textContent=(deal.stage_name||stageLabel)+' ▾';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
+    const trigger=document.createElement('button'),feedback=document.createElement('span');
+    trigger.type='button';trigger.className='deal-stage-trigger';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
     const triggerLabel=document.createElement('span');triggerLabel.className='deal-stage-trigger-label';triggerLabel.textContent=deal.stage_name||stageLabel;trigger.title=triggerLabel.textContent;trigger.replaceChildren(triggerLabel);
-    const pill=document.createElement('div');pill.className='deal-stage-pill';pill.append(pipeline,trigger);
-    feedback.setAttribute('role','status');stageBar.append(pill,feedback);head.after(stageBar);
+    feedback.setAttribute('role','status');stageBar.append(trigger,feedback);
+    const view=layout({host,deal,sections,chat,stage:stageBar,isCurrent,actions:duplicate?[duplicate]:[]});
+    if(openDialog){view.link.onclick=openDialog;view.link.hidden=false;}
     const picker=document.createElement('div');picker.className='deal-stage-picker';picker.hidden=true;
     const sheet=document.createElement('section');sheet.className='deal-stage-sheet';sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',stageLabel);
     const pickerHead=document.createElement('header'),pipelineSelect=document.createElement('select'),dismiss=document.createElement('button'),choices=document.createElement('div');
-    pipelineSelect.setAttribute('aria-label',({ru:'Сменить воронку',az:'Vərəqi dəyiş',en:'Change pipeline'}[window.tenantI18n?.language]||'Change pipeline'));pipelineSelect.dataset.dealPipelinePicker='';
+    pipelineSelect.setAttribute('aria-label',({ru:'Сменить воронку',az:'Satış xəttini dəyiş',en:'Change pipeline'}[window.tenantI18n?.language]||'Change pipeline'));pipelineSelect.dataset.dealPipelinePicker='';
     dismiss.type='button';dismiss.textContent='×';dismiss.setAttribute('aria-label',({ru:'Закрыть',az:'Bağla',en:'Close'}[window.tenantI18n?.language]||'Close'));
     pickerHead.append(pipelineSelect,dismiss);sheet.append(pickerHead,choices);picker.append(sheet);modal.querySelector('.modal-card').append(picker);
     const closePicker=()=>{picker.hidden=true;trigger.setAttribute('aria-expanded','false');if(current())trigger.focus();};
@@ -117,7 +234,8 @@
       };
       const render=()=>{
         const catalog=catalogFor(stageRow.pipeline_id);
-        pipeline.textContent=catalog?.name||stageRow.pipeline_name||stageLabel;pipeline.title=pipeline.textContent;
+        const field=general.querySelector('[data-deal-pipeline]');
+        if(field)field.textContent=catalog?.name||stageRow.pipeline_name||'—';
         triggerLabel.textContent=stageRow.stage_name||stageLabel;trigger.title=triggerLabel.textContent;
         trigger.disabled=busy||!permitted()||!policy.move_context||!window.tenantKommoStageMove?.canIdentify(stageRow)||!(policy.catalog||[]).some(p=>targetsFor(p.pipeline_id).length);
         pipelineSelect.replaceChildren();
@@ -162,10 +280,10 @@
       render();
     }).catch(()=>{if(current())trigger.disabled=true;});
 
-    let relatedStarted=false;
-    function loadRelated(){
-    if(relatedStarted||!current())return;relatedStarted=true;
-    const tasks=container.querySelector('[data-related-tasks]');
+    let tasksStarted=false,notesStarted=false;
+    function loadTasks(){
+    if(tasksStarted||!current())return;tasksStarted=true;
+    const tasks=tasksPanel.querySelector('[data-related-tasks]');
     if(!flow){tasks.textContent=c.error;}else void flow.read('kommo',{},scope).then(result=>{
       if(!current()||!flow.current(scope))return;
       if(result.source!=='kommo'||!Array.isArray(result.tasks)||result.sources?.find(item=>item.source==='kommo')?.view!==true)throw Error('invalid_tasks');
@@ -173,17 +291,16 @@
       tasks.innerHTML=rows.map(item=>`<button class="kommo-related-card" type="button" data-related-task="${esc(item.id)}"><small>${esc(item.task_type_name||'')} · ${esc(date(item.due_at))}</small>${esc(String(item.description||item.text||item.display_title||'').replace(/\n?\[CRM:[a-f0-9]{32}\]/g,''))}</button>`).join('')||`<p class="sub">${esc(c.emptyTasks)}</p>`;
       if(result.has_more)tasks.insertAdjacentHTML('beforeend',`<p class="sub">${esc(c.limited)}</p>`);
       tasks.querySelectorAll('[data-related-task]').forEach(button=>button.onclick=()=>{if(!current())return;document.getElementById('dealModal').classList.remove('show');void flow.openFromLink('kommo',button.dataset.relatedTask);});
-      const create=container.querySelector('[data-related-create]');create.hidden=result.sources.find(item=>item.source==='kommo')?.create!==true;
-      create.onclick=async()=>{if(!current())return;create.disabled=true;try{const opened=await flow.createForKommoDeal(deal.kommo_lead_id,current,()=>{if(container.isConnected&&isCurrent()){document.getElementById('dealModal').classList.add('show');create.focus();}});if(opened&&current())document.getElementById('dealModal').classList.remove('show');}catch{if(current())tasks.textContent=c.error;}finally{create.disabled=false;}};
+      const create=tasksPanel.querySelector('[data-related-create]');create.hidden=result.sources.find(item=>item.source==='kommo')?.create!==true;
+      create.onclick=async()=>{if(!current())return;create.disabled=true;try{const opened=await flow.createForKommoDeal(deal.kommo_lead_id,current,()=>{if(tasksPanel.isConnected&&isCurrent()){document.getElementById('dealModal').classList.add('show');create.focus();}});if(opened&&current())document.getElementById('dealModal').classList.remove('show');}catch{if(current())tasks.textContent=c.error;}finally{create.disabled=false;}};
     }).catch(()=>{if(current())tasks.textContent=c.error;});
-    const notes=container.querySelector('[data-related-notes]');
-    void (flow?flow.api('/api/platform/crm/deal/notes?lead_id='+encodeURIComponent(deal.kommo_lead_id),{scope}):Promise.reject(Error('scope_unavailable'))).then(result=>{if(!current())return;if(!Array.isArray(result.notes))throw Error('invalid_notes');window.tenantKommoDealNoteCreate?.mount({container,leadId:deal.kommo_lead_id,scope,current,canCreate:result.can_create===true,flow});notes.innerHTML=result.notes.map(item=>`<article class="kommo-related-card kommo-note-card"><small>${esc(date(item.created_at))}</small>${esc(item.text)}</article>`).join('')||`<p class="sub">${esc(c.emptyNotes)}</p>`;if(result.has_more)notes.insertAdjacentHTML('beforeend',`<p class="sub">${esc(c.limited)}</p>`);}).catch(()=>{if(current())notes.textContent=c.error;});
     }
-    const syncLayout=()=>{if(container.isConnected&&isCurrent())setInfo(mobileInfoOpen);};
-    desktop?.addEventListener?.('change',syncLayout);
-    cleanupLayout=()=>desktop?.removeEventListener?.('change',syncLayout);
-    // Related requests are independent of chat loading and never awaited here.
-    syncLayout();
+    function loadNotes(){
+      if(notesStarted||!current())return;notesStarted=true;
+      const notes=notesPanel.querySelector('[data-related-notes]');
+      void (flow?flow.api('/api/platform/crm/deal/notes?lead_id='+encodeURIComponent(deal.kommo_lead_id),{scope}):Promise.reject(Error('scope_unavailable'))).then(result=>{if(!current()||!flow.current(scope))return;if(!Array.isArray(result.notes))throw Error('invalid_notes');window.tenantKommoDealNoteCreate?.mount({container:notesPanel,leadId:deal.kommo_lead_id,scope,current,canCreate:result.can_create===true,flow});notes.innerHTML=result.notes.map(item=>`<article class="kommo-related-card kommo-note-card"><small>${esc(date(item.created_at))}</small>${esc(item.text)}</article>`).join('')||`<p class="sub">${esc(c.emptyNotes)}</p>`;if(result.has_more)notes.insertAdjacentHTML('beforeend',`<p class="sub">${esc(c.limited)}</p>`);}).catch(()=>{if(current())notes.textContent=c.error;});
+    }
+    return view;
   }
-  window.tenantKommoDealCard={mount};
+  window.tenantKommoDealCard={mount,layout,overview,copy};
 })();
