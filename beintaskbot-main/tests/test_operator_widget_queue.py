@@ -160,6 +160,49 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     assert owned["internal_comments"][0]["note"] == "internal only"
     assert owned["dialog"]["crm_company_id"] is None
     assert owned["dialog"]["dialog_company_name"] == account
+    # After the first personal reply the provider can assign the thread to that
+    # employee. The shared REST identity still reads it, including follow-ups.
+    from cryptography.fernet import Fernet
+    from tenant_operator_widget_sender import _binding
+    link_id = str(uuid.uuid4())
+    link = {"id":link_id, "member_telegram_id":33, "connection_instance_id":key[1],
+            "connection_generation":CREDENTIALS["generation"], "operator_login":"staff", "operator_account":"team"}
+    cipher = Fernet(Fernet.generate_key())
+    blob = cipher.encrypt(json.dumps({"binding":_binding(A,link),"token":"personal"}).encode())
+    cur.execute("""INSERT INTO saas_beinsystems_operator_employee_links
+        (id,tenant_id,connection_instance_id,connection_generation,member_telegram_id,operator_login,
+         operator_account,verification_basis,evidence_summary,verified_by,widget_reply_ciphertext)
+        VALUES(%s,%s,%s,%s,33,'staff','team','manual','test fixture',11,decode(%s,'hex'))""",
+        (link_id,A,key[1],CREDENTIALS["generation"],blob.hex()))
+    assigned = {**CHAT, "operator":"staff@team"}
+    sync.snapshot(cur,A,CREDENTIALS,widget._routes([assigned],CREDENTIALS),"integration")
+    db.commit()
+    with monkeypatch.context() as patch:
+        patch.setattr(op,"_fernet",lambda: cipher)
+        def upstream(path, body, credentials):
+            assert credentials["token"] == CREDENTIALS["token"]
+            return [assigned] if path.endswith("getActiveChats") else []
+        patch.setattr(widget,"_post",upstream)
+        sent = []
+        def dispatch(credentials, row, text, request_id):
+            sent.append((credentials["widget_login"],credentials["token"],row["client_id"]))
+            return {"state":"unknown"}
+        patch.setattr(transport,"send_reply",dispatch)
+        patch.setattr(transport,"socket_block_reason",lambda c: "" if c["token"]=="personal" else "widget_socket_auth_denied")
+        assert queue.history(recipient,params)["dialog"]["can_send"]
+        staff = {**PROFILE, **recipient,"role":"operator","permissions":["dialogs","operator_data","operator_api"]}
+        command = {"action":"reply","chat_id":"15","revision":routes[15][1],
+                   "request_id":str(uuid.uuid4()),"text":"synthetic reply"}
+        with pytest.raises(op.OperatorError):
+            widget.handle(PROFILE,{**command,"request_id":str(uuid.uuid4())})
+        assert widget.handle(staff,command)["state"] == "unknown"
+        assert widget.handle(staff,command)["state"] == "unknown"
+        assert sent == [("staff@team","personal",CHAT["client_id"])]
+        cur.execute("UPDATE saas_beinsystems_operator_employee_links SET revoked_at=now() WHERE id=%s",(link_id,))
+        db.commit()
+        assert not queue.history(recipient,params)["dialog"]["can_send"]
+    sync.snapshot(cur,A,CREDENTIALS,routes,"integration")
+    db.commit()
     cur.execute("UPDATE saas_beinsystems_operator_links SET revoked_at=now() WHERE tenant_id=%s AND local_entity_id=%s", (A, company))
     db.commit()
     lifecycle.mutate(

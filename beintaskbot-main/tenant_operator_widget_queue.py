@@ -33,6 +33,23 @@ def source(cur, profile, action="view"):
     return instance if cur.fetchone() else None
 
 
+def _allow_own_provider_assignment(cur, tenant, instance, actor, rows):
+    owned = [r for r in rows if not r["writable"] and r["state"] == "accepted"
+             and r["operator_id"] == actor and r.get("open_operator_login")]
+    if not owned:
+        return
+    cur.execute("""SELECT l.operator_login || '@' || l.operator_account AS login
+                   FROM saas_beinsystems_operator_employee_links l JOIN saas_widget_sources s
+                   ON s.tenant_id=l.tenant_id AND s.instance=l.connection_instance_id
+                   AND s.generation=l.connection_generation WHERE l.tenant_id=%s AND s.instance=%s
+                   AND l.member_telegram_id=%s AND l.revoked_at IS NULL
+                   AND l.widget_reply_ciphertext IS NOT NULL FOR SHARE OF l""", (tenant, instance, actor))
+    link = cur.fetchone()
+    if link:
+        for row in owned:
+            row["writable"] = row["open_operator_login"] == link["login"]
+
+
 def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     tenant, actor, policy = access(cur, profile, "dialogs", action="update" if update else "view")
     instance = source(cur, policy.profile, "update" if update else "view")
@@ -51,6 +68,7 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     row = cur.fetchone()
     if not row or not replay and row["state"] == "accepted" and row["operator_id"] != actor:
         raise TenantLinearError("Диалог недоступен.", 403)
+    _allow_own_provider_assignment(cur, tenant, instance, actor, [row])
     if update and not row["writable"]:
         raise TenantLinearError("Operator ограничил действия в этом чате.", 403)
     return row, actor, policy
@@ -160,6 +178,7 @@ def cards(cur, policy, mode, rollout):
         (actor, tenant, instance, actor, mode, mode),
     )
     rows = cur.fetchall()
+    _allow_own_provider_assignment(cur, tenant, instance, actor, rows)
     attach_companies(cur, policy, instance, rows)
     writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
@@ -227,7 +246,15 @@ def history(profile, params, before=None):
     if dialog["lifecycle"]["can_close"]:
         credentials = operator._credentials(key[0])
         if credentials["connection_instance_id"] == key[1]:
-            reason = socket_block_reason(credentials)
+            from tenant_operator_widget_sender import employee_sender
+            try:
+                with operator._connect() as db, db.cursor() as cur:
+                    sender = employee_sender(cur, key[0], actor, credentials)
+                reason = ("widget_socket_auth_denied" if sender and row["open_operator_login"]
+                          and sender["widget_login"] != row["open_operator_login"]
+                          else socket_block_reason(sender or credentials))
+            except operator.OperatorError:
+                reason = "widget_socket_auth_denied"
             dialog.update(can_send=not reason, send_block_reason=reason)
     directions = {"client": "incoming", "system": "system", "operator": "outgoing"}
     authors = {"client": "customer", "system": "system", "operator": "operator"}

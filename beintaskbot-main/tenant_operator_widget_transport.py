@@ -126,7 +126,9 @@ def send_reply(credentials, row, text, request_id):
             client.on("operator_message_pending", delivered_pending)
             client.on("operator_message_error", rejected)
             # A pending event can mean already delivered. Wait for persistence and never resend on timeout.
-            client.emit("register_operator", {})
+            registration = ({"name": credentials["widget_login"], "role": "operator"}
+                            if credentials.get("widget_login") else {})
+            client.emit("register_operator", registration)
             emitted = True
             client.emit("operator_message", {"client_id": row["client_id"], "channel": "widget",
                         "client_name": row.get("client_name") or row["client_id"], "account": row.get("account"),

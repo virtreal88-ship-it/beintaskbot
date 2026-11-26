@@ -1804,7 +1804,7 @@ def confirm_employee_link(profile, *, member_telegram_id, account, login,
                     raise OperatorError("Этот Operator-пользователь уже связан с другим сотрудником.", 409)
                 if existing:
                     cur.execute("""UPDATE saas_beinsystems_operator_employee_links
-                      SET revoked_at=now(),version=version+1,updated_at=now()
+                      SET revoked_at=now(),widget_reply_ciphertext=NULL,version=version+1,updated_at=now()
                       WHERE tenant_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL""",
                       (tenant, str(existing["id"])))
                 cur.execute("""INSERT INTO saas_beinsystems_operator_employee_links
@@ -1875,7 +1875,7 @@ def revoke_employee_link(profile, link_id):
         with conn.cursor() as cur:
             _operator_owner(profile, cur)
             cur.execute("""UPDATE saas_beinsystems_operator_employee_links
-              SET revoked_at=now(),version=version+1,updated_at=now()
+              SET revoked_at=now(),widget_reply_ciphertext=NULL,version=version+1,updated_at=now()
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND revoked_at IS NULL
               RETURNING member_telegram_id,operator_account,operator_login,version""", (tenant, ident))
             row = cur.fetchone()

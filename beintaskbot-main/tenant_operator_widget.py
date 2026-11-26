@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 import tenant_beinsystems_operator as operator
 from tenant_beinsystems_operator_access import widget_allowed
 from tenant_linear_policy import TenantLinearError
+from tenant_operator_widget_sender import employee_sender
 
 PAGE = 50
 
@@ -164,9 +165,17 @@ def handle(profile, data):
         if action == "older":
             query["before_id"] = _positive(data["before_id"])
         rows = _post("/chat/getMessages", query, credentials)
-        if widget_allowed(current, "update") and _can_reply(row, login):
+        sender = None
+        if widget_allowed(current, "update"):
             from tenant_operator_widget_transport import socket_block_reason
-            socket_ready = not socket_block_reason(credentials)
+            try:
+                if managed:
+                    with operator._connect() as db, db.cursor() as cur:
+                        sender = employee_sender(cur, tenant, int(profile["telegram_id"]), credentials)
+                if _can_reply(row, sender["widget_login"] if sender else login):
+                    socket_ready = not socket_block_reason(sender or credentials)
+            except operator.OperatorError:
+                socket_ready = False
     with operator._connect() as db, db.cursor() as cur:
         current, login = _snapshot(cur, profile, credentials)
         writable = widget_allowed(current, "update")
@@ -191,6 +200,8 @@ def handle(profile, data):
         visible,writable = access_for(chat,row)
         if not visible:
             raise operator.OperatorError("Диалог недоступен.",403)
+        if sender:
+            login = sender["widget_login"]
         messages = _messages(rows, chat, row["client_id"])
         _reconcile(cur, tenant, chat, data["revision"], rows)
         if action == "older":
@@ -225,7 +236,7 @@ def _reconcile(cur, tenant, chat, revision, rows):
 def _require_queue_owner(cur, profile, credentials, chat, row):
     from tenant_operator_widget_sync import enabled, PROVIDER
     if enabled() != operator._tenant(profile):
-        return
+        return None
     from tenant_operator_widget_queue import authorized
     try:
         route,actor,_ = authorized(cur,profile,{
@@ -235,6 +246,7 @@ def _require_queue_owner(cur, profile, credentials, chat, row):
         raise operator.OperatorError(str(error),error.status) from error
     if route["state"]!="accepted" or route["operator_id"]!=actor:
         raise operator.OperatorError("Сначала примите диалог.",409)
+    return employee_sender(cur, operator._tenant(profile), actor, credentials)
 
 
 def _reply_receipt(row):
@@ -281,14 +293,16 @@ def _reply(profile, credentials, chat, data):
             _, login = _snapshot(cur, profile, credentials, "update")
             routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
             row = _route(routes, chat, data["revision"])
-            _require_queue_owner(cur, profile, credentials, chat, row)
+            sender = _require_queue_owner(cur, profile, credentials, chat, row)
+            if sender:
+                login = sender["widget_login"]
             if not _can_reply(row, login):
                 raise operator.OperatorError("Диалог закрыт или закреплён за другим оператором.", 409)
         except operator.OperatorError:
             cur.execute("UPDATE saas_operator_widget_replies SET state='rejected' WHERE tenant_id=%s AND request_id=%s", key)
             db.commit()
             raise
-        outcome = send_reply(credentials, row, text, data["request_id"])
+        outcome = send_reply(sender or credentials, row, text, data["request_id"])
         state = outcome["state"]
         # Pending delivery still needs the existing unique reservation until history confirms it.
         pending = state == "pending"
