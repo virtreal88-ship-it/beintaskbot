@@ -85,3 +85,45 @@ def test_company_directory_pagination_is_scoped():
         listing.assert_called_once_with('tenant-1','Acme',51,actor_id=20,offset=100)
         invalid=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'page':'0'})))
         assert invalid.status==400 and listing.call_count==1
+
+
+def test_operator_account_is_separate_from_editable_company_name(company_db):
+    db = company_db
+    company = companies.create_company(A, 'test')
+    local = companies.create_company(A, 'Local company')
+    instance = str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_beinsystems_operator_company_imports
+        (tenant_id,external_account,company_id,created_by,updated_by,
+         last_seen_connection_instance_id,last_seen_generation)
+        VALUES(%s,'test',%s,11,11,%s,'generation')""", (A, company['id'], instance))
+    db.commit()
+    assert companies.get_company(A, company['id'])['operator_account'] == 'test'
+    assert companies.get_company(A, local['id'])['operator_account'] is None
+    assert companies.get_company(B, company['id']) is None
+    companies.update_company(A, company['id'], 'Local display name')
+    updated = companies.get_company(A, company['id'])
+    assert (updated['name'], updated['operator_account']) == ('Local display name', 'test')
+    assert all('operator_account' not in row for row in companies.list_companies(A))
+
+
+def test_company_detail_uses_only_unambiguous_own_operator_identity(company_db):
+    db = company_db
+    company = companies.create_company(A, 'Company')
+    instance = str(uuid.uuid4())
+
+    def link(tenant, account, *, revoked=False):
+        db.execute("""INSERT INTO saas_beinsystems_operator_links
+           (id,tenant_id,connection_instance_id,connection_generation,local_entity_type,
+            local_entity_id,external_entity_type,external_id,verification_basis,evidence_summary,verified_by,revoked_at)
+           VALUES(%s,%s,%s,'generation','company',%s,'account',%s,'manual','test evidence',11,
+                  CASE WHEN %s THEN now() END)""",
+                   (str(uuid.uuid4()), tenant, instance, company['id'], account, revoked))
+        db.commit()
+
+    link(B, 'foreign')
+    link(A, 'revoked', revoked=True)
+    assert companies.get_company(A, company['id'])['operator_account'] is None
+    link(A, 'verified')
+    assert companies.get_company(A, company['id'])['operator_account'] == 'verified'
+    link(A, 'ambiguous')
+    assert companies.get_company(A, company['id'])['operator_account'] is None
