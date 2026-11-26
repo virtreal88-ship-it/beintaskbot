@@ -259,8 +259,11 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             order = 'completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
     sql += ' ORDER BY ' + order
     if limit is not None:
-        sql += ' LIMIT %s OFFSET %s'
-        args.extend([limit, offset])
+        sql += ' LIMIT %s'
+        args.append(limit)
+    if offset:
+        sql += ' OFFSET %s'
+        args.append(offset)
     cur.execute(sql, args)
     selected_rows = cur.fetchall()
     from tenant_kommo_board_provenance import revisions
