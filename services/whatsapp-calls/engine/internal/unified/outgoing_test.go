@@ -108,6 +108,31 @@ func TestGroupMembershipIsCheckedImmediatelyBeforeProviderSend(t *testing.T) {
 	}
 }
 
+func TestGroupCheckTimeoutAndUnconfirmedDispatchHaveDifferentReceipts(t *testing.T) {
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "group-check.db")), testScope)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &outgoingClient{}
+	request := Outgoing{Scope: testScope, Operation: "group-timeout", Chat: "120363123456789@g.us",
+		Kind: "text", Text: "synthetic", VerifyGroupMembership: true}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		cancel()
+		return ErrGroupCheckUnavailable
+	}); !errors.Is(err, ErrGroupCheckUnavailable) || client.sends != 0 {
+		t.Fatalf("check timeout should be definitively unsent: %v", err)
+	}
+	client.fail = true
+	if _, err := j.Deliver(context.Background(), client, request, nil, func(context.Context) error { return nil }); !errors.Is(err, ErrUnknown) || client.sends != 1 {
+		t.Fatalf("a lost provider reply should remain unknown: %v", err)
+	}
+	if _, err := j.Deliver(context.Background(), client, request, nil, func(context.Context) error {
+		t.Fatal("a possible dispatch must return its receipt before checking again")
+		return nil
+	}); !errors.Is(err, ErrUnknown) || client.sends != 1 {
+		t.Fatalf("ambiguous dispatch was retried or reclassified: %v", err)
+	}
+}
+
 func TestOwnTextEditAndRevokeUseWhatsmeowControlMessages(t *testing.T) {
 	ctx := context.Background()
 	for _, action := range []string{"edit", "delete"} {

@@ -33,7 +33,8 @@ async function withComposer(run) {
   });
   input.value='Salam';
   try{
-    await run({env,input,button,calls,pending:()=>w.sessionStorage.getItem(key),click:()=>button.onclick()});
+    await run({env,input,button,calls,pending:()=>w.sessionStorage.getItem(key),click:()=>button.onclick(),
+      status:()=>w.document.getElementById('tenantChatSendStatus')?.textContent});
   }finally{
     w.close();
   }
@@ -79,6 +80,32 @@ async function withComposer(run) {
     env.result=async()=>{throw Object.assign(new Error('rejected'),{keepRequest:false});};
     await click();
     assert.equal(pending(),null);
+  });
+  await withComposer(async({click,pending,input,button,env,status,calls})=>{
+    env.result=async()=>{throw Object.assign(new Error('membership check failed'),{
+      keepRequest:false,deliveryPhase:'not_sent',errorCode:'native_group_check_unavailable'
+    });};
+    await click();
+    assert.match(status(),/^Göndərilmədi\./);
+    assert.equal(pending(),null);
+    assert.equal(input.value,'Salam');
+    assert.equal(button.textContent,'Göndər');
+    assert.deepEqual(calls.map(call=>call.method),['POST']);
+  });
+  await withComposer(async({click,pending,input,button,env,status,calls})=>{
+    env.result=async()=>{throw Object.assign(new Error('provider response lost'),{
+      keepRequest:true,deliveryPhase:'unknown'
+    });};
+    await click();
+    const initial=pending();
+    assert.ok(initial);
+    assert.match(status(),/^Çatdırılma məlum deyil\./);
+    assert.equal(input.value,'Salam');
+    assert.equal(button.textContent,'Vəziyyəti yoxla');
+    env.result=async()=>({state:'unknown'});
+    await click();
+    assert.equal(pending(),initial);
+    assert.deepEqual(calls.map(call=>call.method),['POST','GET']);
   });
   await withComposer(async({click,pending,input,env})=>{
     env.result=async()=>{env.current=false;input.value='New draft';return {state:'accepted'};};

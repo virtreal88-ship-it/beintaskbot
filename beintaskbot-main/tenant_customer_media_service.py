@@ -270,6 +270,8 @@ async def run(session, command, content, logger):
         result = TenantLinearError('Göndərmə nəticəsi məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.' if started
                                    else 'Fayl göndərilmədi. Dialoq icazəsini yoxlayın.', 503)
         result.keep_request = started
+        if started and route.get('verify_group_membership'):
+            result.delivery_phase = 'unknown'
         raise result from None
 
 

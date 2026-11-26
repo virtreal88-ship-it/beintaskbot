@@ -8,19 +8,30 @@ from tenant_whatsapp_native_projection import GROUP
 from tenant_linear_policy import TenantLinearError
 
 
-def membership_error(code):
-    if code == 'native_group_session_unavailable':
-        return TenantLinearError('Номер WhatsApp отключён. Проверьте подключение выбранного источника.', 409)
-    return TenantLinearError('WeCall не подтвердил участие выбранного номера в этой группе WhatsApp.', 409)
+MEMBERSHIP_ERRORS = {
+    'native_group_session_unavailable': 'Номер WhatsApp недоступен. Проверьте подключение выбранного источника.',
+    'native_group_membership_unconfirmed': 'WeCall не подтвердил участие выбранного номера в этой группе WhatsApp.',
+    'native_group_check_unavailable': 'Не удалось проверить участие выбранного номера в WhatsApp. Повторите проверку позже.',
+}
+
+def membership_error(code, *, sending=False):
+    if not isinstance(code, str) or code not in MEMBERSHIP_ERRORS:
+        code = 'native_group_check_unavailable'
+    error = TenantLinearError(MEMBERSHIP_ERRORS[code], 409)
+    error.error_code = code
+    if sending:
+        error.delivery_phase = 'not_sent'
+        error.keep_request = False
+    return error
 
 
-def require_membership(route):
+def require_membership(route, *, sending=False):
     """Check the current gateway generation for a locked, exact native route."""
     from tenant_call_sources import service
     binding = route.get('native')
     chat = route['conversation_id']
     if not binding or not GROUP.fullmatch(chat):
-        raise membership_error('native_group_session_unavailable')
+        raise membership_error('native_group_session_unavailable', sending=sending)
     scope = binding['scope']
     try:
         url, token = service()
@@ -41,10 +52,10 @@ def require_membership(route):
                 lid=proof.get('account_lid','')
                 if isinstance(lid,str) and (not lid or re.fullmatch(r'[0-9]{5,22}@lid',lid)):
                     return lid
-            code = proof.get('error') if isinstance(proof, dict) else None
+            code = proof.get('error') if response.status_code == 409 and isinstance(proof, dict) else None
     except (requests.RequestException, TenantPlatformError, ValueError, TypeError):
         code = None
-    raise membership_error(code)
+    raise membership_error(code, sending=sending)
 
 
 def apply_metadata(cur,scope,payload):
