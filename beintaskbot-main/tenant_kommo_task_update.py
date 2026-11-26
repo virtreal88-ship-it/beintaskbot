@@ -50,7 +50,7 @@ def verified(remote, payload):
 
 
 def cache_confirmed(cur, profile, payload, result):
-    cur.execute("""UPDATE saas_crm_tasks SET text=%s,
+    cur.execute("""UPDATE saas_crm_tasks SET text=%s,synced_at=clock_timestamp(),
       raw=jsonb_set(COALESCE(raw,'{}'::jsonb),'{text}',to_jsonb(%s::text))
       WHERE tenant_id=%s::uuid AND kommo_task_id=%s
       AND COALESCE(raw->>'text','') IN (%s,%s)""",

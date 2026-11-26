@@ -68,12 +68,19 @@ def execute_sync(profile, payload, request, *, operation, path, prepare, verifie
                     cache_confirmed(cur,current,payload,result)
                     from tenant_kommo_board_provenance import refresh_after_command
                     result['source_revision']=refresh_after_command(cur,binding,entity,ident)
-                else: result['source_revision']=current_revision
+                else:
+                    result['source_revision'] = current_revision
+                    if done and operation == 'deal_stage_move':
+                        result['stage_name'] = (store.state.get('result') or {}).get('stage_name', '')
             # Cache, refreshed provenance and receipt commit together.
             store.save({**store.state,'step':'done','result':result,'confirmed_source_revision':result.get('source_revision') or payload.get('source_revision')})
             return result
         except TaskFlowError as exc:
             store.conn.rollback()
+            if unknown and not done and exc.code == 'board_changed_since_confirmation':
+                store.save({**store.state, 'step':'rejected', 'code':exc.code})
+                exc.keep_request = False
+                raise
             if not patched and not unknown:
                 store.save({**store.state,'step':'rejected','code':exc.code})
                 exc.keep_request=False

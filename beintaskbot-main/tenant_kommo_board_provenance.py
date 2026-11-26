@@ -37,10 +37,13 @@ def record(cur,tenant,resource,snapshots,observation):
     for row in snapshots:
         raw=row['raw']; raw_hash=digest(raw)
         revision=digest({'binding':asdict(binding),'resource':resource,'id':str(raw['id']),'raw':raw_hash})
-        values.append((tenant,resource,int(raw['id']),binding.account_id,binding.connection_generation,raw_hash,revision))
-    cur.executemany('''INSERT INTO saas_crm_board_provenance
+        values.append((tenant,resource,int(raw['id']),binding.account_id,binding.connection_generation,raw_hash,revision,tenant,int(raw['id']),json.dumps(raw)))
+    # A late page can lose the snapshot UPDATE. It must also lose the proof write.
+    table, key = ('saas_crm_tasks','kommo_task_id') if resource=='tasks' else ('saas_crm_deals','kommo_lead_id')
+    cur.executemany(f'''INSERT INTO saas_crm_board_provenance
       (tenant_id,resource,external_id,account_id,connection_generation,raw_digest,source_revision)
-      VALUES(%s::uuid,%s,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,resource,external_id)
+      SELECT %s::uuid,%s,%s,%s,%s,%s,%s WHERE EXISTS (SELECT 1 FROM {table}
+        WHERE tenant_id=%s::uuid AND {key}=%s AND raw=%s::jsonb) ON CONFLICT(tenant_id,resource,external_id)
       DO UPDATE SET account_id=EXCLUDED.account_id,connection_generation=EXCLUDED.connection_generation,
       raw_digest=EXCLUDED.raw_digest,source_revision=EXCLUDED.source_revision,observed_at=now()''',values)
 

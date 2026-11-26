@@ -269,7 +269,7 @@ from tenant_platform import (
     update_onboarding, upsert_member as upsert_tenant_member,
     append_audit_event as append_tenant_audit_event, get_crm_deal as get_tenant_crm_deal,
     list_crm_deals as list_tenant_crm_deals, list_crm_tasks as list_tenant_crm_tasks,
-    list_crm_messages as list_tenant_crm_messages, upsert_crm_deals as upsert_tenant_crm_deals,
+    list_crm_messages as list_tenant_crm_messages,
     upsert_crm_messages as upsert_tenant_crm_messages, upsert_crm_tasks as upsert_tenant_crm_tasks,
     list_linear_accounts, create_linear_account, delete_linear_news,
     upsert_linear_news, list_linear_news, mark_linear_news_published, sync_linear_news_environments,
@@ -17479,9 +17479,10 @@ def _tenant_normalize_talk_message(message: dict, channel: str) -> dict:
 async def _sync_tenant_chat(profile: dict, lead_id: int, *, recent=False) -> list[dict]:
     """Compatibility wrapper; bounded reader and cache service live separately."""
     from tenant_chat_sync import sync
+    from tenant_crm_store import update_chat_preview
     return await sync(profile, lead_id, _tenant_kommo_request, tenant_member,
                       get_tenant_crm_deal, list_tenant_crm_messages,
-                      upsert_tenant_crm_messages, upsert_tenant_crm_deals,
+                      upsert_tenant_crm_messages, update_chat_preview,
                       _tenant_normalize_talk_message, _tenant_talk_channel, recent=recent)
 
 

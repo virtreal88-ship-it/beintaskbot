@@ -3,7 +3,7 @@ import {useDealCardActivation} from './deal-card-activation.js';
 import {stageStyle} from './deal-stage-style.js';
 import {DealStageBadge, DealStageSelect} from './deal-stage-badge.jsx';
 
-export const dealProfileScope = (data=window.tenantProfileSnapshot||{}) => JSON.stringify([data.member,data.capabilities,data.role_permissions,data.integrations]);
+export const dealProfileScope = (data=window.tenantProfileSnapshot||{}) => JSON.stringify([data.member,data.capabilities,data.role_permissions,Array.isArray(data.integrations)?data.integrations.map(({updated_at,...binding})=>binding):data.integrations]);
 
 const copy = {
   az:{board:'Kanban',table:'Cədvəl',move:'Mərhələni dəyiş',open:'Aç',edit:'Redaktə et',empty:'Sövdələşmə yoxdur',saving:'Saxlanılır…',error:'Dəyişiklik saxlanmadı. Siyahını yeniləyin.',drag:'Daşımaq üçün tutun'},

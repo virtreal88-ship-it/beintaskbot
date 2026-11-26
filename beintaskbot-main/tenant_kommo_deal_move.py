@@ -56,12 +56,13 @@ def authorize_cached(cur,profile,payload, *, unknown=False):
     # Only these exact pairs are eligible; remote CAS still gates a first write.
     if {'pipeline_id':int(cached['pipeline_id']),'stage_id':int(cached['status_id'])} not in ((source,wanted) if unknown else (source,)):
         raise TaskFlowError('kommo_deal_changed',409)
+    return cached
 
 
 def prepare(cur, profile, binding, remote, payload, unknown=False, request=None):
     if not binding or str(binding.tenant_id)!=str(profile['tenant_id']):
         raise TaskFlowError('kommo_connection_changed',409)
-    authorize_cached(cur,profile,payload,unknown=unknown)
+    cached = authorize_cached(cur,profile,payload,unknown=unknown)
     try:
         valid=(isinstance(remote,dict) and not remote.get('is_deleted')
             and positive(remote.get('id'))==payload['lead_id']
@@ -72,6 +73,15 @@ def prepare(cur, profile, binding, remote, payload, unknown=False, request=None)
         valid=False
     if not valid:
         raise TaskFlowError('kommo_deal_changed',409)
+    if unknown and remote['pipeline_id'] == payload['expected_pipeline_id'] and remote['status_id'] == payload['expected_status_id']:
+        # Only a newer, independently synced snapshot of this same record can
+        # retire an uncertain attempt after an external return to its source.
+        snapshot = (cached or {}).get('raw') or {}
+        keys = ('id', 'pipeline_id', 'status_id', 'updated_at')
+        if (type(remote.get('updated_at')) is int and remote['updated_at'] > payload['expected_updated_at']
+                and all(remote.get(key) == snapshot.get(key) for key in keys)
+                and (remote['pipeline_id'], remote['status_id']) != (destination(payload), payload['stage_id'])):
+            raise TaskFlowError('board_changed_since_confirmation', 409)
     # A pipeline is changed only alongside an explicitly selected mapped stage.
     body={'status_id':payload['stage_id']}
     if destination(payload)!=payload['expected_pipeline_id']: body['pipeline_id']=destination(payload)
@@ -95,16 +105,17 @@ def cache_confirmed(cur,profile,payload,result):
         if int(p['pipeline_id'])==destination(payload)), {})
     stage_name=next((s.get('name','') for s in pipeline.get('stages',[])
         if int(s['stage_id'])==payload['stage_id']), '')
-    cur.execute("""UPDATE saas_crm_deals SET pipeline_id=%s,pipeline_name=%s,status_id=%s,stage_name=%s,source_updated_at=%s,
+    cur.execute("""UPDATE saas_crm_deals SET pipeline_id=%s,status_id=%s,stage_name=%s,source_updated_at=%s,synced_at=clock_timestamp(),
         raw=COALESCE(raw,'{}'::jsonb)||jsonb_build_object('pipeline_id',%s::bigint,'status_id',%s::bigint,'updated_at',%s::bigint)
         WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
         AND ((pipeline_id=%s AND status_id=%s) OR (pipeline_id=%s AND status_id=%s))
         AND (source_updated_at IS NULL OR source_updated_at<=%s)
         AND COALESCE(raw->>'source','')<>'connect'""",
-        (destination(payload),pipeline.get('name',''),payload['stage_id'],stage_name,stamp,
+        (destination(payload),payload['stage_id'],stage_name,stamp,
          destination(payload),payload['stage_id'],result['updated_at'],profile['tenant_id'],payload['lead_id'],
          payload['expected_pipeline_id'],payload['expected_status_id'],destination(payload),payload['stage_id'],stamp))
     if cur.rowcount!=1: raise TaskFlowError('kommo_deal_changed',409)
+    result['stage_name'] = stage_name
 
 
 

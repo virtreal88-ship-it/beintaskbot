@@ -112,6 +112,7 @@ jobs:
           node tests/test_crm_sync_live_ui.cjs
           node tests/test_crm_sync_live_browser.cjs
           node tests/test_deal_source_picker_browser.cjs
+          node tests/test_deal_server_search_browser.cjs
           node tests/test_deal_pagination_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_native_task_assignee_browser.cjs

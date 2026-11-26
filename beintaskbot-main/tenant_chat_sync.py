@@ -10,7 +10,7 @@ from tenant_platform import TenantPlatformError
 async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dict]],
                member: Callable[[str, int], dict | None], get_deal: Callable[..., dict | None],
                list_messages: Callable[..., list[dict]], upsert_messages: Callable[..., int],
-               upsert_deals: Callable[..., int], normalize: Callable[[dict, str], dict],
+               update_preview: Callable[..., int], normalize: Callable[[dict, str], dict],
                channel: Callable[[dict], str], *, recent=False) -> list[dict]:
     tenant = str(profile['tenant_id'])
 
@@ -54,11 +54,10 @@ async def sync(profile: dict, lead_id: int, request: Callable[..., Awaitable[dic
     if normalized:
         await asyncio.to_thread(upsert_messages, tenant_id=tenant, kommo_lead_id=lead_id, messages=normalized)
         latest = max(normalized, key=lambda item: item.get('happened_at') or '')
-        # Compare the read snapshot; concurrent preview writes remain possible.
         if not deal.get('last_message_at') or str(latest.get('happened_at') or '') >= str(deal['last_message_at']):
-            await asyncio.to_thread(upsert_deals, tenant_id=tenant, deals=[{
-                **deal, 'last_message':latest.get('body') or '', 'last_message_at':latest.get('happened_at'),
-                'channel':latest.get('channel') or '', 'raw':deal.get('raw') or {}}])
+            await asyncio.to_thread(update_preview, tenant_id=tenant, lead_id=lead_id,
+                body=latest.get('body') or '', happened_at=latest.get('happened_at'),
+                channel=latest.get('channel') or '')
     if recent:
         return []  # HTTP boundary reauthorizes and reads exactly one cached page.
     cached = await asyncio.to_thread(list_messages, tenant_id=tenant, kommo_lead_id=lead_id)

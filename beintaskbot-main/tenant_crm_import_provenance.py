@@ -46,6 +46,11 @@ def board_observation_digest(resource, raw):
             value = {**raw, '_embedded': {**embedded, 'contacts': [
                 {key: item[key] for key in ('id', 'is_main') if key in item}
                 if isinstance(item, dict) else item for item in contacts]}}
+        companies = embedded.get('companies')
+        if isinstance(companies, list):
+            value = {**value, '_embedded': {**value['_embedded'], 'companies': [
+                {key: val for key, val in item.items() if key != 'name'}
+                if isinstance(item, dict) else item for item in companies]}}
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
 
 

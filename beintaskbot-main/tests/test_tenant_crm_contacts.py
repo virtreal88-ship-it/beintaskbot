@@ -27,10 +27,28 @@ class ContactsTests(unittest.IsolatedAsyncioTestCase):
     async def test_no_contacts_no_request(self):
         request = AsyncMock()
         self.assertEqual(await enrich_contacts('a', [{'id': 1}], request),
-                         [{'id': 1, '_embedded': {'contacts': []}}])
+                         [{'id': 1}])
         request.assert_not_awaited()
 
     async def test_failure_is_not_silently_converted_to_empty_contact(self):
         with self.assertRaises(RuntimeError):
             await enrich_contacts('a', [{'id': 1, '_embedded': {'contacts': [{'id': 9}]}}],
                                   AsyncMock(side_effect=RuntimeError('provider unavailable')))
+
+    async def test_company_enrichment_matches_only_linked_ids_and_preserves_proof(self):
+        from tenant_crm_import_provenance import board_observation_digest
+        lead = {'id':9,'_embedded':{'companies':[{'id':31}]}}
+        request = AsyncMock(return_value={'_embedded':{'companies':[
+            {'id':32,'name':'unrelated'},{'id':31,'name':'Matching company'}]}})
+        updated, = await enrich_contacts('tenant',[lead],request)
+        self.assertEqual(updated['_embedded']['companies'], [{'id':31,'name':'Matching company'}])
+        original = lead
+        self.assertEqual(board_observation_digest('leads', updated),board_observation_digest('leads',original))
+        updated['_embedded']['companies'][0]['id'] = 32
+        self.assertNotEqual(board_observation_digest('leads', updated),board_observation_digest('leads',original))
+
+    async def test_company_denial_does_not_discard_authorized_lead(self):
+        lead = {'id':9, '_embedded':{'companies':[{'id':31}]}}
+        denied = RuntimeError('provider denied companies')
+        denied.provider_status = 403
+        self.assertEqual(await enrich_contacts('tenant',[lead],AsyncMock(side_effect=denied)), [lead])

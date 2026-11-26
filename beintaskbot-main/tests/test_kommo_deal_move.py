@@ -122,7 +122,7 @@ class PipelineMoveTests(unittest.TestCase):
   policy=SimpleNamespace(deal_board=lambda:[{'pipeline_id':20,'name':'Other','stages':[{'stage_id':201,'name':'Next'}]}])
   with patch.object(move,'TenantPolicy',return_value=policy):
    move.cache_confirmed(self.cur,P,self.payload,{'updated_at':1002})
-   sql,args=self.cur.execute.call_args.args;self.assertEqual(args[:4],(20,'Other',201,'Next'))
+   sql,args=self.cur.execute.call_args.args;self.assertEqual(args[:3],(20,201,'Next'));self.assertNotIn('pipeline_name=',sql)
    self.cur.rowcount=0
    with self.assertRaises(TaskFlowError):move.cache_confirmed(self.cur,P,self.payload,{'updated_at':1002})
 

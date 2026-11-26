@@ -40,10 +40,11 @@
   }
   let dialogRevalidation=null,lastFocusCheck=null;
   const visibleDialogs=()=>document.getElementById?.('view-dialogs')?.classList.contains('active');
-  const canKeepDialog=()=>!authPending&&visibleDialogs()&&!window.tenantOperator?.resolvingCaseLink&&window.tenantProfileSnapshot?.member?.active===true;
+  const visibleCrmList=()=>['deals','tasks'].some(view=>document.getElementById?.('view-'+view)?.classList.contains('active'));
+  const canKeepView=()=>!authPending&&(visibleCrmList()||visibleDialogs()&&!window.tenantOperator?.resolvingCaseLink)&&window.tenantProfileSnapshot?.member?.active===true;
   function verifyOnReturn(){
     if(revalidation)return revalidation;
-    if(!canKeepDialog())return revalidateProfile();
+    if(!canKeepView())return revalidateProfile();
     if(dialogRevalidation)return dialogRevalidation;
     if(lastFocusCheck?.generation===generation&&Date.now()-lastFocusCheck.at<500)return Promise.resolve();
     let version=generation;
@@ -74,7 +75,7 @@
     return dialogRevalidation;
   }
   document.addEventListener('visibilitychange',()=>{
-    if(document.hidden){lastFocusCheck=null;if(!canKeepDialog())pendingAuth();}
+    if(document.hidden){lastFocusCheck=null;if(!canKeepView())pendingAuth();}
     else void verifyOnReturn().catch(()=>{});
   });
   window.addEventListener('focus',()=>{if(!document.hidden)void verifyOnReturn().catch(()=>{});});

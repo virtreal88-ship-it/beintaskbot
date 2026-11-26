@@ -61,7 +61,7 @@ class CRMRepository:
                         contact_name = EXCLUDED.contact_name, phone = EXCLUDED.phone,
                         channel = EXCLUDED.channel, last_message = EXCLUDED.last_message,
                         last_message_at = EXCLUDED.last_message_at,
-                        source_updated_at = EXCLUDED.source_updated_at, raw = EXCLUDED.raw, synced_at = now()
+                        source_updated_at = EXCLUDED.source_updated_at, raw = EXCLUDED.raw, synced_at = clock_timestamp()
                 """, rows)
 
     def list_deals(self, *, tenant_id: str, search: str = '', pipeline_ids: list[int] | None = None,
@@ -123,7 +123,7 @@ class CRMRepository:
                     ON CONFLICT (tenant_id, kommo_task_id) DO UPDATE SET
                         kommo_lead_id = EXCLUDED.kommo_lead_id, text = EXCLUDED.text, due_at = EXCLUDED.due_at,
                         responsible_id = EXCLUDED.responsible_id, completed = EXCLUDED.completed,
-                        raw = EXCLUDED.raw, synced_at = now()
+                        raw = EXCLUDED.raw, synced_at = clock_timestamp()
                 """, rows)
 
     def list_tasks(self, *, tenant_id: str, responsible_id: int | None = None,
