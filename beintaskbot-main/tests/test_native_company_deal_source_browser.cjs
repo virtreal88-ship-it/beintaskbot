@@ -19,5 +19,21 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
   b=await setup(width,{dealCreate:true,dealRead:false,dealUpdate:false,companyRead:false,contactRead:true});try{const{page,ids}=b;await page.waitForFunction(()=>document.querySelector('#view-deals').classList.contains('active'));assert.equal(await page.locator('#nativeDealCreate').isVisible(),true);await page.locator('.nav [data-view=profile]').click();assert.equal(await page.locator('#nativeDealCreate').isVisible(),false);if(await page.locator('#nativeCrmNav').getAttribute('open')===null)await page.locator('#nativeCrmNav > summary').click();await page.locator('.nav [data-view=deals]').click();assert.equal(await page.locator('#nativeDealsList').isVisible(),false);await page.locator('#nativeDealCreate').click();await page.locator('#nativeDealContact').selectOption(ids.contact);assert.equal(await page.locator('#nativeDealCompany').isDisabled(),true);await page.locator('#nativeDealTitle').fill('Browser creation with readable contact');await page.locator('#nativeDealForm [type=submit]').click();await page.waitForFunction(()=>!document.getElementById('nativeDealModal').classList.contains('show'));const calls=await posts(page);assert.equal(calls.length,1);assert.equal(calls[0].body.contact_id,ids.contact);assert.equal(calls[0].path,'/api/platform/crm/native/deals');assert.equal(await page.evaluate(()=>nativeTaskFixture.calls.some(c=>c.method==='GET'&&c.url==='/api/platform/crm/native/deals')),false);assert.deepEqual(b.errors,[]);}catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
   console.log('PASS Chromium '+width+': source-company U, source-deal U, exact routes, create C/contact R, 409, duplicate click and close without reopen');
  }
+ const paged=await setup(390,{pagination:true});try{const {page}=paged;
+  if(await page.locator('#nativeCrmNav').getAttribute('open')===null)await page.locator('#nativeCrmNav > summary').click();
+  await page.locator('.nav [data-view=companies]').click();
+  await page.locator('#nativeCompaniesPage').filter({hasText:/^1$/}).waitFor();
+  await page.locator('#nativeCompaniesNext').click();
+  await page.locator('#nativeCompaniesPage').filter({hasText:/^2$/}).waitFor();
+  await page.locator('#nativeCompaniesNext').click();
+  await page.locator('#nativeCompaniesPage').filter({hasText:/^3$/}).waitFor();
+  await page.getByText('Directory company 120',{exact:true}).waitFor();
+  assert.equal(await page.locator('#nativeCompaniesNext').isDisabled(),true);
+  await page.locator('#companySearch').fill('Directory company 120');
+  await page.waitForFunction(()=>document.querySelector('#nativeCompaniesPage').textContent==='1');
+  assert.equal(await page.locator('#nativeCompaniesList .row').count(),1);
+  assert.equal(await page.locator('#nativeCompaniesPager').isVisible(),false);
+  assert.deepEqual(paged.errors,[]);console.log('PASS Chromium: Companies past 100; search resets to first results page');
+ }catch(error){throw await diagnose(paged.page,error)}finally{await paged.context.close()}
  const b=await setup(390,{dealUpdate:true,companyRead:false,contactRead:false});try{const{page,ids}=b;await page.locator(`[data-native-open="deal:${ids.deal}"]`).click();await page.locator('[data-deal-tab=company]').click();await page.locator('[data-deal-companies-unavailable]').waitFor();assert.equal(await page.locator('[data-deal-company-select] option').count(),1);assert.equal(await page.evaluate(()=>nativeTaskFixture.calls.some(c=>c.path==='/api/platform/crm/native/companies')),false);await page.locator('[data-deal-unlink-company]').click();await page.waitForFunction(()=>nativeTaskFixture.deals[0].company_id===null);assert.deepEqual((await posts(page))[0].body,{company_id:ids.company,unlink:true});assert.deepEqual(b.errors,[]);console.log('PASS Chromium denied directory: source context survives; unlink known target without company R/U/D');}catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
 }finally{if(browser)await browser.close();await new Promise(resolve=>server.close(resolve))}})().catch(e=>{console.error(e);process.exitCode=1});

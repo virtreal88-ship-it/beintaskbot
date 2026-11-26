@@ -67,6 +67,8 @@ def migrate_operator_identity_links(cur) -> None:
       ON saas_operator_widget_replies(tenant_id,signature) WHERE state='unknown'""")
     migrate_customer_links(cur)
     migrate_company_actions(cur)
+    from tenant_operator_company_import_jobs import migrate_jobs
+    migrate_jobs(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_dialog_accounts (
       tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
       provider TEXT NOT NULL CHECK(provider IN ('connect','kommo')),

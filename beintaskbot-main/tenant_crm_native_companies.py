@@ -96,7 +96,7 @@ def find_or_create_company(tenant_id,name,phone='',email='',description='',respo
     return row
 
 
-def list_companies(tenant_id,search='',limit=50,*,actor_id=None):
+def list_companies(tenant_id,search='',limit=50,*,actor_id=None,offset=0):
     q='%'+str(search or '').strip()[:120].replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%'
     with _connect() as conn:
         _ensure_schema(conn)
@@ -112,8 +112,8 @@ def list_companies(tenant_id,search='',limit=50,*,actor_id=None):
                 FROM saas_crm_native_companies c LEFT JOIN saas_tenant_members m ON m.tenant_id=c.tenant_id AND m.telegram_id=c.responsible_id
                 WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({where})
                 AND (c.name ILIKE %s ESCAPE '\\' OR c.phone ILIKE %s ESCAPE '\\' OR c.email ILIKE %s ESCAPE '\\')
-                ORDER BY c.updated_at DESC,c.id LIMIT %s""",
-                [*contact_params,*deal_params,*action_params,tenant_id,*params,q,q,q,max(1,min(int(limit),100))])
+                ORDER BY c.updated_at DESC,c.id LIMIT %s OFFSET %s""",
+                [*contact_params,*deal_params,*action_params,tenant_id,*params,q,q,q,max(1,min(int(limit),100)),max(0,int(offset))])
             return [public_row(row) for row in cur.fetchall()]
 
 

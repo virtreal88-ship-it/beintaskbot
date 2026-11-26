@@ -9,6 +9,8 @@ on:
       - 'beintaskbot-main/tests/test_operator_widget*'
       - 'beintaskbot-main/tenant_beinsystems_operator.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_company_import.py'
+      - 'beintaskbot-main/tenant_operator_company_import_jobs.py'
+      - 'beintaskbot-main/docs/tenant-operator-company-import.js'
       - 'beintaskbot-main/tenant_beinsystems_operator_access.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_schema.py'
@@ -66,4 +68,5 @@ jobs:
         run: |
           node tests/test_operator_widget_queue_ui.cjs
           node tests/test_beinsystems_operator_ui.cjs
+          node tests/test_beinsystems_operator_company_import_ui.cjs
           node tests/test_app_loading_performance.cjs

@@ -37,6 +37,7 @@ EXPECTED_ASSETS = ['/assets/tenant-search-inputs.js','/assets/tenant-deal-chat.j
 
 EXPECTED_ASSETS += ['/assets/tenant-kommo-settings.js', '/assets/tenant-shared-integration-settings.js']
 EXPECTED_ASSETS += ['/assets/tenant-beinsystems-operator-settings.js']
+EXPECTED_ASSETS += ['/assets/tenant-operator-company-import.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-analytics.js']
 EXPECTED_ASSETS += ['/assets/tenant-ai-business-analyst.css']

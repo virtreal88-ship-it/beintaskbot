@@ -322,6 +322,30 @@ class BeinSystemsOperatorTests(unittest.TestCase):
             self.assertEqual(result.status, 400)
             call.assert_not_called()
 
+    def test_background_import_requires_explicit_plan_receipt_not_caller_account_ids(self):
+        profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
+        request = MagicMock(method="POST")
+        handler = operator_api.accounts_handler(lambda _: profile, "https://crm.example", MagicMock())
+        actions = (
+            ({"action": "preview_company_import_all"}, 200,
+             {"plan": True, "catalogue": True, "background": True}, "company_batch_preview"),
+            ({"action": "confirm_company_import_all", "receipt": "opaque"}, 202,
+             {"receipt": "opaque", "catalogue": True, "background": True}, "company_import_job"),
+            ({"action": "confirm_company_import_all", "receipt": "opaque", "accounts": ["a"]},
+             400, None, None),
+        )
+        for body, expected_status, arguments, key in actions:
+            with self.subTest(action=body["action"]), patch.dict("os.environ", {access.WORKSPACE_ENV: TENANT}), \
+                 patch.object(operator_api, "_body", new=AsyncMock(return_value=body)), \
+                 patch.object(company_import, "first_company_batch", return_value={"id": "job"}) as call:
+                result = asyncio.run(handler(request))
+                self.assertEqual(result.status, expected_status)
+                if key:
+                    call.assert_called_once_with(profile, **arguments)
+                    self.assertEqual(json.loads(result.text)[key], {"id": "job"})
+                else:
+                    call.assert_not_called()
+
     def test_add_account_company_requires_explicit_single_account_action(self):
         profile = {"tenant_id": TENANT, "telegram_id": 7, "role": "owner", "active": True}
         request = MagicMock(method="POST")
