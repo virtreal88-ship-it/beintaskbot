@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 from aiohttp import web
 from tenant_task_flow import query, TaskFlowError
+from tenant_crm_view_preferences import TASK_STATUSES
 
 
 @dataclass(frozen=True)
@@ -30,21 +31,24 @@ def handler(context: TaskViewContext):
             query(request, profile, required=True)
         except TaskFlowError as exc:
             return response({'success': False, 'error': exc.code}, exc.status)
-        source = None
+        options = {'source': None}
         if request.method == 'POST':
             if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
                 return response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, 403)
             try:
                 data = await request.json()
-                if (not isinstance(data, dict) or set(data) != {'source'}
-                        or not isinstance(data['source'], str) or data['source'] not in ('native', 'kommo')):
+                if not isinstance(data, dict) or not data or set(data) - {'source', 'status'}:
                     raise ValueError()
-                source = data['source']
+                if 'source' in data and data['source'] not in ('native', 'kommo'):
+                    raise ValueError()
+                if 'status' in data and data['status'] not in TASK_STATUSES:
+                    raise ValueError()
+                options.update(data)
             except Exception:
                 return response({'success': False, 'error': context.invalid_message}, 400)
         try:
             result = await asyncio.to_thread(context.preferences, tenant_id=str(profile['tenant_id']),
-                                            actor_id=int(profile['telegram_id']), source=source)
+                                            actor_id=int(profile['telegram_id']), **options)
             return response({'success': True, **result})
         except context.platform_error as exc:
             return response({'success': False, 'error': str(exc)}, 400)

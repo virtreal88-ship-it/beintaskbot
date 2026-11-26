@@ -118,7 +118,16 @@ def test_has_more_requires_an_actual_authorized_sentinel_not_a_full_page(task_fl
     else:
         _seed_external(f, 1, start=30000)
     before = _state(f)
-    assert asyncio.run(page())['has_more'] is True
+    first = asyncio.run(page())
+    assert first['has_more'] is True and first['next_offset'] == limit
+    async def next_page():
+        async with TestClient(TestServer(_app(f))) as http:
+            status, second = await _get(http, cookie, source, extra={'offset': str(first['next_offset'])})
+            assert status == 200 and len(second['tasks']) == 1 and second['next_offset'] is None
+            assert second['tasks'][0]['id'] not in {row['id'] for row in first['tasks']}
+            status, _ = await _get(http, cookie, source, extra={'offset': '-1'})
+            assert status == 400
+    asyncio.run(next_page())
     assert _state(f) == before
     assert f['provider'].calls == []
 
@@ -278,6 +287,9 @@ def test_customer_search_before_limit_on_both_feeds_and_status(task_flow):
     first_page = list_deals(A, actor_id=11)
     assert len(first_page) == 50
     assert str(DEALS[0]) not in {str(row['id']) for row in first_page}
+    next_page = list_deals(A, actor_id=11, offset=50)
+    assert str(DEALS[0]) in {str(row['id']) for row in next_page}
+    assert {row['id'] for row in first_page}.isdisjoint(row['id'] for row in next_page)
     repo = CRMRepository(f['factory'], lambda conn: None)
     cookie = f['session'].issue(A,11)
     terms = ['+994 50 123-45-67','050 1234567','123-45','eYLa','sMiNe']

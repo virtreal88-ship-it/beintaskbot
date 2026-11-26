@@ -59,7 +59,7 @@ def query(request, profile, *, required=False):
     """Browser intent is a deny-only check; the cookie remains authority."""
     result = {}
     params = request.query if hasattr(request, 'query') else request.rel_url.query
-    for key in ('flow', 'source', 'task_id', 'request_id', 'expected_tenant_id', 'expected_user_id'):
+    for key in ('flow', 'source', 'task_id', 'request_id', 'offset', 'expected_tenant_id', 'expected_user_id'):
         values = params.getall(key, []) if hasattr(params, 'getall') else (
             [params[key]] if key in params else [])
         if len(values) > 1 or (values and not str(values[0])):
@@ -81,6 +81,13 @@ def query(request, profile, *, required=False):
         raise TaskFlowError('task_invalid_query')
     if 'request_id' in result:
         result['request_id'] = _uuid(result['request_id'])
+    if 'offset' in result:
+        raw = result['offset']
+        if (result.get('flow') != '1' or 'task_id' in result or 'request_id' in result
+                or not raw.isascii() or not raw.isdecimal() or len(raw) > 10
+                or int(raw) > 2_147_483_647):
+            raise TaskFlowError('task_invalid_query')
+        result['offset'] = int(raw)
     return result
 
 
@@ -179,7 +186,7 @@ def _native_where(profile):
     return read_where(profile)
 
 
-def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=()):
+def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=(), offset=0):
     if source == 'native':
         where, args = _native_where(profile)
         if task_id:
@@ -239,7 +246,8 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
         sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at,raw
           FROM saas_crm_tasks WHERE '''+where+' ORDER BY completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
     if limit is not None:
-        sql += ' LIMIT %s'; args.append(limit)
+        sql += ' LIMIT %s OFFSET %s'
+        args.extend([limit, offset])
     cur.execute(sql, args)
     selected_rows = cur.fetchall()
     from tenant_kommo_board_provenance import revisions
@@ -352,7 +360,7 @@ def _command(cur, profile, source, request_id):
     return result
 
 
-def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=()):
+def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=(), offset=0):
     if status not in (None, "all", "open", "completed"):
         raise TaskFlowError("task_invalid_query")
     if source not in (None, 'native', 'kommo') or (task_id and request_id):
@@ -376,9 +384,12 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None, st
                 raise TaskFlowError('task_not_found', 404)
             result['task'] = rows[0]
         else:
-            rows = _rows(cur, current, selected, limit=result['limit']+1, search=search, status=None if status=='all' else status, type_ids=type_ids)
-            result.update(tasks=rows[:result['limit']], shown=min(len(rows), result['limit']),
-                          has_more=len(rows)>result['limit'], state='ready' if rows else 'empty')
+            limit = result['limit']
+            rows = _rows(cur, current, selected, limit=limit + 1, search=search,
+                         status=None if status == 'all' else status, type_ids=type_ids, offset=offset)
+            has_more = len(rows) > limit
+            result.update(tasks=rows[:limit], shown=min(len(rows), limit), has_more=has_more,
+                          next_offset=offset + limit if has_more else None, state='ready' if rows else 'empty')
         return result
     return _attempt(profile, operation)
 

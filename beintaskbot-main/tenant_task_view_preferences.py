@@ -7,7 +7,7 @@ from tenant_task_flow import _sources
 from tenant_crm_view_preferences import source_preferences, validate_source
 
 
-def preferences(*, tenant_id: str, actor_id: int, source=None) -> dict:
+def preferences(*, tenant_id: str, actor_id: int, source=None, status=None) -> dict:
     current = member(tenant_id, int(actor_id))
     if (not current or current.get('active') is not True
             or current.get('tenant_status', 'active') not in ACTIVE_TENANT_STATUSES):
@@ -17,4 +17,4 @@ def preferences(*, tenant_id: str, actor_id: int, source=None) -> dict:
     if not allowed:
         raise TenantPlatformError('Tapşırıqlar üçün icazə yoxdur.')
     return source_preferences(kind='tasks', tenant_id=tenant_id, actor_id=actor_id,
-        policy=policy, allowed=allowed, connect=_connect, source=source)
+        policy=policy, allowed=allowed, connect=_connect, source=source, status=status)

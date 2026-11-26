@@ -87,7 +87,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                 query = request.rel_url.query
                 search = str(query.get('search') or '').strip()[:160]
                 options = dict(source=params.get('source'), task_id=params.get('task_id'),
-                               request_id=params.get('request_id'), search=search, status=query.get('status'))
+                               request_id=params.get('request_id'), search=search, status=query.get('status'),
+                               offset=params.get('offset', 0))
                 result = await asyncio.to_thread(read_flow, profile, **options)
                 # Resolve provider type labels only after the scoped read grants access.
                 if search and result.get('source') == 'kommo' and 'tasks' in result:

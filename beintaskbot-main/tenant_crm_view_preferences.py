@@ -8,7 +8,10 @@ def validate_source(value, message='Tapşırıq mənbəyi düzgün deyil.'):
     return value
 
 
-def source_preferences(*, kind, tenant_id, actor_id, policy, allowed, connect, source=None,
+TASK_STATUSES = ('all', 'open', 'completed')
+
+
+def source_preferences(*, kind, tenant_id, actor_id, policy, allowed, connect, source=None, status=None,
                        invalid_message='Tapşırıq mənbəyi düzgün deyil.',
                        forbidden_message='Tapşırıq mənbəyi üçün icazə yoxdur.'):
     # Static allowlist: callers cannot choose an arbitrary member policy subkey.
@@ -16,15 +19,28 @@ def source_preferences(*, kind, tenant_id, actor_id, policy, allowed, connect, s
     if not allowed:
         raise TenantPlatformError(forbidden_message)
     existing = policy.member_settings.get(key)
-    saved = existing.get('source') if isinstance(existing, dict) else None
+    if not isinstance(existing, dict):
+        existing = {}
+    saved = existing.get('source')
     if not isinstance(saved, str) or saved not in ('native', 'kommo'):
         saved = 'kommo' if kind == 'deals' else 'native'
+    result = {'source': saved}
+    updates = {}
     if source is not None:
-        saved = validate_source(source, invalid_message)
-        if saved not in allowed:
+        source = validate_source(source, invalid_message)
+        if source not in allowed:
             raise TenantPlatformError(forbidden_message)
+        updates['source'] = source
+    if kind == 'tasks':
+        saved_status = existing.get('status')
+        result['status'] = saved_status if saved_status in TASK_STATUSES else 'open'
+        if status is not None:
+            if status not in TASK_STATUSES:
+                raise TenantPlatformError('Tapşırıq vəziyyəti düzgün deyil.')
+            updates['status'] = status
+    if updates:
         actor_key = str(int(actor_id))
-        value = _json({'source': saved})
+        value = _json(updates)
         with connect() as conn:
             with conn.cursor() as cur:
                 # Atomic personal subkey update, preserving every grant and user.
@@ -33,8 +49,12 @@ def source_preferences(*, kind, tenant_id, actor_id, policy, allowed, connect, s
                     ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=jsonb_set(
                         jsonb_set(saas_tenant_workflow_policies.value,ARRAY[%s::text]::text[],
                             COALESCE(saas_tenant_workflow_policies.value->(%s::text),'{}'::jsonb),TRUE),
-                        ARRAY[%s::text,%s::text]::text[],%s::jsonb,TRUE),
+                        ARRAY[%s::text,%s::text]::text[],
+                        CASE WHEN jsonb_typeof(saas_tenant_workflow_policies.value #> ARRAY[%s::text,%s::text]) = 'object'
+                             THEN saas_tenant_workflow_policies.value #> ARRAY[%s::text,%s::text]
+                             ELSE '{}'::jsonb END || %s::jsonb,TRUE),
                         updated_by=%s,updated_at=now()''',
-                    (tenant_id, actor_key, key, value, int(actor_id), actor_key, actor_key, actor_key, key, value, int(actor_id)))
+                    (tenant_id, actor_key, key, value, int(actor_id), actor_key, actor_key,
+                     actor_key, key, actor_key, key, actor_key, key, value, int(actor_id)))
             conn.commit()
-    return {'source': saved}
+    return {**result, **updates}

@@ -12,7 +12,7 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
  assert.equal(await page.locator('#view-tasks [data-task-flow-label="intro"]').count(),0);
  assert.equal(await page.locator('#view-tasks .top #kommoTaskCount').isVisible(),true);
  assert.equal(await page.locator('#nativeTaskCount').isVisible(),false);
- assert.match(await page.locator('#kommoTaskCount').getAttribute('aria-label'),/ограничен/);
+ assert.match(await page.locator('#kommoTaskCount').getAttribute('aria-label'),/Есть ещё задачи/);
  // Compare the actual page-heading geometry with the Deals heading at the same width.
  const heading=await page.evaluate(()=>{
   const task=document.querySelector('#view-tasks .top'),deal=document.querySelector('#view-deals .top');
