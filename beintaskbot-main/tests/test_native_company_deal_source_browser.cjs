@@ -16,6 +16,29 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
    await page.evaluate(()=>{nativeTaskFixture.relationError=null;nativeTaskFixture.holdRelations=true});await page.locator('[data-deal-unlink-company]').click();await page.evaluate(()=>document.querySelector('[data-deal-unlink-company]').click());await page.waitForFunction(()=>nativeTaskFixture.pendingRelations.length===1);assert.equal((await posts(page)).length,3);await page.locator('[data-native-card-close]').first().click();await page.evaluate(()=>nativeTaskFixture.pendingRelations.shift()());await page.waitForTimeout(50);assert.equal(await page.locator('#nativeEntityCard').isVisible(),false,'late response cannot reopen');assert.deepEqual(b.errors,[]);
   }catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
   b=await setup(width,{companyUpdate:true,dealUpdate:false});try{const{page,ids}=b;if(await page.locator('#nativeCrmNav').getAttribute('open')===null)await page.locator('#nativeCrmNav > summary').click();await page.locator('.nav [data-view=companies]').click();await page.locator(`[data-native-open="company:${ids.company}"]`).click();await page.locator('[data-company-tab=deals]').click();await page.locator('#companyCardDealSelect').selectOption(ids.otherDeal);await page.locator('[data-company-link=deal]').click();await page.waitForFunction(()=>nativeTaskFixture.deals[1].company_id===nativeTaskFixture.ids.company);assert.deepEqual((await posts(page))[0].body,{action:'link_deal',entity_id:ids.otherDeal});await page.locator('[data-company-tab=deals]').click();await page.locator('[data-company-unlink=deal]').first().click();await page.waitForFunction(()=>nativeTaskFixture.deals[0].company_id===null);assert.equal((await posts(page))[1].body.action,'unlink_deal');await page.screenshot({path:'/tmp/crm-source-company-'+width+'.png'});assert.deepEqual(b.errors,[]);}catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
+  b=await setup(width,{companyUpdate:true});try{const{page,ids}=b;
+   if(await page.locator('#nativeCrmNav').getAttribute('open')===null)await page.locator('#nativeCrmNav > summary').click();
+   await page.locator('.nav [data-view=companies]').click();
+   const openCompany=async id=>page.locator(`[data-native-open="company:${id}"]`).click();
+   await openCompany(ids.company);
+   await page.locator('[data-company-operator-account]').filter({hasText:'@test'}).waitFor();
+   await page.locator('#nativeEntityCard [data-native-card-edit]').click();
+   const account=page.locator('#nativeCompanyOperatorAccount');
+   await account.waitFor();assert.equal(await account.inputValue(),'@test');
+   assert.equal(await account.isEditable(),false);
+   await page.locator('#nativeCompanyName').fill('Local display name');
+   await page.locator('#nativeCompanySave').click();
+   await page.locator('#nativeCompanyModal').waitFor({state:'hidden'});
+   const writes=await posts(page);assert.equal(writes.length,1);
+   assert.equal(writes[0].body.name,'Local display name');assert(!('operator_account' in writes[0].body));
+   if(await page.locator('#nativeEntityCard').isVisible())await page.locator('#nativeEntityCard button.close[data-native-card-close]').click();
+   await openCompany(ids.company);await page.locator('[data-company-operator-account]').waitFor();
+   assert.equal(await page.locator('#nativeEntityTitle').textContent(),'Local display name');
+   await page.locator('#nativeEntityCard button.close[data-native-card-close]').click();
+   await openCompany(ids.otherCompany);await page.locator('[data-company-panel=general]').waitFor();
+   assert.equal(await page.locator('[data-company-operator-account]').count(),0);
+   assert.deepEqual(b.errors,[]);
+  }catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
   b=await setup(width,{dealCreate:true,dealRead:false,dealUpdate:false,companyRead:false,contactRead:true});try{const{page,ids}=b;await page.waitForFunction(()=>document.querySelector('#view-deals').classList.contains('active'));assert.equal(await page.locator('#nativeDealCreate').isVisible(),true);await page.locator('.nav [data-view=profile]').click();assert.equal(await page.locator('#nativeDealCreate').isVisible(),false);if(await page.locator('#nativeCrmNav').getAttribute('open')===null)await page.locator('#nativeCrmNav > summary').click();await page.locator('.nav [data-view=deals]').click();assert.equal(await page.locator('#nativeDealsList').isVisible(),false);await page.locator('#nativeDealCreate').click();await page.locator('#nativeDealContact').selectOption(ids.contact);assert.equal(await page.locator('#nativeDealCompany').isDisabled(),true);await page.locator('#nativeDealTitle').fill('Browser creation with readable contact');await page.locator('#nativeDealForm [type=submit]').click();await page.waitForFunction(()=>!document.getElementById('nativeDealModal').classList.contains('show'));const calls=await posts(page);assert.equal(calls.length,1);assert.equal(calls[0].body.contact_id,ids.contact);assert.equal(calls[0].path,'/api/platform/crm/native/deals');assert.equal(await page.evaluate(()=>nativeTaskFixture.calls.some(c=>c.method==='GET'&&c.url==='/api/platform/crm/native/deals')),false);assert.deepEqual(b.errors,[]);}catch(error){throw await diagnose(b.page,error)}finally{await b.context.close()}
   console.log('PASS Chromium '+width+': source-company U, source-deal U, exact routes, create C/contact R, 409, duplicate click and close without reopen');
  }
