@@ -86,8 +86,24 @@ def send_reply(credentials, row, text, request_id):
     temp_id = "temp-" + request_id
     result = {"state": "unknown"}
     finished = Event()
+    registered = Event()
+    route_ready = False
     emitted = False
     outcome_lock = Lock()
+
+    def active_chats(rows):
+        nonlocal route_ready
+        if not isinstance(rows, list):
+            return
+        # The realtime ID is independent of the REST chat ID. Operator routes
+        # replies by client_id; require the same unambiguous channel and account.
+        matches = [chat for chat in rows if isinstance(chat, dict)
+                   and chat.get("client_id") == row["client_id"]]
+        route_ready = (len(matches) == 1 and matches[0].get("channel") == "widget"
+                       and matches[0].get("account") == row.get("account")
+                       and matches[0].get("status") == "open"
+                       and "operator" in matches[0] and matches[0]["operator"] == row.get("operator"))
+        registered.set()
 
     def matches(event):
         return (isinstance(event, dict) and event.get("temp_id") == temp_id
@@ -121,6 +137,7 @@ def send_reply(credentials, row, text, request_id):
 
     try:
         with _socket(credentials) as client:
+            client.on("active_chats_list", active_chats)
             client.on("operator_message_saved", saved)
             client.on("message_persisted", saved)
             client.on("operator_message_pending", delivered_pending)
@@ -129,6 +146,8 @@ def send_reply(credentials, row, text, request_id):
             registration = ({"name": credentials["widget_login"], "role": "operator"}
                             if credentials.get("widget_login") else {})
             client.emit("register_operator", registration)
+            if not registered.wait(5) or not route_ready:
+                return {"state": "rejected", "reason": "widget_route_unconfirmed"}
             emitted = True
             client.emit("operator_message", {"client_id": row["client_id"], "channel": "widget",
                         "client_name": row.get("client_name") or row["client_id"], "account": row.get("account"),

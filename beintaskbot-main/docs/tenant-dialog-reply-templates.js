@@ -430,5 +430,12 @@
   document.addEventListener('pointerdown',event=>{
     if(mounted&&!mounted.suggestions.hidden&&!mounted.root.contains(event.target)){mounted.suggestions.hidden=true;}
   });
+  document.addEventListener('click',event=>{
+    const send=event.target.closest?.('[data-widget-reply="true"] #sendChat');
+    if(send&&mounted?.root.contains(send)){
+      mounted.showSuggestions=false;
+      renderSuggestions(mounted);
+    }
+  },true);
   attach();
 })();
