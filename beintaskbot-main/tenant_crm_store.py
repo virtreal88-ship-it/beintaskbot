@@ -16,6 +16,15 @@ def upsert_crm_deals(*, tenant_id: str, deals: list[dict]) -> int:
         tenant_id=tenant_id, deals=deals)
 
 
+def update_chat_preview(*, tenant_id, lead_id, body, happened_at, channel):
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE saas_crm_deals SET last_message=%s,last_message_at=%s,channel=%s
+                WHERE tenant_id=%s::uuid AND kommo_lead_id=%s AND deleted_at IS NULL
+                  AND (last_message_at IS NULL OR last_message_at<=%s::timestamptz)""",
+                (body[:4000], happened_at, channel[:100], tenant_id, lead_id, happened_at))
+
+
 def list_crm_deals(*, tenant_id: str, search: str = "", pipeline_ids: list[int] | None = None,
                    status_ids: list[int] | None = None, limit: int = 100, offset: int = 0,
                    scope: list[dict] | None = None, creator_id: int | None = None) -> tuple[list[dict], int]:

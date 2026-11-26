@@ -14,7 +14,7 @@ from tenant_policy import TenantPolicy
 from tenant_scoped_access import scoped_access_enabled, ACTIVE_TENANT_STATUSES
 from tenant_workflow_store import _read_tenant_workflow
 from tenant_crm_queries import task_filters, deal_filters
-from tenant_crm_native_access import scoped_sql
+from tenant_crm_native_access import related_scope_sql, scoped_sql
 from tenant_native_task_access import read_where, capabilities as task_capabilities
 
 
@@ -179,7 +179,7 @@ def _native_where(profile):
     return read_where(profile)
 
 
-def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None):
+def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=()):
     if source == 'native':
         where, args = _native_where(profile)
         if task_id:
@@ -187,10 +187,26 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
         if request_id:
             where += ' AND t.idempotency_key=%s AND t.created_by=%s'
             args.extend(['manual:'+request_id, profile['telegram_id']])
+        company_join = ''
+        if status:
+            where += ' AND t.status=%s'
+            args.append(status)
         if search:
-            needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
-            where += " AND (t.text ILIKE %s ESCAPE '\\' OR d.title ILIKE %s ESCAPE '\\')"
-            args.extend([needle, needle])
+            from tenant_crm_queries import search_predicate
+            title, terms = search_predicate(search, ('t.text','m.display_name'))
+            contact_scope, contact_args = scoped_sql(profile, 'customers', 'view', 'c')
+            contact, contact_terms = search_predicate(search, ('c.display_name','c.phone'), ('c.phone',))
+            deal_scope, deal_args = scoped_sql(profile, 'deals', 'view', 'd')
+            company_scope, company_params = related_scope_sql(profile, 'companies', 'co')
+            company_join = (' LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id '
+                            f'AND co.id=d.company_id AND co.archived_at IS NULL AND ({company_scope}) ')
+            args = [*company_params, *args]
+            deal, deal_terms = search_predicate(search, ('d.title','co.name','co.phone'), ('co.phone',))
+            where += f""" AND ({title} OR EXISTS (SELECT 1 FROM saas_crm_native_contacts c
+                WHERE c.tenant_id=t.tenant_id AND (c.id=t.contact_id OR (c.id=d.contact_id AND d.archived_at IS NULL AND ({deal_scope}))) AND c.archived_at IS NULL
+                AND ({contact_scope}) AND {contact}) OR (d.archived_at IS NULL AND ({deal_scope})
+                AND {deal}))"""
+            args.extend([*terms,*deal_args,*contact_args,*contact_terms,*deal_args,*deal_terms])
         sql = '''SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,
           t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
           t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
@@ -199,15 +215,27 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
           JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
           LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
           LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
-          WHERE '''+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
+          '''+company_join+' WHERE '+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
     else:
         where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).kommo_task_scope())
         if task_id:
             where += ' AND kommo_task_id=%s'; args.append(_positive(task_id))
+        if status:
+            where += ' AND completed=%s'
+            args.append(status == 'completed')
         if search:
-            needle = '%'+str(search).strip()[:120].replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')+'%'
-            where += " AND text ILIKE %s ESCAPE '\\'"
-            args.append(needle)
+            from tenant_crm_queries import search_predicate
+            policy = TenantPolicy(profile)
+            deals, deal_args = deal_filters(tenant_id=profile['tenant_id'], search=search,
+                scope=None if policy.privileged else policy.kommo_pipeline_scope(),
+                creator_id=policy.kommo_user_id())
+            text_match, terms = search_predicate(search, ('text',))
+            if type_ids:
+                text_match = f"({text_match} OR raw->>'task_type_id'=ANY(%s))"
+                terms.append(type_ids)
+            where += f""" AND ({text_match} OR EXISTS (SELECT 1 FROM saas_crm_deals
+                WHERE kommo_lead_id=saas_crm_tasks.kommo_lead_id AND {deals}))"""
+            args.extend([*terms,*deal_args])
         sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at,raw
           FROM saas_crm_tasks WHERE '''+where+' ORDER BY completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
     if limit is not None:
@@ -324,7 +352,9 @@ def _command(cur, profile, source, request_id):
     return result
 
 
-def read(profile, *, source=None, task_id=None, request_id=None, search=None):
+def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=()):
+    if status not in (None, "all", "open", "completed"):
+        raise TaskFlowError("task_invalid_query")
     if source not in (None, 'native', 'kommo') or (task_id and request_id):
         raise TaskFlowError('task_invalid_query')
     if request_id:
@@ -346,7 +376,7 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None):
                 raise TaskFlowError('task_not_found', 404)
             result['task'] = rows[0]
         else:
-            rows = _rows(cur, current, selected, limit=result['limit']+1, search=search)
+            rows = _rows(cur, current, selected, limit=result['limit']+1, search=search, status=None if status=='all' else status, type_ids=type_ids)
             result.update(tasks=rows[:result['limit']], shown=min(len(rows), result['limit']),
                           has_more=len(rows)>result['limit'], state='ready' if rows else 'empty')
         return result

@@ -41,7 +41,7 @@ class CRMQueries(unittest.TestCase):
         search = "' OR TRUE; DROP TABLE saas_tenants; --"
         sql, values = deal_filters(tenant_id='a', search=search)
         self.assertNotIn(search, sql)
-        self.assertEqual(values[1:], ['%' + search + '%'] * 4)
+        self.assertEqual(values[1:], ['%' + search.replace('_', r'\_') + '%'] * 5)
         _, values = deal_filters(tenant_id='a', search='x' * 200)
         self.assertEqual(len(values[1]), 162)
 

@@ -40,19 +40,25 @@
   }
   let dialogRevalidation=null,lastFocusCheck=null;
   const visibleDialogs=()=>document.getElementById?.('view-dialogs')?.classList.contains('active');
-  const canKeepDialog=()=>!authPending&&visibleDialogs()&&!window.tenantOperator?.resolvingCaseLink&&window.tenantProfileSnapshot?.member?.active===true;
+  const visibleCrmList=()=>['deals','tasks','customers'].some(view=>document.getElementById?.('view-'+view)?.classList.contains('active'));
+  const canKeepView=()=>!authPending&&(visibleCrmList()||visibleDialogs()&&!window.tenantOperator?.resolvingCaseLink)&&window.tenantProfileSnapshot?.member?.active===true;
   function verifyOnReturn(){
     if(revalidation)return revalidation;
-    if(!canKeepDialog())return revalidateProfile();
+    if(!canKeepView())return revalidateProfile();
     if(dialogRevalidation)return dialogRevalidation;
     if(lastFocusCheck?.generation===generation&&Date.now()-lastFocusCheck.at<500)return Promise.resolve();
     let version=generation;
+    const keepCrmList=visibleCrmList();
+    let transientFailure=false;
     // This read must be fresh, independent of the startup profile cache, and
     // must not publish if logout or a foreground reauthorization won the race.
     dialogRevalidation=(async()=>{
       try{
+        // A transport failure cannot establish a logout or a change of rights.
+        transientFailure=keepCrmList;
         const response=await nativeFetch('/api/platform/me',{credentials:'same-origin',cache:'no-store',
           signal:window.AbortSignal?.timeout?.(8000)});
+        transientFailure=keepCrmList&&(response.status>=500||response.status===429||response.status===408);
         const data=await response.json();
         if(version!==generation)return;
         if(!response.ok||data?.success!==true||data.member?.active!==true)throw new Error('Authentication required');
@@ -66,15 +72,23 @@
             document.dispatchEvent(new CustomEvent('tenant-profile',{detail:data}));
           }
         }
+        if(keepCrmList&&visibleCrmList()&&!document.hidden)
+          document.dispatchEvent(new CustomEvent('tenant-crm-reauthorized'));
         if(visibleDialogs()&&!document.hidden)document.dispatchEvent(new CustomEvent('tenant-dialog-reauthorized'));
         lastFocusCheck={at:Date.now(),generation};
-      }catch(error){if(version===generation)invalidateAuth();throw error;}
+      }catch(error){
+        if(version===generation){
+          if(!transientFailure)invalidateAuth();
+          else if(visibleCrmList())document.dispatchEvent(new CustomEvent('tenant-crm-refresh-failed'));
+        }
+        throw error;
+      }
       finally{dialogRevalidation=null;}
     })();
     return dialogRevalidation;
   }
   document.addEventListener('visibilitychange',()=>{
-    if(document.hidden){lastFocusCheck=null;if(!canKeepDialog())pendingAuth();}
+    if(document.hidden){lastFocusCheck=null;if(!canKeepView())pendingAuth();}
     else void verifyOnReturn().catch(()=>{});
   });
   window.addEventListener('focus',()=>{if(!document.hidden)void verifyOnReturn().catch(()=>{});});

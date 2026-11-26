@@ -27,6 +27,11 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
     document.addEventListener('dragstart',()=>window.drags.push('start'));
     document.addEventListener('dragend',()=>window.drags.push('end'));
     window.fetch=async(url,options={})=>{
+     if(window.testStageDrop && options.method==='POST' && String(url).endsWith('/crm/deals/move-stage')){
+       const payload=JSON.parse(options.body);window.writes.push(payload.stage_id);
+       return {ok:true,json:async()=>({success:true,state:'confirmed',lead_id:'7',pipeline_id:10,
+         status_id:Number(payload.stage_id),updated_at:1001,source_revision:'b'.repeat(64)})};
+     }
      if(options.method && options.method!=='GET'){window.writes.push(url);throw Error('Unexpected write');}
      return {ok:true,json:async()=>({success:true,catalog:[{pipeline_id:10,name:'Fixture',stages:[{stage_id:100,name:'New'},{stage_id:101,name:'Working'},{stage_id:102,name:'Done'}]}],hidden_stage_keys:[],move_stage_targets:[{pipeline_id:10,stage_id:100},{pipeline_id:10,stage_id:101}],move_stage_sources:[{pipeline_id:10,stage_id:100}],move_context:{tenant_id:'fixture',user_id:'7'}})};
     };
@@ -36,7 +41,7 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    assert.deepEqual(errors,[],kind+' bundle initializes without browser errors');
    await page.evaluate(kind=>{
     const onOpen=id=>window.opened.push(id);
-    if(kind==='native')window.tenantChakraCRM.renderNativeDeals([{id:'1',title:'Fixture deal',contact_name:'Fixture client',pipeline_id:10,stage_id:100,updated_at:'2026-11-14T00:00:00Z',actions:{update:true}}],{tenantId:'fixture',userId:7,canUpdate:true,onOpen,onEdit:id=>window.edited.push(id),onMove:()=>{window.writes.push('move');throw Error('Unexpected move');},workflows:[100,101,102].map(stage_id=>({pipeline_id:10,stage_id,stage_name:'Stage '+stage_id}))});
+    if(kind==='native')window.tenantChakraCRM.renderNativeDeals([{id:'1',title:'Fixture deal',contact_name:'Fixture client',pipeline_id:10,stage_id:100,updated_at:'2026-11-14T00:00:00Z',actions:{update:true}}],{tenantId:'fixture',userId:7,canUpdate:true,onOpen,onEdit:id=>window.edited.push(id),onMove:(row,stage)=>{if(!window.testStageDrop)throw Error('Unexpected move');window.writes.push(String(stage));return {...row,stage_id:stage};},workflows:[100,101,102].map(stage_id=>({pipeline_id:10,stage_id,stage_name:'Stage '+stage_id}))});
     else window.tenantChakraCRM.renderDeals('dealsList',[{source_revision:'a'.repeat(64),kommo_lead_id:7,name:'Fixture deal',contact_name:'Fixture client',pipeline_id:10,status_id:100,raw:{updated_at:1000}}],false,onOpen);
    },kind);
    const card=page.locator(kind==='native'?'[data-native-deal-card]':'[data-deal-open-surface]').first();
@@ -78,8 +83,16 @@ const fs=require('node:fs'),assert=require('node:assert/strict');
    assert.equal(await count(),before,kind+' horizontal touch swipe does not open');
    assert.deepEqual(await page.evaluate(()=>window.writes),[],kind+' no mutations');
    assert.deepEqual(errors,[],kind+' interactions have no browser errors');
+   // Drop on an authorized column using the desktop pointer.
+   await page.setViewportSize({width:1440,height:950});
+   await page.evaluate(()=>{window.testStageDrop=true;document.querySelector('.app-kanban-swipe').scrollLeft=0;});
+   const column=page.locator(kind==='native'?'[data-native-stage="101"]':'[data-kommo-stage-key="10:101"]');
+   await card.dragTo(column,{sourcePosition:{x:12,y:12},targetPosition:{x:24,y:24}});
+   await column.locator(kind==='native'?'[data-native-deal-card]':'[data-deal-open-surface]').waitFor();
+   assert.deepEqual(await page.evaluate(()=>window.writes.map(String)),['101']);
+   assert.equal(await count(),before,kind+' successful drop does not open the card');
    await cdp.detach();await page.close();
   }
-  console.log('PASS real Chromium deal surface/keyboard/nested controls, drag cancellation and mobile touch swipe without mutations');
+  console.log('PASS real Chromium deal surface/keyboard/nested controls, authorized stage drops, drag cancellation and mobile swipe');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1});

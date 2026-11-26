@@ -154,7 +154,8 @@ class SyncPageStore:
                     cur.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (lock,))
                     if not cur.fetchone()['locked']:
                         continue
-                    cur.execute('''SELECT * FROM saas_crm_sync_jobs WHERE tenant_id=%s::uuid AND resource=%s
+                    cur.execute('''SELECT *, clock_timestamp() AS page_started_at FROM saas_crm_sync_jobs
+                        WHERE tenant_id=%s::uuid AND resource=%s
                         AND status IN ('queued','running') AND next_attempt_at<=now() FOR UPDATE''', key)
                     row = cur.fetchone()
                     if not row:
@@ -231,7 +232,10 @@ class SyncPageStore:
                     WHERE (saas_crm_deals.source_updated_at IS NULL OR
                         EXCLUDED.source_updated_at>=saas_crm_deals.source_updated_at)
                     AND (saas_crm_deals.deleted_at IS NULL OR
-                        EXCLUDED.source_updated_at>saas_crm_deals.deleted_at)''', rows)
+                        EXCLUDED.source_updated_at>saas_crm_deals.deleted_at)
+                    AND (saas_crm_deals.synced_at<=COALESCE(%s::timestamptz,clock_timestamp())
+                        OR EXCLUDED.source_updated_at>saas_crm_deals.source_updated_at)''',
+                    [(*item,self.row.get('page_started_at')) for item in rows])
             elif rows:
                 cur.executemany('''INSERT INTO saas_crm_tasks
                     (tenant_id,kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,raw)
@@ -242,7 +246,11 @@ class SyncPageStore:
                     WHERE COALESCE(CASE WHEN EXCLUDED.raw->>'updated_at' ~ '^[0-9]+$'
                         THEN (EXCLUDED.raw->>'updated_at')::numeric END,0) >=
                         COALESCE(CASE WHEN saas_crm_tasks.raw->>'updated_at' ~ '^[0-9]+$'
-                        THEN (saas_crm_tasks.raw->>'updated_at')::numeric END,0)''', rows)
+                        THEN (saas_crm_tasks.raw->>'updated_at')::numeric END,0)
+                    AND (saas_crm_tasks.synced_at<=COALESCE(%s::timestamptz,clock_timestamp()) OR
+                        (CASE WHEN EXCLUDED.raw->>'updated_at' ~ '^[0-9]+$' THEN (EXCLUDED.raw->>'updated_at')::numeric END) >
+                        (CASE WHEN saas_crm_tasks.raw->>'updated_at' ~ '^[0-9]+$' THEN (saas_crm_tasks.raw->>'updated_at')::numeric END))''',
+                    [(*item,self.row.get('page_started_at')) for item in rows])
             if not deleted:
                 from tenant_kommo_board_provenance import record as record_board_provenance
                 record_board_provenance(cur,tenant,resource,snapshots,observation)

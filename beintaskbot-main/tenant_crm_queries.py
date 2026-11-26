@@ -3,6 +3,7 @@
 Values always remain separate from SQL. Explicit empty/unknown scopes deny
 access; a missing scope preserves the existing trusted caller contract.
 """
+import re
 from uuid import UUID
 
 from crm_stage_labels import stage_display_name
@@ -22,6 +23,32 @@ def public_crm_row(row: dict) -> dict:
     if not isinstance(result.get('raw'), dict):
         result['raw'] = {}
     return result
+
+
+def search_predicate(search, fields, phones=()):
+    """Field expressions are constants supplied by the caller, never user input."""
+    query = str(search or '').strip()[:160]
+    escaped = query.replace(chr(92), chr(92)*2).replace('%', chr(92)+'%').replace('_', chr(92)+'_')
+    terms = [f"{field} ILIKE %s ESCAPE '\\'" for field in fields]
+    values = ['%' + escaped + '%'] * len(terms)
+    if phones and re.fullmatch(r'[+0-9()\s.\-]+', query):
+        digits = re.sub(r'[^0-9]', '', query)
+        if digits:
+            # Azerbaijan's domestic trunk prefix replaces the country code.
+            variants = [digits]
+            if digits.startswith('0') and len(digits) >= 3:
+                variants.append('994' + digits[1:])
+            elif digits.startswith('994') and len(digits) > 3:
+                variants.append('0' + digits[3:])
+            for phone in phones:
+                terms.append(f"regexp_replace({phone}, '[^0-9]', '', 'g') LIKE ANY(%s)")
+                values.append(['%' + number + '%' for number in variants])
+    return '(' + ' OR '.join(terms) + ')', values
+
+
+def kommo_company_search(raw):
+    # Search every linked company in the provider snapshot.
+    return f"jsonb_path_query_array({raw}, '$._embedded.companies[*].name')"
 
 
 def deal_filters(*, tenant_id: str, search: str = '', pipeline_ids: list[int] | None = None,
@@ -45,8 +72,11 @@ def deal_filters(*, tenant_id: str, search: str = '', pipeline_ids: list[int] | 
         clauses.append(scope_sql)
     needle = str(search or '').strip()[:160]
     if needle:
-        clauses.append('(name ILIKE %s OR contact_name ILIKE %s OR phone ILIKE %s OR stage_name ILIKE %s)')
-        values.extend([f'%{needle}%'] * 4)
+        predicate, params = search_predicate(needle, ('name', 'contact_name', 'phone', 'stage_name'), ('phone',))
+        company, company_params = search_predicate(needle, ('company.name',))
+        clauses.append(f"({predicate} OR EXISTS (SELECT 1 FROM jsonb_array_elements_text("
+                       f"{kommo_company_search('raw')}) AS company(name) WHERE {company}))")
+        values.extend([*params, *company_params])
     normalized_pipelines = [int(value) for value in (pipeline_ids or []) if str(value).isdigit()]
     normalized_statuses = [int(value) for value in (status_ids or []) if str(value).isdigit()]
     if normalized_pipelines:

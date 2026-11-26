@@ -157,22 +157,28 @@ def get_deal(tenant_id, deal_id, *, actor_id=None):
 
 
 def list_deals(tenant_id, search='', limit=50, *, actor_id=None):
-    needle = '%' + str(search or '').strip()[:120].replace('\\','\\\\').replace('%','\\%').replace('_','\\_') + '%'
+    from tenant_crm_queries import search_predicate
+    predicate, terms = search_predicate(search, ('d.title','c.display_name','co.name','c.phone','co.phone','d.stage_id','stage.name'),
+                                        ('c.phone','co.phone')) if search else ('TRUE', [])
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
             profile = current_access(cur, tenant_id, actor_id, 'deals', 'view')
             where, params = scoped_sql(profile, 'deals', 'view', 'd')
+            contact_scope, contact_params = related_scope_sql(profile, 'customers', 'c')
+            company_scope, company_params = related_scope_sql(profile, 'companies', 'co')
             columns, action_params = action_columns(profile, 'deals', 'd')
             cur.execute(f"""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
                 d.company_id,co.name AS company_name,d.responsible_id,d.channel_id,d.conversation_id,d.updated_at {columns}
                 FROM saas_crm_native_deals d
-                LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=d.tenant_id AND c.id=d.contact_id
-                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id
+                LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=d.tenant_id AND c.id=d.contact_id AND c.archived_at IS NULL AND ({contact_scope})
+                LEFT JOIN saas_crm_native_companies co ON co.tenant_id=d.tenant_id AND co.id=d.company_id AND co.archived_at IS NULL AND ({company_scope})
+                LEFT JOIN saas_tenant_pipeline_stages stage ON stage.tenant_id=d.tenant_id
+                  AND stage.pipeline_id=d.pipeline_id AND stage.stage_id=d.stage_id
                 WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL AND ({where})
-                AND (d.title ILIKE %s ESCAPE '\\' OR c.display_name ILIKE %s ESCAPE '\\')
+                AND {predicate}
                 ORDER BY d.updated_at DESC,d.id LIMIT %s""",
-                [*action_params, tenant_id, *params, needle, needle, max(1,min(int(limit),100))])
+                [*action_params, *contact_params, *company_params, tenant_id, *params, *terms, max(1,min(int(limit),100))])
             return [public_deal(row, profile) for row in cur.fetchall()]
 
 

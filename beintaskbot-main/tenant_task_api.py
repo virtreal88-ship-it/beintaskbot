@@ -84,8 +84,17 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                     raise TaskFlowError('task_forbidden', 403)
                 if 'refresh' in request.rel_url.query or 'full' in request.rel_url.query:
                     raise TaskFlowError('task_invalid_query')
-                result = await asyncio.to_thread(read_flow, profile, source=params.get('source'),
-                    task_id=params.get('task_id'), request_id=params.get('request_id'))
+                query = request.rel_url.query
+                search = str(query.get('search') or '').strip()[:160]
+                options = dict(source=params.get('source'), task_id=params.get('task_id'),
+                               request_id=params.get('request_id'), search=search, status=query.get('status'))
+                result = await asyncio.to_thread(read_flow, profile, **options)
+                # Resolve provider type labels only after the scoped read grants access.
+                if search and result.get('source') == 'kommo' and 'tasks' in result:
+                    names = await titles.names(str(profile['tenant_id']))
+                    matched = [key for key, name in names.items() if search.casefold() in name.casefold()]
+                    if matched:
+                        result = await asyncio.to_thread(read_flow, profile, type_ids=matched, **options)
                 await titles.enrich(profile['tenant_id'], result)
                 return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
             if 'expected_tenant_id' in params:

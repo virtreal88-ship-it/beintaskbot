@@ -220,7 +220,9 @@ class TenantKommo:
             if response.status_code >= 400:
                 self.context.logger.warning("Tenant Kommo request failed: tenant=%s status=%s path=%s",
                                             tenant_id, response.status_code, path)
-                raise self.context.platform_error("Kommo məlumatları yüklənmədi. Bir az sonra yenidən cəhd edin.")
+                error = self.context.platform_error("Kommo məlumatları yüklənmədi. Bir az sonra yenidən cəhd edin.")
+                error.provider_status = response.status_code
+                raise error
             if response.status_code == 204 or not response.content:
                 return {}
             payload = response.json()

@@ -68,7 +68,7 @@ def verified(remote,payload):
 
 def cache_confirmed(cur,profile,payload,result):
     # Only update the verified scalar, never replace stale task text/relations.
-    cur.execute("""UPDATE saas_crm_tasks SET due_at=%s::timestamptz,
+    cur.execute("""UPDATE saas_crm_tasks SET due_at=%s::timestamptz,synced_at=clock_timestamp(),
       raw=jsonb_set(COALESCE(raw,'{}'::jsonb),'{complete_till}',to_jsonb(%s::bigint))
       WHERE tenant_id=%s::uuid AND kommo_task_id=%s
       AND COALESCE(EXTRACT(EPOCH FROM due_at)::bigint,0) IN (%s,%s)""",
