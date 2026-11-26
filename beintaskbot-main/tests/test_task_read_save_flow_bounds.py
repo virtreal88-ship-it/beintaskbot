@@ -94,6 +94,41 @@ def test_external_cap_and_marker_scope_preserve_lossless_exact_id_outside_window
     assert f['provider'].calls == []
 
 
+def test_recent_task_feed_limits_both_sources_to_ten_in_creation_order(task_flow):
+    f = task_flow
+    native_ids = _seed_native(f, 12, prefix='recent')
+    _seed_external(f, 13)
+    kommo_ids = list(range(20000, 20012))
+    with f['factory']() as conn, conn.cursor() as cur:
+        cur.executemany(
+            "UPDATE saas_crm_native_tasks SET created_at='2090-01-01'::timestamptz + %s * interval '1 second' "
+            "WHERE id=%s::uuid", list(enumerate(native_ids)))
+        cur.executemany(
+            "UPDATE saas_crm_tasks SET raw=jsonb_build_object('created_at', %s::bigint) "
+            "WHERE tenant_id=%s::uuid AND kommo_task_id=%s",
+            [(3_786_912_000 - i, A, ident) for i, ident in enumerate(kommo_ids)])
+        cur.execute("UPDATE saas_crm_tasks SET raw=jsonb_build_object('created_at','invalid') "
+                    "WHERE tenant_id=%s::uuid AND kommo_task_id=20012", (A,))
+    cookie = f['session'].issue(A, 11)
+    before = _state(f)
+
+    async def scenario():
+        async with TestClient(TestServer(_app(f))) as http:
+            for source, recent_ids in [('native', native_ids[::-1]), ('kommo', list(map(str, kommo_ids)))]:
+                filters = {'order': 'recent', 'status': 'open'}
+                status, first = await _get(http, cookie, source, extra=filters)
+                assert status == 200 and first['limit'] == first['next_offset'] == 10
+                assert [row['id'] for row in first['tasks']] == recent_ids[:10]
+                status, second = await _get(http, cookie, source, extra={**filters, 'offset': '10'})
+                assert status == 200 and [row['id'] for row in second['tasks']][:2] == recent_ids[10:]
+                assert {row['id'] for row in first['tasks']}.isdisjoint(row['id'] for row in second['tasks'])
+                assert all(row['status'] == 'open' for row in first['tasks'] + second['tasks'])
+                status, _ = await _get(http, cookie, source, extra={'order': 'invalid'})
+                assert status == 400
+    asyncio.run(scenario())
+    assert _state(f) == before
+
+
 @pytest.mark.parametrize('source,limit', [('native', 100), ('kommo', 200)])
 def test_has_more_requires_an_actual_authorized_sentinel_not_a_full_page(task_flow, source, limit):
     f = task_flow

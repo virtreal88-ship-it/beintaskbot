@@ -4,27 +4,36 @@ const { appHtml, installFixture } = require('./task_read_save_flow_fixture.cjs')
 const { html: dealHtml, installDeals } = require('./deal_source_picker_fixture.cjs');
 
 const nativeId = id => '10000000-0000-4000-8000-' + String(id).padStart(12, '0');
-const taskRows = source => Array.from({ length: 45 }, (_, index) => ({
+const taskRows = source => Array.from({ length: 26 }, (_, index) => ({
   id: source === 'native' ? nativeId(index + 1) : String(index + 1),
   source,
   text: 'Example task ' + (index + 1),
-  status: index < 42 ? 'open' : 'completed'
+  status: index < 23 ? 'open' : 'completed'
 }));
 
-async function reachNextPage(page, button) {
-  // Move the real scroll container to the footer, without clicking it.
-  await page.locator(button).evaluate(node => {
-    if (!node.hidden) node.scrollIntoView({block:'end'});
+async function reachNextPage(page, footer) {
+  const position = await page.locator(footer).evaluate(node => {
+    if (node.hidden) return null;
+    const bounds = node.getBoundingClientRect();
+    if (bounds.top>innerHeight || bounds.bottom<0) {
+      node.scrollIntoView({block:'end'});
+      return null;
+    }
+    return {x:bounds.left+bounds.width/2, y:Math.min(bounds.top,innerHeight-80)};
   });
+  if (position) {
+    await page.mouse.move(position.x, position.y);
+    await page.mouse.wheel(0, 160);
+  }
 }
 
 async function checkTasks(browser, width) {
-  const page = await browser.newPage({ viewport: { width, height: 800 } });
+  const page = await browser.newPage({ viewport: { width, height: width>1000 ? 2400 : 800 } });
   let saved = { source: 'native' };
   const start = 'https://fixture.test/app?view=tasks&lang=ru';
   try {
     await page.addInitScript(() => { window.originalFetch = window.fetch; });
-    await page.addInitScript(installFixture, { native:taskRows('native'), kommo:taskRows('kommo'), pageSize:20 });
+    await page.addInitScript(installFixture, { native:taskRows('native'), kommo:taskRows('kommo'), pageSize:10 });
     await page.addInitScript(() => {
       const mock = window.fetch;
       window.fetch = (url, options) => String(url).includes('/task-view-preferences') ?
@@ -40,14 +49,25 @@ async function checkTasks(browser, width) {
         route.fulfill({ contentType:'text/html', body:appHtml() }) : route.abort();
     });
     await page.goto(start);
-    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 20 / 20 +');
+    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 10 / 10 +');
     assert.equal(await page.locator('#taskStatus').inputValue(), 'open');
-    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count(), 20);
+    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count(), 10);
+    assert.equal(await page.locator('#view-tasks button[id$="More"]').count(), 0);
+    if (width>1000) {
+      assert(await page.locator('#nativeTasksMore').evaluate(node => node.getBoundingClientRect().bottom<innerHeight),
+        'the first page fits without scrolling');
+    }
+    await page.waitForTimeout(200);
+    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count(), 10);
+    const orders = await page.evaluate(() => taskFlowFixture.calls.filter(call =>
+      call.path==='/api/platform/crm/tasks' && call.url.includes('flow=1')).map(call =>
+      new URL(call.url,location.origin).searchParams.get('order')));
+    assert.deepEqual([...new Set(orders)], ['recent']);
     await reachNextPage(page, '#nativeTasksMore');
-    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 40 / 40 +');
+    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 20 / 20 +');
     await reachNextPage(page, '#nativeTasksMore');
-    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 42 / 42' && nativeTasksMore.hidden);
-    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count(), 42);
+    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 23 / 23' && nativeTasksMore.hidden);
+    assert.equal(await page.locator('#nativeTasksList [data-task-flow-open]').count(), 23);
     const nativePages = await page.evaluate(() => taskFlowFixture.calls.filter(call => /source=native.*offset=/.test(call.url)));
     assert.equal(nativePages.length, 2);
 
@@ -58,11 +78,11 @@ async function checkTasks(browser, width) {
     await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 3 / 3');
     assert.equal(await page.locator('#taskStatus').inputValue(), 'completed');
     await page.selectOption('#taskStatus', 'open');
-    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 20 / 20 +');
+    await page.waitForFunction(() => nativeTaskCount.textContent === 'Задач: 10 / 10 +');
     await page.selectOption('#taskFeedSource', 'kommo');
     await page.waitForFunction(() => !taskFeedSource.disabled && !tasksMore.hidden);
     await reachNextPage(page, '#tasksMore');
-    await page.waitForFunction(() => kommoTaskCount.textContent === 'Задач: 40 / 40 +');
+    await page.waitForFunction(() => kommoTaskCount.textContent === 'Задач: 20 / 20 +');
     assert.equal(saved.source, 'kommo');
     assert.equal(saved.status, 'open');
   } finally {
@@ -105,6 +125,7 @@ async function checkDeals(browser, width) {
         notice:dealsNotice.textContent, rows:dealsList.textContent.slice(0, 80)}));
       throw new Error(JSON.stringify(state), {cause:error});
     });
+    assert.equal(await page.locator('#view-deals button[id$="More"]').count(), 0);
     await reachNextPage(page, '#dealsMore');
     await page.waitForFunction(() => dealCount.textContent === '112 сделок' && dealsMore.hidden);
     // Scroll to the source control before switching from the bottom of the list.

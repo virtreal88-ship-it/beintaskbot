@@ -138,7 +138,7 @@
     const state = rows[source];
     pagers[source]({more: allowed() && visible() && source===activeSource &&
                           state.query===queryKey(filters()) && Number.isSafeInteger(state.page?.next_offset),
-                    busy: !!state.promise, failed: state.phase==='stale', loadingLabel: text().loading});
+                    busy: !!state.promise, loadingLabel: text().loading});
   }
   function filtered(source){const {search,status}=filters(),query=search.toLocaleLowerCase(),state=rows[source];
     return state.rows.filter(row=>(status==='all'||row.status===status)&&(!query||state.search===search||
@@ -243,9 +243,10 @@
       try {
         const incoming = [];
         const target = !append && previous ? state.rows.length : 0;
+        const recentQuery = {...query, order:'recent'};
         let page, next = offset;
         do {
-          page = await read(source, next ? {...query, offset:next} : query, scope);
+          page = await read(source, next ? {...recentQuery, offset:next} : recentQuery, scope);
           if (!requestCurrent()) return;
           if (page.source!==source || !Array.isArray(page.tasks) ||
               !page.tasks.every(row => rowValid(source,row)) || !Array.isArray(page.sources)) {
