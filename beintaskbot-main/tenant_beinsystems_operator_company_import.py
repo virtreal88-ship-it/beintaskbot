@@ -84,7 +84,7 @@ def _require_first_batch_plan_enabled(tenant):
         raise operator.OperatorError("Создание компаний из первой выборки отключено.", 403)
 
 
-def first_company_batch(profile, *, receipt=None, plan=False, catalogue=False):
+def first_company_batch(profile, *, receipt=None, plan=False, catalogue=False, background=False):
     """Keep the source list read-only; only a separate guarded plan can mint a receipt."""
     if not operator.first_company_batch_preview_enabled():
         raise operator.OperatorError("Первая выборка аккаунтов отключена.", 404)
@@ -96,12 +96,18 @@ def first_company_batch(profile, *, receipt=None, plan=False, catalogue=False):
     if not catalogue and source != "accounts_only":
         raise operator.OperatorError("Первая выборка доступна только для режима accounts-only.", 409)
     if catalogue:
-        scope = _first_batch_digest(["catalogue", source, _first_batch_scope(tenant, actor, credentials)])
+        scope = _first_batch_digest(["catalogue_background" if background else "catalogue",
+                                     source, _first_batch_scope(tenant, actor, credentials)])
     else:
         scope = _first_batch_scope(tenant, actor, credentials)
     if claims is not None and claims["scope"] != scope:
         raise operator.OperatorError("Доступ Operator изменился. Откройте новый предпросмотр.", 409)
 
+    if background and claims is not None:
+        from tenant_operator_company_import_jobs import confirmed_job
+        existing = confirmed_job(tenant, actor, claims["nonce"], scope)
+        if existing:
+            return existing
     _verify_selected_identity(profile, tenant, actor, source, credentials)
     operator._record_operator_read(profile, "accounts", {})
     _selected_source_fence(profile, tenant, actor, source, credentials)
@@ -114,7 +120,8 @@ def first_company_batch(profile, *, receipt=None, plan=False, catalogue=False):
         return _preview_operator_accounts_only(profile, tenant, actor, accounts, credentials)
     options = {"catalogue_source": source} if catalogue else {}
     return _apply_company_import(profile, tenant, actor, accounts, credentials,
-        first_batch=True, preview_receipt=receipt, preview_scope=scope, **options)
+        first_batch=True, preview_receipt=receipt, preview_scope=scope,
+        background=background, **options)
 
 
 
@@ -522,7 +529,8 @@ def _catalogue_plan(plan):
 
 
 def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
-                          first_batch=False, preview_receipt=None, preview_scope=None, catalogue_source=None):
+                          first_batch=False, preview_receipt=None, preview_scope=None, catalogue_source=None,
+                          background=False, job=None):
     catalogue = catalogue_source is not None
     try:
         instance_id = str(uuid.UUID(credentials["connection_instance_id"]))
@@ -592,6 +600,11 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                         "Для безопасного импорта нужен полный доступ к CRM-компаниям.", 403
                     )
                 authorize_create(cur, create_profile, "companies", tenant, actor)
+
+            if job is not None:
+                from tenant_operator_company_import_jobs import lock_job
+                if not lock_job(cur, job):
+                    return
 
             # Serialize retries for this tenant. The stable account key and unique
             # mapping constraint make repeated imports idempotent.
@@ -712,7 +725,7 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                 else:
                     batch = plan
                 digest = _first_batch_digest(plan)
-                if preview_receipt is None:
+                if preview_receipt is None and job is None:
                     preview = {"checked": len(accounts), "partial": True, "limit": FIRST_BATCH_LIMIT,
                                "mode": "company_plan",
                                "rows": [{"account": a["account"], "action": a["action"]} for a in batch],
@@ -723,19 +736,25 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                         receipt = operator._fernet().encrypt(json.dumps(payload).encode("utf-8"))
                         preview["receipt"] = receipt.decode("ascii")
                     return preview
-                claims = _decode_first_batch_receipt(preview_receipt)
-                if claims["scope"] != preview_scope or claims["digest"] != digest:
-                    raise operator.OperatorError("Выборка или план изменились. Откройте новый предпросмотр.", 409)
-                # Audit ID has a primary key. Insert in the write transaction:
-                # rollback permits retry, while concurrent/repeated confirmation cannot write twice.
-                cur.execute("""INSERT INTO saas_tenant_audit_events
-                  (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
-                  VALUES(%s::uuid,%s::uuid,%s,'operator_first_company_batch',
-                    'operator_company_import','first_batch',%s::jsonb)
-                  ON CONFLICT(id) DO NOTHING RETURNING id""",
-                  (claims["nonce"], tenant, actor, operator._json({"checked": len(accounts)})))
-                if not cur.fetchone():
-                    raise operator.OperatorError("Эта выборка уже подтверждена. Откройте новый предпросмотр.", 409)
+                if job is None:
+                    claims = _decode_first_batch_receipt(preview_receipt)
+                    if background:
+                        from tenant_operator_company_import_jobs import confirm_job
+                        if claims["scope"] != preview_scope:
+                            raise operator.OperatorError("Подключение Operator изменилось. Откройте предпросмотр.", 409)
+                        return confirm_job(conn, cur, tenant, actor, claims, digest, plan, catalogue_report)
+                    if claims["scope"] != preview_scope or claims["digest"] != digest:
+                        raise operator.OperatorError("Выборка или план изменились. Откройте новый предпросмотр.", 409)
+                    # Audit ID has a primary key. Insert in the write transaction:
+                    # rollback permits retry, while concurrent/repeated confirmation cannot write twice.
+                    cur.execute("""INSERT INTO saas_tenant_audit_events
+                      (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                      VALUES(%s::uuid,%s::uuid,%s,'operator_first_company_batch',
+                        'operator_company_import','first_batch',%s::jsonb)
+                      ON CONFLICT(id) DO NOTHING RETURNING id""",
+                      (claims["nonce"], tenant, actor, operator._json({"checked": len(accounts)})))
+                    if not cur.fetchone():
+                        raise operator.OperatorError("Эта выборка уже подтверждена. Откройте новый предпросмотр.", 409)
             collision_summary = _name_collision_summary(plan)
             created = reused = manual_review = 0
             for action in batch:
@@ -777,6 +796,9 @@ def _apply_company_import(profile, tenant, actor, accounts, credentials, *,
                 reused = catalogue_report["already"]
                 manual_review = len(catalogue_report["conflicts"])
                 catalogue_report["remaining"] -= created
+            if job is not None:
+                from tenant_operator_company_import_jobs import complete_batch
+                complete_batch(cur, job, len(accounts), created, reused, manual_review)
             cur.execute(
                 """INSERT INTO saas_tenant_audit_events
                   (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)

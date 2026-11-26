@@ -15,6 +15,7 @@ from psycopg.rows import dict_row
 
 import tenant_beinsystems_operator_company_import as batch
 import tenant_crm_native_companies as native
+import tenant_operator_company_import_jobs as jobs
 from tenant_crm_native_access import CRMAccessError
 
 
@@ -31,7 +32,8 @@ def state(monkeypatch):
     actor, received_at = 7, datetime.now(timezone.utc)
     fingerprint = batch._identifier_fingerprint("owner@example")
     credentials = {"connection_instance_id": instance, "identity_fingerprint": fingerprint,
-                   "generation": "g", "received_at": received_at, "token": "mock"}
+                   "generation": "g", "received_at": received_at, "token": "mock",
+                   "base_url": "https://operator-api.example/v1"}
     cipher = Fernet(Fernet.generate_key())
     envelope = cipher.encrypt(json.dumps({"tenant_id": tenant, "owner_telegram_id": actor,
         "provider": batch.operator.PROVIDER, "purpose": "pending_auth_verification",
@@ -60,6 +62,10 @@ def state(monkeypatch):
         admin.execute(f'CREATE SCHEMA "{schema}"')
         try:
             with connect() as c:
+                c.execute("CREATE TABLE saas_tenants (id uuid PRIMARY KEY)")
+                c.execute("INSERT INTO saas_tenants (id) VALUES (%s)", (tenant,))
+                with c.cursor() as cur:
+                    jobs.migrate_jobs(cur)
                 c.execute("""CREATE TABLE saas_tenant_audit_events (
                   id uuid PRIMARY KEY, tenant_id uuid,actor_telegram_id bigint,action text,
                   entity_type text,entity_id text,payload jsonb)""")
@@ -89,13 +95,18 @@ def state(monkeypatch):
                 c.execute("""INSERT INTO saas_beinsystems_operator_pending_auth_v2
                   VALUES(%s,%s,%s,%s,NULL)""", (tenant, actor, received_at, envelope))
 
-            def run(accounts, receipt=None, *, source_only=False, catalogue=False):
+            monkeypatch.setattr(batch, "_selected_source_credentials",
+                                lambda p: (tenant,actor,"accounts_only",credentials))
+            scope = batch._first_batch_digest(
+                ["catalogue_background","accounts_only",batch._first_batch_scope(tenant, actor, credentials)])
+
+            def run(accounts, receipt=None, *, source_only=False, catalogue=False, background=False):
                 rows = [{"account": name} for name in accounts]
                 if source_only:
                     return batch._preview_operator_accounts_only(profile, tenant, actor, rows, credentials)
                 return batch._apply_company_import(profile, tenant, actor, rows, credentials,
-                    first_batch=True, preview_receipt=receipt, preview_scope="scope",
-                    catalogue_source="accounts_only" if catalogue else None)
+                    first_batch=True, preview_receipt=receipt, preview_scope=scope if background else "scope",
+                    catalogue_source="accounts_only" if catalogue else None, background=background)
 
             yield connect, run, tenant
         finally:
@@ -388,3 +399,64 @@ def test_same_target_case_alias_and_reverse_manual_link_block_exact_reuse(state)
     assert after["rows"] == [{"account": "real", "action": "manual_review"},
                              {"account": "other", "action": "manual_review"}]
     assert "receipt" not in after
+
+
+def test_background_confirmation_imports_more_than_one_batch_and_is_replay_safe(state):
+    connect, run, tenant = state
+    names = [f"background-{i:03}" for i in range(104)]
+    plan = run(names, catalogue=True, background=True)
+    assert plan["received"] == plan["remaining"] == 104
+    job = run(names, plan["receipt"], catalogue=True, background=True)
+    assert job["state"] == "queued" and job["total"] == 104 and job["created"] == 0
+    with connect() as c:
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies").fetchone()["n"] == 0
+    # Two workers racing may take one or two independent slices, but cannot
+    # advance the same cursor twice. Changes survive new DB sessions per tick.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: jobs.run_once(), range(2)))
+    replay = run(names, plan["receipt"], catalogue=True, background=True)
+    assert replay["id"] == job["id"] and replay["processed"] in {50,100}
+    for _ in range(3):
+        jobs.run_once()
+    with connect() as c:
+        row = c.execute("SELECT * FROM saas_operator_company_import_jobs").fetchone()
+        assert row["state"] == "completed"
+        assert row["processed"] == row["created"] == 104
+        assert row["accounts"] == []
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies").fetchone()["n"] == 104
+        assert c.execute("SELECT count(*) AS n FROM saas_beinsystems_operator_company_imports").fetchone()["n"] == 104
+    assert "receipt" not in run(names, catalogue=True, background=True)
+
+
+def test_background_import_rechecks_access_and_preserves_committed_slices(state):
+    connect, run, tenant = state
+    names = [f"background-{i:03}" for i in range(51)]
+    plan = run(names, catalogue=True, background=True)
+    run(names, plan["receipt"], catalogue=True, background=True)
+    jobs.run_once()
+    with connect() as c:
+        c.execute("UPDATE saas_beinsystems_operator_accounts_capabilities SET expires_at=now() WHERE tenant_id=%s", (tenant,))
+    jobs.run_once()
+    with connect() as c:
+        row = c.execute("SELECT * FROM saas_operator_company_import_jobs").fetchone()
+        assert row["state"] == "failed" and row["error_code"] == "access_or_plan_changed"
+        assert row["processed"] == row["created"] == 50 and row["accounts"] == []
+        assert c.execute("SELECT count(*) AS n FROM saas_crm_native_companies").fetchone()["n"] == 50
+
+
+def test_background_does_not_adopt_same_name_or_create_outside_confirmed_set(state):
+    connect, run, tenant = state
+    names = [f"background-{i:03}" for i in range(51)]
+    plan = run(names, catalogue=True, background=True)
+    run(names, plan["receipt"], catalogue=True, background=True)
+    with connect() as c:
+        c.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name) VALUES(%s,%s,%s)",
+                  (uuid.uuid4(),tenant,names[50]))
+    jobs.run_once()
+    jobs.run_once()
+    with connect() as c:
+        row = c.execute("SELECT * FROM saas_operator_company_import_jobs").fetchone()
+        assert row["state"] == "completed" and row["processed"] == 51
+        assert row["created"] == 50 and row["conflicts"] == 1
+        assert not c.execute("SELECT 1 FROM saas_beinsystems_operator_company_imports WHERE external_account=%s",
+                             (names[50],)).fetchone()

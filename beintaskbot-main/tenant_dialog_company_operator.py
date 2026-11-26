@@ -9,6 +9,8 @@ from tenant_beinsystems_operator_access import dialogue_chooser_enabled
 import tenant_dialog_operator_account as accounts
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access
+from tenant_operator_company_name_guard import lock_name_writes, require_unreserved_account_pair
+from tenant_crm_native_access import CRMAccessError
 
 
 _LIMIT = 5
@@ -114,6 +116,64 @@ def _assert_fresh(cur,tenant,actor,source,credentials):
             raise operator.OperatorError('Доступ к аккаунтам Operator истёк. Подтвердите его заново.',409)
 
 
+def _ensure_catalogue_company(cur, tenant, actor, account, credentials):
+    """Materialize one verified account without returning CRM-only company data.
+
+    The caller already holds the same tenant namespace lock as the importer.
+    A name collision or archived mapping is not evidence to bind, duplicate,
+    or restore a CRM record. The independent Operator dialogue link can stand.
+    """
+    mappings, reserved = imports._first_batch_prior_identity(cur, tenant, [account])
+    confirmed = imports._catalogue_links(cur, tenant, [account], credentials)
+    existing = set(reserved.get(account, ()))
+    known = set(confirmed.get(account, ()))
+    if account in mappings:
+        known.add(mappings[account])
+    if existing - known or len(known) > 1:
+        return 'manual_review'
+    if known:
+        company_id = next(iter(known))
+        cur.execute("""SELECT id FROM saas_crm_native_companies
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL FOR UPDATE""",
+          (tenant, company_id))
+        if not cur.fetchone():
+            return 'manual_review'
+        try:
+            require_unreserved_account_pair(cur, tenant, account, company_id)
+        except CRMAccessError:
+            return 'manual_review'
+        if account in mappings:
+            return 'reuse'
+        return 'bind' if imports._put_mapping(cur, tenant, account, company_id, actor, credentials) else 'manual_review'
+
+    cur.execute("""SELECT id FROM saas_crm_native_companies
+      WHERE tenant_id=%s::uuid AND lower(name)=lower(%s) LIMIT 1""", (tenant, account))
+    if cur.fetchone():
+        return 'manual_review'
+    company_id = str(uuid.uuid4())
+    # Keep the independent dialogue link intact if the identity guard refuses
+    # to record the new mapping; never leave an unlinked company behind.
+    cur.execute("SAVEPOINT operator_dialogue_company")
+    try:
+        imports._require_import_name(cur, tenant, account, company_id)
+        cur.execute("""INSERT INTO saas_crm_native_companies
+          (id,tenant_id,name,phone,email,description,responsible_id,access_responsible_id)
+          VALUES(%s::uuid,%s::uuid,%s,'','','',NULL,%s)""",
+          (company_id, tenant, account, actor))
+        if not imports._put_mapping(cur, tenant, account, company_id, actor, credentials):
+            cur.execute("ROLLBACK TO SAVEPOINT operator_dialogue_company")
+            cur.execute("RELEASE SAVEPOINT operator_dialogue_company")
+            return 'manual_review'
+        cur.execute("RELEASE SAVEPOINT operator_dialogue_company")
+        return 'create'
+    except operator.OperatorError as error:
+        if error.status != 409:
+            raise
+        cur.execute("ROLLBACK TO SAVEPOINT operator_dialogue_company")
+        cur.execute("RELEASE SAVEPOINT operator_dialogue_company")
+        return 'manual_review'
+
+
 def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, choice=False,
             expected_company_id=dialogue._UNCHECKED, selection_search=None):
     route=dialogue._key(provider,lead_id,channel_id,conversation_id)
@@ -127,6 +187,8 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
     try:
         tenant,actor,source,credentials,verified=_read_live(profile,route,term,choice=choice,selection_search=selection_search)
         with dialogue._connect() as conn, conn.cursor() as cur:
+            if choice:
+                lock_name_writes(cur,tenant,wait=True)
             policy=_fenced_local(cur,profile,route,tenant,actor,source,credentials)
             _assert_fresh(cur,tenant,actor,source,credentials)
             if not choice:
@@ -140,13 +202,14 @@ def chooser(profile, *, provider, lead_id, channel_id, conversation_id, term, ch
                 dialogue.assert_expected_company(actual,expected_company_id)
             saved=accounts.save(cur,tenant,actor,route,current,term,
                                 credentials['generation'],credentials['connection_instance_id'])
-            if not current or current['id']!=saved['id']:
+            materialized=_ensure_catalogue_company(cur,tenant,actor,term,credentials)
+            if not current or current['id']!=saved['id'] or materialized in {'create','bind'}:
                 account_hash=hashlib.sha256(term.encode('utf-8')).hexdigest()
                 cur.execute("""INSERT INTO saas_tenant_audit_events
                   (id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
                   VALUES(%s,%s::uuid,%s,'operator_dialog_company_selected','operator_endpoint',%s,%s::jsonb)""",
                   (str(uuid.uuid4()),tenant,actor,account_hash,
-                   operator._json({'account_hash':account_hash,'source':source})))
+                   operator._json({'account_hash':account_hash,'source':source,'catalogue_result':materialized})))
             result={'binding':accounts.snapshot(cur,tenant,policy,route,True,record=saved)}
             conn.commit()
             return result

@@ -103,9 +103,12 @@ def test_exact_selection_reuses_the_direct_binding_and_refuses_blind_replacement
     assert refuses.value.status==409
     assert binding.binding(OWNER,**ROUTE)==one
     assert count(db,'saas_operator_dialog_accounts')==1
-    assert count(db,'saas_crm_native_companies')==company_count
+    assert count(db,'saas_crm_native_companies')==company_count+1
     assert not bindings(db)
-    assert count(db,'saas_beinsystems_operator_company_imports')==0
+    assert db.execute('''SELECT c.name FROM saas_beinsystems_operator_company_imports m
+      JOIN saas_crm_native_companies c ON c.tenant_id=m.tenant_id AND c.id=m.company_id
+      WHERE m.tenant_id=%s::uuid AND m.external_account='exact-one' ''',(A,))==[{'name':'exact-one'}]
+    db.commit()
 
 
 def test_inline_replace_and_unlink_require_current_exact_binding(ready):
@@ -120,7 +123,7 @@ def test_inline_replace_and_unlink_require_current_exact_binding(ready):
         binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=original['company_id'])
     assert stale_unlink.value.status==409
     assert binding.binding(OWNER,**ROUTE,company_id=None,expected_company_id=changed['company_id'])['company_id'] is None
-    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==0
+    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==2
 
 
 @pytest.mark.parametrize('active',[False,True])
@@ -151,6 +154,27 @@ def test_uniset_exact_result_is_verified_again_and_linked_without_touching_crm(r
     assert not bindings(db)
     assert db.execute("SELECT count(*) AS n FROM saas_crm_native_companies WHERE lower(name)='uniset'")==[{'n':2}]
     db.commit()
+
+
+def test_existing_archived_mapping_does_not_create_or_restore_company(ready):
+    db,_,_=ready
+    first=choose('archived-account')
+    db.execute("""UPDATE saas_crm_native_companies SET archived_at=now()
+      WHERE tenant_id=%s::uuid AND name='archived-account'""",(A,))
+    db.commit()
+    assert choose('archived-account')==first
+    assert db.execute("""SELECT count(*) AS n FROM saas_crm_native_companies
+      WHERE tenant_id=%s::uuid AND name='archived-account' AND archived_at IS NULL""",(A,))==[{'n':0}]
+    db.commit()
+
+
+def test_mapping_conflict_does_not_leave_an_orphan_company(ready, monkeypatch):
+    db,_,_=ready
+    before=count(db,'saas_crm_native_companies')
+    monkeypatch.setattr(service.imports,'_put_mapping',lambda *args:False)
+    assert choose('mapping-conflict')['operator_account']=='mapping-conflict'
+    assert count(db,'saas_crm_native_companies')==before
+    assert count(db,'saas_beinsystems_operator_company_imports')==0
 
 
 def test_provider_result_and_current_pending_credential_are_rechecked(ready,monkeypatch):
@@ -227,7 +251,7 @@ def _activate_synthetic(db,instance):
     db.commit()
 
 
-def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready):
+def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready,monkeypatch):
     db,_,instance=ready
     _activate_synthetic(db,instance)
     db.execute("""UPDATE saas_tenant_members SET permissions='["dialogs","support","operator_api"]'::jsonb
@@ -239,7 +263,13 @@ def test_accepted_api_operator_can_select_and_detach_without_company_crud(ready)
     assert selected['company_name']=='example' and selected['can_unlink']
     detached=binding.binding(STAFF,**ROUTE,company_id=None,expected_company_id=selected['company_id'])
     assert detached['company_id'] is None
-    assert count(db,'saas_beinsystems_operator_company_imports')==0
+    assert count(db,'saas_beinsystems_operator_company_imports')==1
+    from tenant_crm_native_access import CRMAccessError
+    monkeypatch.setattr(native,'_connect',lambda:db)
+    monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
+    with pytest.raises(CRMAccessError):
+        native.list_companies(A, actor_id=33)
+    db.rollback()
     with pytest.raises(provider.OperatorError):
         binding.binding(STAFF,**{**ROUTE,'channel_id':CB},company_id=None,expected_company_id=None)
 
@@ -305,7 +335,7 @@ def test_concurrent_initial_choices_have_one_winner(ready,monkeypatch):
     winner=next(result for result in results if result)
     assert results.count(None)==1
     assert binding.binding(OWNER,**ROUTE)['operator_account']==winner
-    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==0
+    assert not bindings(db) and count(db,'saas_beinsystems_operator_company_imports')==1
 
 
 def test_kommo_requires_exact_route_and_keeps_connect_binding_separate(ready):
@@ -319,4 +349,32 @@ def test_kommo_requires_exact_route_and_keeps_connect_binding_separate(ready):
     assert binding.binding(OWNER,**route)==chosen
     assert binding.binding(OWNER,**ROUTE)['operator_account'] is None
     assert not bindings(db)
-    assert count(db,'saas_beinsystems_operator_company_imports')==0
+    assert count(db,'saas_beinsystems_operator_company_imports')==1
+
+
+def test_same_account_in_two_sources_reuses_one_catalogue_record(ready):
+    from test_dialog_lifecycle_company_binding_postgres import _deal
+    db,_,_=ready
+    route=_deal(db)
+    first=choose('shared-account')
+    second=choose('shared-account',**route)
+    assert first['company_id']!=second['company_id']  # independent dialogue binding IDs
+    assert count(db,'saas_beinsystems_operator_company_imports')==1
+    assert binding.binding(OWNER,**route)['operator_account']=='shared-account'
+
+
+def test_directory_pages_include_more_than_one_hundred_and_respect_tenant(ready,monkeypatch):
+    db,_,_=ready
+    monkeypatch.setattr(native,'_connect',lambda:db)
+    monkeypatch.setattr(native,'_ensure_schema',lambda *_:None)
+    db.execute("""INSERT INTO saas_crm_native_companies(id,tenant_id,name,updated_at)
+      SELECT gen_random_uuid(),%s::uuid,'paging-fixture-'||n,
+        now()+n*interval '1 second' FROM generate_series(1,122) n""",(A,))
+    db.execute("""INSERT INTO saas_crm_native_companies(id,tenant_id,name)
+      VALUES(gen_random_uuid(),%s::uuid,'paging-fixture-foreign')""",(B,))
+    db.commit()
+    pages=[native.list_companies(A,'paging-fixture-',50,actor_id=11,offset=offset)
+        for offset in (0,50,100)]
+    assert list(map(len,pages))==[50,50,22]
+    assert len({row['id'] for page in pages for row in page})==122
+    assert not any(row['name'].endswith('foreign') for page in pages for row in page)

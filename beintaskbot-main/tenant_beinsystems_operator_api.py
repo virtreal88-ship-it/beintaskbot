@@ -192,6 +192,19 @@ def accounts_handler(member: Callable, origin: str, logger):
                 return _json_response({"imported": result["imported"],
                     "activated": result["activated"], "integration": result["status"],
                     "identity": result["identity"]})
+            if data == {"action": "company_import_status"}:
+                from tenant_operator_company_import_jobs import latest_job
+                return _json_response({"company_import_job": await asyncio.to_thread(latest_job, profile)})
+            if data == {"action": "preview_company_import_all"}:
+                result = await asyncio.to_thread(
+                    company_import.first_company_batch, profile, plan=True, catalogue=True, background=True)
+                return _json_response({"company_batch_preview": result})
+            if (set(data) == {"action", "receipt"} and action == "confirm_company_import_all"
+                    and isinstance(data["receipt"], str) and data["receipt"]):
+                result = await asyncio.to_thread(
+                    company_import.first_company_batch, profile, receipt=data["receipt"], catalogue=True,
+                    background=True)
+                return _json_response({"company_import_job": result}, status=202)
             if data == {"action": "preview_first_company_batch"}:
                 result = await asyncio.to_thread(company_import.first_company_batch, profile)
                 return _json_response({"company_batch_preview": result})
@@ -233,7 +246,8 @@ def accounts_handler(member: Callable, origin: str, logger):
         except Exception:
             if action in {"create_companies", "preview_first_company_batch",
                           "preview_first_company_batch_plan", "confirm_first_company_batch",
-                          "preview_company_import_plan", "confirm_company_import_batch"}:
+                          "preview_company_import_plan", "confirm_company_import_batch",
+                          "preview_company_import_all", "confirm_company_import_all", "company_import_status"}:
                 logger.error("Operator company creation failed")
             else:
                 logger.exception("Operator account request failed")
