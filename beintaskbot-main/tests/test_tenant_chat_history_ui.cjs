@@ -8,6 +8,7 @@ function fixture(){
     append(...items){this.children.push(...items);}before(item){this.beforeNode=item;}
     remove(){nodes.delete(this.id);this.isConnected=false;}
     querySelectorAll(){return [];}
+    closest(){return null;}
     setAttribute(){}insertAdjacentHTML(where,text){this.html=text+this.html;}
   }
   const rows=new Element();rows.id='chatRows';

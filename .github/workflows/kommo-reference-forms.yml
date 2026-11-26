@@ -7,6 +7,7 @@ on:
       - 'beintaskbot-main/docs/deal-phone-duplicates.js'
       - 'beintaskbot-main/tests/test_deal_duplicate_actions_browser.cjs'
       - 'beintaskbot-main/tests/test_deal_fullscreen_browser.cjs'
+      - 'beintaskbot-main/tests/test_deal_card_reference_browser.cjs'
       - 'beintaskbot-main/tests/test_phone_duplicates_ui.cjs'
       - 'beintaskbot-main/docs/tenant-kommo-deal-note-create.js'
       - 'beintaskbot-main/docs/tenant-deal-completion.js'
@@ -89,6 +90,7 @@ jobs:
           node tests/test_phone_duplicates_ui.cjs
           node tests/test_deal_duplicate_actions_browser.cjs
           node tests/test_deal_fullscreen_browser.cjs
+          node tests/test_deal_card_reference_browser.cjs
           node tests/test_deal_stage_receipt_integration.cjs
           node tests/test_deal_stage_stale_notice.cjs
           node tests/test_tenant_deal_completion_ui.cjs

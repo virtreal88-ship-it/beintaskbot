@@ -12,17 +12,17 @@ for(const width of [390,1024,1440])for(const theme of ['light','dark']){
  tenantKommoDealCard.mount({host,deal:{kommo_lead_id:7,contact_name:'Client',phone:'0551234567'},isCurrent:()=>true});document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:7}}));
  });
  await page.locator('#dealModal>.modal-card').evaluate(async n=>{await Promise.all(n.getAnimations().map(a=>a.finished));});
- if(width>=1024){
-  const chat=await page.locator('.chat-placeholder').boundingBox(),info=await page.locator('#dealInfoPanel').boundingBox();assert(chat.x+chat.width<=info.x+1,'chat left, info right');
-  const support=page.locator('#supportCreateFromChat'),duplicate=page.locator('[data-duplicate-search]');assert(await support.locator('.deal-support-caption').isVisible());
+ if(width>=900){
+  const chat=await page.locator('.chat-placeholder').boundingBox(),info=await page.locator('#dealInfoPanel').boundingBox();assert(info.x+info.width<=chat.x+1,'data left, chat right');
+  const support=page.locator('#supportCreateFromChat'),duplicate=page.locator('[data-duplicate-search]');assert(await support.isVisible());
   assert(await duplicate.evaluate(n=>n.previousElementSibling.id==='supportCreateFromChat'),'adjacent actions');
   await duplicate.click();await page.locator('[data-open="9"]').waitFor();assert.equal(await page.locator('.phone-duplicates-dialog input').count(),0);assert.equal(await page.locator('.phone-duplicates-result img').count(),0);
   assert.equal(await page.evaluate(()=>calls.filter(x=>x.includes('/duplicates?')).length),1);assert(await page.evaluate(()=>calls.some(x=>x.includes('phone=0551234567')&&x.includes('expected_tenant_id=fixture'))));
   await page.locator('[data-close]').click();await page.evaluate(()=>reply={success:true,deals:[]});await duplicate.click();await page.waitForFunction(()=>document.querySelector('.phone-duplicates-dialog [role=status]').textContent.includes('не найдено'));await page.locator('[data-close]').click();
   await duplicate.evaluate(n=>n.dataset.duplicatePhone='');const before=await page.evaluate(()=>calls.length);await duplicate.click();assert((await page.locator('.phone-duplicates-dialog').textContent()).includes('нет номера'));assert.equal(await page.evaluate(()=>calls.length),before);await page.locator('[data-close]').click();
   await duplicate.evaluate(n=>n.dataset.duplicatePhone='0551234567');await page.evaluate(()=>delayed=true);await duplicate.click();await page.waitForFunction(()=>!!window.finish);await page.evaluate(()=>document.dispatchEvent(new CustomEvent('tenant-chat-close')));await page.evaluate(()=>finish());assert.equal(await page.locator('.phone-duplicates-overlay').count(),0);
-  await page.setViewportSize({width:390,height:900});await page.waitForFunction(()=>document.getElementById('dealInfoPanel').hidden);assert(await page.locator('#dealInfoPanel').evaluate(n=>n.hidden));assert.equal(await duplicate.getAttribute('data-duplicate-auto'),null);assert.equal(await duplicate.evaluate(n=>n.closest('#dealInfoPanel')!==null),true);
- }else{assert(!(await page.locator('#supportCreateFromChat .deal-support-caption').isVisible()));await page.locator('.deal-info-toggle').click();await page.locator('[data-duplicate-search]').click();assert.equal(await page.locator('.phone-duplicates-dialog input').count(),1);assert.equal(await page.evaluate(()=>calls.filter(x=>x.includes('/duplicates?')).length),0);}
+  await page.setViewportSize({width:390,height:900});await page.waitForFunction(()=>!document.querySelector('[data-duplicate-search]').hasAttribute('data-duplicate-auto'));assert(await page.locator('#dealInfoPanel').isVisible());assert.equal(await duplicate.getAttribute('data-duplicate-auto'),null);assert.equal(await duplicate.evaluate(n=>n.closest('#dealInfoPanel')!==null),true);
+ }else{assert(await page.locator('#supportCreateFromChat').isVisible());await page.locator('[data-duplicate-search]').click();assert.equal(await page.locator('.phone-duplicates-dialog input').count(),1);assert.equal(await page.evaluate(()=>calls.filter(x=>x.includes('/duplicates?')).length),0);}
  await page.close();
 }
 console.log('PASS desktop actions, auto search, missing/empty/escaped results, stale response, mobile and responsive sidebar in both themes');

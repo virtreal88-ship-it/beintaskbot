@@ -7,8 +7,8 @@
     // Attach rejection immediately: the deal request can finish after this read.
     return api('/api/platform/crm/chat/history?'+query,{signal}).then(data=>({data}),error=>({error}));
   }
-  function mount({api,id,member,signal,isCurrent,line,first}) {
-    const box=$('chatRows'),scroller=box.closest('.deal-chat-history'),c=copy();
+  function mount({api,id,member,signal,isCurrent,line,first,box=$('chatRows'),refreshProvider=true}) {
+    const scroller=box.closest('.deal-chat-history'),c=copy();
     const status=document.createElement('div');status.className='deal-chat-status';status.style.cssText='font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;gap:6px;align-items:center';status.setAttribute('role','status');box.before(status);
     let loaded=false,paging=false,flight=null,queued=null,refreshFlight=null,revision=0;
     const valid=()=>isCurrent()&&!signal.aborted&&box===$('chatRows');
@@ -65,7 +65,7 @@
       flight=(async()=>{const result=await(prefetched||read({api,id,member,signal}));if(!valid()||serial!==revision)return;if(result.error){failure(result.error);return;}apply(result.data,reset);if(provider&&valid())void refresh();})().finally(()=>{flight=null;});
       return flight;
     }
-    void load(true,first);
+    void load(refreshProvider,first);
     return {reload:()=>load(false)};
   }
   window.tenantDealChat={read,mount};

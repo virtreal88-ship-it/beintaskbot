@@ -213,7 +213,8 @@
   @media(max-width:700px){#supportCases .campaign-metrics{grid-template-columns:minmax(0,1fr)}#supportCases .campaign-metric-group dl{grid-template-columns:minmax(0,1fr)}}
 </style>
 <style>#view-tasks .task-source-panel{padding:0;border:0;box-shadow:none;background:transparent}#view-tasks .task-header-counts .task-source-count:not([hidden]){display:inline-flex!important}#view-tasks .task-header-counts .task-source-count{width:max-content;max-width:100%;margin:6px 0 0;padding:5px 0;border:1px solid transparent;font-size:14px;line-height:inherit;color:var(--muted)}@media(max-width:760px){#view-tasks .task-header-counts .task-source-count{font-size:13px}}#taskFeedPreferenceNotice:empty{display:none}.task-source-panel[hidden]{display:none!important}.task-flow-filters{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.task-flow-filters label{display:grid;gap:6px;min-width:0}.task-flow-filters input,.task-flow-filters select{box-sizing:border-box;width:100%;min-width:0;min-height:44px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);padding:10px;font:inherit}.task-flow-filters input:focus-visible,.task-flow-filters select:focus-visible{outline:2px solid var(--brand);outline-offset:2px}@media(max-width:700px){.task-flow-filters{grid-template-columns:1fr}}</style>
-<style>#view-tasks>.task-flow-filters{margin-bottom:12px}.task-flow-filters{display:flex!important;align-items:flex-end;gap:12px;flex-wrap:wrap}.task-flow-filters>label{flex:1 1 160px;min-width:0}.task-flow-filters>label:nth-child(2){flex-grow:2}.task-flow-filters input,.task-flow-filters select{height:44px;box-sizing:border-box}.task-view-controls{flex:none;margin-left:auto}.deal-source-panel[hidden]{display:none!important}.deal-source-filters{display:flex;align-items:flex-end;gap:12px;flex-wrap:nowrap}.deal-source-filters label{display:grid;gap:6px;min-width:160px;flex:0 0 220px}.deal-source-filters input{flex:1;min-width:120px;height:44px;box-sizing:border-box}.deal-source-filters select{width:100%;height:44px;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);font:inherit}.crm-count-badge{display:inline-flex!important;width:max-content;max-width:100%;padding:5px 10px;border-radius:8px;background:#fff0d7!important;color:#9a4e00!important;border:1px solid #f0bb64;font-weight:650}[data-app-theme=dark] .crm-count-badge{background:#492b00!important;color:#ffd18a!important;border-color:#8e5a14}.crm-sync-status{display:block;margin-top:6px;font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}.crm-sync-status[data-failed=true]{color:#be4b00}.crm-sync-status[hidden]{display:none!important}#dealViewControls{flex:none}#view-deals:has(#kommoDealSourcePanel[hidden]) #dealViewControls{display:none}@media(max-width:900px){.deal-source-filters{flex-wrap:wrap}.deal-source-filters label{flex:1 1 140px;min-width:0}.deal-source-filters input{flex:1 1 160px;min-width:0}#dealViewControls{margin-left:auto}}</style>
+<style>#view-tasks>.task-flow-filters{margin-bottom:12px}.task-flow-filters{display:flex!important;align-items:flex-end;gap:12px;flex-wrap:wrap}.task-flow-filters>label{flex:1 1 160px;min-width:0}.task-flow-filters>label:nth-child(2){flex-grow:2}.task-flow-filters input,.task-flow-filters select{height:44px;box-sizing:border-box}.task-view-controls{flex:none;margin-left:auto}.deal-source-panel[hidden]{display:none!important}.deal-source-filters{display:flex;align-items:flex-end;gap:12px;flex-wrap:nowrap}.deal-source-filters label{display:grid;gap:6px;min-width:160px;flex:0 0 220px}.deal-source-filters input{flex:1;min-width:120px;height:44px;box-sizing:border-box}.deal-source-filters select{width:100%;height:44px;box-sizing:border-box;padding:10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--ink);font:inherit}#view-deals #dealCount{margin:6px 0 0;padding:0;border:0;background:transparent;color:var(--muted);font-size:14px;font-weight:400}@media(max-width:760px){#view-deals #dealCount{font-size:13px}}
+.crm-count-badge{display:inline-flex!important;width:max-content;max-width:100%;padding:5px 10px;border-radius:8px;background:#fff0d7!important;color:#9a4e00!important;border:1px solid #f0bb64;font-weight:650}[data-app-theme=dark] .crm-count-badge{background:#492b00!important;color:#ffd18a!important;border-color:#8e5a14}.crm-sync-status{display:block;margin-top:6px;font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}.crm-sync-status[data-failed=true]{color:#be4b00}.crm-sync-status[hidden]{display:none!important}#dealViewControls{flex:none}#view-deals:has(#kommoDealSourcePanel[hidden]) #dealViewControls{display:none}@media(max-width:900px){.deal-source-filters{flex-wrap:wrap}.deal-source-filters label{flex:1 1 140px;min-width:0}.deal-source-filters input{flex:1 1 160px;min-width:0}#dealViewControls{margin-left:auto}}</style>
 <style>
 /* Task dialogs use the available phone width, without changing desktop cards. */
 @media(max-width:600px){
@@ -315,7 +316,7 @@
     <section class="view" id="view-night_report"><div id="agentReports"></div></section>
     <section class="view" id="view-tasks"><div class="top"><div><div class="eyebrow" data-task-flow-label="eyebrow">İŞ PLANI</div><h1 data-task-flow-label="title">Tapşırıqlar</h1><div class="task-header-counts"><p id="nativeTaskCount" class="sub task-source-count" aria-live="polite"></p><p id="kommoTaskCount" class="sub task-source-count" aria-live="polite" hidden></p></div></div><div class="crm-toolbar-actions"><button class="primary" id="nativeTaskCreate" type="button">+ Tapşırıq yarat</button><button class="refresh" id="tasksRefresh" type="button" hidden><i class="spinner"></i><span data-task-flow-label="refresh">Siyahını yenilə</span></button></div></div><div class="grid task-flow-filters"><label><span id="taskFeedSourceLabel">Tapşırıq mənbəyi</span><select id="taskFeedSource"><option value="native">Beintaskbot</option><option value="kommo">Kommo</option></select></label><label><span data-task-flow-label="search">Yüklənmiş tapşırıqlarda axtarış</span><input id="taskSearch" class="search" type="search" autocomplete="off" placeholder="Yüklənmiş tapşırıqlarda axtarış"></label><label><span data-task-flow-label="status">Vəziyyət</span><select id="taskStatus"><option value="all">Hamısı</option><option value="open" selected>Açıq</option><option value="completed">Tamamlandı</option></select></label><div id="nativeTaskViewControls" class="task-view-controls"></div><div id="kommoTaskViewControls" class="task-view-controls" hidden></div></div><p id="taskFeedPreferenceNotice" class="sub" role="status" aria-live="polite"></p><div id="tasksFlowNotice" class="notice" role="status"></div><div id="taskSavedNotice" class="notice" role="status" hidden></div><article class="panel task-source-panel"><div id="nativeTasksNotice" class="notice" role="status"></div><div id="nativeTasksList" class="table"></div><button id="nativeTasksMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></article><article class="panel task-source-panel" hidden><div id="tasksNotice" class="notice" role="status"></div><div id="tasksList" class="table"><div class="empty">Tapşırıqlar yüklənir…</div></div><button id="tasksMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></article></section>
     <section class="view" id="view-customers" aria-labelledby="contactsTitle"><div class="top"><div><div class="eyebrow" id="contactsSourceLabel"></div><h1 id="contactsTitle" tabindex="-1">Əlaqələr</h1><p id="customerCount" role="status">Yüklənir…</p></div><div class="crm-toolbar-actions"><button class="primary" id="nativeContactCreate" type="button" hidden>+ Əlaqə yarat</button><button class="refresh" id="customersRefresh" type="button"><i class="spinner"></i><span>Yenilə</span></button></div></div><div class="toolbar"><label id="contactsSourceControl" hidden><span id="contactsSourceTitle">Mənbə</span><select id="contactsSource"><option value="native">Beintaskbot</option><option value="kommo">Kommo — saxlanılan tarixçə</option></select></label><input id="customerSearch" class="search" type="search" maxlength="120" placeholder="Ad, telefon və ya email üzrə axtarın"></div><p id="contactsStatus" role="status" aria-live="polite"></p><div id="customersNotice" class="notice" role="alert"></div><div id="contactsSyncReceipt" class="notice" role="status" aria-live="polite"></div><div id="customersList" class="table" aria-live="polite"></div><div id="contactsPagination" class="crm-toolbar-actions"><button class="outline" id="contactsPrevious" type="button" disabled>Əvvəlki</button><button class="outline" id="contactsNext" type="button" disabled>Növbəti</button></div></section>
-    <section class="view" id="view-deals"><div class="top"><div><div class="eyebrow">CRM</div><h1>Sövdələşmələr</h1><p id="dealCount" class="crm-count-badge" aria-live="polite">Yüklənir…</p></div><div class="crm-toolbar-actions"><button class="primary" data-native-operation="create" id="nativeDealCreate" type="button">+ Sövdələşmə yarat</button><button class="refresh" id="dealsRefresh" hidden><i class="spinner"></i>Yenilə</button></div></div><form id="dealSearchForm" autocomplete="off"></form><div class="toolbar deal-source-filters"><label><span id="dealFeedSourceLabel">Sövdələşmə mənbəyi</span><select id="dealFeedSource"><option value="kommo">Kommo</option><option value="native">Beintaskbot</option></select></label><input id="dealSearch" form="dealSearchForm" type="search" name="deal_query" autocomplete="off" class="search" placeholder="Sövdələşmə, müştəri və ya mərhələ axtarın"><div id="dealViewControls"></div></div><p id="dealFeedPreferenceNotice" class="sub" role="status"></p><div id="kommoDealSourcePanel" class="deal-source-panel"><div id="dealsNotice" class="notice"></div><div id="dealsList" class="table"><div class="empty">Sövdələşmələr yüklənir…</div></div><button id="dealsMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></div><article id="nativeDealSourcePanel" class="panel deal-source-panel" data-native-operation="view" hidden><h2>Beintaskbot sövdələşmələri</h2><div id="nativeDealsSyncReceipt" class="notice" role="status" aria-live="polite"></div><div id="nativeDealsNotice" class="notice"></div><div id="nativeDealsList" class="table"></div><button id="nativeDealsMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></article></section><section class="view" id="view-companies"><div class="top"><div><div class="eyebrow">CRM</div><h1>Şirkətlər</h1><p>Müştəri şirkətləri və əlaqəli CRM qeydləri.</p></div><div class="crm-toolbar-actions"><button class="primary" id="nativeCompanyCreate" type="button">+ Şirkət yarat</button><button class="refresh" id="companiesRefresh" type="button">Yenilə</button></div></div><div class="toolbar"><input type="search" id="companySearch" class="search" placeholder="Şirkət, telefon və ya email üzrə axtarın"></div><div id="nativeCompaniesNotice" class="notice"></div><div id="nativeCompaniesList" class="table"></div><div id="nativeCompaniesPager" hidden><button id="nativeCompaniesPrevious" class="outline" type="button" aria-label="Əvvəlki səhifə">‹</button> <span id="nativeCompaniesPage" aria-live="polite"></span> <button id="nativeCompaniesNext" class="outline" type="button" aria-label="Növbəti səhifə">›</button></div></section>
+    <section class="view" id="view-deals"><div class="top"><div><div class="eyebrow">CRM</div><h1>Sövdələşmələr</h1><p id="dealCount" class="sub" aria-live="polite">Yüklənir…</p></div><div class="crm-toolbar-actions"><button class="primary" data-native-operation="create" id="nativeDealCreate" type="button">+ Sövdələşmə yarat</button><button class="refresh" id="dealsRefresh" hidden><i class="spinner"></i>Yenilə</button></div></div><form id="dealSearchForm" autocomplete="off"></form><div class="toolbar deal-source-filters"><label><span id="dealFeedSourceLabel">Sövdələşmə mənbəyi</span><select id="dealFeedSource"><option value="kommo">Kommo</option><option value="native">Beintaskbot</option></select></label><input id="dealSearch" form="dealSearchForm" type="search" name="deal_query" autocomplete="off" class="search" placeholder="Sövdələşmə, müştəri və ya mərhələ axtarın"><div id="dealViewControls"></div></div><p id="dealFeedPreferenceNotice" class="sub" role="status"></p><div id="kommoDealSourcePanel" class="deal-source-panel"><div id="dealsNotice" class="notice"></div><div id="dealsList" class="table"><div class="empty">Sövdələşmələr yüklənir…</div></div><button id="dealsMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></div><article id="nativeDealSourcePanel" class="panel deal-source-panel" data-native-operation="view" hidden><h2>Beintaskbot sövdələşmələri</h2><div id="nativeDealsSyncReceipt" class="notice" role="status" aria-live="polite"></div><div id="nativeDealsNotice" class="notice"></div><div id="nativeDealsList" class="table"></div><button id="nativeDealsMore" class="outline" type="button" hidden style="min-height:44px;margin-top:12px">Daha çox</button></article></section><section class="view" id="view-companies"><div class="top"><div><div class="eyebrow">CRM</div><h1>Şirkətlər</h1><p>Müştəri şirkətləri və əlaqəli CRM qeydləri.</p></div><div class="crm-toolbar-actions"><button class="primary" id="nativeCompanyCreate" type="button">+ Şirkət yarat</button><button class="refresh" id="companiesRefresh" type="button">Yenilə</button></div></div><div class="toolbar"><input type="search" id="companySearch" class="search" placeholder="Şirkət, telefon və ya email üzrə axtarın"></div><div id="nativeCompaniesNotice" class="notice"></div><div id="nativeCompaniesList" class="table"></div><div id="nativeCompaniesPager" hidden><button id="nativeCompaniesPrevious" class="outline" type="button" aria-label="Əvvəlki səhifə">‹</button> <span id="nativeCompaniesPage" aria-live="polite"></span> <button id="nativeCompaniesNext" class="outline" type="button" aria-label="Növbəti səhifə">›</button></div></section>
     <section class="view" id="view-dialogs"><div id="operatorDialogs"></div></section>
     <section class="view" id="view-support"><div id="operatorSupport"></div></section>
     <section class="view" id="view-support_cases"><div id="supportCases"></div></section>
@@ -652,28 +653,115 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     const x=(await api('/api/platform/crm/native/deals/'+dealId)).deal;
     return api('/api/platform/crm/native/deals/'+dealId,{method:'POST',body:JSON.stringify({title:x.title,pipeline_id:x.pipeline_id,stage_id:x.stage_id,contact_id:contactId||null,responsible_id:x.responsible_id||null,channel_id:x.channel_id||null,conversation_id:x.conversation_id||'',description:x.description||''})});
   }
-  async function renderNativeDealCard(x,tasks){
-    const body=$('nativeEntityBody'),modal=$('nativeEntityCard'),revision=modal?.dataset.revision,current=()=>!modal||(!modal.dataset.contactsDirectoryOwner&&modal.dataset.revision===revision&&modal.classList.contains('show')&&modal.dataset.type==='deal'&&String(modal.dataset.id)===String(x.id));if(!current())return;
-    const related=await Promise.allSettled([nativeCompanyAction('view')?api('/api/platform/crm/native/companies'):Promise.reject(new Error('forbidden')),nativeAction('customers','view')?api('/api/platform/crm/native/contacts'):Promise.reject(new Error('forbidden'))]);if(!current())return;
-    const companies=related[0].status==='fulfilled'?related[0].value.companies||[]:[],contacts=related[1].status==='fulfilled'?related[1].value.data||[]:[];let relationPending=false;
-    body.innerHTML=`<div class="crm-relation-tabs"><button class="active" data-deal-tab="general">Ümumi</button><button data-deal-tab="contacts">Müştəri</button><button data-deal-tab="company">Şirkət</button><button data-deal-tab="tasks">Tapşırıqlar</button></div><section data-deal-panel="general"><div class="meta"><div><b>Satış xətti</b>${esc(nativeDealLabels(x.pipeline_id,x.stage_id).pipeline)}</div><div><b>Mərhələ</b>${esc(nativeDealLabels(x.pipeline_id,x.stage_id).stage)}</div><div><b>Müştəri</b>${esc(x.contact_name||'Müştəri seçilməyib')}</div><div><b>Şirkət</b>${esc(x.company_name||'Şirkət seçilməyib')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'Təyin edilməyib')}</div></div></section><section data-deal-panel="contacts" hidden><div class="crm-relation-row"><span>${esc(x.contact_name||'Müştəri bağlı deyil')}</span>${x.contact_id?'<button class="outline danger" data-deal-unlink-contact>Ayır</button>':''}</div><div class="crm-relation-add"><select data-deal-contact-select><option value="">Müştəri seçin</option>${contacts.filter(c=>String(c.id)!==String(x.contact_id||'')).map(c=>`<option value="${esc(c.id)}">${esc(c.display_name)}</option>`).join('')}</select><button class="outline" data-deal-link-contact>Əlavə et</button></div></section><section data-deal-panel="company" hidden><div class="crm-relation-row"><span>${esc(x.company_name||'Şirkət bağlı deyil')}</span>${x.company_id?'<button class="outline danger" data-deal-unlink-company>Ayır</button>':''}</div><div class="crm-relation-add"><select data-deal-company-select><option value="">Şirkət seçin</option>${companies.filter(c=>String(c.id)!==String(x.company_id||'')).map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select><button class="outline" data-deal-link-company>Əlavə et</button></div></section><section data-deal-panel="tasks" hidden>${tasks.map(t=>`<div class="crm-relation-row"><span>${esc(t.text)} · ${esc(t.status==='completed'?'Tamamlandı':'Açıq')}</span><button class="outline" data-native-open="task:${esc(t.id)}">Aç</button></div>`).join('')||'<p class="sub">Bu sövdələşməyə bağlı tapşırıq yoxdur.</p>'}</section>`;
-    body.querySelectorAll('[data-deal-link-contact],[data-deal-unlink-contact],[data-deal-contact-select]').forEach(node=>node.hidden=!nativeAction('deals','update'));
-    body.querySelectorAll('[data-deal-link-company],[data-deal-company-select]').forEach(node=>node.hidden=!nativeDealCompanyRelationAllowed(false,x));
-    body.querySelectorAll('[data-deal-unlink-company]').forEach(node=>node.hidden=!nativeDealCompanyRelationAllowed(true,x));
-    body.querySelectorAll('[data-deal-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-deal-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-deal-panel]').forEach(panel=>panel.hidden=panel.dataset.dealPanel!==b.dataset.dealTab)});
-    body.querySelector('[data-deal-link-contact]')?.addEventListener('click',async()=>{const contact=body.querySelector('[data-deal-contact-select]').value;if(!contact)return;try{await changeNativeDealContact(x.id,contact);await openNativeEntityCard('deal',x.id);await loadNativeDeals()}catch(e){notice('nativeDealsNotice',e.message)}});
-    body.querySelector('[data-deal-unlink-contact]')?.addEventListener('click',async()=>{if(!confirm('Müştəri əlaqəsi ayırılsın? Sövdələşmə saxlanılacaq.'))return;try{await changeNativeDealContact(x.id,null);await openNativeEntityCard('deal',x.id);await loadNativeDeals()}catch(e){notice('nativeDealsNotice',e.message)}});
-    if(related[0].status==='rejected')body.querySelector('[data-deal-panel="company"]').insertAdjacentHTML('beforeend','<p class="sub" data-deal-companies-unavailable>Şirkət siyahısı əlçatan deyil.</p>');
-    const companyRelation=async(company,unlink)=>{if(!current()||relationPending||!nativeDealCompanyRelationAllowed(unlink,x)||!company)return;if(unlink&&!confirm('Sövdələşməni şirkətdən ayırmaq? Sövdələşmə özü saxlanılacaq.'))return;relationPending=true;body.querySelectorAll('[data-deal-link-company],[data-deal-unlink-company]').forEach(b=>b.disabled=true);try{await changeNativeDealCompany(x,company,unlink);if(!current())return;await openNativeEntityCard('deal',x.id);if(nativeAction('deals','view'))await loadNativeDeals()}catch(e){if(current())body.insertAdjacentHTML('beforeend','<p role="alert">'+esc(nativeRelationError(e))+'</p>')}finally{relationPending=false;if(current())body.querySelectorAll('[data-deal-link-company],[data-deal-unlink-company]').forEach(b=>b.disabled=false)}};
-    body.querySelector('[data-deal-link-company]')?.addEventListener('click',()=>companyRelation(body.querySelector('[data-deal-company-select]').value,false));
-    body.querySelector('[data-deal-unlink-company]')?.addEventListener('click',()=>companyRelation(x.company_id,true));
+  function renderNativeDealCard(x,current,historyContext){
+    const body=$('nativeEntityBody'),modal=$('nativeEntityCard'),card=window.tenantKommoDealCard,c=card.copy();
+    const labels=({ru:{edit:'Редактировать',archive:'Архивировать',link:'Привязать',unlink:'Отвязать',tasks:'Задачи',open:'Открыть',empty:'К сделке пока не привязаны задачи.'},
+      en:{edit:'Edit',archive:'Archive',link:'Link',unlink:'Unlink',tasks:'Tasks',open:'Open',empty:'No tasks linked to this deal.'},
+      az:{edit:'Redaktə et',archive:'Arxivlə',link:'Əlavə et',unlink:'Ayır',tasks:'Tapşırıqlar',open:'Aç',empty:'Bu sövdələşməyə bağlı tapşırıq yoxdur.'}}[window.tenantI18n?.language]||
+      {edit:'Redaktə et',archive:'Arxivlə',link:'Əlavə et',unlink:'Ayır',tasks:'Tapşırıqlar',open:'Aç',empty:'Bu sövdələşməyə bağlı tapşırıq yoxdur.'});
+    modal.querySelector('[data-native-card-edit]').textContent=labels.edit;
+    modal.querySelector('[data-native-card-archive]').textContent=labels.archive;
+    const names=nativeDealLabels(x.pipeline_id,x.stage_id);
+    const general=document.createElement('section');
+    general.innerHTML=card.overview({...x,pipeline_name:names.pipeline});
+    const sections=[{key:'general',label:c.general,node:general}];
+    const relationActions={
+      contacts:{label:c.contact,allowed:()=>nativeAction('deals','update'),read:()=>nativeAction('customers','view'),
+        endpoint:'/api/platform/crm/native/contacts',items:'data',id:x.contact_id,name:x.contact_name},
+      company:{label:c.company,allowed:()=>nativeDealCompanyRelationAllowed(false,x),read:()=>nativeCompanyAction('view'),
+        endpoint:'/api/platform/crm/native/companies',items:'companies',id:x.company_id,name:x.company_name}
+    };
+    let relationPending=false;
+    for(const [key,relation] of Object.entries(relationActions)){
+      const unlink=key==='company'?nativeDealCompanyRelationAllowed(true,x):relation.allowed();
+      if(!relation.allowed()&&!unlink&&!relation.name)continue;
+      const node=document.createElement('section');
+      const kind=key==='contacts'?'contact':'company';
+      node.innerHTML=`<div class="crm-relation-row"><span>${esc(relation.name||'—')}</span>${relation.id?`<button type="button" class="outline danger" data-deal-unlink-${kind} ${unlink?'':'hidden'}>${esc(labels.unlink)}</button>`:''}</div><div class="crm-relation-add"${relation.allowed()?'':' hidden'}><select data-deal-${kind}-select aria-label="${esc(relation.label)}"><option value="">${esc(relation.label)}</option></select><button type="button" class="outline" data-deal-link-${kind} ${relation.allowed()?'':'hidden'}>${esc(labels.link)}</button></div><p class="sub" role="status"></p>`;
+      const select=node.querySelector('select'),status=node.querySelector('[role=status]');
+      let loaded=false;
+      const change=async(target,remove)=>{
+        if(!current()||relationPending||!target)return;
+        if(key==='company'&&!nativeDealCompanyRelationAllowed(remove,x)||key==='contacts'&&!relation.allowed())return;
+        if(remove&&!confirm(key==='company'?'Sövdələşməni şirkətdən ayırmaq? Sövdələşmə özü saxlanılacaq.':'Müştəri əlaqəsi ayırılsın? Sövdələşmə saxlanılacaq.'))return;
+        relationPending=true;status.textContent='';status.setAttribute('role','status');node.querySelectorAll('button').forEach(button=>button.disabled=true);
+        try{
+          if(key==='company')await changeNativeDealCompany(x,target,remove);
+          else await changeNativeDealContact(x.id,remove?null:target);
+          if(!current())return;
+          await openNativeEntityCard('deal',x.id);
+          if(nativeAction('deals','view'))await loadNativeDeals();
+        }catch(error){if(current()){status.setAttribute('role','alert');status.textContent=nativeRelationError(error);}}
+        finally{relationPending=false;if(current())node.querySelectorAll('button').forEach(button=>button.disabled=false);}
+      };
+      node.querySelector('[data-deal-link-'+kind+']').onclick=()=>void change(select.value,false);
+      const remove=node.querySelector('[data-deal-unlink-'+kind+']');
+      if(remove)remove.onclick=()=>void change(relation.id,true);
+      sections.push({key,label:relation.label,node,load:async()=>{
+        if(loaded||!relation.allowed()&&!unlink)return;
+        loaded=true;
+        try{
+          if(!relation.read())throw Error('forbidden');
+          const result=await api(relation.endpoint);
+          if(!current())return;
+          for(const item of result[relation.items]||[])if(String(item.id)!==String(relation.id||''))
+            select.add(new Option(item.display_name||item.name,String(item.id)));
+        }catch{if(!current())return;status.textContent=key==='company'?'Şirkət siyahısı əlçatan deyil.':'Əlaqə siyahısı əlçatan deyil.';if(key==='company')status.dataset.dealCompaniesUnavailable='';}
+      }});
+    }
+    if(nativeAction('tasks','view')){
+      const node=document.createElement('section');let loaded=false;
+      sections.push({key:'tasks',label:labels.tasks,node,load:async()=>{
+        if(loaded)return;
+        loaded=true;node.textContent='…';
+        try{
+          const result=await api('/api/platform/crm/native/tasks');
+          if(!current())return;
+          node.innerHTML=(result.tasks||[]).filter(t=>String(t.deal_id)===String(x.id)).map(t=>`<div class="crm-relation-row"><span>${esc(t.text)}</span><button class="outline" data-native-open="task:${esc(t.id)}">${esc(labels.open)}</button></div>`).join('')||`<p class="sub">${esc(labels.empty)}</p>`;
+        }catch(error){if(current())node.textContent=error.message;}
+      }});
+    }
+    if(historyContext&&window.tenantCrmSyncHistory){
+      const node=document.createElement('section');let loaded=false;
+      sections.push({key:'history',label:c.history,node,load:()=>{
+        if(loaded)return;loaded=true;
+        window.tenantCrmSyncHistory.mount({type:'deal',id:x.id,parent:node,context:historyContext,current,readable:x.actions?.view!==false});
+      }});
+    }
+    const stage=document.createElement('div');stage.className='deal-stage-bar';
+    const select=document.createElement('select');select.className='deal-stage-trigger';select.setAttribute('aria-label',c.stage);
+    const status=document.createElement('span');status.setAttribute('role','status');stage.append(select,status);
+    select.add(new Option(names.stage,String(x.stage_id)));select.disabled=true;
+    const guard=nativeDealMoveScope();
+    const view=card.layout({host:body,deal:x,sections,stage,isCurrent:current});
+    void loadNativeDealBoardCatalog().then(()=>{
+      if(!current()||!guard.current())return;
+      const stages=nativeDealBoardCatalog.workflows.filter(row=>String(row.pipeline_id)===String(x.pipeline_id));
+      general.querySelector('[data-deal-pipeline]').textContent=stages[0]?.pipeline_name||names.pipeline;
+      if(stages.some(row=>String(row.stage_id)===String(x.stage_id))){
+        select.replaceChildren(...stages.map(row=>new Option(row.stage_name,String(row.stage_id))));
+        select.value=String(x.stage_id);
+      }
+      const permitted=nativeAction('deals','update')&&x.actions?.update===true&&x.updated_at&&select.options.length>1;
+      select.disabled=!permitted;
+      select.onchange=async()=>{
+        if(!permitted||!current()||!guard.current()||!stages.some(row=>String(row.stage_id)===select.value))return;
+        select.disabled=true;status.textContent='';
+        try{const updated=await moveNativeDealStage(x,select.value,guard);if(current())Object.assign(x,updated);}
+        catch(error){if(current())status.textContent=error.message;}
+        finally{if(current()){select.value=String(x.stage_id);select.disabled=false;}}
+      };
+    }).catch(()=>{});
+    if(x.channel_id&&x.conversation_id)void bindNativeDealChat(x,view,current,modal);
   }
+
   async function openNativeEntityCard(type,id){
     if(type==='contact')return window.tenantContactsDirectory?.openNative(id);
+    if(type==='deal'&&chatController)closeDeal();
     if(type==='task'&&window.tenantTaskFlow)return window.tenantTaskFlow.openFromLink('native',id);
     window.tenantContactsDirectory?.leaveCard();
-    const historyContext=window.tenantCrmSyncHistory?.capture();const modal=ensureNativeEntityCard();delete modal.dataset.contactsDirectoryOwner;modal.dataset.type=type;modal.dataset.id=id;const revision=String(Number(modal.dataset.revision||0)+1);modal.dataset.revision=revision;const current=()=>modal.classList.contains('show')&&!modal.dataset.contactsDirectoryOwner&&modal.dataset.type===type&&modal.dataset.id===String(id)&&modal.dataset.revision===revision;const body=$('nativeEntityBody'),status=modal.querySelector('[data-native-card-status]'),archive=modal.querySelector('[data-native-card-archive]');status.hidden=true;status.textContent='';archive.disabled=false;archive.hidden=true;archive.textContent=type==='company'?companyDeletionCopy().delete:'Arxivlə';body.innerHTML='<div class="empty">Yüklənir…</div>';modal.classList.add('show');
-    try{let x,title='';if(type==='company'){x=(await api('/api/platform/crm/native/companies/'+id)).company;if(!current())return;title=x.name;nativeCardCompanyId=id;await renderNativeCompanyCard(x,historyContext)}else if(type==='deal'){x=(await api('/api/platform/crm/native/deals/'+id)).deal;if(!current())return;title=x.title;const td=nativeAction('tasks','view')?await api('/api/platform/crm/native/tasks'):{tasks:[]};await renderNativeDealCard(x,(td.tasks||[]).filter(t=>String(t.deal_id)===String(x.id)))}else{x=(await api('/api/platform/crm/native/tasks/'+id)).task;if(!current())return;title=x.text;body.innerHTML=`<div class="crm-relation-tabs"><button class="active" data-task-tab="general">Ümumi</button><button data-task-tab="related">Əlaqəli qeydlər</button></div><section data-task-panel="general"><div class="meta"><div><b>Son tarix</b>${esc(x.due_at?date(x.due_at):'Təyin edilməyib')}</div><div><b>Status</b>${esc(x.status==='completed'?'Tamamlandı':'Açıq')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'—')}</div></div></section><section data-task-panel="related" hidden><div class="meta"><div><b>Sövdələşmə</b><span data-native-open="deal:${esc(x.deal_id)}">${esc(x.deal_title||'—')}</span></div><div><b>Müştəri</b>${esc(x.contact_name||'—')}</div><div><b>Mənbə</b>${x.channel_id&&x.conversation_id?'Connect dialoqu tapşırığa bağlıdır.':'Dialoq bağlı deyil.'}</div></div><p class="sub">Tapşırığı başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil.</p></section>`;body.querySelectorAll('[data-task-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-task-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-task-panel]').forEach(panel=>panel.hidden=panel.dataset.taskPanel!==b.dataset.taskTab)})}if(!current())return;if(type==='deal')window.tenantCrmSyncHistory?.mount({type,id,parent:body,context:historyContext,current,readable:String(x?.id)===String(id)&&x?.actions?.view!==false});$('nativeEntityTitle').textContent=title||'Kart';const privileged=['owner','admin','manager'].includes(state.me?.role),canArchive=privileged||(type==='task'&&Number(x.created_by)===Number(state.me?.telegram_id));modal.querySelector('[data-native-card-archive]').hidden=type==='company'?!(x.actions?.delete??nativeCompanyAction('delete')):!nativeAction(type==='deal'?'deals':'tasks','delete')||!canArchive;modal.querySelector('[data-native-card-edit]').hidden=type==='company'?!nativeCompanyAction('update'):!nativeAction(type==='deal'?'deals':'tasks','update')}
+    const historyContext=window.tenantCrmSyncHistory?.capture();const modal=ensureNativeEntityCard();delete modal.dataset.contactsDirectoryOwner;modal.dataset.type=type;modal.dataset.id=id;const revision=String(Number(modal.dataset.revision||0)+1);modal.dataset.revision=revision;const profileKey=dealProfileKey;if(type==='deal')modal.dataset.dealProfile=profileKey;else delete modal.dataset.dealProfile;const current=()=>modal.classList.contains('show')&&!modal.dataset.contactsDirectoryOwner&&modal.dataset.type===type&&modal.dataset.id===String(id)&&modal.dataset.revision===revision&&profileKey===dealProfileKey;const body=$('nativeEntityBody'),head=modal.querySelector('.modal-head');head.prepend($('nativeEntityTitle'));head.querySelectorAll('[data-deal-header-extra]').forEach(node=>node.remove());modal.classList.remove('deal-conversation');body.classList.remove('deal-card-layout');$('nativeEntityTitle').textContent='';stopNativeDealChat();const status=modal.querySelector('[data-native-card-status]'),archive=modal.querySelector('[data-native-card-archive]');status.hidden=true;status.textContent='';archive.disabled=false;archive.hidden=true;archive.textContent=type==='company'?companyDeletionCopy().delete:'Arxivlə';body.innerHTML='<div class="empty">Yüklənir…</div>';modal.classList.add('show');
+    try{let x,title='';if(type==='company'){x=(await api('/api/platform/crm/native/companies/'+id)).company;if(!current())return;title=x.name;nativeCardCompanyId=id;await renderNativeCompanyCard(x,historyContext)}else if(type==='deal'){x=(await api('/api/platform/crm/native/deals/'+id)).deal;if(!current())return;title=x.title;renderNativeDealCard(x,current,historyContext)}else{x=(await api('/api/platform/crm/native/tasks/'+id)).task;if(!current())return;title=x.text;body.innerHTML=`<div class="crm-relation-tabs"><button class="active" data-task-tab="general">Ümumi</button><button data-task-tab="related">Əlaqəli qeydlər</button></div><section data-task-panel="general"><div class="meta"><div><b>Son tarix</b>${esc(x.due_at?date(x.due_at):'Təyin edilməyib')}</div><div><b>Status</b>${esc(x.status==='completed'?'Tamamlandı':'Açıq')}</div><div><b>Məsul əməkdaş</b>${esc(x.responsible_name||'—')}</div></div></section><section data-task-panel="related" hidden><div class="meta"><div><b>Sövdələşmə</b><span data-native-open="deal:${esc(x.deal_id)}">${esc(x.deal_title||'—')}</span></div><div><b>Müştəri</b>${esc(x.contact_name||'—')}</div><div><b>Mənbə</b>${x.channel_id&&x.conversation_id?'Connect dialoqu tapşırığa bağlıdır.':'Dialoq bağlı deyil.'}</div></div><p class="sub">Tapşırığı başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil.</p></section>`;body.querySelectorAll('[data-task-tab]').forEach(b=>b.onclick=()=>{body.querySelectorAll('[data-task-tab]').forEach(q=>q.classList.toggle('active',q===b));body.querySelectorAll('[data-task-panel]').forEach(panel=>panel.hidden=panel.dataset.taskPanel!==b.dataset.taskTab)})}if(!current())return;$('nativeEntityTitle').textContent=title||'Kart';const privileged=['owner','admin','manager'].includes(state.me?.role),canArchive=privileged||(type==='task'&&Number(x.created_by)===Number(state.me?.telegram_id));modal.querySelector('[data-native-card-archive]').hidden=type==='company'?!(x.actions?.delete??nativeCompanyAction('delete')):!nativeAction(type==='deal'?'deals':'tasks','delete')||!canArchive;modal.querySelector('[data-native-card-edit]').hidden=type==='company'?!nativeCompanyAction('update'):!nativeAction(type==='deal'?'deals':'tasks','update')||type==='deal'&&x.actions?.update===false}
     catch(e){if(current())body.innerHTML=`<div class="notice show">${esc(e.message||'Kartı yükləmək mümkün olmadı.')}</div>`}
   }
   const companyAccountLabel=()=>({az:'Hesab',ru:'Аккаунт',en:'Account'}[window.tenantI18n?.language||document.documentElement.lang]||'Hesab');
@@ -693,11 +781,11 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     if(epoch!==nativeDealBoardEpoch||tenant!==state.me?.tenant_id||actor!==state.me?.telegram_id||state.me?.active!==true)return;
     nativeDealBoardCatalog={identity,workflows:options.workflows||[]};
   }
-  function renderNativeDealBoard(rows){
-    if(!window.tenantChakraCRM?.renderNativeDeals)return false;
+  function nativeDealMoveScope(){
     const tenant=state.me?.tenant_id,actor=state.me?.telegram_id,epoch=nativeDealBoardEpoch;
-    const current=()=>epoch===nativeDealBoardEpoch&&tenant===state.me?.tenant_id&&actor===state.me?.telegram_id&&state.me?.active===true;
-    window.tenantChakraCRM.renderNativeDeals(rows,{tenantId:tenant,userId:actor,workflows:nativeDealBoardCatalog.identity===`${tenant}:${actor}`?nativeDealBoardCatalog.workflows:[],canUpdate:nativeAction('deals','update'),onOpen:id=>openNativeEntityCard('deal',id),onEdit:id=>editNativeDeal(id),onMove:async(row,stage)=>{
+    return {tenant,actor,current:()=>epoch===nativeDealBoardEpoch&&tenant===state.me?.tenant_id&&actor===state.me?.telegram_id&&state.me?.active===true};
+  }
+  async function moveNativeDealStage(row,stage,{tenant,actor,current}){
       if(!current())throw Error('İstifadəçi konteksti dəyişib.');
       const query=new URLSearchParams({expected_tenant_id:tenant,expected_user_id:String(actor)});
       const result=await api('/api/platform/crm/native/deals/'+encodeURIComponent(row.id)+'?'+query,{method:'POST',body:JSON.stringify({action:'move_stage',stage_id:stage,expected_updated_at:row.updated_at})});
@@ -708,7 +796,12 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       dealFeeds.native=dealFeeds.native.map(item=>String(item.id)===String(row.id)?{...item,...result.deal}:item);
       renderDealFeeds();
       return result.deal;
-    }});return true;
+  }
+  function renderNativeDealBoard(rows){
+    if(!window.tenantChakraCRM?.renderNativeDeals)return false;
+    const move=nativeDealMoveScope(),{tenant,actor}=move;
+    window.tenantChakraCRM.renderNativeDeals(rows,{tenantId:tenant,userId:actor,workflows:nativeDealBoardCatalog.identity===`${tenant}:${actor}`?nativeDealBoardCatalog.workflows:[],canUpdate:nativeAction('deals','update'),onOpen:id=>openNativeEntityCard('deal',id),onEdit:id=>editNativeDeal(id),onMove:(row,stage)=>moveNativeDealStage(row,stage,move)});
+    return true;
   }
   function renderNativeDealRows(rows){
     nativeDealsMounted=true;if(renderNativeDealBoard(rows))return;
@@ -909,19 +1002,94 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
   });
   document.addEventListener('tenant-crm-cache-refresh',event=>{if(event.detail?.resource==='leads'&&event.detail.tenant_id===state.me?.tenant_id&&event.detail.expected_user_id===String(state.me?.telegram_id)&&state.view==='deals'&&dealActive==='native'&&dealFeedAllowed('native'))void loadNativeDeals();});
   document.addEventListener('tenant-crm-sync-complete',e=>{if(e.detail.tenant_id!==state.me?.tenant_id)return;const modules=state.capabilities.modules||{};if(e.detail.resources.includes('leads')&&canLoadKommoDeals())loadDeals(false);if(e.detail.resources.includes('tasks')&&modules.tasks&&!window.tenantTaskFlow)loadTasks(false)});
-  let chatRevision=0,chatController,dealChat,chatProfileKey='';
+  let chatRevision=0,chatController,chatProfileKey='';
   const chatIdentity=()=>state.me?.tenant_id+':'+state.me?.telegram_id;
+  const dealChatCopy=()=>window.tenantKommoDealCard.copy();
   function chatLine(m){
-    const outgoing=m.direction==='outgoing',audio=['voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
+    const c=dealChatCopy(),outgoing=m.direction==='outgoing',audio=['voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
     const media=m.media_url||['picture','image','photo','video','file','document','voice','audio','voice_message','call','call_recording'].includes(String(m.message_type||'').toLowerCase());
-    return `<div data-chat-id="${esc(m.external_id)}" style="display:flex;justify-content:${outgoing?'flex-end':'flex-start'};margin:8px 0"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''} style="max-width:84%;padding:9px 11px;border-radius:12px;background:${outgoing?'#dff7ec':'#f0f4f2'}"><div data-chat-body>${esc(m.body||'Media mesajı')}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}"><button type="button" class="outline">Faylı aç</button><span role="status"></span></div>`:''}<small style="color:#637a72">${esc(m.channel||'Kommo')} · ${date(m.happened_at||m.created_at)}</small></div></div>`;
+    return `<div class="deal-message" data-direction="${outgoing?'outgoing':'incoming'}" data-chat-id="${esc(m.external_id)}"><div ${audio?`data-chat-audio="${esc(m.external_id)}"`:''}><div class="deal-message-meta"><strong>${esc(m.author_name||(outgoing?c.operator:c.customerMessage))}</strong><time>${esc(date(m.happened_at||m.created_at))}</time></div><div data-chat-body>${esc(m.body||(media?c.media:''))}</div>${media?`<div data-chat-attachment="${esc(m.external_id)}"><button type="button" class="outline">${esc(c.file)}</button><span role="status"></span></div>`:''}</div></div>`;
   }
-  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;dealChat=null;$('dealModal').classList.remove('show');if(owned)document.dispatchEvent(new CustomEvent('tenant-chat-close'));}
-  for(const event of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(event,closeDeal);
-  document.addEventListener('tenant-profile',()=>{if(chatController&&chatProfileKey!==dealProfileKey)closeDeal();});
-  function loadChat(){return dealChat?.reload();}
+  function dealChatMarkup({ai=false}={}){
+    const c=dealChatCopy();
+    return `<div class="operator-composer tc-legacy-composer"><textarea id="chatText" rows="1" placeholder="${esc(c.compose)}" aria-label="${esc(c.compose)}"></textarea><div class="operator-composer-actions">${ai?'<button type="button" class="outline operator-composer-ai" id="tcAiMenuToggle" aria-label="AI" aria-controls="tcAiActions" aria-expanded="false">AI</button>':''}<button type="button" class="primary" id="sendChat" ${ai?'data-composer-delegate="true" aria-hidden="true" tabindex="-1"':''}>${esc(c.send)}</button>${ai?`<button type="button" class="primary tc-legacy-composer-primary" id="tcComposerPrimary" aria-label="${esc(c.send)}" title="${esc(c.send)}" disabled>↑</button>`:''}</div></div>`;
+  }
+  async function findDealDialog(deal,signal,native=false){
+    if(!state.me||state.capabilities.modules?.dialogs!==true)return null;
+    const query=new URLSearchParams({lifecycle:'all',expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id});
+    if(native){
+      if(!deal.channel_id||!deal.conversation_id)return null;
+      query.set('channel','connect:'+deal.channel_id);query.set('search',deal.conversation_id);
+    }else{
+      const search=deal.contact_name||deal.phone||deal.name;
+      if(!search)return null;
+      query.set('search',search);
+    }
+    const result=await api('/api/platform/ai/dialogs?'+query,{signal});
+    const rows=result.result?.dialogs||[];
+    const exact=rows.filter(row=>native?row.provider==='connect'&&String(row.channel_id)===String(deal.channel_id)&&row.conversation_id===deal.conversation_id:
+      String(row.lead_id)===String(deal.kommo_lead_id)&&(['connect','kommo'].includes(row.provider))&&Boolean(row.last_message_at||row.conversation_id));
+    return exact.length===1?exact[0]:null;
+  }
+  function connectDealDialogLink(view,route,current,close){
+    if(!route||typeof window.tenantOperator?.openDialog!=='function')return;
+    view.link.hidden=false;
+    view.link.onclick=()=>{
+      if(!current()||!window.tenantOperator.hasRight('dialogs')||!window.tenantAppNavigate?.('dialogs',true))return;
+      close();
+      void window.tenantOperator.openDialog(route);
+    };
+  }
+  function mountDealChat({id,box,controller,current,first,route,refreshProvider=true,canSend=true}){
+    const options={api,id,member:state.me,signal:controller.signal,isCurrent:current,box,line:chatLine,first,refreshProvider};
+    document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:id,surface:refreshProvider?'deal':'native-deal',...(route?{channel_id:route.channel_id,conversation_id:route.conversation_id}:{})}}));
+    const view=window.tenantDealChat.mount(options);
+    if(canSend){
+      if(window.tenantChatSend)window.tenantChatSend.bind({api,identity:chatIdentity(),leadId:id,me:state.me,isCurrent:current,reload:view.reload});
+      else if($('sendChat'))$('sendChat').disabled=true;
+    }
+  }
+  let nativeDealChatSession=null;
+  function stopNativeDealChat(){
+    const session=nativeDealChatSession;if(!session)return;
+    nativeDealChatSession=null;session.controller.abort();session.observer.disconnect();
+    if(session.mounted)document.dispatchEvent(new CustomEvent('tenant-chat-close'));
+    session.box?.remove();session.view.composer.replaceChildren();
+  }
+  async function bindNativeDealChat(deal,view,current,modal){
+    const controller=new AbortController();
+    const status=view.history.querySelector('.deal-card-empty');
+    if(status)status.setAttribute('aria-busy','true');
+    const observer=new MutationObserver(()=>{if(!current()&&nativeDealChatSession?.controller===controller)stopNativeDealChat();});
+    const session={controller,observer,view,box:null,mounted:false};nativeDealChatSession=session;
+    observer.observe(modal,{attributes:true,attributeFilter:['class','data-revision','data-type']});
+    const valid=()=>current()&&nativeDealChatSession===session&&!controller.signal.aborted;
+    try{
+      const route=await findDealDialog(deal,controller.signal,true);
+      if(!valid()||!route)return;
+      const lead=Number(route.lead_id);
+      if(!Number.isSafeInteger(lead)||lead<1)return;
+      const first=window.tenantDealChat.read({api,id:lead,member:state.me,signal:controller.signal});
+      const box=document.createElement('div');box.id='chatRows';view.history.replaceChildren(box);session.box=box;
+      const canSend=route.can_send===true&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.archive_read_only;
+      if(canSend){view.composer.innerHTML=dealChatMarkup();view.composer.hidden=false;}
+      connectDealDialogLink(view,route,valid,()=>modal.classList.remove('show'));
+      session.mounted=true;mountDealChat({id:lead,box,controller,current:valid,first,route,canSend,refreshProvider:false});
+    }catch{ /* The existing empty state remains when the source cannot be verified. */ }
+    finally{status?.removeAttribute('aria-busy');}
+  }
+  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;$('dealModal').classList.remove('show');if(owned)document.dispatchEvent(new CustomEvent('tenant-chat-close'));$('modalContent').replaceChildren();}
+  for(const event of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(event,()=>{closeDeal();stopNativeDealChat();if($('nativeEntityCard')?.dataset.type==='deal'){$('nativeEntityCard').classList.remove('show');$('nativeEntityBody').replaceChildren();}});
+  document.addEventListener('tenant-profile',()=>{
+    if(chatController&&chatProfileKey!==dealProfileKey)closeDeal();
+    const modal=$('nativeEntityCard');
+    if(modal?.dataset.type==='deal'&&modal.dataset.dealProfile!==dealProfileKey){
+      stopNativeDealChat();modal.classList.remove('show');$('nativeEntityBody').replaceChildren();
+    }
+  });
   async function openDeal(id){
-    chatController?.abort();dealChat=null;
+    stopNativeDealChat();if($('nativeEntityCard')?.dataset.type==='deal')$('nativeEntityCard').classList.remove('show');
+    chatController?.abort();
     const revision=++chatRevision,identity=chatIdentity(),profileKey=dealProfileKey,controller=new AbortController();chatController=controller;chatProfileKey=profileKey;
     const active=()=>revision===chatRevision&&identity===chatIdentity()&&profileKey===dealProfileKey&&!controller.signal.aborted;
     const current=()=>active()&&$('dealModal').classList.contains('show');
@@ -934,15 +1102,12 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       const d=await api('/api/platform/crm/deal?lead_id='+encodeURIComponent(id),{signal:controller.signal});
       if(!current())return;
       const x=d.deal;$('modalTitle').textContent=x.name||'Sövdələşmə';
-      $('modalContent').innerHTML=`<div class="chat-placeholder"><div id="chatRows"></div><div class="operator-composer tc-legacy-composer"><textarea id="chatText" rows="1" placeholder="Mesaj yazın" aria-label="Mesaj yazın"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-composer-ai" id="tcAiMenuToggle" aria-label="AI əməliyyatları" title="AI əməliyyatları" aria-controls="tcAiActions" aria-expanded="false">AI</button><button type="button" class="primary" id="sendChat" data-composer-delegate="true" aria-hidden="true" tabindex="-1">Göndər</button><button type="button" class="primary tc-legacy-composer-primary" id="tcComposerPrimary" aria-label="Göndər" title="Göndər" disabled>↑</button></div></div></div>`;
-      $('modalContent').insertAdjacentHTML('afterbegin',`<button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}" style="margin-top:12px">Dublikatları tap</button>`);
-      $('dealModal').classList.add('show');
-      window.tenantKommoDealCard?.mount({host:$('modalContent'),deal:x,api,isCurrent:active});
-      document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:x.kommo_lead_id}}));
-      if(window.tenantChatSend)window.tenantChatSend.bind({api,identity,leadId:x.kommo_lead_id,me:state.me,
-        isCurrent:current,reload:()=>loadChat(x.kommo_lead_id)});
-      else{$('sendChat').disabled=true;alert('Mesaj modulu yüklənmədi. Səhifəni yeniləyin.');}
-      dealChat=window.tenantDealChat.mount({api,id:x.kommo_lead_id,member:state.me,signal:controller.signal,isCurrent:current,line:chatLine,first});
+      const host=$('modalContent');
+      host.innerHTML=`<div class="chat-placeholder"><div id="chatRows"></div>${dealChatMarkup({ai:true})}</div><button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}"></button>`;
+      const view=window.tenantKommoDealCard.mount({host,deal:x,api,isCurrent:active});
+      mountDealChat({id:x.kommo_lead_id,box:host.querySelector('#chatRows'),controller,current,first});
+      void first.then(({data})=>current()&&data?findDealDialog(x,controller.signal):null)
+        .then(route=>{if(current())connectDealDialogLink(view,route,current,closeDeal);}).catch(()=>{});
     }catch(e){if(current()){controller.abort();$('modalContent').textContent=e.message;}}
   }
   const profileCopy={az:{eyebrow:'ŞƏXSİ HESAB',title:'Profil',intro:'Girişiniz və şirkətdəki rolunuz.',company:'Şirkət',role:'Rol',telegram:'Telegram hesabı',connected:'Qoşulub',status:'Giriş vəziyyəti',active:'Aktiv',logoutTitle:'Sistemdən çıxış',logoutDescription:'Bu cihazda CRM Smart Assistant kabinetindən çıxacaqsınız. Yenidən daxil olmaq üçün Telegram təsdiqi lazımdır.',logout:'Çıxış et',user:'İstifadəçi',roles:{owner:'Administrator',admin:'Administrator',manager:'Menecer',worker:'İcraçı'}},ru:{eyebrow:'ЛИЧНЫЙ КАБИНЕТ',title:'Профиль',intro:'Ваш вход и роль в компании.',company:'Компания',role:'Роль',telegram:'Учётная запись Telegram',connected:'Подключена',status:'Состояние входа',active:'Активен',logoutTitle:'Выход из системы',logoutDescription:'Вы выйдете из CRM Smart Assistant на этом устройстве. Для повторного входа потребуется подтверждение Telegram.',logout:'Выйти',user:'Пользователь',roles:{owner:'Владелец',admin:'Администратор',manager:'Менеджер',worker:'Сотрудник'}},en:{eyebrow:'PERSONAL ACCOUNT',title:'Profile',intro:'Your sign-in and role in the company.',company:'Company',role:'Role',telegram:'Telegram account',connected:'Connected',status:'Sign-in status',active:'Active',logoutTitle:'Sign out',logoutDescription:'You will sign out of CRM Smart Assistant on this device. Telegram confirmation is required to sign in again.',logout:'Sign out',user:'User',roles:{owner:'Owner',admin:'Administrator',manager:'Manager',worker:'Employee'}}};const profileLanguage=()=>profileCopy[window.tenantI18n?.language]||profileCopy.az;function translateProfile(){const c=profileLanguage();$('profileEyebrow').textContent=c.eyebrow;$('profilePageTitle').textContent=c.title;$('profilePageIntro').textContent=c.intro;const labels=$('view-profile').querySelectorAll('.meta b');[c.company,c.role,c.telegram,c.status].forEach((label,index)=>{if(labels[index])labels[index].textContent=label});$('profileTelegramLabel').textContent=c.connected;$('profileStatusLabel').textContent=c.active;$('profileLogoutTitle').textContent=c.logoutTitle;$('profileLogoutDescription').textContent=c.logoutDescription;$('profileLogoutLabel').textContent=c.logout}document.addEventListener('tenant-language',translateProfile);function renderProfile(member){if(!member)return;const c=profileLanguage();$('profileName').textContent=member.display_name||c.user;$('profileCompany').textContent=member.tenant_name||'—';$('profileRole').textContent=c.roles[member.role]||member.role||'—';$('company').textContent=member.tenant_name||'Şirkət';translateProfile()}

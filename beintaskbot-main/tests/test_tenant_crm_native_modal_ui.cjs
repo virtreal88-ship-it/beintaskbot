@@ -48,7 +48,7 @@ assert(view('companies').includes('companySearch') && view('companies').includes
 assert(!view('companies').includes('nativeCompanyLinkContact') && !view('companies').includes('nativeCompanyLinkDeal'), 'company associations belong inside the company card');
 assert(app.includes('nativeEntityCard') && app.includes('data-company-tab=\"contacts\"') && app.includes('data-company-tab=\"deals\"'), 'company card exposes relationship tabs');
 assert(contacts.includes("['general','companies','deals','dialogs']") && contacts.includes('data-contact-panel="companies"') && contacts.includes('data-contact-panel="deals"') && contacts.includes('data-contact-panel="dialogs"') && contacts.includes("t('dialogsHelp')"), 'the current contact card retains company/deal relations and explains its dialog limitation');
-assert(app.includes('data-deal-tab=\"contacts\"') && app.includes('data-deal-tab=\"company\"') && app.includes('data-deal-tab=\"tasks\"'), 'deal card exposes contact/company/task relations');
+assert(app.includes('contacts:{label:c.contact') && app.includes('company:{label:c.company') && app.includes("key:'tasks'"), 'deal card exposes contact/company/task relations');
 assert(app.includes('data-task-tab=\"related\"') && app.includes('başqa sövdələşməyə keçirmək hazırkı API-də mövcud deyil'), 'task card shows its real links and reports that reassignment is unsupported');
 assert(app.includes('.top{align-items:center;flex-wrap:wrap}') && app.includes('.crm-toolbar-actions{width:100%;justify-content:flex-start;flex-wrap:wrap}'), 'CRM action rows wrap at mobile widths without horizontal overflow');
 assert(app.includes("Arxivlənsin?\\n\\nQeyd: ${title}"), 'archive confirmation identifies the record title');

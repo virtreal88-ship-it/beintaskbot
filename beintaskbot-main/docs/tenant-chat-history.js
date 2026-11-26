@@ -3,7 +3,8 @@
   const $=id=>document.getElementById(id);
   let member, lead, epoch=0, detail;
   const identity=m=>m?.tenant_id+':'+m?.telegram_id;
-  const clear=()=>{$('chatHistoryPages')?.remove();};
+  let removeScroll=()=>{};
+  const clear=()=>{removeScroll();removeScroll=()=>{};$('chatHistoryPages')?.remove();};
   function render() {
     clear();
     const box=$('chatRows');
@@ -17,10 +18,10 @@
     host.append(button,notice);box.before(host);
     const valid=()=>current===epoch&&who===identity(member)&&selected===lead&&box===$('chatRows')&&host.isConnected;
     const line=detail.render_message;
+    const scroller=box.closest('.deal-chat-history');
     button.onclick=async()=>{
       if(button.disabled||!cursor||!valid())return;
       button.disabled=true;button.textContent='Yüklənir…';button.setAttribute('aria-busy','true');notice.textContent='';
-      const scroller=$('dealModal')?.querySelector('.deal-chat-history')||$('dealModal')?.querySelector('.modal-card');
       try{
         const query=new URLSearchParams({lead_id:selected,cursor,limit:40,expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
         const response=await fetch('/api/platform/crm/chat/history?'+query,{credentials:'same-origin',cache:'no-store'});
@@ -38,6 +39,11 @@
       }catch(error){if(valid()){if([401,403,404,409].includes(error.status)){box.textContent=error.message;host.remove();cursor=null;}else notice.textContent=error.message;}}
       finally{button.disabled=false;button.textContent='Daha çox';button.setAttribute('aria-busy','false');}
     };
+    if(scroller){
+      const previous=()=>{if(scroller.clientHeight&&scroller.scrollHeight>scroller.clientHeight&&scroller.scrollTop<=32)void button.onclick();};
+      scroller.addEventListener('scroll',previous,{passive:true});
+      removeScroll=()=>scroller.removeEventListener('scroll',previous);
+    }
   }
   document.addEventListener('tenant-profile',event=>{
     if(identity(member)!==identity(event.detail.member)){epoch++;detail=null;clear();}

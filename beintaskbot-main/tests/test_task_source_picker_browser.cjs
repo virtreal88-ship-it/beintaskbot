@@ -13,7 +13,7 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
  assert.equal(await page.locator('#view-tasks .top #kommoTaskCount').isVisible(),true);
  assert.equal(await page.locator('#nativeTaskCount').isVisible(),false);
  assert.match(await page.locator('#kommoTaskCount').getAttribute('aria-label'),/Есть ещё задачи/);
- // Compare the actual page-heading geometry with the Deals heading at the same width.
+ // Compare heading geometry while accounting for the Tasks counter's own padding.
  const heading=await page.evaluate(()=>{
   const task=document.querySelector('#view-tasks .top'),deal=document.querySelector('#view-deals .top');
   const clone=deal.cloneNode(true);clone.querySelector('h1').textContent=task.querySelector('h1').textContent;clone.querySelector('h1').className=task.querySelector('h1').className;
@@ -23,9 +23,12 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
   if(actions){if(clonedActions)clonedActions.replaceWith(actions.cloneNode(true));else clone.append(actions.cloneNode(true));}else clonedActions?.remove();
   clone.style.width=task.getBoundingClientRect().width+'px';clone.style.position='absolute';clone.style.visibility='hidden';
   document.querySelector('#view-tasks').append(clone);
-  const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();clone.remove();return {task:a.height,deals:b.height};
+  const chrome=node=>{const css=getComputedStyle(node);return ['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((sum,key)=>sum+parseFloat(css[key]),0);};
+  const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();
+  const countSpacing=chrome(task.querySelector('.task-source-count:not([hidden])'))-chrome(clone.querySelector('#dealCount'));
+  clone.remove();return {task:a.height,deals:b.height,countSpacing};
  });
- assert(Math.abs(heading.task-heading.deals)<=2,JSON.stringify({width,heading}));
+ assert(Math.abs(heading.task-heading.deals-heading.countSpacing)<=2,JSON.stringify({width,heading}));
  await page.locator('#kommoTaskViewControls button').first().waitFor();
  assert.equal(await page.locator('.task-view-controls:visible').count(),1);
  const assertBoardGap=async()=>{const gap=await page.evaluate(()=>{const view=document.querySelector('#view-tasks');const mobile=view.querySelector('.crm-mobile-toolbar');const toolbar=mobile&&mobile.getBoundingClientRect().height?mobile:view.querySelector(':scope>.task-flow-filters');const panel=Array.from(view.querySelectorAll(':scope>.task-source-panel')).find(el=>!el.hidden);return panel.getBoundingClientRect().top-toolbar.getBoundingClientRect().bottom;});assert(gap>=11&&gap<=20,JSON.stringify({width,gap,message:'filters and task board need a compact visible gap'}));};
@@ -49,9 +52,12 @@ const {appHtml,installFixture}=require('./task_read_save_flow_fixture.cjs');
   if(actions){if(clonedActions)clonedActions.replaceWith(actions.cloneNode(true));else clone.append(actions.cloneNode(true));}else clonedActions?.remove();
   clone.style.width=task.getBoundingClientRect().width+'px';clone.style.position='absolute';clone.style.visibility='hidden';
   document.querySelector('#view-tasks').append(clone);
-  const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();clone.remove();return {task:a.height,deals:b.height};
+  const chrome=node=>{const css=getComputedStyle(node);return ['paddingTop','paddingBottom','borderTopWidth','borderBottomWidth'].reduce((sum,key)=>sum+parseFloat(css[key]),0);};
+  const a=task.getBoundingClientRect(),b=clone.getBoundingClientRect();
+  const countSpacing=chrome(task.querySelector('.task-source-count:not([hidden])'))-chrome(clone.querySelector('#dealCount'));
+  clone.remove();return {task:a.height,deals:b.height,countSpacing};
  });
- assert(Math.abs(heading.task-heading.deals)<=2,JSON.stringify({width,heading}));
+ assert(Math.abs(heading.task-heading.deals-heading.countSpacing)<=2,JSON.stringify({width,heading}));
 
  if(width<=700){
   assert.equal(await page.locator('#view-tasks>.app-mobile-title-row').isVisible(),true);
