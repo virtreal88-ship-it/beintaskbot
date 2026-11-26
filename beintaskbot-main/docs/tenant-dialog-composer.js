@@ -67,12 +67,13 @@
   // never inspect, mutate, or reimplement its durable receipt state.
   const hasPending=send=>send.textContent.trim()===(window.tenantI18n?.t?.('checkSend')||'Vəziyyəti yoxla');
   const close=focus=>{if(!active)return;active.menu.hidden=true;active.ai.setAttribute('aria-expanded','false');if(focus)active.ai.focus();};
-  function clear(){close(false);active?.emoji.close(false);active?.observer.disconnect();active=null;}
+  function clear(){close(false);active?.emoji.close(false);active?.observer.disconnect();active?.composer?.removeAttribute('data-voice-editor-open');active=null;}
   function attach(){
     const actions=document.querySelector('.operator-composer-actions'),input=document.getElementById('chatText'),send=document.getElementById('sendChat');
     if(!actions||!input||!send||actions.closest('[data-widget-reply="true"]')){clear();return;}
     if(active?.actions===actions){active.refresh();return;}
     clear();
+    const composer=actions.closest('.operator-composer');
     const ai=document.createElement('button');ai.type='button';ai.id='operatorAIActionMenu';ai.className='outline operator-composer-ai';ai.textContent='AI';ai.title=copy('ai');ai.setAttribute('aria-label',copy('ai'));ai.setAttribute('aria-expanded','false');ai.setAttribute('aria-controls','operatorAIActionChoices');
     const menu=document.createElement('div');menu.id='operatorAIActionChoices';menu.className='operator-composer-ai-menu';menu.hidden=true;menu.setAttribute('role','group');menu.setAttribute('aria-label',copy('ai'));
     for(const id of ['operatorAIReply','operatorCopilotToggle','operatorCopilotVoiceToggle']){
@@ -97,9 +98,17 @@
       if(emoji.trigger.disabled!==emojiDisabled)emoji.trigger.disabled=emojiDisabled;
       if(emojiDisabled&&!emoji.panel.hidden)emoji.close(false);
       const mic=actions.querySelector('.operator-voice-mic');if(mic&&mic.dataset.composerDelegate!=='true')mic.dataset.composerDelegate='true';
-      const media=!hasPending(send)&&window.tenantCustomerMedia?.action();
-      if(media){setPrimary('media',media.label,media.disabled,media.preview?'preview':'send');return;}
       const pending=hasPending(send);
+      const voiceEditor=!pending&&!!composer?.querySelector('.operator-customer-voice[data-voice-editor="true"]');
+      composer?.toggleAttribute('data-voice-editor-open',voiceEditor);
+      primary.hidden=voiceEditor;
+      if(voiceEditor){
+        setPrimary('voice-message',copy('send'),true);
+        close(false);emoji.close(false);
+        return;
+      }
+      const media=!pending&&window.tenantCustomerMedia?.action();
+      if(media){setPrimary('media',media.label,media.disabled,media.preview?'preview':'send');return;}
       const useSend=!!input.value.trim()||pending;
       const label=useSend?(pending?copy('check'):copy('send')):(mic?copy('voice'):copy('unavailable'));
       setPrimary(useSend?'send':'voice',label,useSend?send.disabled:(!mic||mic.hidden||mic.disabled||input.disabled));
@@ -112,7 +121,7 @@
       if(panel){const open=!panel.hidden;if(panelWasOpen&&!open)ai.focus({preventScroll:true});panelWasOpen=open;}
       if(records.some(r=>r.target===send||r.target===input||menu.contains(r.target)&&r.attributeName==='disabled'||r.target.classList?.contains('operator-voice-mic')||r.type==='childList'&&r.target===actions))refresh();
     });
-    active={actions,input,send,primary,menu,ai,emoji,observer,refresh};
+    active={actions,composer,input,send,primary,menu,ai,emoji,observer,refresh};
     observer.observe(actions,{childList:true,subtree:true,attributes:true,attributeFilter:['disabled','hidden','class']});
     observer.observe(input,{attributes:true,attributeFilter:['disabled','readonly']});
     if(panel)observer.observe(panel,{attributes:true,attributeFilter:['hidden']});
@@ -141,6 +150,7 @@
   }
 }
 .operator-composer{position:relative}
+.operator-composer[data-voice-editor-open] > :is(#chatText, #operatorReplyQuote, .operator-composer-actions){display:none!important}
 .operator-composer-actions [data-composer-delegate=true]{display:none!important}
 .operator-composer-actions #operatorComposerPrimary{display:grid;place-items:center;margin-left:auto;flex:none;width:44px;height:44px;min-width:44px;min-height:44px;padding:0;border-radius:50%;background:var(--ink,#132621);color:var(--card,#fff)}
 .operator-composer-actions #operatorComposerPrimary[data-action=voice]{background:transparent;color:var(--ink,#132621)}
@@ -161,6 +171,7 @@
 .operator-emoji-panel button:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}`;document.head.append(style);
   document.addEventListener('tenant-chat-attachments-ready',attach);
   document.addEventListener('tenant-composer-media',()=>active?.refresh());
+  document.addEventListener('tenant-composer-voice',()=>active?.refresh());
   document.addEventListener('tenant-chat-close',clear);
   document.addEventListener('tenant-auth-invalid',clear);
   document.addEventListener('pointerdown',event=>{
