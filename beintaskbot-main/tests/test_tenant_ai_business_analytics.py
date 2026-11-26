@@ -599,14 +599,15 @@ def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards(monkey
             return []
 
     monkeypatch.setattr(task_flow, 'TenantPolicy', lambda profile: SimpleNamespace(
-        task_scope=lambda: {'kind': 'all'}, kommo_task_scope=lambda: {'kind': 'all'}))
+        privileged=True, kommo_task_scope=lambda: {'kind': 'all'}, kommo_user_id=lambda: 0))
     monkeypatch.setattr(task_flow, 'task_filters', lambda tenant_id, scope: ('tenant_id=%s::uuid', [tenant_id]))
     cursor = Cursor()
     search = r'literal % _ \\ tail'
 
     task_flow._rows(cursor, OWNER, 'kommo', limit=201, search=search)
 
-    assert 'ILIKE %s ESCAPE' in cursor.query
+    assert 'text ILIKE %s' in cursor.query
     assert search not in cursor.query
     assert cursor.args[0] == TENANT
+    assert cursor.args[1] == cursor.args[-2]
     assert cursor.args[-2] == r'%literal \% \_ \\\\ tail%'
