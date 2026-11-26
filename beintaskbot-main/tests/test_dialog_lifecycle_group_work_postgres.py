@@ -17,6 +17,7 @@ import requests
 
 import tenant_chat_send_store as sends
 import tenant_connect_transport as transport
+import tenant_dialog_group_work as group_work
 import tenant_dialog_lifecycle as lifecycle
 import tenant_operator_dialogs as dialogs
 from tenant_linear_policy import TenantLinearError
@@ -52,8 +53,8 @@ def history(actor, **extra):
     return dialogs.history(profile(actor),'connect',lead,channel,GROUP,**extra)
 
 
-def card(actor):
-    return next((r for r in dialogs.listing(profile(actor))['dialogs']
+def card(actor, **options):
+    return next((r for r in dialogs.listing(profile(actor),**options)['dialogs']
                  if r['conversation_id']==GROUP),None)
 
 
@@ -183,15 +184,16 @@ def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collabo
     with pytest.raises(TenantLinearError):
         dialogs.history(profile(44),'connect',1001,CA,GROUP)
     with pytest.raises(TenantLinearError,match='Коллега ещё подключён'):
-        action(33,'close',row(database,33)['revision'],expected_group_episode_id=episode)
+        action(33,'close',row(database,33)['revision'],expected_group_episode_id=episode,close_group_confirmed=True)
     database.commit()
-    with pytest.raises(TenantLinearError,match='только ведущий'):
+    with pytest.raises(TenantLinearError,match='только последний участник'):
         action(44,'close',row(database,44)['revision'],expected_group_episode_id=episode)
     database.commit()
     action(44,'leave_group',row(database,44)['revision'],expected_group_episode_id=episode)
     database.commit()
-    assert card(33)['lifecycle']['group_work']['role']=='leader'
-    assert card(44)['lifecycle']['group_work']['can_join']
+    assert card(33)['lifecycle']['can_close']
+    departed=card(44,lifecycle='completed')
+    assert departed['lifecycle']['state']=='closed' and departed['lifecycle']['group_work']['can_join']
     action(44,'join_group',row(database,44)['revision'],expected_group_episode_id=episode)
     database.commit()
     action(33,'transfer_group',row(database,33)['revision'],expected_group_episode_id=episode,target_employee_id=44)
@@ -200,7 +202,9 @@ def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collabo
     assert card(33)['lifecycle']['group_work']['role']=='participant'
     events=history(44,include_operator_events=True)['operator_events']
     assert {'accept','join_group','leave_group','transfer_group'} <= {event['kind'] for event in events}
-    action(44,'close',row(database,44)['revision'],expected_group_episode_id=episode,close_group_confirmed=True)
+    action(33,'leave_group',row(database,33)['revision'],expected_group_episode_id=episode)
+    database.commit()
+    action(44,'close',row(database,44)['revision'],expected_group_episode_id=episode)
     database.commit()
     assert all(row(database,actor)['state']=='closed' for actor in SOURCES)
     assert database.execute("""SELECT accepted_by,operator_id,closed_at IS NOT NULL AS closed
@@ -213,6 +217,71 @@ def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collabo
     incoming(database,44,'NEXT_EPISODE')
     current=action(44,'accept',row(database,44)['revision'])
     assert current['lifecycle']['id']!=episode
+
+
+def test_acceptance_is_visible_before_join_on_the_authorized_peer_source(collaboration):
+    peer_channel,peer_lead,_=SOURCES[44]
+    first=history(44,include_operator_events=True)
+    assert first['operator_events']==[]
+    assert group_work.read_revision(profile(44),peer_channel,GROUP,peer_lead)=={
+        'revision':first['dialog']['group_work_revision']}
+
+    accepted=action(33,'accept')
+    assert accepted['controls']['can_send']
+    assert accepted['controls']['lifecycle']['group_work']['role']=='leader'
+    refreshed=group_work.read_revision(profile(44),peer_channel,GROUP,peer_lead)
+    assert refreshed['revision']!=first['dialog']['group_work_revision']
+    second=history(44,include_operator_events=True,operator_events_revision=first['operator_events_revision'])
+    assert second['operator_events']==[accepted['operator_event']]
+    assert second['dialog']['lifecycle']['group_work']['can_join']
+    assert not second['dialog']['can_send']
+    with pytest.raises(TenantLinearError):
+        group_work.read_revision(profile(44),CA,GROUP,1001)
+
+
+def test_initial_leader_can_leave_and_last_operator_completes(collaboration):
+    database,_,_=collaboration
+    episode=join(database)
+    previous_peer_revision=history(44)['dialog']['group_work_revision']
+    action(33,'leave_group',row(database,33)['revision'],expected_group_episode_id=episode)
+    departed=card(33,lifecycle='completed')
+    assert departed['lifecycle']['state']=='closed'
+    assert not departed['can_send']
+    assert not any(item['conversation_id']==GROUP for item in dialogs.listing(profile(33),lifecycle='active')['dialogs'])
+    remaining=history(44,include_operator_events=True)
+    assert remaining['dialog']['group_work_revision']!=previous_peer_revision
+    assert remaining['dialog']['lifecycle']['can_close']
+    assert remaining['dialog']['can_send']
+    assert any(event['kind']=='transfer_group' for event in remaining['operator_events'])
+    assert database.execute('SELECT operator_id,closed_at FROM saas_dialog_episodes WHERE id=%s',(episode,))==[
+        {'operator_id':44,'closed_at':None}]
+    database.commit()
+    incoming(database,33,'BEFORE_LAST_CLOSE')
+    assert card(33,lifecycle='completed')['lifecycle']['state']=='closed'
+    with pytest.raises(TenantLinearError,match='последним участником'):
+        action(44,'leave_group',row(database,44)['revision'],expected_group_episode_id=episode)
+    database.commit()
+    action(44,'close',row(database,44)['revision'],expected_group_episode_id=episode)
+    assert card(33,lifecycle='completed')['lifecycle']['can_start']
+
+
+def test_waiting_peer_can_start_after_the_group_closes(collaboration):
+    database,membership,_=collaboration
+    previous=action(33,'accept')['lifecycle']['id']
+    action(33,'close',row(database,33)['revision'],expected_group_episode_id=previous)
+    peer=history(44)['dialog']['lifecycle']
+    assert peer['state']=='closed' and peer['can_start']
+    assert not peer['can_accept']
+    with pytest.raises(TenantLinearError,match='изменился'):
+        action(44,'start',peer['revision'],expected_group_episode_id=str(uuid.uuid4()))
+    membership[SOURCES[44][2]]=False
+    with pytest.raises(TenantLinearError,match='WeCall не подтвердил'):
+        action(44,'start',peer['revision'],expected_group_episode_id=previous)
+    membership[SOURCES[44][2]]=True
+    restarted=action(44,'start',peer['revision'],expected_group_episode_id=previous)
+    assert restarted['lifecycle']['id']!=previous
+    assert restarted['controls']['can_send']
+    assert history(33,include_operator_events=True)['operator_events'][-1]==restarted['operator_event']
 
 
 def test_simultaneous_first_accept_across_sources(collaboration):

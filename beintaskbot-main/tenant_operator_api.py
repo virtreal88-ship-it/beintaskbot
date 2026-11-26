@@ -93,6 +93,13 @@ def handler(member_from_request,origin,logger,resource):
                         options['observed_operator_id']=colleague
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
+                elif resource=='history' and query.get('group_work_revision')=='1':
+                    _expected(query,profile)
+                    if query.get('provider')!='connect':
+                        raise TenantLinearError('Диалог не найден.',404)
+                    from tenant_dialog_group_work import read_revision
+                    result=await timing.run(read_revision,profile,query.get('channel_id'),
+                        query.get('conversation_id'),query.get('lead_id'))
                 elif resource=='history':
                     colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
                         'support_case_only','paired_history','paired_history_redirect','anchor',

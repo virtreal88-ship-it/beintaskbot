@@ -1042,9 +1042,10 @@ def _fold_group_routes(rows, *, prefer_actionable=False, group_unread=None):
         else:
             representative = groups[key]
             representative['group_sources'].append(dict(row))
-            role = (row.get('lifecycle',{}).get('group_work') or {}).get('role')
-            selected_role = (representative.get('lifecycle',{}).get('group_work') or {}).get('role')
-            if (role and not selected_role) or (prefer_actionable and representative.get('archive_read_only') and not row.get('archive_read_only')):
+            work = row.get('lifecycle',{}).get('group_work') or {}
+            selected_work = representative.get('lifecycle',{}).get('group_work') or {}
+            prefer_work = not selected_work.get('role') and (work.get('role') or work.get('left') and not selected_work.get('left'))
+            if prefer_work or (prefer_actionable and representative.get('archive_read_only') and not row.get('archive_read_only')):
                 sources=representative['group_sources']
                 representative.clear()
                 representative.update(row,group_sources=sources)
@@ -1367,6 +1368,14 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                                    if p['primary_lead'] not in exact_shared and p['alternate_lead'] not in exact_shared]
                 rows,history_companions=fold_cards(rows,history_pairs)
             if lifecycle != 'all':
+                if lifecycle == 'active' and group_work_snapshots:
+                    left_groups={r['conversation_id'] for r in rows if r['provider']=='connect'
+                                 and (r['lifecycle'].get('group_work') or {}).get('left')}
+                    joined_groups={r['conversation_id'] for r in rows if r['provider']=='connect'
+                                   and (r['lifecycle'].get('group_work') or {}).get('role')}
+                    personally_closed=left_groups-joined_groups
+                    if personally_closed:
+                        rows=[r for r in rows if r['provider']!='connect' or r['conversation_id'] not in personally_closed]
                 rows=[r for r in rows if ((r.get('lifecycle') or {}).get('state') in {'closed','dismissed'}) == (lifecycle=='completed')]
             if history_pairs:
                 count=len({('group',r['conversation_id']) if r['provider']=='connect' and group_jid(r['conversation_id'])
@@ -1940,15 +1949,17 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     _assignment_display(cur,tenant,policy,[dialog])
                 _hide_shared_ai(dialog)
             lifecycle=dialog.get('lifecycle')
+            work=(lifecycle or {}).get('group_work') or {}
+            group_acceptance=work.get('id') if work.get('can_join') else None
             if (include_operator_events and not shared_archive and provider=='connect' and lifecycle and not anchor
                     and requested_route==history_scope['canonical_route']
-                    and (before or str(lifecycle['revision'])!=str(operator_events_revision))):
+                    and (before or group_acceptance or str(lifecycle['revision'])!=str(operator_events_revision))):
                 from tenant_dialog_operator_timeline import page as operator_event_page
                 operator_timeline=operator_event_page(conn,cur,tenant,channel,conversation,messages=messages,
                     before=identifier(before) if before else None,history_leads=history_leads,
                     history_channel=row['history_channel'],group_channels=group_channels,
                     authorized_before_stamp=merge_timeline_boundary.get('before_stamp'),
-                    group_actor=actor if group_dialog else None)
+                    group_actor=actor if group_dialog else None,group_acceptance=group_acceptance)
                 if 'operator_events' in operator_timeline:
                     operator_timeline['operator_events_revision']=lifecycle['revision']
             if (include_shared_reminder_events and not shared_archive and provider=='connect' and not anchor
