@@ -6,11 +6,11 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-de
 const docs = path.resolve(__dirname, '../docs');
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
-async function setup(page) {
+async function setup(page, {emptySecondRoute=false}={}) {
   await page.route('**/*', route => route.request().isNavigationRequest() ?
     route.fulfill({contentType:'text/html',body:html}) : route.abort());
   await page.goto('https://example.test/app?view=dialogs');
-  await page.evaluate(() => {
+  await page.evaluate(({emptySecondRoute}) => {
     document.querySelectorAll('.view').forEach(node => node.classList.toggle('active',node.id==='view-dialogs'));
     window.tenantProfileSnapshot={
       member:{tenant_id:'fixture',telegram_id:44,role:'operator',active:true},
@@ -31,13 +31,14 @@ async function setup(page) {
     const routes = [makeRoute('b',42,'+994500000112'),makeRoute('c',43,'+994500000113')];
     function dialog(route) {
       const own = joined && route.channel_id==='c';
+      const hasInbound = !emptySecondRoute || route.channel_id!=='c' || own;
       return {...route,customer_name:'Fixture group',customer_kind:'group',lifecycle_enabled:true,
         group_work_revision:`${active?episode:'waiting'}:${revision}`,
-        can_send:own,lifecycle:{state:own?'accepted':'waiting',operator_id:own?44:null,has_inbound:true,
+        can_send:own,lifecycle:{state:own?'accepted':'waiting',operator_id:own?44:null,has_inbound:hasInbound,
           id:own?episode:null,revision,can_close:own&&alone,
           ...(active?{group_work:{id:episode,role:own?(leader?'leader':'participant'):null,can_join:!joined,
             can_leave:own&&!alone,number:route.number,colleagues:own&&!alone?peers:[],...(!joined?{sources:routes}:{})}}:
-            {group_available:true,can_accept:true,last_inbound_id:'fixture-inbound'})}};
+            {group_available:true,can_accept:hasInbound,last_inbound_id:hasInbound?'fixture-inbound':null})}};
     }
     window.groupRequests=[];
     window.otherOperatorAccepted=()=>{active=true;};
@@ -82,7 +83,7 @@ async function setup(page) {
       }
       return {ok:true,status:200,json:async()=>({success:true,result})};
     };
-  });
+  }, {emptySecondRoute});
   for (const asset of ['tenant-operator-i18n.js','tenant-operator-dialogs.js']) {
     await page.addScriptTag({path:path.join(docs,asset)});
   }
@@ -153,6 +154,26 @@ async function verifyAcceptanceReceipt(page) {
   await page.evaluate(()=>window.finishGroupHistory());
 }
 
+async function verifyBackgroundAcceptance(page) {
+  await setup(page,{emptySecondRoute:true});
+  await page.locator('.operator-row').click();
+  await page.evaluate(async()=>{
+    const route=window.tenantOperator.currentDialog;
+    await window.tenantOperator.openDialog({...route,channel_id:'c',lead_id:43},true);
+    let hidden=true;
+    Object.defineProperty(document,'hidden',{get:()=>hidden});
+    document.dispatchEvent(new Event('visibilitychange'));
+    window.otherOperatorAccepted();
+    // Focus can return to another window without a fresh visibilitychange event.
+    hidden=false;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-operator-lifecycle="join_group"]').waitFor({timeout:2000});
+  assert.equal(await page.evaluate(()=>window.tenantOperator.currentDialog.channel_id),'c');
+  assert.match(await page.locator('[data-operator-timeline-event="accepted"]').innerText(),/Operator A/);
+  assert.deepEqual(await page.evaluate(()=>window.groupRequests),[]);
+}
+
 (async()=>{
   const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
   try {
@@ -163,9 +184,12 @@ async function verifyAcceptanceReceipt(page) {
       const receipt=await browser.newPage({viewport:{width,height:900}});
       await verifyAcceptanceReceipt(receipt);
       await receipt.close();
+      const background=await browser.newPage({viewport:{width,height:900}});
+      await verifyBackgroundAcceptance(background);
+      await background.close();
     }
   } finally {
     await browser.close();
   }
-  console.log('PASS desktop and mobile group acceptance, timeline before joining, exact source, author, leave and handoff');
+  console.log('PASS desktop and mobile group acceptance, foreground refresh of the second source, timeline, author, leave and handoff');
 })().catch(error=>{console.error(error);process.exit(1);});
