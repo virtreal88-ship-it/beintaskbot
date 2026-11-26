@@ -43,7 +43,7 @@ from tenant_ai_testing_api import handler as testing_handler
 from tenant_ai_historical_replay_api import handler as historical_replay_handler
 from tenant_ai_simulation_api import handler as simulation_handler
 from tenant_ai_state_api import handler as ai_state_handler
-from tenant_operator_api import handler as operator_handler
+from tenant_operator_api import GroupWorkUpdates, handler as operator_handler
 from tenant_dialog_compose_api import handler as dialog_compose_handler
 from tenant_employee_work_status_api import handler as employee_work_status_handler
 from tenant_dialog_reply_templates_api import handler as reply_templates_handler
@@ -77,6 +77,7 @@ class TenantWebContext:
 
 
 def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
+    group_work_updates=GroupWorkUpdates()
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
@@ -192,14 +193,14 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/duplicates', operator_handler(member, origin, logger, 'dialog_duplicates'), ('POST',)),
         ('dialogs/history-merges', operator_handler(member, origin, logger, 'dialog_history_merges'), ('POST',)),
         ('dialogs/contact-phone', operator_handler(member, origin, logger, 'contact_phone'), ('GET',)),
-        ('dialogs/history', operator_handler(member, origin, logger, 'history'), ('GET',)),
+        ('dialogs/history', operator_handler(member, origin, logger, 'history',group_work_updates=group_work_updates), ('GET',)),
         ('dialogs/reply-templates', reply_templates_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/internal-comments', operator_handler(member, origin, logger, 'internal_comments'), ('POST',)),
         ('dialogs/quick-replies', operator_handler(member, origin, logger, 'quick_replies'), ('POST',)),
         ('dialogs/personal-reminders', reminders_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/shared-reminders', reminders_handler(member, origin, logger, shared=True), ('GET','POST')),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
-        ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle'), ('POST',)),
+        ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle',group_work_updates=group_work_updates), ('POST',)),
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),
         ('dialogs/audio-transcription', dialog_audio_transcription_handler(member, origin, logger), ('GET', 'POST')),
         ('dialogs/asr-comparison', owner_asr_comparison_handler(member, origin, logger), ('GET', 'POST')),
