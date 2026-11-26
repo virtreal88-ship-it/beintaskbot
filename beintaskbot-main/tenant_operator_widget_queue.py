@@ -50,7 +50,11 @@ def _allow_provider_assignment(cur, tenant, instance, rows):
             row["writable"] = row["open_operator_login"] == link["login"]
 
 
-def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
+def _unassigned(row):
+    return row["state"] == "waiting" and row["operator_id"] is None
+
+
+def authorized(cur, profile, params, *, update=False, lock=False, replay=False, waiting=False):
     tenant, actor, policy = access(cur, profile, "dialogs", action="update" if update else "view")
     instance = source(cur, policy.profile, "update" if update else "view")
     if not instance or instance != str(params.get("channel_id")) or params.get("provider") != PROVIDER:
@@ -69,7 +73,8 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     if not row or not replay and row["state"] == "accepted" and row["operator_id"] != actor:
         raise TenantLinearError("Диалог недоступен.", 403)
     if not widget_allowed(policy.profile) or (update and not widget_allowed(policy.profile, "update")):
-        if row["state"] != "accepted" or row["operator_id"] != actor:
+        own = row["state"] == "accepted" and row["operator_id"] == actor
+        if not own and not (waiting and _unassigned(row) and widget_allowed(policy.profile, "update", assigned=True)):
             raise TenantLinearError("Диалог недоступен.", 403)
     _allow_provider_assignment(cur, tenant, instance, [row])
     if update and not row["writable"]:
@@ -114,7 +119,7 @@ def card(row, actor, writable, rollout, online):
         "last_inbound_id": inbound,
         "has_inbound": bool(inbound),
         "can_accept": bool(
-            state == "waiting" and writable and online and rollout.admission_enabled and inbound
+            _unassigned(row) and writable and online and rollout.admission_enabled and inbound
         ),
         "can_transfer": own,
         "can_close": own,
@@ -164,6 +169,8 @@ def cards(cur, policy, mode, rollout):
     if not instance or not rollout.enforced:
         return [], None
     tenant, actor = str(profile["tenant_id"]), int(profile["telegram_id"])
+    full_view = widget_allowed(profile)
+    can_work = widget_allowed(profile, "update", assigned=True)
     cur.execute(
         """SELECT d.*,
        (SELECT count(*) FROM saas_widget_messages m WHERE
@@ -174,21 +181,21 @@ def cards(cur, policy, mode, rollout):
          (d.tenant_id,d.instance,d.chat_id,d.identity)=(r.tenant_id,r.instance,r.chat_id,r.identity) AND r.actor=%s
        LEFT JOIN LATERAL (SELECT m.body,m.mid,m.sender FROM saas_widget_messages m
            WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
+           AND (%s OR d.state<>'waiting' OR m.mid=d.latest_in)
            ORDER BY m.mid DESC LIMIT 1) last ON true
        WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
-         AND (%s OR (state='accepted' AND operator_id=%s))
+         AND (%s OR (state='accepted' AND operator_id=%s) OR (%s AND state='waiting' AND operator_id IS NULL))
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
-        (actor, tenant, instance, actor, widget_allowed(profile), actor, mode, mode),
+        (actor, full_view, tenant, instance, actor, full_view, actor, can_work, mode, mode),
     )
     rows = cur.fetchall()
     _allow_provider_assignment(cur, tenant, instance, rows)
     attach_companies(cur, policy, instance, rows)
     writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
-    own_writable = widget_allowed(profile, "update", assigned=True)
     return [card(row, actor, row["writable"] and (writable or
-                 own_writable and row["state"] == "accepted" and row["operator_id"] == actor),
+                 can_work and (_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor)),
                  rollout, online) for row in rows], {
         "id": PROVIDER + ":" + instance,
         "name": SOURCE,
@@ -216,7 +223,7 @@ def history(profile, params, before=None):
     from tenant_dialog_internal_comments import _event
 
     with operator._connect() as db, db.cursor() as cur:
-        row, actor, policy = authorized(cur, profile, params)
+        row, actor, policy = authorized(cur, profile, params, waiting=True)
         key = scope(row)
         rollout = guard(cur, key[0])
         if not rollout.enforced:
@@ -226,15 +233,16 @@ def history(profile, params, before=None):
             row,
             actor,
             row["writable"] and widget_allowed(policy.profile, "update",
-                assigned=row["state"] == "accepted" and row["operator_id"] == actor),
+                assigned=_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor),
             rollout,
             is_online(cur, key[0], actor, source_channel=key[1]),
         )
+        admission_preview = _unassigned(row) and not widget_allowed(policy.profile)
         cur.execute(
             "SELECT *,at AS message_at FROM saas_widget_messages WHERE "
             + KEY
-            + " AND (%s::bigint IS NULL OR mid<%s) ORDER BY mid DESC LIMIT 51",
-            (*key, before, before),
+            + " AND (%s::bigint IS NULL OR mid<%s) AND (NOT %s OR (mid=%s AND sender='client')) ORDER BY mid DESC LIMIT 51",
+            (*key, before, before, admission_preview, row["latest_in"]),
         )
         rows = cur.fetchall()
         from tenant_operator_widget import confirmed_authors
@@ -242,14 +250,14 @@ def history(profile, params, before=None):
         cur.execute(
             """SELECT id,author_name,note,created_at FROM saas_dialog_internal_comments WHERE
             tenant_id=%s AND provider=%s AND channel_id=%s AND conversation_id=%s AND lead_id=%s
-            ORDER BY created_at DESC LIMIT 60""",
-            (key[0], PROVIDER, key[1], key[3], key[2]),
+            AND NOT %s ORDER BY created_at DESC LIMIT 60""",
+            (key[0], PROVIDER, key[1], key[3], key[2], admission_preview),
         )
         comments = [_event(n) for n in reversed(cur.fetchall())]
         cur.execute(
             """SELECT payload FROM saas_tenant_audit_events WHERE tenant_id=%s
-             AND entity_type='operator_widget_dialog' AND entity_id=%s ORDER BY created_at DESC LIMIT 60""",
-            (key[0], event_key(key)),
+             AND entity_type='operator_widget_dialog' AND entity_id=%s AND NOT %s ORDER BY created_at DESC LIMIT 60""",
+            (key[0], event_key(key), admission_preview),
         )
         events = [e["payload"]["event"] for e in reversed(cur.fetchall())]
         db.commit()
@@ -288,13 +296,16 @@ def history(profile, params, before=None):
         "internal_comments": comments,
         "operator_events": events,
         "next_before": str(rows[49]["mid"]) if len(rows) > 50 else None,
-        "read_through_message_id": messages[-1]["id"] if messages and not before else None,
+        "read_through_message_id": messages[-1]["id"] if messages and not before and not admission_preview else None,
     }
 
 
 def read(profile, params):
     with operator._connect() as db, db.cursor() as cur:
-        row, actor, _ = authorized(cur, profile, params)
+        row, actor, policy = authorized(cur, profile, params, waiting=True)
+        if (_unassigned(row) and not widget_allowed(policy.profile)
+                and int(params["message_id"]) != row["latest_in"]):
+            raise TenantLinearError("Сообщение недоступно.", 404)
         key = scope(row)
         cur.execute(
             """INSERT INTO saas_widget_reads(tenant_id,instance,chat_id,identity,actor,through_id)
@@ -353,7 +364,7 @@ def mutate(profile, params):
     digest = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
     with operator._connect() as db, db.cursor() as cur:
         rollout = guard(cur, str(profile["tenant_id"]))
-        row, actor, policy = authorized(cur, profile, params, update=True, lock=True, replay=True)
+        row, actor, policy = authorized(cur, profile, params, update=True, lock=True, replay=True, waiting=action == "accept")
         key = scope(row)
         cur.execute(
             "SELECT actor_id,input_hash,result FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s AND request_id=%s",

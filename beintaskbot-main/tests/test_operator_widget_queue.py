@@ -160,19 +160,19 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     assert owned["internal_comments"][0]["note"] == "internal only"
     assert owned["dialog"]["crm_company_id"] is None
     assert owned["dialog"]["dialog_company_name"] == account
-    # After the first personal reply the provider can assign the thread to that
-    # employee. The shared REST identity still reads it, including follow-ups.
+    # The provider sender is distinct from both the CRM owner and the operator.
     from cryptography.fernet import Fernet
     from tenant_operator_widget_sender import _binding
     link_id = str(uuid.uuid4())
-    link = {"id":link_id, "member_telegram_id":33, "connection_instance_id":key[1],
+    cur.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s,44,'operator','Shared sender')",(A,))
+    link = {"id":link_id, "member_telegram_id":44, "connection_instance_id":key[1],
             "connection_generation":CREDENTIALS["generation"], "operator_login":"staff", "operator_account":"team"}
     cipher = Fernet(Fernet.generate_key())
     blob = cipher.encrypt(json.dumps({"binding":_binding(A,link),"token":"personal"}).encode())
     cur.execute("""INSERT INTO saas_beinsystems_operator_employee_links
         (id,tenant_id,connection_instance_id,connection_generation,member_telegram_id,operator_login,
          operator_account,verification_basis,evidence_summary,verified_by,widget_reply_ciphertext)
-        VALUES(%s,%s,%s,%s,33,'staff','team','manual','test fixture',11,decode(%s,'hex'))""",
+        VALUES(%s,%s,%s,%s,44,'staff','team','manual','test fixture',11,decode(%s,'hex'))""",
         (link_id,A,key[1],CREDENTIALS["generation"],blob.hex()))
     assigned = {**CHAT, "operator":"staff@team"}
     sync.snapshot(cur,A,CREDENTIALS,widget._routes([assigned],CREDENTIALS),"integration")
@@ -198,12 +198,32 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
         patch.setattr(transport,"socket_block_reason",lambda c: "" if c["token"]=="personal" else "widget_socket_auth_denied")
         cur.execute("UPDATE saas_widget_dialogs SET state='waiting',operator_id=NULL WHERE " + sync.KEY,key)
         db.commit()
-        with pytest.raises(TenantLinearError):
-            queue.history(recipient,params)
+        preview = queue.history(recipient,params)
+        assert preview["internal_comments"] == preview["operator_events"] == []
+        assert [m["id"] for m in preview["messages"]] == ["2"]
+        assert preview["dialog"]["lifecycle"]["can_accept"] and not preview["dialog"]["can_send"]
         _, _, restricted = queue.access(cur,recipient)
-        assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0] == []
-        cur.execute("UPDATE saas_widget_dialogs SET state='accepted',operator_id=33 WHERE " + sync.KEY,key)
-        db.commit()
+        assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0][0]["lifecycle"]["can_accept"]
+        accept = {**params,"action":"accept","request_id":str(uuid.uuid4()),
+                  "expected_revision":preview["dialog"]["lifecycle"]["revision"]}
+        with patch.context() as offline:
+            offline.setattr(queue,"is_online",lambda *args,**kwargs:False)
+            assert not queue.history(recipient,params)["dialog"]["lifecycle"]["can_accept"]
+            with pytest.raises(TenantLinearError):
+                lifecycle.mutate(recipient,accept)
+        with patch.context() as denied:
+            denied.setattr(TenantPolicy,"action_scope",lambda self,module,action:
+                "none" if module=="dialogs" and action=="update" else scope_for_actor(self,module,action))
+            assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0] == []
+            with pytest.raises(TenantLinearError):
+                queue.history(recipient,params)
+        receipt = lifecycle.mutate(recipient,accept)
+        assert receipt["lifecycle"]["operator_id"] == 33
+        assert lifecycle.mutate(recipient,accept) == receipt
+        with pytest.raises(TenantLinearError):
+            lifecycle.mutate(PROFILE,{**accept,"request_id":str(uuid.uuid4())})
+        with pytest.raises(TenantLinearError):
+            page()
         assert queue.history(recipient,params)["dialog"]["can_send"]
         staff = {**PROFILE, **recipient,"role":"operator","permissions":["dialogs","operator_data","operator_api"]}
         command = {"action":"reply","chat_id":"15","revision":routes[15][1],
@@ -213,6 +233,9 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
         assert widget.handle(staff,command)["state"] == "unknown"
         assert widget.handle(staff,command)["state"] == "unknown"
         assert sent == [("staff@team","personal",CHAT["client_id"])]
+        cur.execute("SELECT actor,crm_author_name FROM saas_operator_widget_replies WHERE tenant_id=%s AND request_id=%s",
+                    (A,command["request_id"]))
+        assert cur.fetchone() == {"actor":33,"crm_author_name":"Agent"}
         # Transfer the conversation to the owner, who sends with the same
         # upstream identity. The durable receipt and history identify the owner.
         lifecycle.mutate(recipient,{**transfer,"target_employee_id":11,"request_id":str(uuid.uuid4()),
