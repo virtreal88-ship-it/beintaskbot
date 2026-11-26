@@ -194,7 +194,9 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         imports = {node.module for node in ast.parse((ROOT/'tenant_web_routes.py').read_text()).body
                    if isinstance(node, ast.ImportFrom) and (node.module or '').startswith('tenant_')}
         self.provider = Mock(return_value=AsyncMock())
+        self.group_work_updates = object()
         self.module = load('tenant_web_routes', {**self.factories, 'deal_provider': self.provider, 'learning_mcp_routes':learning_routes,
+                           'GroupWorkUpdates': Mock(return_value=self.group_work_updates),
                            'TelegramBot': TelegramBot}, imports)
         self.context = self.module.TenantWebContext(member=Mock(), origin='https://crm.pro.az',
             logger=Mock(), crm_request=AsyncMock(), wait_slot=Mock(), bot=Mock())
@@ -266,6 +268,9 @@ class Routes(unittest.IsolatedAsyncioTestCase):
         self.factories['historical_replay_handler'].assert_called_once_with(self.context.member,self.context.origin,self.context.logger)
 
     def test_special_modes_remain_explicit(self):
+        for call in self.factories['operator_handler'].call_args_list:
+            if call.args[3] in ('history','dialogs_lifecycle'):
+                self.assertIs(call.kwargs.get('group_work_updates'), self.group_work_updates)
         self.assertEqual([call.kwargs for call in self.factories['news_handler'].call_args_list],
                          [{}, {'ai': True}, {'public': True}])
         self.assertEqual([call.kwargs for call in self.factories['chat_ai_handler'].call_args_list],

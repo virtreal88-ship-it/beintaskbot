@@ -77,7 +77,6 @@ class TenantWebContext:
 
 
 def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
-    group_work_updates=GroupWorkUpdates()
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
     bindings = [
@@ -148,6 +147,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
 def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/') -> list[tuple[str, str, Handler]]:
     """AI Agents are a tenant product module, independent of message transports."""
     member, origin, logger = context.member, context.origin, context.logger
+    group_work_updates = GroupWorkUpdates()
     routes = [
         ('testing/sessions', testing_handler(member, origin, logger, 'sessions'), ('GET','POST')),
         ('testing/historical-replay', historical_replay_handler(member,origin,logger), ('GET','POST')),
