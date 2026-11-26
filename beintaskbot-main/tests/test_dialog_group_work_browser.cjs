@@ -6,7 +6,7 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-de
 const docs = path.resolve(__dirname, '../docs');
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
-async function verify(page) {
+async function setup(page) {
   await page.route('**/*', route => route.request().isNavigationRequest() ?
     route.fulfill({contentType:'text/html',body:html}) : route.abort());
   await page.goto('https://example.test/app?view=dialogs');
@@ -21,6 +21,10 @@ async function verify(page) {
     let joined = false;
     let leader = false;
     let revision = 0;
+    let active = false;
+    let alone = false;
+    let holdHistory = false;
+    const acceptance = {id:'accepted',kind:'accept',employee_name:'Operator A',at:'2026-11-26T08:00:01Z'};
     const peers = [{employee_id:'33',name:'Operator A'}];
     const makeRoute = (id,lead,number) => ({provider:'connect',channel_active:true,channel_id:id,
       channel_name:'Fixture '+id,lead_id:lead,conversation_id:group,number});
@@ -28,30 +32,48 @@ async function verify(page) {
     function dialog(route) {
       const own = joined && route.channel_id==='c';
       return {...route,customer_name:'Fixture group',customer_kind:'group',lifecycle_enabled:true,
+        group_work_revision:`${active?episode:'waiting'}:${revision}`,
         can_send:own,lifecycle:{state:own?'accepted':'waiting',operator_id:own?44:null,has_inbound:true,
-          id:own?episode:null,revision,can_close:own&&leader,
-          group_work:{id:episode,role:own?(leader?'leader':'participant'):null,can_join:!joined,
-            can_leave:own&&!leader,number:route.number,colleagues:own?peers:[],...(!joined?{sources:routes}:{})}}};
+          id:own?episode:null,revision,can_close:own&&alone,
+          ...(active?{group_work:{id:episode,role:own?(leader?'leader':'participant'):null,can_join:!joined,
+            can_leave:own&&!alone,number:route.number,colleagues:own&&!alone?peers:[],...(!joined?{sources:routes}:{})}}:
+            {group_available:true,can_accept:true,last_inbound_id:'fixture-inbound'})}};
     }
     window.groupRequests=[];
+    window.otherOperatorAccepted=()=>{active=true;};
+    window.otherOperatorLeft=()=>{alone=leader=true;revision++;};
     window.makeLead=()=>{leader=true;return window.tenantOperator.openDialog(dialog(routes[1]),true);};
     window.fetch=async (input, options={}) => {
       const url=new URL(String(input),location.origin);
       if(url.pathname.endsWith('/me'))return {ok:true,json:async()=>window.tenantProfileSnapshot};
       let result;
       if(url.pathname.endsWith('/dialogs/history')){
-        result={dialog:dialog(routes.find(route=>route.channel_id===url.searchParams.get('channel_id'))),
-          messages:joined?[{id:'first',external_id:'first',direction:'incoming',source:'connect',message_type:'text',
-            body:'Fixture reply',author_type:'employee',author_name:'Operator A',sending_number:'+994500000111',
-            created_at:'2026-11-26T08:00:00Z'}]:[],read_through_message_id:null,next_before:null};
+        const view=dialog(routes.find(route=>route.channel_id===url.searchParams.get('channel_id')));
+        if(url.searchParams.get('group_work_revision')==='1')result={revision:view.group_work_revision};
+        else{
+          if(holdHistory)await new Promise(resolve=>{window.finishGroupHistory=()=>{holdHistory=false;resolve();};});
+          result={dialog:view,operator_events:active?[acceptance]:[],
+            messages:joined?[{id:'first',external_id:'first',direction:'incoming',source:'connect',message_type:'text',
+              body:'Fixture reply',author_type:'employee',author_name:'Operator A',sending_number:'+994500000111',
+              created_at:'2026-11-26T08:00:00Z'}]:[],read_through_message_id:null,next_before:null};
+        }
       }else if(url.pathname.endsWith('/dialogs_lifecycle')){
         const command=JSON.parse(options.body);
         window.groupRequests.push(command);
+        if(command.action==='accept'){
+          await new Promise(resolve=>{window.confirmGroupAcceptance=resolve;});
+          active=joined=leader=holdHistory=true;
+        }
         revision++;
         if(command.action==='join_group')joined=true;
         if(command.action==='leave_group'||command.action==='close')joined=false;
         if(command.action==='transfer_group')leader=false;
-        result={group_changed:true,lifecycle:dialog(routes[1]).lifecycle};
+        const view=dialog(routes[1]);
+        result={group_changed:true,lifecycle:view.lifecycle};
+        if(command.action==='accept'){
+          result.operator_event={...acceptance,employee_name:'Operator B'};
+          result.controls={can_send:view.can_send,lifecycle:view.lifecycle,group_work_revision:view.group_work_revision};
+        }
       }else if(url.pathname.endsWith('/dialogs')){
         const sources=joined?[dialog(routes[1])]:routes.map(dialog);
         result={dialogs:[{...sources[0],group_sources:sources,unread_count:2}],channels:[],agents:[],total_count:1};
@@ -65,13 +87,23 @@ async function verify(page) {
     await page.addScriptTag({path:path.join(docs,asset)});
   }
   await page.evaluate(()=>window.tenantOperator.refresh());
+}
+
+async function verify(page) {
+  await setup(page);
   const card=page.locator('.operator-row');
   assert.equal(await card.count(),1);
   assert.equal(await card.locator('.operator-unread-count').textContent(),'2');
   await card.click();
+  await page.locator('[data-operator-lifecycle="accept"]').waitFor();
+  await page.evaluate(()=>window.otherOperatorAccepted());
+  const join=page.locator('[data-operator-lifecycle="join_group"]');
+  await join.waitFor({timeout:8000});
+  assert.match(await page.locator('[data-operator-timeline-event="accepted"]').innerText(),/Operator A/);
+  assert.equal(await page.locator('#chatText').isDisabled(),true);
+  assert.deepEqual(await page.evaluate(()=>window.groupRequests),[]);
   await page.locator('#operatorComposerSourceSelect').selectOption('1');
   await page.waitForFunction(()=>window.tenantOperator.currentDialog?.channel_id==='c');
-  const join=page.locator('[data-operator-lifecycle="join_group"]');
   await join.click();
   await page.locator('[data-group-sending-number]').filter({hasText:'+994500000113'}).waitFor();
   await page.waitForFunction(()=>document.querySelector('#chatText')?.disabled===false);
@@ -84,7 +116,9 @@ async function verify(page) {
   await join.click();
   await leave.waitFor();
   await page.evaluate(()=>window.makeLead());
-  await page.locator('[data-operator-lifecycle="close"]').click();
+  assert.equal(await page.locator('[data-operator-lifecycle="close"]').count(),0);
+  assert.equal(await leave.count(),1);
+  await page.locator('[data-operator-lifecycle="transfer_group"]').click();
   const warning=page.locator('#operatorLifecycleModal');
   await warning.waitFor();
   const bounds=await warning.locator('.operator-complete-card').boundingBox();
@@ -95,6 +129,28 @@ async function verify(page) {
   assert.deepEqual(sent.map(cmd=>cmd.action),['join_group','leave_group','join_group','transfer_group']);
   assert(sent.every(cmd=>cmd.channel_id==='c'&&cmd.lead_id===43&&cmd.expected_group_episode_id===sent[0].expected_group_episode_id));
   assert.equal(sent.at(-1).target_employee_id,33);
+  await page.evaluate(()=>window.otherOperatorLeft());
+  await page.locator('[data-operator-lifecycle="close"]').waitFor({timeout:8000});
+  assert.equal(await leave.count(),0);
+}
+
+async function verifyAcceptanceReceipt(page) {
+  await setup(page);
+  await page.locator('.operator-row').click();
+  await page.evaluate(async()=>{
+    const route=window.tenantOperator.currentDialog;
+    await window.tenantOperator.openDialog({...route,channel_id:'c',lead_id:43},true);
+  });
+  const accept=page.locator('[data-operator-lifecycle="accept"]');
+  await accept.click();
+  await page.waitForFunction(()=>typeof window.confirmGroupAcceptance==='function');
+  assert.equal(await accept.getAttribute('aria-busy'),'true');
+  assert.equal(await page.locator('#chatText').isDisabled(),true);
+  await page.evaluate(()=>window.confirmGroupAcceptance());
+  await page.waitForFunction(()=>typeof window.finishGroupHistory==='function');
+  assert.match(await page.locator('[data-operator-timeline-event="accepted"]').innerText(),/Operator B/);
+  assert.equal(await page.locator('#chatText').isDisabled(),false);
+  await page.evaluate(()=>window.finishGroupHistory());
 }
 
 (async()=>{
@@ -104,9 +160,12 @@ async function verify(page) {
       const page=await browser.newPage({viewport:{width,height:900}});
       await verify(page);
       await page.close();
+      const receipt=await browser.newPage({viewport:{width,height:900}});
+      await verifyAcceptanceReceipt(receipt);
+      await receipt.close();
     }
   } finally {
     await browser.close();
   }
-  console.log('PASS desktop and mobile group join, exact source, author, leave and leader handoff');
+  console.log('PASS desktop and mobile group acceptance, timeline before joining, exact source, author, leave and handoff');
 })().catch(error=>{console.error(error);process.exit(1);});

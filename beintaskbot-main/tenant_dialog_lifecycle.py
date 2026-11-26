@@ -352,7 +352,7 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
     from tenant_connect_dialog_equivalence import canonical
     conversation=canonical(cur,tenant,channel,conversation)
     lock_dialog(cur, tenant, 'connect', channel, conversation)
-    from tenant_dialog_group_work import snapshot
+    from tenant_dialog_group_work import active, snapshot
     group = snapshot(cur,tenant,conversation)
     if group and group['closed_at'] and not group['legacy_active']:
         # New physical routes can receive the next episode's first incoming.
@@ -372,8 +372,9 @@ def note_inbound(cur, tenant, channel, conversation, message_id, event_at, *, is
       revision=revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
       WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
         AND last_inbound_id IS DISTINCT FROM %s
-        AND (state NOT IN ('closed','dismissed') OR %s::timestamptz>closed_at)""",
-      (str(uuid.uuid4()),str(message_id),tenant,channel,conversation,str(message_id),event_at))
+        AND (state NOT IN ('closed','dismissed') OR (%s::timestamptz>closed_at AND id IS DISTINCT FROM %s::uuid))""",
+      (str(uuid.uuid4()),str(message_id),tenant,channel,conversation,str(message_id),event_at,
+       group['id'] if active(group) else None))
     # Do not resume a manually paused AI or the group coordinator as a side effect.
 
 
@@ -634,7 +635,7 @@ def decorate(cur, tenant, actor, dialog, *, details=True, allow_closed_archive=F
     return dialog
 
 
-def _transition_controls(cur, tenant, actor, channel, conversation, lead, current, rollout, policy, closed_episode):
+def _transition_controls(cur, tenant, actor, channel, conversation, lead, current, rollout, policy, closed_episode, *, group=None):
     accepted = current['state']=='accepted'
     active, can_send = _transition_source(cur, tenant, channel, check_send=accepted)
     last = None
@@ -658,7 +659,13 @@ def _transition_controls(cur, tenant, actor, channel, conversation, lead, curren
             controls['accepted_by_name'] = name
     else:
         controls['can_submit_case'] = bool(closed_episode and not closed_episode['case_id'])
+    if group:
+        from tenant_dialog_group_work import decorate as decorate_group
+        decorate_group(view,actor,group,current,source={'enabled':True,'active':active},
+            admission=rollout.admission_enabled,can_update=True,online=True)
+    group_revision = view.get('group_work_revision')
     return {'lifecycle':controls,'can_send':view['can_send'],
+            **({'group_work_revision':group_revision} if group_revision else {}),
             **({'closed_episode':closed_episode} if closed_episode else {})}
 
 
@@ -811,6 +818,7 @@ def _mutate_once(profile, payload):
                 raise TenantLinearError('Выбор компании доступен только при завершении диалога.',422)
             bound_on_close=None
             closed_episode=None
+            promoted=None
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
             group=group_work.snapshot(cur,tenant,conversation)
@@ -830,11 +838,11 @@ def _mutate_once(profile, payload):
             if shared and action=='close':
                 if (payload.get('expected_group_episode_id')!=group['id'] or actor!=group['operator_id']
                         or channel!=group['leader_source'] or not row or str(row['id'])!=group['id']):
-                    raise TenantLinearError('Завершить общий диалог может только ведущий.',409)
-                if len(group['participants']) > 1 and payload.get('close_group_confirmed') is not True:
-                    raise TenantLinearError('Коллега ещё подключён. Передайте ведение или подтвердите завершение для всех.',409)
+                    raise TenantLinearError('Завершить общий диалог может только последний участник.',409)
+                if len(group['participants']) > 1:
+                    raise TenantLinearError('Коллега ещё подключён. Выйдите, чтобы завершить только своё участие.',409)
             if action in group_work.MEMBER_ACTIONS:
-                group_work.transition(cur,tenant=tenant,actor=actor,policy=policy,channel=channel,
+                promoted=group_work.transition(cur,tenant=tenant,actor=actor,policy=policy,channel=channel,
                     conversation=conversation,lead=int(route['lead_id']),workflow=row,group=group,payload=payload,peer=peer)
             elif action=='dismiss':
                 # Old bulk clients must never silently mark messages.
@@ -860,7 +868,9 @@ def _mutate_once(profile, payload):
                 if action=='start':
                     require_access(cur,tenant,actor,'connect',channel,conversation,'view',allow_closed_archive=True,
                                    owner=policy.profile.get('role')=='owner')
-                    if not row or row['state'] not in {'closed','dismissed'}:
+                    restart_waiting=(managed and group_work.can_restart_waiting(group,row)
+                                     and payload.get('expected_group_episode_id')==group['id'])
+                    if not restart_waiting and (not row or row['state'] not in {'closed','dismissed'}):
                         raise TenantLinearError('Диалог уже изменился или недоступен.',409)
                     if is_shared_archive(row,actor):
                         if (payload.get('conversation_id') != conversation or str(payload.get('channel_id')) != channel
@@ -929,6 +939,9 @@ def _mutate_once(profile, payload):
             result={'lifecycle':{k:str(current[k]) if k=='id' else current[k] for k in ('id','state','operator_id','revision')}}
             if grouped or action in group_work.MEMBER_ACTIONS:
                 result['group_changed']=True
+                if action in {'accept','start'}:
+                    result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
+                        current,rollout,policy,None,group=group_work.snapshot(cur,tenant,conversation))
             elif (action=='accept' and exact_route) or individual_close:
                 result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
                                                         current,rollout,policy,closed_episode)
@@ -972,6 +985,11 @@ def _mutate_once(profile, payload):
                       WHERE tenant_id=%s::uuid AND telegram_id=%s''',(tenant,current['operator_id']))
                     recipient=cur.fetchone() or {}
                     result['operator_event']['employee_name']=str(recipient.get('display_name') or '').strip()[:120]
+            if promoted:
+                cur.execute('''INSERT INTO saas_tenant_audit_events(id,tenant_id,actor_telegram_id,action,entity_type,entity_id,payload)
+                  VALUES(%s::uuid,%s::uuid,%s,'dialog_transfer_group','dialog_episode',%s,%s::jsonb)''',
+                  (str(uuid.uuid4()),tenant,actor,str(audit_episode),
+                   json.dumps({**audit_payload,'operator_id':promoted['actor_id']})))
             cur.execute('''INSERT INTO saas_dialog_lifecycle_receipts(tenant_id,request_id,actor_id,input_hash,result)
               VALUES(%s::uuid,%s::uuid,%s,%s,%s::jsonb)''',(tenant,request_id,actor,digest,json.dumps(result)))
         conn.commit()

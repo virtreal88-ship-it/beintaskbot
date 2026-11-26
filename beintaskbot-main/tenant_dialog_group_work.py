@@ -104,6 +104,32 @@ def active(group):
     return bool(group and group['id'] and group['closed_at'] is None)
 
 
+def revision(group, workflow):
+    return f"{group['id'] or '-'}:{int(active(group))}:{(workflow or {}).get('revision', 0)}"
+
+
+def read_revision(profile, channel, conversation, lead_id):
+    from psycopg.errors import LockNotAvailable
+    from tenant_dialog_lifecycle import _row, enabled
+    from tenant_operator_access import access, assert_route
+    from tenant_platform import _connect
+
+    try:
+        if str(uuid.UUID(channel)) != channel or not group_jid(conversation) or not 0 < int(lead_id) < 2**63:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError):
+        raise TenantLinearError('Диалог не найден.',404) from None
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL lock_timeout = '250ms'")
+            tenant,_,policy=access(cur,profile,'dialogs')
+            assert_route(cur,tenant,policy,'connect',conversation,channel,int(lead_id))
+            group=snapshot(cur,tenant,conversation) if enabled(cur,tenant) else None
+            return {'revision':revision(group,_row(cur,tenant,channel,conversation)) if group else ''}
+    except LockNotAvailable:
+        return {}
+
+
 def participant(group, actor, channel=None):
     return next((p for p in group.get('participants') or []
                  if int(p['actor_id']) == int(actor) and (channel is None or p['channel_id'] == channel)), None)
@@ -114,6 +140,12 @@ def queue_has_inbound(group, workflow, has_inbound):
         return has_inbound
     # Only note_inbound can reopen an idle route after a shared close.
     return bool(workflow and workflow['last_inbound_id'] and workflow['updated_at'] > group['closed_at'])
+
+
+def can_restart_waiting(group, workflow):
+    return bool(group and group['configured'] and group['closed_at'] and not group['legacy_active']
+                and (workflow or {}).get('state', 'waiting') == 'waiting'
+                and not queue_has_inbound(group, workflow, True))
 
 
 def keeps_assignment(cur, tenant, conversation, workflow):
@@ -204,6 +236,7 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
     episode = group['id']
     own = participant(group, actor, channel)
     leader = actor == group['operator_id'] and channel == group['leader_source']
+    successor = None
     if action == 'join_group':
         require_access(cur,tenant,actor,'connect',channel,conversation,'view',owner=policy.profile.get('role')=='owner')
         if participant(group, actor) or any(p['channel_id']==channel for p in group['participants']):
@@ -222,14 +255,17 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
         if not own or not workflow or workflow['state']!='accepted' or str(workflow['id'])!=episode:
             raise TenantLinearError('Вы не подключены к этому эпизоду группы.',403)
         if action == 'leave_group':
-            if leader:
-                raise TenantLinearError('Передайте ведение коллеге или завершите диалог.',409)
+            if len(group['participants']) == 1:
+                raise TenantLinearError('Вы остались последним участником. Завершите диалог.',409)
             cur.execute("""UPDATE saas_dialog_group_participants SET left_at=clock_timestamp()
-              WHERE tenant_id=%s::uuid AND id=%s::uuid AND left_at IS NULL""",(tenant,own['id']))
-            cur.execute("""UPDATE saas_dialog_workflows SET id=%s::uuid,state='waiting',operator_id=NULL,
-              revision=revision+1,updated_at=clock_timestamp(),last_inbound_id=NULL
+              WHERE tenant_id=%s::uuid AND id=%s::uuid AND left_at IS NULL RETURNING left_at""",(tenant,own['id']))
+            left_at=cur.fetchone()['left_at']
+            cur.execute("""UPDATE saas_dialog_workflows SET state='closed', closed_at=%s,
+              revision=revision+1,updated_at=%s
               WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
-              (str(uuid.uuid4()),tenant,channel,conversation))
+              (left_at,left_at,tenant,channel,conversation))
+            if leader:
+                successor=next(p for p in group['participants'] if p['id'] != own['id'])
         elif action == 'transfer_group':
             if not leader or peer['actor_id']==actor or participant(group,peer['actor_id'])!=peer:
                 raise TenantLinearError('Ведение группы или подключение коллеги изменилось. Обновите диалог.',409)
@@ -240,11 +276,14 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
             check_binding(peer,binding)
             from tenant_whatsapp_native_groups import require_membership
             require_membership(binding)
-            cur.execute("""UPDATE saas_dialog_episodes SET operator_id=%s,group_leader_channel_id=%s::uuid
-              WHERE tenant_id=%s::uuid AND id=%s::uuid""",(peer['actor_id'],peer['channel_id'],tenant,episode))
+            successor=peer
+    if successor:
+        cur.execute("""UPDATE saas_dialog_episodes SET operator_id=%s,group_leader_channel_id=%s::uuid
+          WHERE tenant_id=%s::uuid AND id=%s::uuid""",(successor['actor_id'],successor['channel_id'],tenant,episode))
     cur.execute("""UPDATE saas_dialog_workflows SET revision=revision+1,updated_at=clock_timestamp()
       WHERE tenant_id=%s::uuid AND conversation_id=%s AND id=%s::uuid AND state='accepted'""",
       (tenant,conversation,episode))
+    return successor if action == 'leave_group' else None
 
 
 def close_episode(cur, tenant, group, conversation, closed_at):
@@ -287,27 +326,38 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
             state['can_accept'] = state['can_start'] = False
         return
     ready_source = bool(source.get('enabled') and source.get('active'))
+    if ready_source and (group['configured'] or active(group)):
+        dialog['group_work_revision'] = revision(group, workflow)
     if not active(group):
         if group['closed_at'] and state['state']=='waiting':
             state['has_inbound'] = queue_has_inbound(group, workflow, state['has_inbound'])
             if not state['has_inbound']:
                 state['can_accept'] = False
+                if can_restart_waiting(group, workflow):
+                    state.update(state='closed',can_start=bool(admission and can_update and online),
+                                 group_restart_episode_id=group['id'])
         state['can_accept'] = bool(ready_source and state['can_accept'])
         state['can_start'] = bool(ready_source and state['can_start'])
-        state['group_available'] = bool(ready_source)
+        state['group_available'] = bool(ready_source and group['configured'])
         return
     channel = dialog['channel_id']
     own = participant(group,actor,channel)
     leader = bool(own and actor==group['operator_id'] and channel==group['leader_source'])
     others = [{'employee_id':str(p['actor_id']),'name':p['name'] or ''}
               for p in group['participants'] if int(p['actor_id']) != actor]
+    alone = len(group['participants']) == 1
+    left = bool(workflow and str(workflow['id'])==group['id'] and workflow['state']=='closed'
+                and workflow['operator_id']==actor)
     state.update(can_accept=False,can_start=False,can_takeover=False,can_transfer=False,
-                 can_close=bool(leader and can_update),can_dismiss=bool(leader and state['can_dismiss']))
+                 can_close=bool(leader and alone and can_update),can_dismiss=bool(leader and state['can_dismiss']))
+    if left:
+        state['can_submit_case'] = False
     state['group_work'] = {
         'id':group['id'], 'role':'leader' if leader else 'participant' if own else None,
         'can_join':bool(admission and can_update and online and ready_source and not participant(group,actor)
                         and state['state'] in {'waiting','closed','dismissed'}),
-        'can_leave':bool(own and not leader and can_update),
+        'can_leave':bool(own and not alone and can_update),
+        'left':left,
         'colleagues':others if own else [],
     }
     if own or state['group_work']['can_join']:

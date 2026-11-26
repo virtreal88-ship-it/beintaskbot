@@ -248,6 +248,29 @@
   const identity=m=>m?String(m.tenant_id)+':'+String(m.telegram_id):'';
   const dialogKey=row=>[row?.provider||'connect',row?.channel_id||'',row?.conversation_id||'',row?.lead_id||''].join(':');
   const sameDialog=(a,b)=>!!a&&!!b&&dialogKey(a)===dialogKey(b);
+  let groupWorkTimer=null,groupWorkRefreshing=false;
+  function scheduleGroupWorkRefresh(){
+    clearTimeout(groupWorkTimer);
+    const route=currentDialog,view=openRevision,version=epoch;
+    const visible=()=>!document.hidden&&$('view-dialogs')?.classList.contains('active');
+    const current=()=>visible()&&version===epoch&&view===openRevision&&sameDialog(route,currentDialog);
+    if(groupWorkRefreshing||!visible()||!route?.group_work_revision||route.archive_read_only||
+      route.search_overview_read_only||route.colleague_read_only||route.source_message_id)return;
+    groupWorkTimer=setTimeout(async()=>{
+      if(!current()||pendingDialogRoute||lifecycleInFlight.size){scheduleGroupWorkRefresh();return;}
+      const query=historyQuery(route);
+      query.set('group_work_revision','1');
+      query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
+      groupWorkRefreshing=true;
+      try{
+        const {result}=await rawApi(endpoint+'dialogs/history?'+query,{method:'GET'},{optionalScopedRead:true});
+        if(current()&&!pendingDialogRoute&&!lifecycleInFlight.size&&typeof result?.revision==='string'&&
+          result.revision!==currentDialog.group_work_revision)await openDialog(currentDialog,true,'',{suppressRead:true});
+      }catch(error){
+        if(current()&&[403,404].includes(error.status))await openDialog(currentDialog,true,'',{suppressRead:true,revalidateAccess:true});
+      }finally{groupWorkRefreshing=false;scheduleGroupWorkRefresh();}
+    },2500);
+  }
   function stopAutoRefresh(){clearTimeout(autoRefreshTimer);autoRefreshTimer=null;}
   function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();const backgroundNoticePolling=document.hidden&&window.Notification?.permission==='granted'&&!pushDeviceConnected;if((document.hidden&&!backgroundNoticePolling)||!hasRight('dialogs'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;void refreshClientSupportCase();try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
   const helperDrafts=new Map();let helperHistoryClosing=false;
@@ -584,22 +607,23 @@
   }
   function applyLifecycleReceipt(route,action,result){
     const state=result.lifecycle,controls=result.controls;
+    const accepted=action==='accept'||action==='start';
     if(!currentPage||!sameDialog(currentPage.dialog,route)||!state||
        state.revision!==Number(route.lifecycle?.revision)+1||
        String(state.operator_id)!==String(member.telegram_id)||
-       state.state!==(action==='accept'?'accepted':'closed'))return;
+       state.state!==(accepted?'accepted':'closed'))return;
     showLifecycleTimelineEvent(result.operator_event,action);
     const previous=currentDialog.lifecycle;
     if(Number(previous?.revision)>=state.revision)return;
-    const {company_completion,...prior}=previous||{};
+    const {company_completion,group_restart_episode_id,...prior}=previous||{};
     const lifecycle={...prior,can_accept:false,can_dismiss:false,can_takeover:false,
-      can_close:action==='accept',can_transfer:false,can_start:false,can_submit_case:false,
+      can_close:accepted,can_transfer:false,can_start:false,can_submit_case:false,
       no_reply_needed:false,...controls?.lifecycle,...state};
     if(controls?.closed_episode){
       const episode=controls.closed_episode;
       lifecycle.completed_episodes=[episode,...(prior.completed_episodes||[]).filter(old=>old.id!==episode.id)].slice(0,20);
     }
-    const canSend=action==='accept'&&controls?.can_send===true&&
+    const canSend=accepted&&controls?.can_send===true&&
       !currentDialog.archive_read_only&&!currentDialog.owner_overview_read_only&&!currentDialog.search_overview_read_only;
     // A pre-transition read of this view must not replace the receipt or
     // remove a dialogue the server has just confirmed is ours.
@@ -607,19 +631,28 @@
     pendingDialogRoute=null;
     $('operatorConversationContent')?.setAttribute('aria-busy','false');
     currentDialog={...currentDialog,lifecycle,can_send:canSend,send_block_reason:canSend?'':'dialog_accept_required',missed_call_pending:false};
+    if(controls?.group_work_revision){
+      delete lifecycle.group_available;
+      currentDialog.group_work_revision=controls.group_work_revision;
+    }
     selectedDialog=currentDialog;
     currentPage={...currentPage,dialog:currentDialog,scroll_to_latest:false};
     renderDialog(currentPage,{suppressRead:true});
-    if(action==='accept')window.tenantDialogueCompany?.refresh?.();
+    if(accepted)window.tenantDialogueCompany?.refresh?.();
   }
-  async function lifecycleAction(route,action,button,target,episodeId,closeGroupConfirmed=false){
+  async function lifecycleAction(route,action,button,target,episodeId){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const groupId=route.lifecycle?.group_work?.id;
-    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+'.'+closeGroupConfirmed;
+    const groupId=route.lifecycle?.group_work?.id||route.lifecycle?.group_restart_episode_id;
+    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
     if(lifecycleInFlight.has(key))return;
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{}),...(groupId?{expected_group_episode_id:groupId}:{}),...(closeGroupConfirmed?{close_group_confirmed:true}:{})};lifecycleRequests.set(key,payload);}
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{}),...(groupId?{expected_group_episode_id:groupId}:{})};lifecycleRequests.set(key,payload);}
     lifecycleInFlight.add(key);button.disabled=true;
+    const confirmingGroup=route.lifecycle?.group_available&&['accept','start'].includes(action);
+    if(confirmingGroup){
+      button.setAttribute('aria-busy','true');
+      button.textContent=groupWorkText(action==='accept'?'accepting':'starting');
+    }
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
       lifecycleRequests.delete(key);
@@ -628,11 +661,12 @@
       if(view!==openRevision||!sameDialog(route,currentDialog))return;
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       if(result.group_changed){
+        if(result.controls&&['accept','start'].includes(action))applyLifecycleReceipt(route,action,result);
         if(['leave_group','close'].includes(action)){
           if($('sendChat'))$('sendChat').disabled=true;
           if($('chatText'))$('chatText').disabled=true;
         }
-        await openDialog(route,true,'',{suppressRead:true});
+        await openDialog(currentDialog,true,'',{suppressRead:true});
         listFlight=null;lastListAt=0;void refresh(false,false,{suppressRead:true});return;
       }
       // A successful receipt is authoritative even while history is refreshing.
@@ -668,41 +702,45 @@
           const status=$('operatorChatError');if(status&&sameDialog(route,currentDialog))status.textContent=error.message;
           return;
         }
+        if(error.status===409&&(groupId||route.lifecycle?.group_available)){
+          closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
+          await openDialog(route,true,'',{suppressRead:true,revalidateAccess:true});
+          if(sameDialog(route,currentDialog)&&$('operatorChatError'))$('operatorChatError').textContent=error.message;
+          void refresh(false,false,{suppressRead:true});return;
+        }
         const unavailable=lifecycleUnavailable(error,route);
         if(unavailable){if(action==='start')void refresh();}
         else{
-          if(error.status===409&&(groupId||route.lifecycle?.group_available)){
-            closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
-            await openDialog(route,true,'',{suppressRead:true});
-            if(sameDialog(route,currentDialog)&&$('operatorChatError'))$('operatorChatError').textContent=error.message;
-            void refresh(false,false,{suppressRead:true});return;
-          }
           const status=$('operatorLifecycleStatus')||$('operatorChatError');if(status)status.textContent=error.message;
           button.disabled=false;
           const label=button.querySelector('.operator-lifecycle-label');
           if(label)label.textContent=lifecycleText('retry');
           else if(action!=='dismiss')button.textContent=lifecycleText('retry');}
       }
-    }finally{lifecycleInFlight.delete(key);}
+    }finally{
+      lifecycleInFlight.delete(key);button.removeAttribute('aria-busy');
+      if(confirmingGroup&&version===epoch&&view===openRevision&&sameDialog(route,currentDialog)&&button.isConnected){
+        button.disabled=false;
+        if(button.textContent===groupWorkText(action==='accept'?'accepting':'starting'))button.textContent=lifecycleText(action);
+      }
+    }
   }
   const groupWorkText=key=>({
-    ru:{join:'Подключиться со своего номера',leave:'Выйти',transfer:'Передать ведение',closeAll:'Завершить для всех',warning:'Коллега ещё работает в группе. Можно передать ему ведение или завершить диалог для всех.',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
-    az:{join:'Öz nömrəmlə qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',closeAll:'Hamı üçün tamamla',warning:'Əməkdaş hələ qrupda işləyir. Rəhbərliyi ona ötürə və ya dialoqu hamı üçün tamamlaya bilərsiniz.',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
-    en:{join:'Join from my number',leave:'Leave',transfer:'Transfer lead',closeAll:'Close for everyone',warning:'A colleague is still working in this group. Transfer the lead or close the conversation for everyone.',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
+    ru:{join:'Подключиться со своего номера',leave:'Выйти',transfer:'Передать ведение',accepting:'Принимаем…',starting:'Начинаем…',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
+    az:{join:'Öz nömrəmlə qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',accepting:'Qəbul edilir…',starting:'Başladılır…',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
+    en:{join:'Join from my number',leave:'Leave',transfer:'Transfer lead',accepting:'Accepting…',starting:'Starting…',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
   }[i18n.language]||{})[key];
-  function openGroupWorkModal(route,confirmClose=false){
+  function openGroupWorkModal(route){
     closeLifecycleModal();
     const peers=route.lifecycle?.group_work?.colleagues||[];
     if(!peers.length)return;
     const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
     modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle">
-      <h2 id="operatorLifecycleTitle">${esc(confirmClose?lifecycleText('close'):groupWorkText('transfer'))}</h2>
-      ${confirmClose?`<p>${esc(groupWorkText('warning'))}</p>`:''}
+      <h2 id="operatorLifecycleTitle">${esc(groupWorkText('transfer'))}</h2>
       <select aria-label="${esc(groupWorkText('transfer'))}"></select>
       <p id="operatorLifecycleStatus" role="status"></p>
       <div class="operator-complete-actions">
         <button type="button" class="primary" data-group-transfer>${esc(groupWorkText('transfer'))}</button>
-        ${confirmClose?`<button type="button" class="outline" data-group-close>${esc(groupWorkText('closeAll'))}</button>`:''}
         <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button>
       </div></section>`;
     const select=modal.querySelector('select');
@@ -715,8 +753,6 @@
     modal.querySelector('[data-cancel]').onclick=close;
     modal.onclick=event=>{if(event.target===modal)close();};
     modal.querySelector('[data-group-transfer]').onclick=event=>void lifecycleAction(route,'transfer_group',event.currentTarget,select.value);
-    const done=modal.querySelector('[data-group-close]');
-    if(done)done.onclick=event=>void lifecycleAction(route,'close',event.currentTarget,null,null,true);
     document.body.append(modal);select.focus();
   }
   const transferSidebarText=key=>({
@@ -889,7 +925,6 @@
       if(action==='case')button.title=lifecycleText('caseBudget');
       button.onclick=()=>{
         if(action==='case'&&state.completed_episodes?.length)openLifecycleEpisodeCase(route);
-        else if(action==='close'&&state.group_work?.colleagues?.length)openGroupWorkModal(route,true);
         else void lifecycleAction(route,action,button);
       };if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||action==='dismiss')$('operatorActiveLifecycleActions').append(button);else host.append(button);
     }
@@ -2183,9 +2218,10 @@
         number.textContent=[work.role?groupWorkText(work.role):null,groupWorkText('number'),work.number].filter(Boolean).join(' · ');
         number.dataset.groupSendingNumber='true';slot.append(number);
       }
-      const action=work.can_join?'join_group':work.can_leave?'leave_group':
-        work.role==='leader'&&work.colleagues?.length?'transfer_group':null;
-      if(action){
+      const actions=work.can_join?['join_group']:[];
+      if(work.can_leave)actions.push('leave_group');
+      if(work.role==='leader'&&work.colleagues?.length)actions.push('transfer_group');
+      for(const action of actions){
         const button=document.createElement('button');button.type='button';button.className=work.can_join?'primary':'outline';
         button.textContent=groupWorkText(action.replace('_group',''));button.dataset.operatorLifecycle=action;
         button.onclick=()=>action==='transfer_group'?openGroupWorkModal(currentDialog):void lifecycleAction(currentDialog,action,button);
@@ -3336,6 +3372,7 @@
   }
   function renderDialog(page,{suppressRead=false,replaceMergedHistory=false}={}){
     const route=page.dialog,host=$('operatorConversationContent');if(!host)return;
+    scheduleGroupWorkRefresh();
     if(route.colleague_read_only){
       const query=historyQuery(route);query.set('observed_operator_id',route.observed_operator_id);
       query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
@@ -3897,6 +3934,8 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
   document.addEventListener('tenant-auth-pending',()=>{if(currentDialog?.colleague_read_only)closeDialog(false,true);mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);});
   document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
+  for(const name of ['tenant-view','visibilitychange'])document.addEventListener(name,scheduleGroupWorkRefresh);
+  document.addEventListener('tenant-chat-close',()=>clearTimeout(groupWorkTimer));
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
   document.addEventListener('tenant-view',event=>{if(event.detail.view==='dialogs'){restoreDialogCompany();refresh(false,true);scheduleAutoRefresh();}else{if(currentDialog?.colleague_read_only)closeDialog(false,true);closeDuplicateSearch(true);closeDialogDiagnostics(false);stopRowContacts();if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);if(currentDialog&&$('operatorWorkspace')?.dataset.selected==='true'&&selectedDialogOwner===identity(member)){viewReturnDialog={...currentDialog};viewReturnDialogOwner=identity(member);}if($('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);scheduleAutoRefresh();cancelCaseLink();if(pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);}});
