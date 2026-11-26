@@ -324,6 +324,10 @@
     #notificationClose{font-size:25px}.notification-header button{width:44px;min-width:44px;font-size:25px;padding:0}.notification-filters{display:flex;gap:8px;padding:0 16px 12px;border-bottom:1px solid var(--line,#d7e2dd);flex:none}.notification-filters button{flex:1}.notification-filters button[aria-pressed=true]{background:var(--brand-deep,#14523c);color:#fff;border-color:var(--brand-deep,#14523c)}
     .notification-reminder-entry{padding:8px 16px;border-bottom:1px solid var(--line,#d7e2dd);flex:none}.notification-reminder-entry button{width:100%;text-align:start}
     .notification-unread-badge.notification-reminder-badge{left:auto;right:-5px;top:16px;background:#935814}
+    /* The mobile Dialogues view clips overflow at its top edge. Keep the count inside the bell. */
+    @media(max-width:1023px){
+      #view-dialogs>.app-mobile-title-row #dialogConsultationBell>.notification-unread-badge:not(.notification-reminder-badge){top:0}
+    }
     .notification-list{overflow-y:auto;overscroll-behavior:contain;min-height:0}.notification-list>p{padding:16px}.notification-list>[data-notification-more]{margin:12px 16px}.notification-card{padding:16px;gap:9px}.notification-card h3{margin:0;font-size:15px}.notification-card p{margin:0;line-height:1.45}.notification-meta{display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap}.notification-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:3px}
 
     #dialogConsultationMenu button,#dialogConsultationReplies button,#dialogConsultationReplies a.outline{min-height:44px;line-height:1.25;white-space:normal}.notification-card button{padding:10px 12px}.dialog-consultation-card a.outline{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}.notification-original{font-size:12px;color:var(--muted,#596661)}.notification-original summary{cursor:pointer;padding:4px 0}.notification-original p{white-space:pre-wrap;overflow-wrap:anywhere}.notification-error{margin:0;padding:12px 16px;background:var(--paper,#f4f7f5);color:var(--danger,#a32020);border-bottom:1px solid var(--line,#d7e2dd)}
