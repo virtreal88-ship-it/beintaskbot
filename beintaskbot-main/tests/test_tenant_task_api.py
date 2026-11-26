@@ -53,8 +53,7 @@ class Request:
                  content_type="application/json"):
         self.body = body
         self.method = method
-        self.query = query or {}
-        self.rel_url = SimpleNamespace(query=self.query)
+        self.rel_url = SimpleNamespace(query=query or {})
         self.headers = {} if origin is None else {"Origin": origin}
         self.content_type = content_type
 

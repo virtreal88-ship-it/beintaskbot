@@ -15,6 +15,8 @@ test('integration refresh timestamps retain task nodes, source, filters and open
  const b=await mount();try{
   await refreshProfile(b,f=>{f.profile.integrations=[{provider:'kommo',status:'connected',account_domain:'fixture',connected_at:'2026-01-01',updated_at:'first',metadata:{account_id:'one'}}];});
   el(b,'taskSearch').value='PRIVATE';el(b,'taskSearch').dispatchEvent(new b.w.Event('input'));
+  for(let i=0;i<200&&!b.f.calls.some(c=>c.url.includes('search=PRIVATE'));i++)await new Promise(r=>setTimeout(r,10));
+  await settle();
   await b.w.tenantTaskFlow.open('native',b.f.task);
   const node=el(b,'nativeTasksList').firstChild,card=el(b,'taskFlowCardBody').firstChild,count=b.f.calls.filter(c=>c.url.includes('flow=1')).length,source=el(b,'taskFeedSource').value;
   await refreshProfile(b,f=>{f.profile.integrations[0].updated_at='later';});

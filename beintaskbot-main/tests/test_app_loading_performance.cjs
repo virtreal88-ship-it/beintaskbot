@@ -181,7 +181,9 @@ async function bootstrapTests(){
   const listing=contactReads()[0],params=new URL(listing.url,'https://fixture.test').searchParams;assert.equal(params.get('listing'),'1');assert.equal(params.get('expected_tenant_id'),profile.member.tenant_id);assert.equal(params.get('expected_user_id'),String(profile.member.telegram_id));
   listing.resolve(response({success:true,data:[],total:0,source_total:0,limit:50,offset:0,next_offset:null,source:'native',sources:[{source:'native',allowed:true,available:true,state:'ready'},{source:'kommo',allowed:true,available:false,state:'unavailable',reason:'integration_not_connected'}],state:'empty',actions:{view:true,create:true,update:true,archive:true}}));await settle();
   assert.match(w.document.getElementById('customersList').textContent,/No contacts yet/);assert.match(w.document.getElementById('customerCount').textContent,/Found: 0/);
-  w.tenantAppNavigate('profile',true);await settle();w.tenantAppNavigate('customers',true);await settle();assert.equal(contactReads().length,1,'warm same-scope return reuses the directory without a fetch storm');
+  w.tenantAppNavigate('profile',true);await settle();w.tenantAppNavigate('customers',true);await settle();assert.equal(contactReads().length,2,'warm return starts exactly one background refresh');
+  assert.match(w.document.getElementById('customersList').textContent,/No contacts yet/);
+  assert.match(w.document.getElementById('customerCount').textContent,/Found: 0/);
  }finally{w.close();}
  console.log('PASS bootstrap: superseded startup waits for fresh authorization; independent CRM reads start in parallel');
 }

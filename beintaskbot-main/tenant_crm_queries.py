@@ -29,7 +29,7 @@ def search_predicate(search, fields, phones=()):
     """Field expressions are constants supplied by the caller, never user input."""
     query = str(search or '').strip()[:160]
     escaped = query.replace(chr(92), chr(92)*2).replace('%', chr(92)+'%').replace('_', chr(92)+'_')
-    terms = [f"{field} ILIKE %s" for field in fields]
+    terms = [f"{field} ILIKE %s ESCAPE '\\'" for field in fields]
     values = ['%' + escaped + '%'] * len(terms)
     if phones and re.fullmatch(r'[+0-9()\s.\-]+', query):
         digits = re.sub(r'[^0-9]', '', query)

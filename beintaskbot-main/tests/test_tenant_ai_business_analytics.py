@@ -586,8 +586,7 @@ def test_tool_definitions_match_allowlist_and_are_read_only():
     assert all(item['annotations']['destructiveHint'] is False for item in definitions)
 
 
-def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards(monkeypatch):
-    from types import SimpleNamespace
+def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards():
     import tenant_task_flow as task_flow
 
     class Cursor:
@@ -598,16 +597,14 @@ def test_kommo_task_search_is_parameterized_and_escapes_literal_wildcards(monkey
         def fetchall(self):
             return []
 
-    monkeypatch.setattr(task_flow, 'TenantPolicy', lambda profile: SimpleNamespace(
-        privileged=True, kommo_task_scope=lambda: {'kind': 'all'}, kommo_user_id=lambda: 0))
-    monkeypatch.setattr(task_flow, 'task_filters', lambda tenant_id, scope: ('tenant_id=%s::uuid', [tenant_id]))
     cursor = Cursor()
     search = r'literal % _ \\ tail'
 
-    task_flow._rows(cursor, OWNER, 'kommo', limit=201, search=search)
+    task_flow._rows(cursor, {**OWNER, 'role': 'owner'}, 'kommo', limit=201, search=search)
 
-    assert 'text ILIKE %s' in cursor.query
+    assert 'ILIKE %s ESCAPE' in cursor.query
     assert search not in cursor.query
     assert cursor.args[0] == TENANT
-    assert cursor.args[1] == cursor.args[-2]
-    assert cursor.args[-2] == r'%literal \% \_ \\\\ tail%'
+    assert cursor.args[1] == r'%literal \% \_ \\\\ tail%'
+    assert cursor.args[-2] == cursor.args[1]
+    assert cursor.args[-1] == 201
