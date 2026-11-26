@@ -43,7 +43,7 @@ async function verifyTableReturn(browser) {
       if (path !== '/api/platform/crm/deals') return original(url,options);
       if (f.holdList) await new Promise(r => { (f.listWaiters ||= []).push(r); });
       const rows = Array.from({length:80}, (_,i)=>({kommo_lead_id:i+1, name:'Scope Deal '+(i+1),
-        pipeline_id:1,status_id:10, stage_name:'New',contact_name:i===0 && version ? 'Fresh contact' : 'Contact'}));
+        pipeline_id:1,status_id:10, stage_name:'New',contact_name:i===0 && version ? 'Fresh contact '+version : 'Contact'}));
       return new Response(JSON.stringify(f.deny ? {success:false,error:'forbidden'} : {success:true,deals:rows,total:rows.length}),
                           {status:f.deny?403:200,headers:{'Content-Type':'application/json'}});
     };
@@ -83,6 +83,16 @@ async function verifyTableReturn(browser) {
   await check();
   await releaseList();
   await page.waitForFunction(()=>document.getElementById('dealsList').textContent.includes('Fresh contact'));
+  await check();
+  await page.evaluate(()=>{
+    document.querySelector('.nav [data-view="profile"]').click();
+    focusTest.refresh(); focusTest.holdList=true;
+    document.querySelector('.nav [data-view="deals"]').click();
+  });
+  await page.waitForFunction(()=>focusTest.listWaiters.length>0);
+  await check();
+  await releaseList();
+  await page.waitForFunction(()=>dealsList.textContent.includes('Fresh contact 2'));
   await check();
   await page.evaluate(()=>{focusTest.deny=true;document.dispatchEvent(new CustomEvent('tenant-crm-reauthorized'));});
   await page.waitForFunction(()=>!document.getElementById('dealsList').textContent.includes('Scope Deal 60'));
