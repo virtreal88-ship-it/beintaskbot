@@ -41,7 +41,10 @@ def native_opus(content,mime):
             result=subprocess.run(['ffmpeg','-nostdin','-hide_banner','-loglevel','error','-xerror',
               '-protocol_whitelist','file,pipe','-format_whitelist','ogg,mov,matroska,webm',
               '-i',str(source),'-map','0:a:0','-vn','-sn','-dn','-map_metadata','-1',
-              '-threads','1','-ac','1','-ar','48000','-c:a','libopus','-b:a','32k','-application','voip',
+              # Browser timestamps can drift or jump between chunks. Build the
+              # Ogg Opus timeline from the actual resampled audio (RFC 7845).
+              '-af','aresample=48000,asetpts=N/SR/TB',
+              '-threads','1','-ac','1','-c:a','libopus','-b:a','32k','-application','voip',
               '-t',str(MAX_RECORDING_SECONDS+1),'-fs',str(MAX_RECORDING_BYTES+1),'-f','ogg',str(target)],
               stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=20,check=False)
             if result.returncode or not target.exists():raise VoiceError('voice_invalid_audio')
