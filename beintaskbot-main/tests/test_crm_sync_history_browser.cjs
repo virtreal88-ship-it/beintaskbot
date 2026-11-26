@@ -12,7 +12,17 @@ const event=(state='synced',index=1)=>({event_id:'20000000-0000-4000-8000-'+Stri
    page.on('pageerror',e=>errors.push(e.message));
    await page.route('**/*',route=>{const u=new URL(route.request().url());if(u.origin!=='http://fixture.test')return route.abort();if(u.pathname==='/app')return route.fulfill({status:200,contentType:'text/html',body:appHtml()});const name=path.basename(u.pathname);return u.pathname.startsWith('/assets/')&&assets.includes(name)?route.fulfill({status:200,contentType:'text/javascript',body:fs.readFileSync(path.join(docs,name),'utf8')}):route.abort()});
    await page.goto('http://fixture.test/app?view='+(type==='deal'?'deals':'companies')+'&lang=en');await page.waitForFunction(()=>window.tenantProfileSnapshot?.member?.tenant_id);
-   const id=await page.evaluate(type=>nativeTaskFixture.ids[type],type),open=()=>page.locator(`[data-native-open="${type}:${id}"]`).click();
+   const id=await page.evaluate(type=>nativeTaskFixture.ids[type],type);
+   const open=async()=>{
+    const before=await page.evaluate(()=>syncHistoryFixture.calls.length);
+    await page.locator(`[data-native-open="${type}:${id}"]`).click();
+    if(type==='deal'){
+     const tab=page.locator('[data-deal-tab=history]');
+     await tab.waitFor();
+     assert.equal(await page.evaluate(()=>syncHistoryFixture.calls.length),before,'opening the deal does not eagerly fetch history');
+     await tab.click();
+    }
+   };
    await open();await page.locator('[data-sync-history-event]').waitFor();const history=page.locator('[data-sync-history]');assert.match(await history.textContent(),/journal recorded completion/);assert.match(await history.textContent(),/current external state is not verified/);assert.equal(await page.locator('[data-native-card-edit]').isHidden(),true);
    const bounds=await history.boundingBox();assert(bounds&&bounds.x>=0&&bounds.x+bounds.width<=width+1,'history fits viewport');assert.equal(await history.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'history does not overflow');await page.screenshot({path:'/tmp/crm-history-'+type+'-'+width+'.png'});
    await page.evaluate(()=>syncHistoryFixture.replies.push({hold:true}));await page.locator('[data-sync-history-refresh]').click();await page.waitForFunction(()=>syncHistoryFixture.pending.length===1);await page.evaluate(()=>document.querySelector('[data-sync-history-refresh]').click());assert.equal(await page.evaluate(()=>syncHistoryFixture.calls.length),2,'repeat click does not duplicate read');

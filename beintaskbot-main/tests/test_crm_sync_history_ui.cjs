@@ -7,7 +7,22 @@ const event=(state='pending',index=1,extra={})=>({event_id:'20000000-0000-4000-8
 const history=(events,extra={})=>({success:true,history:{events,has_more:false,next_cursor:null,external_state_checked:false,...extra}});
 const install=b=>{b.w.ReadableStream=ReadableStream;b.w.TextEncoder=TextEncoder;b.w.eval('('+installSyncHistoryFixture.toString()+')({})');b.h=b.w.syncHistoryFixture;b.q=s=>b.d.querySelector(s);b.text=()=>b.q('[data-sync-history]')?.textContent||'';b.rows=()=>[...b.d.querySelectorAll('[data-sync-history-event]')];return b};
 async function contact(config={}){const b=install(await contactMount(config));b.open=async(id=contactA)=>{await b.w.tenantContactsDirectory.openNative(id);await settle()};return b}
-async function native(config={}){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));const dom=new JSDOM(appHtml(true),{url:'https://fixture.test/app?view=deals&lang=en',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installNativeTaskFixture.toString()+')({})');w.eval('('+installNativeCompanyDealFixture.toString()+')('+JSON.stringify(config)+')')}});await settle();const b=install({w:dom.window,d:dom.window.document,f:dom.window.nativeTaskFixture,errors,close:()=>dom.window.close()});b.open=async(type='deal',id=b.f.ids[type])=>{await b.w.tenantContactsBridge.openEntity(type,id);await settle()};return b}
+async function native(config={}){
+ const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));
+ const dom=new JSDOM(appHtml(true),{url:'https://fixture.test/app?view=deals&lang=en',runScripts:'dangerously',pretendToBeVisual:true,virtualConsole:vc,beforeParse(w){w.Response=Response;w.Headers=Headers;w.Request=Request;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.eval('('+installNativeTaskFixture.toString()+')({})');w.eval('('+installNativeCompanyDealFixture.toString()+')('+JSON.stringify(config)+')')}});
+ await settle();
+ const b=install({w:dom.window,d:dom.window.document,f:dom.window.nativeTaskFixture,errors,close:()=>dom.window.close()});
+ b.open=async(type='deal',id=b.f.ids[type])=>{
+  const before=b.h.calls.length;
+  await b.w.tenantContactsBridge.openEntity(type,id);await settle();
+  if(type==='deal'){
+   assert.equal(b.h.calls.length,before,'opening the deal defers history until the tab is selected');
+   b.q('[data-deal-tab=history]')?.click();
+   await settle();
+  }
+ };
+ return b;
+}
 function empty(b){assert.equal(b.rows().length,0);assert(!b.text().includes('Journal recorded completion'))}
 (async()=>{
  const reviewerProfile=b=>{const p=JSON.parse(JSON.stringify(b.f.profile));p.member.telegram_id=-1000000101;p.member.role='owner';p.member.active=true;p.capabilities={...p.capabilities,moderation_reviewer:true};return p};
