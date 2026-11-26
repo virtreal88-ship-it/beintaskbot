@@ -267,6 +267,18 @@ def record_acceptance(session, item, receipt):
                     raise TenantLinearError('Səsin WhatsApp hesabı təsdiqlənmədi.', 409)
                 from tenant_connect_transport import _keep_verified_group_participant
                 facts.update(participantJid=account, _crm_native_send_receipt=True)
+                # The other source can observe only a LID. Reuse the verified
+                # account pair of this dispatch's participant for this event.
+                cur.execute("""SELECT account_lid FROM saas_dialog_group_participants
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND episode_id=%s::uuid AND actor_id=%s
+                    AND channel_id=%s::uuid AND conversation_id=%s AND account_jid=%s""",
+                  (tenant, route.get('group_participant_id'), route.get('lifecycle_episode_id'),
+                   actor, connection[1], connection[2], account))
+                lid = (cur.fetchone() or {}).get('account_lid') or ''
+                if re.fullmatch(r'[0-9]{5,22}@lid', lid):
+                    pair = {'lid': lid, 'jid': account}
+                    if raw.get('participantIdentity') in (None, pair):
+                        facts['participantIdentity'] = pair
                 facts = _keep_verified_group_participant(raw, facts)
             author = str(profile.get('display_name') or 'Operator')[:120]
             if existing:

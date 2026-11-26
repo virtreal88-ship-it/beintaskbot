@@ -17,6 +17,7 @@ import tenant_customer_voice_api as api
 import tenant_customer_voice_service as voice
 import tenant_whatsapp_native_consumer as consumer
 import tenant_whatsapp_native_transport as native
+from tenant_connect_group_history import page as group_history
 from test_dialog_lifecycle_group_work_postgres import (
     A, CB, GROUP, LIDS, SOURCES, GatewayResponse, collaboration, database,
     db, episodes, history, join, profile,
@@ -110,6 +111,7 @@ def project_echo(monkeypatch, actor, provider, *, sender, from_me):
 @pytest.mark.asyncio
 async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_group, monkeypatch):
     database, _, gateway = voice_group
+    replays = []
     for actor, other in ((33, 44), (44, 33)):
         data = command(actor)
         async with app_client(actor) as client:
@@ -123,8 +125,7 @@ async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_
             provider = result['provider_message_id']
             project_echo(monkeypatch, actor, provider, sender=account, from_me=True)
             project_echo(monkeypatch, other, provider, sender=LIDS[account], from_me=False)
-            replay_status, replay = await upload(client, data)
-            assert replay_status == 200 and replay['message_id'] == result['message_id']
+            replays.append((actor, data, result['message_id']))
 
     assert len(gateway['attempts']) == len(gateway['delivered']) == 2
     assert database.execute("SELECT count(*) AS n FROM saas_crm_messages WHERE direction='outgoing' AND message_type='audio'")[0]['n'] == 2
@@ -135,6 +136,18 @@ async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_
         assert {(message['author_name'], message['sending_number']) for message in messages} == {
             ('Operator A', '+994500000111'), ('Operator B', '+994500000112')}
         assert {source['channel_id'] for message in messages for source in message['sources']} == {SOURCES[actor][0]}
+    channels = [route[0] for route in SOURCES.values()]
+    with database.cursor() as cur:
+        combined = [message for message in group_history(cur, A, GROUP, channel_ids=channels)
+                    if message['message_type'] == 'audio']
+    database.commit()
+    assert len(combined) == 2 and all(message['direction'] == 'outgoing' for message in combined)
+    assert all({source['channel_id'] for source in message['sources']} == set(channels) for message in combined)
+    for actor, data, message_id in replays:
+        async with app_client(actor) as client:
+            replay_status, replay = await upload(client, data)
+        assert replay_status == 200 and replay['message_id'] == message_id
+    assert len(gateway['attempts']) == 2
 
 
 @pytest.mark.asyncio
