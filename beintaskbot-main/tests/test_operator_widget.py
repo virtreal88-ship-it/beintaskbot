@@ -270,3 +270,31 @@ def test_realtime_access_uses_documented_transports_and_classifies_failure(monke
     assert wire.socket_block_reason(CREDENTIALS) == expected
     assert wire.socket_block_reason(CREDENTIALS) == expected
     assert attempts == ["websocket", "polling"][:len(outcomes)]
+
+
+
+@pytest.mark.parametrize(("status", "expected"), [(None, "connected"), (401, "auth_denied"), (502, "unavailable")])
+def test_alternate_realtime_probe_is_auth_only_and_does_not_change_send_origin(monkeypatch, caplog, status, expected):
+    from contextlib import contextmanager
+
+    hits = []
+    production_origin = wire.SOCKET_ORIGIN
+
+    @contextmanager
+    def socket(credentials, *, origin=None):
+        hits.append(origin)
+        assert credentials is CREDENTIALS
+        if status is not None:
+            raise wire.OperatorError("details must not be logged", status)
+        yield object()  # No event API: the diagnostic may only connect/disconnect.
+
+    sentinel = object()
+    monkeypatch.setattr(wire, "_availability", sentinel)
+    monkeypatch.setattr(wire, "_socket", socket)
+    with caplog.at_level("INFO"):
+        assert wire.probe_realtime_origin(CREDENTIALS) == expected
+    assert hits == ["https://operator-realtime.beinsystems.az"]
+    assert wire.SOCKET_ORIGIN == production_origin
+    assert wire._availability is sentinel
+    assert f"Operator alternate realtime auth probe: {expected}" in caplog.text
+    assert "details must not be logged" not in caplog.text

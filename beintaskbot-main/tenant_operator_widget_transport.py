@@ -11,10 +11,12 @@ from tenant_beinsystems_operator import OperatorError, _NoRedirectRequestsSessio
 
 
 SOCKET_ORIGIN = "https://operator.beinsystems.az"
+DIAGNOSTIC_SOCKET_ORIGIN = "https://operator-realtime.beinsystems.az"
 
 
 @contextmanager
-def _socket(credentials):
+def _socket(credentials, *, origin=None):
+    origin = SOCKET_ORIGIN if origin is None else origin
     with _NoRedirectRequestsSession() as http:
         http.trust_env = False
         for transport in ("websocket", "polling"):
@@ -31,7 +33,7 @@ def _socket(credentials):
                                      websocket_extra_options={"redirect_limit": 0})
             client.on("connect_error", connect_error)
             try:
-                client.connect(SOCKET_ORIGIN, transports=[transport], wait_timeout=5,
+                client.connect(origin, transports=[transport], wait_timeout=5,
                                auth={"role": "operator", "token": credentials["token"]})
                 break
             except (socketio.exceptions.SocketIOError, OSError, ValueError):
@@ -67,6 +69,17 @@ def socket_block_reason(credentials):
             logging.getLogger(__name__).info("Operator widget realtime check: %s", reason or "connected")
         _availability = (key, monotonic() + (30 if reason else 120), reason)
         return reason
+
+
+def probe_realtime_origin(credentials):
+    """One auth-only probe on the alternate Operator origin. Never emit events."""
+    try:
+        with _socket(credentials, origin=DIAGNOSTIC_SOCKET_ORIGIN):
+            outcome = "connected"
+    except OperatorError as exc:
+        outcome = "auth_denied" if exc.status == 401 else "unavailable"
+    logging.getLogger(__name__).info("Operator alternate realtime auth probe: %s", outcome)
+    return outcome
 
 
 def send_reply(credentials, row, text, request_id):

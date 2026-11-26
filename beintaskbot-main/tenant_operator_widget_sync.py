@@ -207,6 +207,16 @@ def install(app, logger):
         from tenant_operator_widget_transport import socket_block_reason
         socket_block_reason(operator._credentials(tenant))
 
+    def probe_alternate_realtime():
+        from tenant_operator_widget_transport import probe_realtime_origin
+        probe_realtime_origin(operator._credentials(tenant))
+
+    async def diagnostic():
+        try:
+            await asyncio.to_thread(probe_alternate_realtime)
+        except Exception:
+            logger.warning("Operator alternate realtime auth probe could not start")
+
     async def run():
         try:
             await asyncio.to_thread(check_realtime)
@@ -221,10 +231,12 @@ def install(app, logger):
 
     async def context(_):
         task = asyncio.create_task(run(), name="operator-widget-queue")
+        probe = asyncio.create_task(diagnostic(), name="operator-widget-rt-auth-probe")
         try:
             yield
         finally:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            probe.cancel()
+            await asyncio.gather(task, probe, return_exceptions=True)
 
     app.cleanup_ctx.append(context)
