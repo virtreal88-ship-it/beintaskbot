@@ -70,10 +70,10 @@ def test_company_api_requires_member_and_scopes_reads_to_tenant():
     with mock.patch.object(company_api,'list_companies',return_value=[]) as listing:
         response=asyncio.run(handler(SimpleNamespace(method='GET',match_info={},query={'search':'Acme'})))
     assert response.status==200
-    listing.assert_called_once_with('tenant-1','Acme',50,actor_id=20)
+    listing.assert_called_once_with('tenant-1','Acme',51,actor_id=20,offset=0)
 
 
-def test_company_directory_pagination_is_opt_in_and_scoped():
+def test_company_directory_pagination_is_scoped():
     import json
     profile={'tenant_id':'tenant-1','telegram_id':20,'role':'manager','active':True,
         'permissions':['customers:view'],'modules':{'customers':True}}

@@ -126,8 +126,8 @@
   cancel.onclick = () => {receipt = null; status.textContent = ''; controls();};
   function install(data) {
     const member = data?.member;
-    const owner = member?.role === 'owner' &&
-      data.integrations?.some(row => row.provider === 'beinsystems_operator');
+    const owner = member?.role === 'owner' && Array.isArray(data.integrations) &&
+      data.integrations.some(row => row?.provider === 'beinsystems_operator');
     const next = owner ? member.tenant_id + ':' + member.telegram_id : '';
     if (identity !== next) {
       profile = owner ? member : null; identity = next; generation += 1;

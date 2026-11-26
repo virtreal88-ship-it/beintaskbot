@@ -47,8 +47,8 @@ def handler(member_from_request,origin,logger):
             if request.method=='GET':
                 if not policy.allows_action('companies','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-                if not ident and 'page' in request.query:
-                    page = request.query['page']
+                if not ident:
+                    page = request.query.get('page','1')
                     if not page.isascii() or not page.isdecimal() or len(page)>5 or not 1<=int(page)<=10000:
                         return web.json_response({'success':False,'error':'invalid_page'},status=400,headers={'Cache-Control':'no-store'})
                     size = 50

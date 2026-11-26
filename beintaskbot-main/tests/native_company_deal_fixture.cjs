@@ -28,8 +28,8 @@ function installNativeCompanyDealFixture(config={}){
    if(kind==='contacts')return f.profile.capabilities.actions.customers.view?response({data:clone(f.options.contacts)}):response({error:'forbidden'},403);
    if(!f.profile.capabilities.actions[kind].view||f[kind+'Failure'])return response({error:'forbidden'},403);
    const rows=f[kind];
-   if(kind==='companies'&&!id&&config.pagination&&u.searchParams.has('page')){
-    const search=(u.searchParams.get('search')||'').toLowerCase(),page=Number(u.searchParams.get('page'));
+   if(kind==='companies'&&!id&&config.pagination){
+    const search=(u.searchParams.get('search')||'').toLowerCase(),page=Number(u.searchParams.get('page')||1);
     const matches=rows.filter(row=>row.name.toLowerCase().includes(search));
     return response({companies:clone(matches.slice((page-1)*50,page*50)),has_more:matches.length>page*50});
    }
