@@ -5,6 +5,7 @@ from contextlib import AsyncExitStack
 from io import BytesIO
 from aiohttp import web
 from tenant_chat_upload_policy import prepare, MAX_BYTES
+from tenant_chat_send_policy import send_error_payload
 from tenant_chat_upload_service import run
 from tenant_linear_policy import TenantLinearError
 
@@ -66,7 +67,7 @@ def handler(member_from_request, origin, provider, wait_slot, logger, *, runner=
                 result = await runner(session, command, content, provider, wait_slot, logger)
             return web.json_response({'success':True, **result}, headers=headers)
         except TenantLinearError as error:
-            return web.json_response({'success':False,'error':str(error),'keep_request':getattr(error,'keep_request',False)},status=error.status,headers=headers)
+            return web.json_response(send_error_payload(error),status=error.status,headers=headers)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'success':False,'error':'Fayl sorğusu düzgün deyil.','keep_request':False},status=400,headers=headers)
         except Exception:

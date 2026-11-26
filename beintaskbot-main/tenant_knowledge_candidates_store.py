@@ -33,7 +33,8 @@ def authorize(cur,profile):
         require_create(cur,profile)
         from tenant_dialog_access import require_independent_ai
         require_independent_ai(policy)
-        cur.execute('SELECT channel_id::text,conversation_id FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',(tenant,selected))
+        cur.execute("""SELECT COALESCE(to_jsonb(e)->>'group_leader_channel_id',e.channel_id::text) AS channel_id,conversation_id
+          FROM saas_dialog_episodes e WHERE tenant_id=%s::uuid AND id=%s::uuid""",(tenant,selected))
         episode=cur.fetchone()
         if not episode:raise TenantLinearError('Обращение недоступно.',404)
         _closed(cur,profile,episode['channel_id'],episode['conversation_id'],selected)

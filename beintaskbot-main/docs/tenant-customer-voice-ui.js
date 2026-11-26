@@ -11,6 +11,10 @@
       unavailable:'Микрофон недоступен. Проверьте устройство и разрешения браузера.',unsupported:'Этот браузер не поддерживает безопасную запись. Попробуйте обновить браузер.',
       busy:'Микрофон уже используется в другой вкладке или голосовом режиме.',storage:'Не удалось сохранить запись на устройстве. Отправка недоступна.',limit:'Превышен размер записи. Запишите более короткое сообщение.',error:'Не удалось записать или проверить голосовое сообщение.',
       conflict:'В этом диалоге уже есть другая сохранённая запись. Откройте её перед продолжением.',disabled:'Отправка голосовых временно отключена.',
+      groupAccess:'Права на отправку в этой группе изменились. Запись сохранена.',
+      native_group_session_unavailable:'Выбранный номер WhatsApp отключён. Запись сохранена.',
+      native_group_membership_unconfirmed:'Не удалось подтвердить участие выбранного номера в группе. Запись сохранена.',
+      native_group_check_unavailable:'Проверка членства сейчас недоступна. Запись сохранена.',
       voice_manual_mode_unavailable:'Отправка не выполнена: безопасный режим отправки недоступен. Запись сохранена.',
       voice_attribution_unresolved:'Отправка не выполнена: в этом диалоге ещё не разрешён статус предыдущего голосового сообщения. Запись сохранена.'},
     az:{mic:'Səs yaz',stop:'Dayandır',cancel:'Ləğv et',discard:'Yazını sil',retrySave:'Yazını yenidən saxla',send:'Səsi göndər',check:'Vəziyyəti yoxla',manualSeen:'WhatsApp-da tapdım',manualNotSeen:'WhatsApp-da görünmür',manualUnsure:'Əmin deyiləm',manualSaved:'Əl ilə yoxlama provayder statusundan ayrı saxlanıldı.',manualValue_seen:'Qeyd etdiniz: mesaj WhatsApp-da tapıldı.',manualValue_not_seen:'Qeyd etdiniz: mesaj tapılmadı.',manualValue_unsure:'Qeyd etdiniz: əl ilə yoxlamanın nəticəsi aydın deyil.',
@@ -21,6 +25,10 @@
       unavailable:'Mikrofon əlçatan deyil. Cihazı və brauzer icazələrini yoxlayın.',unsupported:'Bu brauzer təhlükəsiz səs yazısını dəstəkləmir. Brauzeri yeniləyin.',
       busy:'Mikrofon başqa vərəqdə və ya səs rejimində istifadə olunur.',storage:'Yazını cihazda saxlamaq mümkün olmadı. Göndərmə əlçatan deyil.',limit:'Yazının ölçüsü böyükdür. Daha qısa səs yazın.',error:'Səsi yazmaq və ya vəziyyətini yoxlamaq mümkün olmadı.',
       conflict:'Bu dialoq üçün başqa saxlanmış yazı var. Davam etməzdən əvvəl onu açın.',disabled:'Səs göndərilməsi müvəqqəti bağlıdır.',
+      groupAccess:'Bu qrupa göndərmə icazəsi dəyişib. Yazı saxlanılıb.',
+      native_group_session_unavailable:'Seçilmiş WhatsApp nömrəsi bağlı deyil. Yazı saxlanılıb.',
+      native_group_membership_unconfirmed:'Seçilmiş nömrənin qrupda iştirakı təsdiqlənmədi. Yazı saxlanılıb.',
+      native_group_check_unavailable:'Qrup üzvlüyünü hazırda yoxlamaq olmur. Yazı saxlanılıb.',
       voice_manual_mode_unavailable:'Göndərilmədi: təhlükəsiz göndərmə rejimi əlçatan deyil. Yazı saxlanılıb.',
       voice_attribution_unresolved:'Göndərilmədi: bu dialoqda əvvəlki səs mesajının vəziyyəti hələ aydın deyil. Yazı saxlanılıb.'},
     en:{mic:'Record voice message',stop:'Stop',cancel:'Cancel',discard:'Delete recording',retrySave:'Try saving again',send:'Send voice message',check:'Check status',manualSeen:'I found it in WhatsApp',manualNotSeen:'I do not see it',manualUnsure:'Not sure',manualSaved:'Your manual check is stored separately from provider status.',manualValue_seen:'You marked the message as found in WhatsApp.',manualValue_not_seen:'You marked the message as not found.',manualValue_unsure:'You marked the manual check as inconclusive.',
@@ -31,6 +39,10 @@
       unavailable:'Microphone unavailable. Check the device and browser permissions.',unsupported:'This browser cannot record safely. Try updating your browser.',
       busy:'The microphone is already in use in another tab or voice mode.',storage:'The recording could not be saved on this device. Sending is unavailable.',limit:'The recording is too large. Record a shorter message.',error:'Could not record or check the voice message.',
       conflict:'Another recording is saved for this dialog. Open it before continuing.',disabled:'Voice sending is temporarily unavailable.',
+      groupAccess:'Your permission to send to this group has changed. The recording is saved.',
+      native_group_session_unavailable:'The selected WhatsApp number is disconnected. The recording is saved.',
+      native_group_membership_unconfirmed:'Membership of the selected number in this group could not be verified. The recording is saved.',
+      native_group_check_unavailable:'Group membership cannot be checked right now. The recording is saved.',
       voice_manual_mode_unavailable:'Not sent: the safe sending mode is unavailable. The recording is saved.',
       voice_attribution_unresolved:'Not sent: the previous voice message in this dialog still has an unresolved status. The recording is saved.'}
   };
@@ -39,12 +51,19 @@
   // Successful delivery states are represented by the message's existing checkmarks.
   const acceptedNotice=state=>state==='failed'?text('failed'):'';
   const operator=()=>window.tenantOperator;
+  function groupRefusal(response,result){
+    if(response.status===403)return text('groupAccess');
+    if(['native_group_session_unavailable','native_group_membership_unconfirmed','native_group_check_unavailable'].includes(result.error_code))return text(result.error_code);
+    return '';
+  }
   function scope(){
     const member=operator()?.member, route=operator()?.currentDialog;
     if(!member || !member.tenant_id || !member.telegram_id || !route || route.provider!=='connect' || !route.lead_id || !route.channel_id || !route.conversation_id) return null;
     const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),String(route.lead_id),String(route.channel_id),String(route.conversation_id)]);
     const policy=JSON.stringify([member.role,member.active,member.permissions,window.tenantProfileSnapshot?.capabilities]);
-    return {key,policy,tenant:String(member.tenant_id),user:String(member.telegram_id),lead:String(route.lead_id)};
+    const conversation=String(route.conversation_id), channel=String(route.channel_id);
+    return {key,policy,tenant:String(member.tenant_id),user:String(member.telegram_id),lead:String(route.lead_id),
+      group:conversation.endsWith('@g.us'),channel,conversation};
   }
   let current=null, revision=0, activeStatusChecks=0, lastUser=null;
   const statusChecks=new Map();
@@ -138,14 +157,16 @@
     session.capabilityPromise=(async()=>{
       const query=new URLSearchParams({lead_id:session.scope.lead,expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user});
       const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),8000);
+      let refusal='';
       try{
         const response=await fetch('/api/platform/crm/chat/voice-capability?'+query,{credentials:'same-origin',cache:'no-store',signal:controller.signal}),result=await readJson(response);
         if(!same(session))return false;
         if(response.status===401||(response.status===409&&result.error_code==='voice_identity_changed')){await forgetUser();return false;}
-        if(response.status===403){stopCurrent(true);return false;}
+        if(response.status===403&&!session.scope.group){stopCurrent(true);return false;}
+        if(session.scope.group)refusal=groupRefusal(response,result);
         session.maySend=!!(response.ok&&result.enabled===true);session.capabilityCheckedAt=Date.now();
       }catch{if(!same(session))return false;session.maySend=false;session.capabilityCheckedAt=Date.now();}finally{clearTimeout(timeout);}
-      if(!session.maySend){const state=session.recorder.snapshot().state;if(state==='recording')session.recorder.stop();else if(state==='requesting')session.recorder.cancel();session.message=text('disabled');}
+      if(!session.maySend){const state=session.recorder.snapshot().state;if(state==='recording')session.recorder.stop();else if(state==='requesting')session.recorder.cancel();session.message=refusal||text('disabled');}
       draw(session);return session.maySend;
     })();
     try{return await session.capabilityPromise;}finally{session.capabilityPromise=null;}
@@ -188,12 +209,13 @@
       if(!await store.claim(session.scope.key,entry.request_id)){session.entry=await store.get(session.scope.key)||null;session.message=text('unknown');return;}
       session.entry={...entry,state:'sending'};draw(session);
       const command={request_id:entry.request_id,lead_id:Number(session.scope.lead),expected_tenant_id:session.scope.tenant,expected_user_id:session.scope.user};
+      if(session.scope.group)Object.assign(command,{expected_channel_id:session.scope.channel,expected_conversation_id:session.scope.conversation});
       const data=new FormData();data.append('command',JSON.stringify(command));data.append('file',entry.blob,'voice');
       let response,result;
       try{response=await fetch('/api/platform/crm/chat/send-voice',{method:'POST',credentials:'same-origin',body:data});result=await readJson(response);}
       catch{await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.message=text('unknown');return;}
       if(response.ok&&result.success&&result.provider_accepted===true){await accepted(session,entry,result);return;}
-      if(response.status===401||response.status===403||(response.status===409&&result.error_code==='voice_identity_changed')){
+      if(response.status===401||(response.status===403&&!session.scope.group)||(response.status===409&&result.error_code==='voice_identity_changed')){
         if(result.keep_request===false)await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
         else await store.markUnknown(session.scope.key,entry.request_id);
         if(!same(session))return;
@@ -204,7 +226,13 @@
         await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
         session.entry=await store.get(session.scope.key)||null;session.message=text(result.error_code);return;
       }
-      if(!response.ok&&response.status<500&&result.keep_request===false){await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());session.entry=await store.get(session.scope.key)||null;session.message=result.error||text('error');return;}
+      if(!response.ok&&result.keep_request===false&&(session.scope.group||response.status<500)){
+        await store.releaseDraft(session.scope.key,entry.request_id,crypto.randomUUID());
+        session.entry=await store.get(session.scope.key)||null;
+        if(response.status===403)session.maySend=false;
+        session.message=(session.scope.group?groupRefusal(response,result):'')||result.error||text('error');
+        return;
+      }
       await store.markUnknown(session.scope.key,entry.request_id);session.entry=await store.get(session.scope.key)||null;session.receipt=await store.getReceipt(session.scope.key,entry.request_id);session.message=text('unknown');
     }catch{session.message=text('storage');}
     finally{session.busy=false;draw(session);}

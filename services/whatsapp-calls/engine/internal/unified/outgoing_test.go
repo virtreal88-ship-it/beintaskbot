@@ -80,6 +80,59 @@ func TestOutgoingReplayAndConflict(t *testing.T) {
 	}
 }
 
+func TestGroupMembershipIsCheckedImmediatelyBeforeProviderSend(t *testing.T) {
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "group.db")), testScope)
+	ctx := context.Background()
+	client := &outgoingClient{}
+	request := Outgoing{Scope: testScope, Operation: "group1", Chat: "120363123456789@g.us",
+		Kind: "document", MIME: "text/plain", Name: "test.txt", Data: []byte("synthetic"), VerifyGroupMembership: true}
+	if _, err := j.Deliver(ctx, client, request, nil); !errors.Is(err, ErrConfiguration) {
+		t.Fatal("a verified group operation was possible without the provider check", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		if client.uploads != 1 || client.sends != 0 {
+			t.Fatal("group proof was not checked after preparation and immediately before send")
+		}
+		return ErrGroupMembership
+	}); !errors.Is(err, ErrGroupMembership) || client.sends != 0 {
+		t.Fatal("an unconfirmed group was sent a message", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error { return nil }); err != nil {
+		t.Fatal("a definitively unsent command was blocked", err)
+	}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		t.Fatal("an accepted command was rechecked instead of returning its stored result")
+		return nil
+	}); err != nil || client.sends != 1 {
+		t.Fatal("the group command was delivered twice", err)
+	}
+}
+
+func TestGroupCheckTimeoutAndUnconfirmedDispatchHaveDifferentReceipts(t *testing.T) {
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "group-check.db")), testScope)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &outgoingClient{}
+	request := Outgoing{Scope: testScope, Operation: "group-timeout", Chat: "120363123456789@g.us",
+		Kind: "text", Text: "synthetic", VerifyGroupMembership: true}
+	if _, err := j.Deliver(ctx, client, request, nil, func(context.Context) error {
+		cancel()
+		return ErrGroupCheckUnavailable
+	}); !errors.Is(err, ErrGroupCheckUnavailable) || client.sends != 0 {
+		t.Fatalf("check timeout should be definitively unsent: %v", err)
+	}
+	client.fail = true
+	if _, err := j.Deliver(context.Background(), client, request, nil, func(context.Context) error { return nil }); !errors.Is(err, ErrUnknown) || client.sends != 1 {
+		t.Fatalf("a lost provider reply should remain unknown: %v", err)
+	}
+	if _, err := j.Deliver(context.Background(), client, request, nil, func(context.Context) error {
+		t.Fatal("a possible dispatch must return its receipt before checking again")
+		return nil
+	}); !errors.Is(err, ErrUnknown) || client.sends != 1 {
+		t.Fatalf("ambiguous dispatch was retried or reclassified: %v", err)
+	}
+}
+
 func TestOwnTextEditAndRevokeUseWhatsmeowControlMessages(t *testing.T) {
 	ctx := context.Background()
 	for _, action := range []string{"edit", "delete"} {
@@ -207,6 +260,59 @@ func TestOutgoingAudioMIMEAndDurationOnlyForVoiceNotes(t *testing.T) {
 				envelope.MediaKind != "audio" || envelope.MediaSize != uint64(len(voice)) ||
 				!proto.Equal(audio, retained.GetAudioMessage()) {
 				t.Fatal("authorized retained event does not match sent audio")
+			}
+		})
+	}
+}
+
+func TestGroupVoiceUsesPTTAndChecksMembershipAfterUpload(t *testing.T) {
+	voice, err := os.ReadFile("testdata/browser_voice_1200ms.ogg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, refusal := range []error{ErrGroupMembership, ErrGroupSession, ErrGroupCheckUnavailable} {
+		t.Run(refusal.Error(), func(t *testing.T) {
+			j := journal(t, database(t, filepath.Join(t.TempDir(), "group-voice.db")), testScope)
+			client := &outgoingClient{}
+			req := Outgoing{Scope: testScope, Operation: "group-voice", Chat: "120363123456789@g.us",
+				Kind: "voice", MIME: "audio/ogg", Data: voice, VerifyGroupMembership: true}
+
+			_, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				if client.uploads != 1 || client.sends != 0 {
+					t.Fatal("voice membership proof did not run after upload and before SendMessage")
+				}
+				return refusal
+			})
+			if !errors.Is(err, refusal) || client.sends != 0 {
+				t.Fatalf("unverified group voice reached SendMessage: %v", err)
+			}
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			audio := client.message.GetAudioMessage()
+			if audio == nil || !audio.GetPTT() || audio.GetSeconds() != 2 || audio.GetMimetype() != "audio/ogg; codecs=opus" {
+				t.Fatal("group message is not a WhatsApp voice note with the expected duration")
+			}
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				t.Fatal("accepted voice replay reached a fresh membership check")
+				return nil
+			}); err != nil || client.sends != 1 || client.uploads != 2 {
+				t.Fatalf("accepted group voice replay was not idempotent: %v", err)
+			}
+
+			req.Operation = "group-voice-lost"
+			client.id = "SYNTHETIC_LOST"
+			client.fail = true
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error { return nil }); !errors.Is(err, ErrUnknown) {
+				t.Fatalf("provider timeout was reported as a refusal: %v", err)
+			}
+			client.fail = false
+			if _, err := j.Deliver(ctx, client, req, nil, func(context.Context) error {
+				t.Fatal("unknown voice replay reached a fresh membership check")
+				return nil
+			}); !errors.Is(err, ErrUnknown) || client.sends != 2 || client.uploads != 3 {
+				t.Fatalf("unknown group voice was retried: %v", err)
 			}
 		})
 	}

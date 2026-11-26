@@ -57,9 +57,22 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
                     return web.json_response({'success':True,**_jsonable(result)},headers={'Cache-Control':'no-store'})
                 if not policy.allows_action('deals','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-                result=await asyncio.to_thread(get_deal,tenant_id,deal_id,actor_id=actor) if deal_id else await asyncio.to_thread(list_deals,tenant_id,request.query.get('search',''),50,actor_id=actor)
-                if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
-                return web.json_response({'success':True,'deal' if deal_id else 'deals':_jsonable(result)},headers={'Cache-Control':'no-store'})
+                if deal_id:
+                    deal = await asyncio.to_thread(get_deal, tenant_id, deal_id, actor_id=actor)
+                    if deal is None:
+                        return web.json_response({'success':False,'error':'not_found'},status=404)
+                    result = {'deal': deal}
+                else:
+                    raw = request.query.getall('offset', ['0'])
+                    if (len(raw) != 1 or not raw[0].isascii() or not raw[0].isdecimal()
+                            or len(raw[0]) > 10 or int(raw[0]) > 2_147_483_647):
+                        raise ValueError('invalid_offset')
+                    offset, limit = int(raw[0]), 50
+                    deals = await asyncio.to_thread(list_deals, tenant_id, request.query.get('search', ''),
+                                                    limit + 1, actor_id=actor, offset=offset)
+                    result = {'deals': deals[:limit],
+                              'next_offset': offset + limit if len(deals) > limit else None}
+                return web.json_response({'success':True, **_jsonable(result)},headers={'Cache-Control':'no-store'})
             require_json_post(request,origin)
             data=await request.json()
             if not isinstance(data,dict): return web.json_response({'success':False,'error':'invalid_body'},status=400)

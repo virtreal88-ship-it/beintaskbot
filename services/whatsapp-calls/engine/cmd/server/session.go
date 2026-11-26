@@ -30,8 +30,9 @@ type Session struct {
 	reg    *callRegistry
 	diag   callDiagnostics
 
-	mu   sync.Mutex
-	auth AuthSnapshot
+	mu              sync.Mutex
+	auth            AuthSnapshot
+	connectionEpoch uint64
 }
 
 func newSession(mgr *SessionManager, id, name string, client *whatsmeow.Client) *Session {
@@ -335,6 +336,9 @@ func pairingFailureState(event string) string {
 
 func (s *Session) setAuth(a AuthSnapshot) {
 	s.mu.Lock()
+	if a.State == "open" || s.auth.State == "open" {
+		s.connectionEpoch++
+	}
 	s.auth = a
 	s.mu.Unlock()
 	s.mgr.broker.emitAuthState(s.id, a)

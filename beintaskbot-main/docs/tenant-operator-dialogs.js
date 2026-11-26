@@ -612,12 +612,13 @@
     renderDialog(currentPage,{suppressRead:true});
     if(action==='accept')window.tenantDialogueCompany?.refresh?.();
   }
-  async function lifecycleAction(route,action,button,target,episodeId){
+  async function lifecycleAction(route,action,button,target,episodeId,closeGroupConfirmed=false){
     if(button.disabled||!sameDialog(route,currentDialog))return;
-    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
+    const groupId=route.lifecycle?.group_work?.id;
+    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+'.'+closeGroupConfirmed;
     if(lifecycleInFlight.has(key))return;
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{})};lifecycleRequests.set(key,payload);}
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{}),...(groupId?{expected_group_episode_id:groupId}:{}),...(closeGroupConfirmed?{close_group_confirmed:true}:{})};lifecycleRequests.set(key,payload);}
     lifecycleInFlight.add(key);button.disabled=true;
     try{
       const result=await api('dialogs_lifecycle','POST',payload);
@@ -626,6 +627,14 @@
       if(['accept','takeover','start','close','dismiss'].includes(action))updateLifecycleList(route,result.lifecycle||result.dialog?.lifecycle);
       if(view!==openRevision||!sameDialog(route,currentDialog))return;
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
+      if(result.group_changed){
+        if(['leave_group','close'].includes(action)){
+          if($('sendChat'))$('sendChat').disabled=true;
+          if($('chatText'))$('chatText').disabled=true;
+        }
+        await openDialog(route,true,'',{suppressRead:true});
+        listFlight=null;lastListAt=0;void refresh(false,false,{suppressRead:true});return;
+      }
       // A successful receipt is authoritative even while history is refreshing.
       if(['accept','takeover','start','close'].includes(action))button.remove();
       if(route.provider==='operator_widget'){
@@ -661,13 +670,54 @@
         }
         const unavailable=lifecycleUnavailable(error,route);
         if(unavailable){if(action==='start')void refresh();}
-        else{const status=$('operatorLifecycleStatus')||$('operatorChatError');if(status)status.textContent=error.message;
+        else{
+          if(error.status===409&&(groupId||route.lifecycle?.group_available)){
+            closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
+            await openDialog(route,true,'',{suppressRead:true});
+            if(sameDialog(route,currentDialog)&&$('operatorChatError'))$('operatorChatError').textContent=error.message;
+            void refresh(false,false,{suppressRead:true});return;
+          }
+          const status=$('operatorLifecycleStatus')||$('operatorChatError');if(status)status.textContent=error.message;
           button.disabled=false;
           const label=button.querySelector('.operator-lifecycle-label');
           if(label)label.textContent=lifecycleText('retry');
           else if(action!=='dismiss')button.textContent=lifecycleText('retry');}
       }
     }finally{lifecycleInFlight.delete(key);}
+  }
+  const groupWorkText=key=>({
+    ru:{join:'Подключиться со своего номера',leave:'Выйти',transfer:'Передать ведение',closeAll:'Завершить для всех',warning:'Коллега ещё работает в группе. Можно передать ему ведение или завершить диалог для всех.',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
+    az:{join:'Öz nömrəmlə qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',closeAll:'Hamı üçün tamamla',warning:'Əməkdaş hələ qrupda işləyir. Rəhbərliyi ona ötürə və ya dialoqu hamı üçün tamamlaya bilərsiniz.',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
+    en:{join:'Join from my number',leave:'Leave',transfer:'Transfer lead',closeAll:'Close for everyone',warning:'A colleague is still working in this group. Transfer the lead or close the conversation for everyone.',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
+  }[i18n.language]||{})[key];
+  function openGroupWorkModal(route,confirmClose=false){
+    closeLifecycleModal();
+    const peers=route.lifecycle?.group_work?.colleagues||[];
+    if(!peers.length)return;
+    const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
+    modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle">
+      <h2 id="operatorLifecycleTitle">${esc(confirmClose?lifecycleText('close'):groupWorkText('transfer'))}</h2>
+      ${confirmClose?`<p>${esc(groupWorkText('warning'))}</p>`:''}
+      <select aria-label="${esc(groupWorkText('transfer'))}"></select>
+      <p id="operatorLifecycleStatus" role="status"></p>
+      <div class="operator-complete-actions">
+        <button type="button" class="primary" data-group-transfer>${esc(groupWorkText('transfer'))}</button>
+        ${confirmClose?`<button type="button" class="outline" data-group-close>${esc(groupWorkText('closeAll'))}</button>`:''}
+        <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button>
+      </div></section>`;
+    const select=modal.querySelector('select');
+    for(const peer of peers)select.append(new Option(peer.name||clientCardText('staff'),peer.employee_id));
+    const events=['tenant-chat-close','tenant-auth-invalid','tenant-profile','tenant-view'];
+    const close=()=>{modal.remove();document.removeEventListener('keydown',key,true);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};};
+    const key=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}};
+    document.addEventListener('keydown',key,true);for(const name of events)document.addEventListener(name,close);
+    closeLifecycleModal=close;
+    modal.querySelector('[data-cancel]').onclick=close;
+    modal.onclick=event=>{if(event.target===modal)close();};
+    modal.querySelector('[data-group-transfer]').onclick=event=>void lifecycleAction(route,'transfer_group',event.currentTarget,select.value);
+    const done=modal.querySelector('[data-group-close]');
+    if(done)done.onclick=event=>void lifecycleAction(route,'close',event.currentTarget,null,null,true);
+    document.body.append(modal);select.focus();
   }
   const transferSidebarText=key=>({
     ru:{empty:'Нет доступных операторов в сети.',loading:'Проверяем, кто в сети…',failed:'Не удалось передать диалог. Проверьте список и попробуйте снова.',stale:'Диалог или статус оператора изменился. Обновите список.',sending:'Передаём диалог…',retry:'Обновить список'},
@@ -837,7 +887,11 @@
       }
       if(action==='dismiss'){const marked=state.no_reply_needed===true;button.setAttribute('aria-pressed',String(marked));button.disabled=marked;}
       if(action==='case')button.title=lifecycleText('caseBudget');
-      button.onclick=()=>action==='case'&&state.completed_episodes?.length?openLifecycleEpisodeCase(route):lifecycleAction(route,action,button);if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||action==='dismiss')$('operatorActiveLifecycleActions').append(button);else host.append(button);
+      button.onclick=()=>{
+        if(action==='case'&&state.completed_episodes?.length)openLifecycleEpisodeCase(route);
+        else if(action==='close'&&state.group_work?.colleagues?.length)openGroupWorkModal(route,true);
+        else void lifecycleAction(route,action,button);
+      };if(['accept','start','takeover'].includes(action))$('operatorAcceptAction').append(button);else if(action==='close'||action==='dismiss')$('operatorActiveLifecycleActions').append(button);else host.append(button);
     }
   }
   function openCompletion(route){
@@ -900,7 +954,14 @@
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
     if(!optionalScopedRead&&(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true))){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
     if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
-    if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
+    if(!response.ok||!payload.success){
+      const error=new Error(payload.error||t('error'));
+      error.status=response.status;
+      error.keepRequest=payload.keep_request!==false;
+      error.deliveryPhase=payload.delivery_phase;
+      error.errorCode=payload.error_code;
+      throw error;
+    }
     return payload;
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;
@@ -1274,6 +1335,7 @@
     workspaceStyle.textContent+=`@media(max-width:520px){.operator-conversation-head-copy{flex-direction:column;align-items:stretch;gap:2px}.operator-conversation-header .operator-dialog-head-main{flex:1 1 150px;min-width:150px;flex-wrap:wrap}.operator-conversation-header .operator-dialog-title{flex:0 1 auto;max-width:46vw}.operator-conversation-header .operator-client-phone{font-size:10px}}`;workspaceStyle.textContent+=`@media(max-width:600px){.operator-advanced{display:none}.operator-advanced[data-open=true]{display:grid;grid-template-columns:1fr}}.operator-list-pane [hidden]{display:none!important}.operator-conversation-content>[data-operator-dialog]{width:100%}.operator-row:focus-visible{outline:2px solid var(--brand);outline-offset:-2px}.operator-row-preview:empty{display:none}.operator-search-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.operator-conversation-head-copy{display:flex;flex:1;min-width:0;align-items:center;gap:10px}.operator-conversation-header .operator-dialog-head{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}.operator-conversation-header .operator-dialog-head-row{width:100%;min-height:25px;gap:7px}.operator-conversation-header .operator-dialog-head-main{gap:6px}.operator-conversation-header .operator-client-phone{flex:none;color:var(--muted);font-size:12px;white-space:nowrap}.operator-conversation-header .operator-dialog-head-secondary{min-width:0;gap:7px}.operator-conversation-header .operator-more-actions{flex:none}.operator-conversation-header .operator-more-actions summary{display:grid;place-items:center;width:30px;height:30px;padding:0;border-radius:7px;font-size:20px}.operator-conversation-header .operator-action-menu{display:none;position:absolute;right:0;top:calc(100% + 4px);z-index:10;min-width:220px;padding:7px;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:0 8px 24px #0003}.operator-conversation-header .operator-more-actions[open] .operator-action-menu{display:grid}.operator-conversation-header .operator-action-menu #operatorMenuExtra{display:grid}.operator-conversation-header .operator-primary-action{display:grid;min-width:0}.operator-conversation-header .operator-primary-action button{white-space:normal}.operator-conversation-header .operator-assignment-form{padding:8px}.operator-dialog-body #operatorChatError:not(:empty){flex:none;padding:5px 10px}.operator-chat-main{overflow:hidden}.operator-chat-scrollarea>#operatorEarlier{flex:none}.operator-chat-history{overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}`;
     workspaceStyle.textContent+=`.operator-lifecycle-badge{align-self:center;flex:none;display:inline-flex;align-items:center;white-space:nowrap;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:600;line-height:1.25;background:var(--panel);color:var(--text);border:1px solid var(--border)}.operator-lifecycle-badge[data-lifecycle-state="waiting"]{background:#be123c;color:#fff;border-color:transparent}.operator-lifecycle-badge[data-lifecycle-state="accepted"]{background:#1d4ed8;color:#fff;border-color:transparent}.operator-lifecycle-badge[data-lifecycle-state="closed"]{color:var(--muted)}.operator-unread-count{align-self:center;flex:none;min-width:22px;height:22px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#b91c1c;color:#fff;font-size:11px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}.operator-tools-menu #operatorSoundStatus{display:block;max-width:240px;padding:4px 8px;color:var(--muted);font-size:12px}.operator-tools-menu[open] #operatorSoundStatus:empty{display:none}`;
     document.head.appendChild(workspaceStyle);
+    style.textContent+=`.operator-group-composer-source:not([hidden]){display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;margin:0 2px 4px}.operator-group-composer-source label,.operator-group-composer-source select{max-width:100%;min-width:0}.operator-group-composer-source button{padding:5px 9px;font-size:12px}`;
     const rowStatusStyle=document.createElement('style');rowStatusStyle.textContent='#operatorRows .operator-row :is(.operator-row-status,.operator-row-company){font-weight:400}.operator-row-company,.operator-row-source{display:block;min-width:0;width:fit-content;max-width:100%;box-sizing:border-box;padding:2px 7px;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.operator-row-context{grid-column:1/-1;display:flex;align-items:center;gap:8px;min-width:0}.operator-row-source{margin-inline-start:auto;padding-inline-end:0;text-align:end;color:var(--brand);font-weight:400}.operator-row-sub:empty,.operator-row-indicators:empty{display:none}.operator-row-context-with-preview .operator-row-preview{flex:1 1 0;min-width:0}.operator-row-context-with-preview .operator-row-source{max-width:55%}';document.head.append(rowStatusStyle);
     const mobileStyle=document.createElement('style');mobileStyle.textContent=`@media(max-width:900px){#view-dialogs.active{height:calc(var(--operator-visual-height,100dvh) - 104px);min-height:0;padding-bottom:env(safe-area-inset-bottom)}#operatorDialogs[data-conversation-open=true]>.operator-page-top{display:none}.operator-list-pane,.operator-conversation-pane,.operator-conversation-content,.operator-dialog-body,.operator-chat-main{min-height:0}.operator-list-pane #operatorRows,.operator-chat-history{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.operator-chat-scrollarea{flex:1 1 0;min-height:0}.operator-chat-history{flex:1 1 0;min-height:0;max-height:none;overflow-y:auto}.operator-chat-scrollarea>#operatorEarlier,.operator-chat-scrollarea>#operatorNewMessages{flex:none}.operator-row{min-height:66px}.operator-filters input,.operator-filters select,.operator-composer textarea,.operator-copilot textarea{font-size:16px}.operator-composer{margin-bottom:max(6px,env(safe-area-inset-bottom));}.operator-dialog-body{position:relative}.operator-copilot-backdrop{display:none}.operator-dialog-body[data-copilot-open=true] .operator-copilot-backdrop{display:block;position:absolute;inset:0;z-index:20;border:0;padding:0;background:#071d1688}.operator-copilot-backdrop[hidden]{display:none!important}.operator-dialog-body .operator-copilot{position:absolute;left:8px;right:8px;bottom:calc(var(--operator-composer-height,76px) + env(safe-area-inset-bottom) + 10px);z-index:21;width:auto;height:auto;max-height:min(68%,520px);overflow:auto;margin:0;border:1px solid var(--line);border-radius:16px;background:var(--card);box-shadow:0 16px 42px #0004;padding:12px}.operator-copilot-header{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:36px;padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:8px}.operator-copilot-header strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.operator-copilot-header button{flex:none;min-width:36px;min-height:36px;font-size:20px}.operator-copilot textarea{width:100%;max-width:100%;min-height:76px;max-height:20dvh;box-sizing:border-box}.operator-copilot-result{max-height:22dvh;overflow:auto}.operator-composer textarea{scroll-margin-bottom:8px}#operatorCopilotBackdrop{touch-action:manipulation}}@media(max-width:440px){.operator-dialog-body .operator-copilot{left:6px;right:6px;padding:10px}.operator-composer-actions button{min-height:40px;touch-action:manipulation}.operator-row{padding:11px 8px}}@media(orientation:landscape) and (max-width:900px){#view-dialogs.active{height:calc(var(--operator-visual-height,100dvh) - 104px)}.operator-dialog-body .operator-copilot{max-height:min(62%,340px)}.operator-composer{margin:3px 4px 4px;padding:4px 6px}#chatText{min-height:34px!important;max-height:64px}.operator-composer-actions button{min-height:32px;padding:4px 7px}#chatSendReview{max-height:48px;overflow:auto;flex:none;margin:4px 4px 0!important;padding:4px 6px!important}#chatSendReview>button{min-height:32px;padding:4px 8px;font-size:11px}}`;
     mobileStyle.textContent+=` .operator-menu-agent{display:none}.operator-composer #chatText,.operator-composer #chatText:focus,.operator-composer #chatText:focus-visible{border:0!important;box-shadow:none!important;outline:none!important}.operator-composer:focus-within{border-color:var(--line)!important;box-shadow:none!important}.operator-composer:has(#chatText:focus-visible){outline:none!important;outline-offset:0!important}.operator-composer #chatText{scrollbar-width:none}.operator-composer #chatText::-webkit-scrollbar{width:0;height:0}.operator-composer #chatText:focus{scrollbar-width:thin}.operator-composer #chatText:focus::-webkit-scrollbar{width:6px;height:6px}@media(max-width:900px){body[data-app-ui=kwid]:has(#view-dialogs.active) main{padding-top:64px!important}#view-dialogs.active{height:calc(var(--operator-visual-height,100dvh) - 64px)}#view-dialogs.active .operator-list-pane{border-radius:0;padding:4px 6px}.operator-filters input,.operator-filter-toggle,.operator-tools-menu summary{min-height:44px}.operator-filter-toggle,.operator-tools-menu summary{min-width:44px}.operator-conversation-header{position:relative;padding-right:50px}.operator-conversation-header .operator-dialog-head-secondary{position:absolute;right:4px;top:4px}.operator-conversation-header .operator-dialog-head-secondary>.operator-agent-label{display:none}.operator-conversation-header .operator-dialog-head-secondary>.operator-assignee-label{display:none}.operator-conversation-header .operator-more-actions summary{width:44px;height:44px}.operator-conversation-header .operator-action-menu{position:absolute;top:calc(100% + 4px);right:0;max-width:calc(100vw - 16px)}.operator-menu-agent{display:grid;gap:3px;padding:8px 9px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}.operator-menu-agent small{color:var(--muted)}}`;
@@ -1525,6 +1587,8 @@
       const messageKeys=m=>[m.id,m.external_id].filter(Boolean).map(String),seen=new Set((currentPage.messages||[]).flatMap(messageKeys));
       const added=(latest.messages||[]).filter(m=>{const keys=messageKeys(m);if(!keys.length||keys.some(key=>seen.has(key)))return false;keys.forEach(key=>seen.add(key));return true;});
       retainOperatorEvents(currentPage,latest);
+      if(Array.isArray(latest.group_read_targets))currentPage.group_read_targets=latest.group_read_targets;
+      else delete currentPage.group_read_targets;
       if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
@@ -1743,6 +1807,7 @@
     if(queueMode()!=='all')return '';
     if(!row.group_sources?.length)return lifecycleBadge(row);
     const sources=activeGroupSources(row);
+    if(row.lifecycle?.group_work?.role)return lifecycleBadge(row);
     const route=['waiting','accepted','closed','dismissed'].map(state=>sources.find(source=>source.lifecycle_enabled&&source.lifecycle?.state===state&&!(state==='waiting'&&source.lifecycle.has_inbound===false))).find(Boolean);
     return lifecycleBadge(route);
   }
@@ -1802,7 +1867,7 @@
       const row=rows[Number(button.dataset.openOperator)],sources=activeGroupSources(row);
       if(isSelectedMergeCard(row))return void openDialog(currentDialog,true,'',{suppressRead:true,revalidateAccess:true});
       const preferCard=ownerOverviewMode()||row.search_overview_read_only||sources.some(source=>source.archive_read_only);
-      openDialog(sources.find(source=>sameDialog(source,currentDialog))
+      openDialog((row.lifecycle?.group_work?.role?row:null)||sources.find(source=>sameDialog(source,currentDialog))
         ||(preferCard&&sources.find(source=>sameDialog(source,row)))||sources[0]||row,false,'',{userOpened:true});
     });
   }
@@ -1840,7 +1905,7 @@
     return query;
   }
   const timelineStamp=value=>Date.parse(value||'');
-  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','takeover','no_reply','close'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
+  const validOperatorEvent=event=>typeof event?.id==='string'&&!!event.id&&['accept','start','transfer','takeover','no_reply','close','join_group','leave_group','transfer_group'].includes(event.kind)&&typeof event.at==='string'&&Number.isFinite(timelineStamp(event.at));
   const operatorEventOrder=(a,b)=>timelineStamp(a.at)-timelineStamp(b.at)||a.at.localeCompare(b.at)||a.id.localeCompare(b.id);
   const OPERATOR_TIMELINE_LIMIT=180;
   function noteOperatorEventOmission(page,at){
@@ -1975,7 +2040,9 @@
         if(!body){body=document.createElement('p');body.dataset.internalCommentBody='';node.insertBefore(body,node.lastElementChild);}
         body.textContent=event.note;
       }else node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
-        statusLabel?(statusLabel[i18n.language]||statusLabel.en):name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
+        statusLabel?(statusLabel[i18n.language]||statusLabel.en):
+        event.kind.endsWith('_group')?[groupWorkText(event.kind),name].filter(Boolean).join(' · '):
+        name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
       if(next)next.before(node);else chat.append(node);
@@ -2100,19 +2167,44 @@
     if(mergeRoutes.length){renderHistoryMergePicker(slot,currentDialog,mergeRoutes);return;}
     delete slot.dataset.mergeActionScope;
     const group=rows.find(row=>row.group_sources?.some(source=>sameDialog(source,currentDialog)));
-    const sources=activeGroupSources(group),currentAvailable=sources.some(source=>sameDialog(source,currentDialog));
+    const work=currentDialog?.lifecycle?.group_work;
+    slot.classList.toggle('operator-group-composer-source',!!work);
+    let sources=activeGroupSources(group);
+    if(work){
+      sources=work.sources?[...work.sources]:sources.filter(source=>source.lifecycle?.group_work?.id===work.id&&source.lifecycle.group_work.can_join);
+      if(work.can_join&&!sources.some(source=>sameDialog(source,currentDialog)))sources.push(currentDialog);
+    }
+    const currentAvailable=sources.some(source=>sameDialog(source,currentDialog));
     slot.replaceChildren();slot.hidden=!sources.length||(sources.length<2&&currentAvailable);
+    if(work?.role||work?.can_join){
+      slot.hidden=false;
+      if(work.number){
+        const number=document.createElement('span');number.className='sub';
+        number.textContent=[work.role?groupWorkText(work.role):null,groupWorkText('number'),work.number].filter(Boolean).join(' · ');
+        number.dataset.groupSendingNumber='true';slot.append(number);
+      }
+      const action=work.can_join?'join_group':work.can_leave?'leave_group':
+        work.role==='leader'&&work.colleagues?.length?'transfer_group':null;
+      if(action){
+        const button=document.createElement('button');button.type='button';button.className=work.can_join?'primary':'outline';
+        button.textContent=groupWorkText(action.replace('_group',''));button.dataset.operatorLifecycle=action;
+        button.onclick=()=>action==='transfer_group'?openGroupWorkModal(currentDialog):void lifecycleAction(currentDialog,action,button);
+        slot.append(button);
+      }
+      if(work.role||sources.length<2&&currentAvailable)return;
+    }
     if(slot.hidden)return;
     const label=document.createElement('label');
     label.textContent=({ru:'Ответить через',az:'Cavab mənbəyi',en:'Reply via'})[i18n.language]||'Reply via';
     const select=document.createElement('select');select.id='operatorComposerSourceSelect';
     if(!currentAvailable){const option=document.createElement('option');option.value='';option.textContent=({ru:'Выберите источник',az:'Mənbə seçin',en:'Choose source'})[i18n.language]||'Choose source';option.disabled=true;option.selected=true;select.append(option);}
-    sources.forEach((source,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=source.channel_name;option.selected=sameDialog(source,currentDialog);select.append(option);});
+    sources.forEach((source,index)=>{const option=document.createElement('option');option.value=String(index);option.textContent=[source.channel_name,source.number||source.lifecycle?.group_work?.number].filter(Boolean).join(' · ');option.selected=sameDialog(source,currentDialog);select.append(option);});
     const original=currentDialog;
     select.onchange=()=>{
       if(!sameDialog(original,currentDialog))return;
       const candidate=sources[Number(select.value)];
-      const fresh=rows.flatMap(row=>row.group_sources||[row]).find(source=>candidate&&sameDialog(source,candidate));
+      const available=work&&currentDialog.lifecycle?.group_work?.sources;
+      const fresh=(available||rows.flatMap(row=>row.group_sources||[row])).find(source=>candidate&&sameDialog(source,candidate));
       if(!fresh||fresh.channel_active===false){renderComposerSourcePicker();return;}
       if(sameDialog(fresh,currentDialog))return;
       select.disabled=true;
@@ -2130,15 +2222,27 @@
   }
   async function markDialogReadIfVisible(page=currentPage){
     const route=page?.dialog,chat=$('chatRows'),messages=page?.messages||[],last=messages[messages.length-1],readId=Object.prototype.hasOwnProperty.call(page||{},'read_through_message_id')?page.read_through_message_id:last?.id;
-    if(!route||route.archive_read_only||!last?.id||!readId||displayedPage!==page||!chat?.isConnected||document.hidden||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog))return;
+    const groupTargets=page?.group_read_targets;
+    if(!route||route.archive_read_only||!last?.id||!(readId||groupTargets?.length)||displayedPage!==page||!chat?.isConnected||document.hidden||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog))return;
     if(!atBottom(chat))return;
     if(page.anchor_message_id&&String(page.anchor_message_id)!==String(last.id))return;
-    const owner=identity(member),key=owner+':'+epoch+':'+dialogKey(route);if(readMarkers.get(key)===readId||readInFlight.has(key))return;readInFlight.add(key);
-    try{await api('dialogs/read','POST',{provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',message_id:readId,...(route.search_overview_read_only===true?{search_overview:true,search:route.search_overview_query}:{})});readMarkers.set(key,readId);if(owner===identity(member)){try{localStorage.setItem(readSyncKey(),String(Date.now())+':'+crypto.randomUUID());}catch{}listRevision++;listFlight=null;lastListAt=0;if($('view-dialogs')?.classList.contains('active'))void refresh();}}
+    const owner=identity(member),generation=epoch,key=owner+':'+generation+':'+dialogKey(route);
+    const signature=groupTargets?.length?JSON.stringify(groupTargets.map(item=>item.message_id)):readId;
+    if(readMarkers.get(key)===signature||readInFlight.has(key))return;
+    readInFlight.add(key);
+    try{
+      const targets=groupTargets?.length?groupTargets:[{provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id||'',conversation_id:route.conversation_id||'',message_id:readId,...(route.search_overview_read_only===true?{search_overview:true,search:route.search_overview_query}:{})}];
+      for(const target of targets){
+        if(owner!==identity(member)||generation!==epoch||!sameDialog(route,currentDialog))return;
+        await api('dialogs/read','POST',target);
+      }
+      readMarkers.set(key,signature);
+      if(owner===identity(member)){try{localStorage.setItem(readSyncKey(),String(Date.now())+':'+crypto.randomUUID());}catch{}listRevision++;listFlight=null;lastListAt=0;if($('view-dialogs')?.classList.contains('active'))void refresh();}
+    }
     catch(error){const status=$('operatorChatError');if(status&&owner===identity(member)&&sameDialog(route,currentDialog))status.textContent=error.message;}
-    finally{readInFlight.delete(key);if(readMarkers.get(key)===readId&&owner===identity(member)&&sameDialog(route,currentDialog)){const next=Object.prototype.hasOwnProperty.call(currentPage||{},'read_through_message_id')?currentPage.read_through_message_id:currentPage?.messages?.at(-1)?.id;if(next&&next!==readId)void markDialogReadIfVisible(currentPage);}}
+    finally{readInFlight.delete(key);if(readMarkers.get(key)===signature&&owner===identity(member)&&sameDialog(route,currentDialog)&&currentPage!==page)void markDialogReadIfVisible(currentPage);}
   }
-  function messageAuthor(m){if(m.author_type==='ai')return t('aiAgent');if(m.author_type==='operator')return m.participant_jid&&m.author_name&&!['Operator','WhatsApp operator'].includes(m.author_name)?m.author_name:t('operator');if(m.author_type==='employee')return `${m.author_name||t('groupParticipant')} · ${t('employee')}`;if(m.author_type==='participant')return m.author_name||t('groupParticipant');if(m.author_type==='customer')return m.author_name||t('customer');return t('system');}
+  function messageAuthor(m){if(m.sending_number)return `${m.author_name||t('operator')} · ${m.sending_number}`;if(m.author_type==='ai')return t('aiAgent');if(m.author_type==='operator')return m.participant_jid&&m.author_name&&!['Operator','WhatsApp operator'].includes(m.author_name)?m.author_name:t('operator');if(m.author_type==='employee')return `${m.author_name||t('groupParticipant')} · ${t('employee')}`;if(m.author_type==='participant')return m.author_name||t('groupParticipant');if(m.author_type==='customer')return m.author_name||t('customer');return t('system');}
   function mediaLabel(m){return m.message_type==='image'?t('photo'):['audio','voice'].includes(m.message_type)?t('voiceMessage'):m.message_type==='video'?t('video'):m.message_type==='document'?t('file'):t('attachment');}
   const attachmentName=m=>String(m.media_filename||m.file_name||'').trim();
   const attachmentStem=name=>name.replace(/\.[a-z0-9]{1,12}$/i,'');
@@ -3684,7 +3788,7 @@
       message.addEventListener('keydown',event=>{if(sendAllowed&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing){
         event.preventDefault();button.click();
       }});
-    }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
+    }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='group_offline'?groupWorkText('offline'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     const replyDiagnostics=$('operatorReplyDiagnostics');
     if(replyDiagnostics){replyDiagnostics.replaceChildren();window.tenantChatSend?.renderDiagnostics?.(replyDiagnostics);}
     renderHistoryMergeReadPicker();renderComposerSourcePicker();

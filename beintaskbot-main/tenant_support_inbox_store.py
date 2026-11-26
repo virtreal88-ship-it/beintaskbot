@@ -144,8 +144,9 @@ def create_in_transaction(cur, tenant, channel, conversation, reason, event_key,
         if (not workflow or workflow['state']!='accepted' or workflow.get('operator_id')!=actor
                 or str(workflow['id'])!=episode_id or int(workflow['revision'])!=expected_revision):
             raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
-        cur.execute('''SELECT id::text,accepted_at,clock_timestamp() AS frozen_at FROM saas_dialog_episodes
-          WHERE tenant_id=%s::uuid AND id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s
+        cur.execute('''SELECT id::text,accepted_at,clock_timestamp() AS frozen_at FROM saas_dialog_episodes e
+          WHERE tenant_id=%s::uuid AND id=%s::uuid AND COALESCE(to_jsonb(e)->>'group_leader_channel_id',e.channel_id::text)=%s
+            AND conversation_id=%s
             AND operator_id=%s AND closed_at IS NULL FOR UPDATE''',(tenant,episode_id,channel,conversation,actor))
         episode=cur.fetchone()
         if not episode:raise TenantLinearError('Текущий цикл диалога не подтверждён.',409)

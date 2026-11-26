@@ -115,6 +115,7 @@ jobs:
           node tests/test_deal_server_search_browser.cjs
           node tests/test_crm_list_return_browser.cjs
           node tests/test_deal_pagination_browser.cjs
+          node tests/test_crm_infinite_scroll_browser.cjs
           node tests/test_native_task_assignee_ui.cjs
           node tests/test_native_task_assignee_browser.cjs
           node tests/test_tenant_tasks_ui.cjs

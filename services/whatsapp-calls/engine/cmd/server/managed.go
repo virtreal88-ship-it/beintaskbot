@@ -86,6 +86,10 @@ func managedHandler(s *server, host, token string) http.Handler {
 			s.handleManagedGroup(w, r)
 			return
 		}
+		if r.Method == "POST" && r.URL.Path == "/internal/messages/group-membership" {
+			s.handleManagedGroupMembership(w, r)
+			return
+		}
 		if r.Method == "POST" && r.URL.Path == "/internal/messages/avatar" {
 			s.handleManagedAvatar(w, r)
 			return

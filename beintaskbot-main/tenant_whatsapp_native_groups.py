@@ -1,9 +1,61 @@
 """Source-bound provider group metadata, never a message or authority grant."""
 import json
+import re
 from datetime import datetime, timedelta, timezone
 import requests
 from tenant_platform import _connect, TenantPlatformError
 from tenant_whatsapp_native_projection import GROUP
+from tenant_linear_policy import TenantLinearError
+
+
+MEMBERSHIP_ERRORS = {
+    'native_group_session_unavailable': 'Номер WhatsApp недоступен. Проверьте подключение выбранного источника.',
+    'native_group_membership_unconfirmed': 'WeCall не подтвердил участие выбранного номера в этой группе WhatsApp.',
+    'native_group_check_unavailable': 'Не удалось проверить участие выбранного номера в WhatsApp. Повторите проверку позже.',
+}
+
+def membership_error(code, *, sending=False):
+    if not isinstance(code, str) or code not in MEMBERSHIP_ERRORS:
+        code = 'native_group_check_unavailable'
+    error = TenantLinearError(MEMBERSHIP_ERRORS[code], 409)
+    error.error_code = code
+    if sending:
+        error.delivery_phase = 'not_sent'
+        error.keep_request = False
+    return error
+
+
+def require_membership(route, *, sending=False):
+    """Check the current gateway generation for a locked, exact native route."""
+    from tenant_call_sources import service
+    binding = route.get('native')
+    chat = route['conversation_id']
+    if not binding or not GROUP.fullmatch(chat):
+        raise membership_error('native_group_session_unavailable', sending=sending)
+    scope = binding['scope']
+    try:
+        url, token = service()
+        with requests.post(url+'/v1/sources/'+binding['gateway_id']+'/messages/group-membership',
+                headers={'Authorization':'Bearer '+token, 'Accept-Encoding':'identity'},
+                json={'scope':scope, 'chat':chat}, timeout=(3, 9), allow_redirects=False,
+                stream=True) as response:
+            if response.headers.get('Content-Encoding', 'identity') != 'identity':
+                raise ValueError()
+            body = bytearray()
+            for chunk in response.iter_content(4096):
+                body.extend(chunk)
+                if len(body) > 4096:
+                    raise ValueError()
+            proof = json.loads(body)
+            if (response.status_code == 200 and isinstance(proof,dict) and proof.get('member') is True
+                    and proof.get('scope')==scope and proof.get('chat')==chat):
+                lid=proof.get('account_lid','')
+                if isinstance(lid,str) and (not lid or re.fullmatch(r'[0-9]{5,22}@lid',lid)):
+                    return lid
+            code = proof.get('error') if response.status_code == 409 and isinstance(proof, dict) else None
+    except (requests.RequestException, TenantPlatformError, ValueError, TypeError):
+        code = None
+    raise membership_error(code, sending=sending)
 
 
 def apply_metadata(cur,scope,payload):

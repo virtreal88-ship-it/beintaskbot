@@ -164,3 +164,10 @@ steps must literally occur in pinned operator text. Attachments in the no-paid-m
 path, unsupported/paraphrased procedures or insufficient authority leave a draft
 with a reason. This prevents a model's suitability assertion from becoming an
 authorization or invented instruction. Existing redaction and audit remain in force.
+## Shared WhatsApp group episodes
+
+Shared work admits a new episode only for an exact group `@g.us` within an enabled workspace. Use `BEINTASKBOT_WHATSAPP_GROUP_COLLABORATION` on Worker with a JSON mapping from workspace UUID to a list of exact group JIDs. An omitted workspace keeps its existing queue behavior. A workspace value of `"*"` selects its WhatsApp groups.
+
+Before enabling, deploy the compatible WeCall engine and supervisor, and apply the additive `tenant_dialog_lifecycle.migrate` preflight. Use the same short database transaction and timeout precautions as for the lifecycle schema. Finish any legacy open episodes for the selected group through their usual workflow. Historical dialogue routes, messages, and assignments have no backfill.
+
+Run acceptance with two independently authorized operators and two connected numbers in a test group. Check both WhatsApp deliveries on a third device. Joining and starting send preparation use a fresh WeCall query for the selected account. The engine asks WhatsApp again immediately before dispatch, including after uploading an attachment. A connection change invalidates in-flight membership proof. The overview's cached roster is for display. A proven refusal keeps the draft and allows a new attempt. An unconfirmed dispatch keeps its receipt for status checks. Removing the group from the environment setting stops new shared admissions. An existing shared episode keeps its participant and source guards until the lead closes it.

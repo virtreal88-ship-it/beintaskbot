@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -145,11 +146,19 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	infos := s.sessions.infos()
 	if len(infos) != 1 || infos[0].State != "open" {
+		if request.VerifyGroupMembership {
+			groupSessionUnavailable(w, r.Context(), g.messages, request)
+			return
+		}
 		http.Error(w, "source_unavailable", 409)
 		return
 	}
 	session, ok := s.sessions.Get(infos[0].ID)
 	if !ok || !session.transportReady() || session.client.Store.ID == nil || session.client.Store.ID.ToNonAD().String() != g.cfg.Account {
+		if request.VerifyGroupMembership {
+			groupSessionUnavailable(w, r.Context(), g.messages, request)
+			return
+		}
 		http.Error(w, "source_identity_mismatch", 409)
 		return
 	}
@@ -159,7 +168,19 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	result, err := g.messages.Deliver(ctx, session.client, request, session.client.Store.LIDs)
+	client := session.client
+	check := func(ctx context.Context) error {
+		if session.client != client {
+			return unified.ErrGroupSession
+		}
+		_, err := verifyManagedGroupMembership(ctx, session, request.Chat, g.cfg.Account)
+		return err
+	}
+	result, err := g.messages.Deliver(ctx, client, request, client.Store.LIDs, check)
+	if unified.IsGroupPreflightError(err) {
+		groupSendRefused(w, err)
+		return
+	}
 	if errors.Is(err, unified.ErrQuoteUnavailable) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"error": "native_quote_not_sent", "confirmed": false,
@@ -179,6 +200,22 @@ func (s *server) handleManagedMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, code, map[string]any{"result": result, "confirmed": err == nil})
+}
+
+func groupSessionUnavailable(w http.ResponseWriter, ctx context.Context, journal *unified.Journal, request unified.Outgoing) {
+	result, err := journal.Lookup(ctx, request.Operation, request.Chat)
+	if errors.Is(err, sql.ErrNoRows) {
+		groupSendRefused(w, unified.ErrGroupSession)
+		return
+	}
+	// Rechecking an offline session says nothing about an earlier dispatch.
+	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"result": result, "confirmed": false})
+}
+
+func groupSendRefused(w http.ResponseWriter, err error) {
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+		"error": err.Error(), "confirmed": false, "delivery_phase": "not_sent",
+	})
 }
 
 func (s *server) handleManagedMessageStatus(w http.ResponseWriter, r *http.Request) {

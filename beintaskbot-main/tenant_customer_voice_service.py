@@ -10,19 +10,34 @@ from urllib.parse import urlencode
 from tenant_chat_send_policy import command as text_command
 from tenant_chat_send_store import dispatch_guarded, authority, finish, mark_sending, reserve
 from tenant_connect_transport import ConnectPreflightError, _request
-from tenant_customer_voice import validate_recording
+from tenant_customer_voice import VoiceError, native_opus, validate_recording
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _connect, _json
+from tenant_whatsapp_native_projection import GROUP
+
+DIRECT = re.compile(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)')
+GROUP_SCOPE_FIELDS = {'expected_channel_id', 'expected_conversation_id'}
 
 
 def prepare(data, mime, content):
-    if (not isinstance(data, dict) or set(data)-{'consultation_id'} != {'request_id', 'lead_id', 'expected_tenant_id', 'expected_user_id'}):
+    if (not isinstance(data, dict) or set(data) - {'consultation_id'} - GROUP_SCOPE_FIELDS
+            != {'request_id', 'lead_id', 'expected_tenant_id', 'expected_user_id'}):
         raise TenantLinearError('Sorğu düzgün deyil.', 400)
+    group_scope = {}
+    if GROUP_SCOPE_FIELDS & data.keys():
+        group = data.get('expected_conversation_id')
+        if not isinstance(group, str) or not GROUP.fullmatch(group):
+            raise TenantLinearError('WhatsApp qrupunun mənbəyi düzgün deyil.', 400)
+        try:
+            channel = str(uuid.UUID(str(data['expected_channel_id'])))
+        except (KeyError, ValueError):
+            raise TenantLinearError('WhatsApp qrupunun mənbəyi düzgün deyil.', 400) from None
+        group_scope = {'expected_channel_id': channel, 'expected_conversation_id': group}
     try:
         content, extension, mime = validate_recording(content, mime)
     except ValueError:
         raise TenantLinearError('Səs faylı düzgün deyil və ya limitdən böyükdür.', 400) from None
-    value = text_command({**data, 'text': 'voice'})
+    value = {**text_command({**data, 'text': 'voice'}), **group_scope}
     value['text'] = ''
     value['file'] = {'name': 'voice.' + extension, 'mime': mime, 'size': len(content),
                      'sha256': hashlib.sha256(content).hexdigest(), 'type': 'audio'}
@@ -52,32 +67,73 @@ def _checked_receipt(value, route, request_id):
         status = 'sent'
     if status not in {'sent', 'delivered', 'read', 'failed'}:
         raise ValueError('invalid accepted receipt')
+    group_sender = {}
+    if GROUP.fullmatch(route['conversation_id']):
+        account = _native_account(route)
+        if not account or value.get('participantJid') != account:
+            raise ValueError('receipt sender mismatch')
+        group_sender = {'participant_jid': account}
     return {'state': 'accepted', 'delivery_state': status, 'provider_accepted': True,
             'delivered': status in {'delivered', 'read'}, 'retry_safe': False,
-            'message_id': message_id, 'operation_id':operation_id,'provider_message_id': provider_id}
+            'message_id': message_id, 'operation_id':operation_id,'provider_message_id': provider_id, **group_sender}
 
 
 def _connect_receipt(route, request_id):
     if route.get('native'):
         from tenant_whatsapp_native_transport import lookup
-        return _checked_receipt(lookup(route,request_id),route,request_id)
+        value = lookup(route, request_id)
+        if GROUP.fullmatch(route['conversation_id']):
+            # The operation journal is read from this exact bound account.
+            value['participantJid'] = _native_account(route)
+        return _checked_receipt(value, route, request_id)
     value = _request(route['api_key'], 'GET', '/v1/channels/' + route['channel_id'] + '/customer-voice/requests/' + request_id + '?' +
                      urlencode({'conversationId': route['conversation_id']}))
     return _checked_receipt(value, route, request_id)
 
 
+def _delivery_audio(route, mime, content):
+    """Finish local encoding before the final authorization and provider step."""
+    if not route.get('native'):
+        return mime, content
+    try:
+        return 'audio/ogg', native_opus(content, mime)
+    except VoiceError:
+        raise TenantLinearError('Səs göndərilmədi: yazını hazırlamaq mümkün olmadı.', 422) from None
+
+
 def _submit(route, request_id, mime, content):
     if route.get('native'):
         from tenant_whatsapp_native_transport import media_receipt
-        from tenant_customer_voice import native_opus
         return _checked_receipt(media_receipt(route,request_id,
-            kind='voice',mime='audio/ogg',content=native_opus(content,mime)),route,request_id)
+            kind='voice',mime=mime,content=content),route,request_id)
     value = _request(route['api_key'], 'POST', '/v1/channels/' + route['channel_id'] + '/customer-voice',
                      {'conversationId': route['conversation_id'], 'clientMessageId': request_id,
                       'authorId': str(route['author_id']), 'crmConversationId': str(route['crm_conversation_id']),
                       'mime': mime, 'audioBase64': base64.b64encode(content).decode('ascii')},
                      safe_preflight_codes=('voice_manual_mode_unavailable',))
     return _checked_receipt(value, route, request_id)
+
+
+def _native_account(route):
+    return (route.get('native') or {}).get('scope', {}).get('account')
+
+
+def _voice_supported(connection, integration):
+    if connection[0] != 'connect':
+        return False
+    route = integration.get('route', {})
+    return bool(DIRECT.fullmatch(connection[2]) or (
+        GROUP.fullmatch(connection[2]) and route.get('native')
+        and route.get('group_participant_id') and route.get('verify_group_membership') is True))
+
+
+def _require_voice_route(connection, integration, command):
+    if not _voice_supported(connection, integration):
+        raise TenantLinearError('Bu dialoqda səs göndərilməsi əlçatan deyil.', 403)
+    expected = command.get('expected_conversation_id')
+    if (expected is not None or GROUP.fullmatch(connection[2])) and connection[1:] != [
+            command.get('expected_channel_id'), expected]:
+        raise TenantLinearError('WhatsApp qrupunun seçilmiş mənbəyi dəyişib.', 409)
 
 
 def own_receipt(session, lead_id, request_id):
@@ -114,6 +170,9 @@ def own_receipt(session, lead_id, request_id):
             if (connection[0] != 'connect' or route.get('voice_protocol') is not True
                     or [route.get('channel_id'), route.get('conversation_id')] != connection[1:]):
                 raise TenantLinearError('Səs sorğusunun dialoqu dəyişib.', 409)
+            if GROUP.fullmatch(connection[2]) and (
+                    not route.get('group_account_jid') or route['group_account_jid'] != _native_account(integration['route'])):
+                raise TenantLinearError('Səs sorğusunun WhatsApp nömrəsi dəyişib.', 409)
             cur.execute('''SELECT outcome,recorded_at FROM saas_customer_voice_manual_checks WHERE tenant_id=%s::uuid
               AND actor_id=%s AND request_id=%s::uuid AND lead_id=%s''',
                         (profile['tenant_id'],profile['telegram_id'],request_id,lead_id))
@@ -134,8 +193,8 @@ def can_send(session, lead_id):
         raise TenantLinearError('Sorğu düzgün deyil.', 400) from None
     with _connect() as conn:
         with conn.cursor() as cur:
-            _, connection, _ = authority(cur, session, lead_id)
-            return connection[0] == 'connect' and bool(re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',connection[2]))
+            _, connection, integration = authority(cur, session, lead_id)
+            return _voice_supported(connection, integration)
 
 
 def record_acceptance(session, item, receipt):
@@ -202,6 +261,25 @@ def record_acceptance(session, item, receipt):
                 try:facts['connect_operation_id']=str(uuid.UUID(operation_id))
                 except ValueError:pass
             if native:facts.update(channelId=connection[1],conversationId=connection[2])
+            if GROUP.fullmatch(connection[2]):
+                account = route.get('group_account_jid')
+                if not account or receipt.get('participant_jid') != account:
+                    raise TenantLinearError('Səsin WhatsApp hesabı təsdiqlənmədi.', 409)
+                from tenant_connect_transport import _keep_verified_group_participant
+                facts.update(participantJid=account, _crm_native_send_receipt=True)
+                # The other source can observe only a LID. Reuse the verified
+                # account pair of this dispatch's participant for this event.
+                cur.execute("""SELECT account_lid FROM saas_dialog_group_participants
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND episode_id=%s::uuid AND actor_id=%s
+                    AND channel_id=%s::uuid AND conversation_id=%s AND account_jid=%s""",
+                  (tenant, route.get('group_participant_id'), route.get('lifecycle_episode_id'),
+                   actor, connection[1], connection[2], account))
+                lid = (cur.fetchone() or {}).get('account_lid') or ''
+                if re.fullmatch(r'[0-9]{5,22}@lid', lid):
+                    pair = {'lid': lid, 'jid': account}
+                    if raw.get('participantIdentity') in (None, pair):
+                        facts['participantIdentity'] = pair
+                facts = _keep_verified_group_participant(raw, facts)
             author = str(profile.get('display_name') or 'Operator')[:120]
             if existing:
                 cur.execute('''UPDATE saas_crm_messages SET author_name=%s,message_type='audio',raw=COALESCE(raw,'{}'::jsonb)||%s::jsonb
@@ -232,23 +310,29 @@ def record_acceptance(session, item, receipt):
 
 
 async def run(session, command, content, logger):
-    item = await asyncio.to_thread(reserve, session, command)
+    item = await asyncio.to_thread(reserve, session, command, validate_route=_require_voice_route)
     if 'cached_result' in item:
         return await check(session, command['lead_id'], command['request_id'])
-    if item['connection'][0] != 'connect':
-        await asyncio.to_thread(finish, item, 'blocked')
-        raise TenantLinearError('Səs yalnız Connect dialoqunda göndərilə bilər.', 409)
-    if not re.fullmatch(r'[0-9]{5,22}@(s\.whatsapp\.net|lid)',item['connection'][2]):
-        await asyncio.to_thread(finish, item, 'blocked')
-        raise TenantLinearError('Qrup dialoqlarında səs göndərilməsi hələ əlçatan deyil.', 409)
     started = False
+
+    def submit(credentials, request_id, mime, audio):
+        nonlocal started
+        _require_voice_route(item['connection'], {'route': credentials}, command)
+        started = True
+        try:
+            return _submit(credentials, request_id, mime, audio)
+        except TenantLinearError as error:
+            if getattr(error, 'delivery_phase', None) == 'not_sent':
+                started = False
+            raise
+
     try:
         channel, conversation = item['connection'][1:]
-        profile, route = await asyncio.to_thread(mark_sending, item, {'origin':'connect','voice_protocol':True,
-                                                                      'channel_id':channel,'conversation_id':conversation})
-        route = {**route,'author_id':item['key'][1],'crm_conversation_id':command['lead_id']}
-        started = True
-        receipt = await asyncio.to_thread(dispatch_guarded, item, route, _submit, command['request_id'], command['file']['mime'], content)
+        _, route = await asyncio.to_thread(mark_sending, item, {'origin':'connect','voice_protocol':True,
+                                                               'channel_id':channel,'conversation_id':conversation})
+        route = {**route, 'author_id':item['key'][1], 'crm_conversation_id':command['lead_id']}
+        mime, audio = await asyncio.to_thread(_delivery_audio, route, command['file']['mime'], content)
+        receipt = await asyncio.to_thread(dispatch_guarded, item, route, submit, command['request_id'], mime, audio)
         if receipt['provider_accepted']:
             await asyncio.to_thread(record_acceptance, session, {**item, 'lead_id': command['lead_id']}, receipt)
         else:
@@ -269,10 +353,13 @@ async def run(session, command, content, logger):
         except Exception:
             logger.error('Customer voice receipt persistence unavailable')
         if isinstance(error, TenantLinearError) and not started:
+            error.keep_request = False
+            error.delivery_phase = 'not_sent'
             raise
         result = TenantLinearError('Göndərmə nəticəsi məlum deyil. Təkrar göndərməyin; vəziyyəti yoxlayın.' if started
                                    else 'Səs göndərilmədi. Dialoq icazəsini yoxlayın.', 503)
         result.keep_request = started
+        result.delivery_phase = 'unknown' if started else 'not_sent'
         raise result from None
 
 

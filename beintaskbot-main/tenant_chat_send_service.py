@@ -12,7 +12,8 @@ async def run(session, data, request, wait_slot, logger):
     try:
         item=await asyncio.to_thread(reserve,session,command(data))
     except TenantLinearError as error:
-        if isinstance(data,dict) and data.get('quote_message_id'):error.keep_request=True
+        if isinstance(data,dict) and data.get('quote_message_id') and getattr(error,'delivery_phase',None)!='not_sent':
+            error.keep_request=True
         raise
     scoped_quote=bool(item.get('quote') and item.get('connection',[None])[0]=='connect' and (item.get('native') or quoted_once_scope(item['key'][0],item['connection'][1])))
     if item.get('check_only'):
@@ -72,6 +73,8 @@ async def run(session, data, request, wait_slot, logger):
         logger.warning('Tenant chat send unavailable; no automatic retry')
         error = TenantLinearError('Nəticə məlum deyil. Yenidən göndərməyin; Kommo-da yoxlayın.' if external_started else 'Mesaj göndərilmədi. Çat mənbəyini və Kommo bağlantısını yoxlayın.', 503)
         error.keep_request = external_started
+        if external_started and is_connect and credentials.get('verify_group_membership'):
+            error.delivery_phase = 'unknown'
         raise error from None
 
 

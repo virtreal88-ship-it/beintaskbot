@@ -59,7 +59,7 @@ def query(request, profile, *, required=False):
     """Browser intent is a deny-only check; the cookie remains authority."""
     result = {}
     params = request.query if hasattr(request, 'query') else request.rel_url.query
-    for key in ('flow', 'source', 'task_id', 'request_id', 'expected_tenant_id', 'expected_user_id'):
+    for key in ('flow', 'source', 'task_id', 'request_id', 'offset', 'order', 'expected_tenant_id', 'expected_user_id'):
         values = params.getall(key, []) if hasattr(params, 'getall') else (
             [params[key]] if key in params else [])
         if len(values) > 1 or (values and not str(values[0])):
@@ -81,6 +81,16 @@ def query(request, profile, *, required=False):
         raise TaskFlowError('task_invalid_query')
     if 'request_id' in result:
         result['request_id'] = _uuid(result['request_id'])
+    if ('offset' in result or 'order' in result) and (
+            result.get('flow') != '1' or 'task_id' in result or 'request_id' in result):
+        raise TaskFlowError('task_invalid_query')
+    if result.get('order') not in (None, 'recent'):
+        raise TaskFlowError('task_invalid_query')
+    if 'offset' in result:
+        raw = result['offset']
+        if (not raw.isascii() or not raw.isdecimal() or len(raw) > 10 or int(raw) > 2_147_483_647):
+            raise TaskFlowError('task_invalid_query')
+        result['offset'] = int(raw)
     return result
 
 
@@ -179,7 +189,7 @@ def _native_where(profile):
     return read_where(profile)
 
 
-def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=()):
+def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=(), offset=0, recent=False):
     if source == 'native':
         where, args = _native_where(profile)
         if task_id:
@@ -215,7 +225,9 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
           JOIN saas_crm_native_deals d ON d.tenant_id=t.tenant_id AND d.id=t.deal_id
           LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
           LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
-          '''+company_join+' WHERE '+where+' ORDER BY (t.status=\'open\') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id'
+          '''+company_join+' WHERE '+where
+        order = ('t.created_at DESC,t.id DESC' if recent else
+                 "(t.status='open') DESC,t.due_at ASC NULLS LAST,t.created_at DESC,t.id")
     else:
         where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).kommo_task_scope())
         if task_id:
@@ -237,9 +249,21 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
                 WHERE kommo_lead_id=saas_crm_tasks.kommo_lead_id AND {deals}))"""
             args.extend([*terms,*deal_args])
         sql = '''SELECT kommo_task_id,kommo_lead_id,text,due_at,responsible_id,completed,synced_at,raw
-          FROM saas_crm_tasks WHERE '''+where+' ORDER BY completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
+          FROM saas_crm_tasks WHERE '''+where
+        if recent:
+            order = """
+              CASE WHEN raw->>'created_at' ~ '^[0-9]{1,12}$'
+                   THEN (raw->>'created_at')::bigint END DESC NULLS LAST,kommo_task_id DESC
+            """
+        else:
+            order = 'completed,due_at ASC NULLS LAST,synced_at DESC,kommo_task_id'
+    sql += ' ORDER BY ' + order
     if limit is not None:
-        sql += ' LIMIT %s'; args.append(limit)
+        sql += ' LIMIT %s'
+        args.append(limit)
+    if offset:
+        sql += ' OFFSET %s'
+        args.append(offset)
     cur.execute(sql, args)
     selected_rows = cur.fetchall()
     from tenant_kommo_board_provenance import revisions
@@ -352,7 +376,7 @@ def _command(cur, profile, source, request_id):
     return result
 
 
-def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=()):
+def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=(), offset=0, recent=False):
     if status not in (None, "all", "open", "completed"):
         raise TaskFlowError("task_invalid_query")
     if source not in (None, 'native', 'kommo') or (task_id and request_id):
@@ -367,7 +391,8 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None, st
             raise TaskFlowError('task_forbidden', 403)
         scope = (policy.action_scope('tasks','view') or ('tenant' if policy.privileged else 'personal')) if selected == 'native' else (
             'tenant' if policy.kommo_task_scope()['kind'] == 'all' else policy.kommo_task_scope()['kind'])
-        result = dict(source=selected, sources=sources, scope=scope, limit=100 if selected == 'native' else 200)
+        page_size = 10 if recent else (100 if selected == 'native' else 200)
+        result = dict(source=selected, sources=sources, scope=scope, limit=page_size)
         if request_id:
             result['command'] = _command(cur, current, selected, request_id)
         elif task_id:
@@ -376,9 +401,12 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None, st
                 raise TaskFlowError('task_not_found', 404)
             result['task'] = rows[0]
         else:
-            rows = _rows(cur, current, selected, limit=result['limit']+1, search=search, status=None if status=='all' else status, type_ids=type_ids)
-            result.update(tasks=rows[:result['limit']], shown=min(len(rows), result['limit']),
-                          has_more=len(rows)>result['limit'], state='ready' if rows else 'empty')
+            limit = result['limit']
+            rows = _rows(cur, current, selected, limit=limit + 1, search=search,
+                         status=None if status == 'all' else status, type_ids=type_ids, offset=offset, recent=recent)
+            has_more = len(rows) > limit
+            result.update(tasks=rows[:limit], shown=min(len(rows), limit), has_more=has_more,
+                          next_offset=offset + limit if has_more else None, state='ready' if rows else 'empty')
         return result
     return _attempt(profile, operation)
 

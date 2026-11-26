@@ -84,7 +84,8 @@ def history_window(cur, tenant, conversation, *, messages, before,
 
 
 def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
-                 history_leads, history_channel, group_channels=None, authorized_before_stamp=None):
+                 history_leads, history_channel, group_channels=None, authorized_before_stamp=None,
+                 group_actor=None):
     # No new index/migration. Limit the optional JSON audit read's latency,
     # and keep a timeout from suppressing otherwise valid chat history.
     # The statement setting is restored on success or savepoint rollback.
@@ -102,6 +103,10 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
             cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
             return {'operator_events': []}
         lower,upper=window
+        group_events = """ OR (a.payload->>'group_work'='true' AND EXISTS(
+          SELECT 1 FROM saas_dialog_group_participants p
+          WHERE p.tenant_id=a.tenant_id AND p.episode_id::text=a.entity_id
+            AND p.channel_id=%s::uuid AND p.actor_id=%s))""" if group_actor is not None else ""
         cur.execute("""SELECT a.id::text AS id,a.created_at,m.display_name,
             CASE WHEN a.action='dialog_transfer' AND a.payload->>'takeover'='true'
                  THEN 'dialog_takeover' ELSE a.action END AS action
@@ -109,16 +114,19 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
             AND m.telegram_id::text=a.payload->>'operator_id'
           WHERE a.tenant_id=%s::uuid AND a.entity_type='dialog_episode'
-            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply','dialog_close')
-            AND a.payload->>'channel_id'=%s AND a.payload->>'conversation_id'=%s
-            AND (a.action='dialog_transfer' OR a.actor_telegram_id::text=a.payload->>'operator_id')
+            AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply','dialog_close',
+                             'dialog_join_group','dialog_leave_group','dialog_transfer_group')
+            AND a.payload->>'conversation_id'=%s AND (a.payload->>'channel_id'=%s"""+group_events+""")
+            AND (a.action IN ('dialog_transfer','dialog_transfer_group') OR a.actor_telegram_id::text=a.payload->>'operator_id')
             AND (%s::timestamptz IS NULL OR a.created_at>=%s::timestamptz)
             AND (%s::timestamptz IS NULL OR a.created_at<%s::timestamptz)
           ORDER BY a.created_at DESC,a.id DESC LIMIT %s""",
-            (tenant,channel,conversation,lower,lower,upper,upper,_PAGE_LIMIT+1))
+            (tenant,conversation,channel,*((channel,group_actor) if group_actor is not None else ()),lower,lower,upper,upper,_PAGE_LIMIT+1))
         rows=cur.fetchall()
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
-    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_takeover":"takeover","dialog_no_reply":"no_reply","dialog_close":"close"}
+    kinds={"dialog_accept":"accept","dialog_start":"start","dialog_transfer":"transfer","dialog_takeover":"takeover",
+           "dialog_no_reply":"no_reply","dialog_close":"close","dialog_join_group":"join_group",
+           "dialog_leave_group":"leave_group","dialog_transfer_group":"transfer_group"}
     shown=rows[:_PAGE_LIMIT]
     result={"operator_events": [{"id":row["id"],"kind":kinds[row["action"]],"at":row["created_at"].isoformat(),
                                 "employee_name":str(row["display_name"] or "").strip()[:120]}

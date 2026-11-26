@@ -1,6 +1,7 @@
 """Same-origin, company/user-bound chat send endpoint."""
 from aiohttp import web
 from tenant_chat_send_service import run
+from tenant_chat_send_policy import send_error_payload
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
 
@@ -21,7 +22,7 @@ def handler(member_from_request, canonical_origin, request_provider, wait_slot, 
             result = await run(session, data, request_provider, wait_slot, logger)
             return web.json_response({'success': True, **result}, headers=headers)
         except TenantLinearError as error:
-            return web.json_response({'success': False, 'error': str(error), 'keep_request': getattr(error, 'keep_request', False)}, status=error.status, headers=headers)
+            return web.json_response(send_error_payload(error), status=error.status, headers=headers)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'success': False, 'error': 'Sorğu düzgün deyil.'}, status=400, headers=headers)
         except Exception:

@@ -37,7 +37,7 @@ def test_api_auth_csrf_input_and_context():
     assert asyncio.run(call(Request('DELETE'))).status == 405
     for origin in ('', 'https://foreign.test'):
         assert asyncio.run(call(Request('POST', {'source': 'native'}, origin))).status == 403
-    for data in ({'source': None}, {'source': []}, {'source': 'all'}, [], {'source': 'native', 'actor_id': 18}):
+    for data in ({'source': None}, {'source': []}, {'source': 'all'}, [], {'source': 'native', 'actor_id': 18}, {}, {'status': 'closed'}, {'status': []}, {'status': None}):
         assert asyncio.run(call(Request('POST', data))).status == 400
     for request in (Request(tenant=OTHER), Request(actor='18')):
         assert asyncio.run(call(request)).status == 409
@@ -57,6 +57,9 @@ def test_api_only_authenticated_identity_and_no_store():
         assert result.headers['Cache-Control'] == 'no-store'
         assert json.loads(result.body) == {'success': True, 'source': 'native'}
         preferences.assert_called_with(tenant_id=TENANT, actor_id=17, source=source)
+    result = asyncio.run(call(Request('POST', {'status': 'completed'})))
+    assert result.status == 200
+    preferences.assert_called_with(tenant_id=TENANT, actor_id=17, source=None, status='completed')
     preferences.side_effect = RuntimeError('secret database detail')
     result = asyncio.run(call(Request()))
     assert result.status == 503 and b'secret' not in result.body
@@ -77,7 +80,7 @@ def test_current_member_access_and_unavailable_saved_preference(monkeypatch):
     monkeypatch.setattr(store, 'member', member)
     connect = Mock(); monkeypatch.setattr(store, '_connect', connect)
     monkeypatch.setattr(store, '_sources', lambda policy: [{'source': 'native', 'view': True}, {'source': 'kommo', 'view': False}])
-    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo'}
+    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo', 'status': 'open'}
     member.assert_called_with(TENANT, 17)
     with pytest.raises(TenantPlatformError):
         store.preferences(tenant_id=TENANT, actor_id=17, source='kommo')
@@ -95,7 +98,7 @@ def test_sources_use_existing_policy_without_granting_access(monkeypatch):
     monkeypatch.setattr(store, 'member', lambda *_: current)
     monkeypatch.setattr('tenant_task_flow.scoped_access_enabled', lambda: False)
     # Native denial does not revoke the independently row-filtered Kommo feed.
-    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native'}
+    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native', 'status': 'open'}
     from tenant_policy import TenantPolicy
     from tenant_task_flow import _sources
     policy = TenantPolicy(current)
@@ -106,7 +109,7 @@ def test_sources_use_existing_policy_without_granting_access(monkeypatch):
     assert policy.kommo_task_scope()['pipelines'] == []
     assert policy.kommo_task_scope()['kommo_user_id'] == 0
     current['permissions'] = ['tasks']
-    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native'}
+    assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native', 'status': 'open'}
 
 
 def test_jsonb_tenant_user_isolation_and_roundtrip(monkeypatch):
@@ -126,16 +129,24 @@ def test_jsonb_tenant_user_isolation_and_roundtrip(monkeypatch):
                    '18': {'pipeline_ids': ['20']}}
         for tenant in (TENANT, OTHER):
             database.query("INSERT INTO saas_tenant_workflow_policies VALUES(%s::uuid,'members',%s::jsonb,17,now())", (tenant, json.dumps(initial)))
-        assert store.preferences(tenant_id=TENANT, actor_id=17, source='kommo') == {'source': 'kommo'}
-        assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo'}
+        assert store.preferences(tenant_id=TENANT, actor_id=17, source='kommo') == {'source': 'kommo', 'status': 'open'}
+        assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo', 'status': 'open'}
         saved = database.query("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid", (TENANT,))[0]['value']
         assert saved == {**initial, '17': {**initial['17'], 'task_view': {'source': 'kommo'}}}
         assert database.query("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid", (OTHER,))[0]['value'] == initial
         store.preferences(tenant_id=TENANT, actor_id=19, source='native')
         newer = database.query("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid", (TENANT,))[0]['value']
         assert newer == {**saved, '19': {'task_view': {'source': 'native'}}}
+        assert store.preferences(tenant_id=TENANT, actor_id=17, status='completed') == {
+            'source': 'kommo', 'status': 'completed'}
+        assert store.preferences(tenant_id=TENANT, actor_id=17, source='native') == {
+            'source': 'native', 'status': 'completed'}
+        assert store.preferences(tenant_id=TENANT, actor_id=17) == {
+            'source': 'native', 'status': 'completed'}
+        assert store.preferences(tenant_id=TENANT, actor_id=19)['status'] == 'open'
+        assert store.preferences(tenant_id=OTHER, actor_id=17)['status'] == 'open'
         fresh = '00000000-0000-0000-0000-000000000103'
         store.preferences(tenant_id=fresh, actor_id=17, source='native')
-        assert store.preferences(tenant_id=fresh, actor_id=17) == {'source': 'native'}
+        assert store.preferences(tenant_id=fresh, actor_id=17) == {'source': 'native', 'status': 'open'}
     finally:
         database.close()
