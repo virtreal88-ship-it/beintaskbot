@@ -156,7 +156,7 @@ def get_deal(tenant_id, deal_id, *, actor_id=None):
             return public_deal(cur.fetchone(), profile)
 
 
-def list_deals(tenant_id, search='', limit=50, *, actor_id=None):
+def list_deals(tenant_id, search='', limit=50, *, actor_id=None, offset=0):
     from tenant_crm_queries import search_predicate
     predicate, terms = search_predicate(search, ('d.title','c.display_name','co.name','c.phone','co.phone','d.stage_id','stage.name'),
                                         ('c.phone','co.phone')) if search else ('TRUE', [])
@@ -177,8 +177,8 @@ def list_deals(tenant_id, search='', limit=50, *, actor_id=None):
                   AND stage.pipeline_id=d.pipeline_id AND stage.stage_id=d.stage_id
                 WHERE d.tenant_id=%s::uuid AND d.archived_at IS NULL AND ({where})
                 AND {predicate}
-                ORDER BY d.updated_at DESC,d.id LIMIT %s""",
-                [*action_params, *contact_params, *company_params, tenant_id, *params, *terms, max(1,min(int(limit),100))])
+                ORDER BY d.updated_at DESC,d.id LIMIT %s OFFSET %s""",
+                [*action_params, *contact_params, *company_params, tenant_id, *params, *terms, max(1, min(int(limit), 100)), offset])
             return [public_deal(row, profile) for row in cur.fetchall()]
 
 

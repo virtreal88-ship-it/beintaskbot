@@ -7,9 +7,9 @@
   const uuid = value => /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(String(value || ''));
   const taskId = (source, id) => source === 'native' ? uuid(id) ? String(id).toLowerCase() : null : /^[1-9]\d*$/.test(String(id)) ? String(id) : null;
   const copy = {
-    ru: {eyebrow:'ПЛАН РАБОТЫ',title:'Задачи',intro:'Выберите источник задач. Ваш выбор сохраняется в профиле.',create:'Создать задачу',refresh:'Обновить список',search:'Поиск по задачам',status:'Статус',all:'Все',open:'Открыта',completed:'Завершена',windowHint:'Поиск и фильтр применяются ко всем доступным задачам источника.',loading:'Загрузка…',empty:'В этом источнике задач нет.',noMatches:'По запросу совпадений нет.',error:'Не удалось загрузить задачи. Обновите список.',stale:'Обновление не удалось. Показан ранее загруженный список.',denied:'Задачи этого источника сейчас недоступны.',auth:'Проверяем текущий доступ…',compactCount:'Задач: {visible} / {shown}',count:'Показано {visible} из {shown} загруженных · предел {limit}',more:'Есть ещё задачи; этот список ограничен.',source:'Где создать задачу?',nativeHint:'Собственная CRM. Требуется доступная сделка.',kommoHint:'Внешняя CRM. Маршрут зависит от сделки и исполнителя; форма объяснит его до сохранения.',cancel:'Отмена',close:'Закрыть',view:'Открыть',edit:'Редактировать',complete:'Завершить',reopen:'Открыть снова',archive:'Архивировать',deal:'Сделка',assignee:'Исполнитель',due:'Срок',none:'Не указан',native:'Beintaskbot',kommo:'Kommo · сохранённые данные',saved:'Задача сохранена. Текущий статус: ',pending:'Запрос ожидает согласования. Задача ещё не создана.',approvals:'Открыть согласования',unknown:'Результат сохранения не подтверждён. Не создавайте задачу повторно; проверьте прежний запрос.',check:'Проверить прежний запрос',notConfirmed:'Сохранение не подтверждено. Прежний запрос сохранён; автоматической повторной отправки нет.',rejected:'Запрос отклонён. Новая задача этим запросом не подтверждена.',cacheUnavailable:'Создание подтверждено; текущие данные задачи пока недоступны. Повторное создание не требуется.',binding:'Эта ссылка относится к другой компании или имеет неверный контекст. Выберите задачу в текущем списке.',unavailable:'Задача больше недоступна или не найдена.',conflict:'Задача изменилась. Ваш текст сохранён. Загрузите текущую версию и проверьте изменения перед сохранением.',unsafeComplete:'Завершение этого внешнего идентификатора недоступно в текущей форме.',confirmArchive:'Архивировать задачу? Связанные записи сохранятся.',readAgain:'Загрузить текущую задачу',writeDenied:'Текущее право изменения недоступно. Введённые данные сохранены.',sync:'Административная синхронизация Kommo',syncHint:'Отдельная синхронизация обращается к Kommo. Обновление списка только читает сохранённые задачи.'},
-    az: {eyebrow:'İŞ PLANI',title:'Tapşırıqlar',intro:'Tapşırıq mənbəyini seçin. Seçiminiz profilinizdə saxlanılır.',create:'Tapşırıq yarat',refresh:'Siyahını yenilə',search:'Tapşırıqlarda axtarış',status:'Vəziyyət',all:'Hamısı',open:'Açıq',completed:'Tamamlandı',windowHint:'Axtarış və filtr mənbədə görə bildiyiniz bütün tapşırıqlara aiddir.',loading:'Tapşırıqlar yüklənir…',empty:'Bu mənbədə tapşırıq yoxdur.',noMatches:'Uyğunluq yoxdur.',error:'Tapşırıqları yükləmək mümkün olmadı. Siyahını yeniləyin.',stale:'Yeniləmə alınmadı. Əvvəl yüklənmiş siyahı göstərilir.',denied:'Bu mənbənin tapşırıqları hazırda əlçatan deyil.',auth:'Cari giriş yoxlanılır…',compactCount:'Tapşırıqlar: {visible} / {shown}',count:'{shown} yüklənmiş tapşırıqdan {visible} göstərilir · hədd {limit}',more:'Daha çox tapşırıq var; siyahı məhduddur.',source:'Tapşırıq harada yaradılsın?',nativeHint:'Daxili CRM. Əlçatan sövdələşmə tələb olunur.',kommoHint:'Xarici CRM. Marşrut sövdələşmədən və icraçıdan asılıdır; forma saxlamadan əvvəl bunu izah edəcək.',cancel:'Ləğv et',close:'Bağla',view:'Aç',edit:'Redaktə et',complete:'Tamamla',reopen:'Yenidən aç',archive:'Arxivlə',deal:'Sövdələşmə',assignee:'İcraçı',due:'Son tarix',none:'Göstərilməyib',native:'Beintaskbot',kommo:'Kommo · saxlanmış məlumatlar',saved:'Tapşırıq saxlanıldı. Cari vəziyyət: ',pending:'Sorğu təsdiq gözləyir. Tapşırıq hələ yaradılmayıb.',approvals:'Təsdiqlərə keç',unknown:'Saxlama nəticəsi təsdiqlənməyib. Yenidən yaratmayın; əvvəlki sorğunu yoxlayın.',check:'Əvvəlki sorğunu yoxla',notConfirmed:'Saxlama təsdiqlənməyib. Əvvəlki sorğu saxlanılıb; avtomatik təkrar göndərilmir.',rejected:'Sorğu rədd edilib. Bu sorğu ilə yeni tapşırıq təsdiqlənməyib.',cacheUnavailable:'Yaradılma təsdiqlənib; tapşırığın cari məlumatları hələ əlçatan deyil. Yenidən yaratmaq lazım deyil.',binding:'Bu keçid başqa şirkətə aiddir və ya konteksti yanlışdır. Cari siyahıdan tapşırıq seçin.',unavailable:'Tapşırıq artıq əlçatan deyil və ya tapılmadı.',conflict:'Tapşırıq dəyişib. Mətniniz saxlanılıb. Cari versiyanı yükləyib dəyişiklikləri yoxlayın.',unsafeComplete:'Bu xarici identifikatoru cari formada tamamlamaq mümkün deyil.',confirmArchive:'Tapşırıq arxivlənsin? Əlaqəli qeydlər saxlanılacaq.',readAgain:'Cari tapşırığı yüklə',writeDenied:'Cari dəyişiklik hüququ əlçatan deyil. Daxil etdiyiniz məlumatlar saxlanılıb.',sync:'Kommo inzibati sinxronizasiyası',syncHint:'Ayrıca sinxronizasiya Kommo-ya müraciət edir. Siyahının yenilənməsi yalnız saxlanmış tapşırıqları oxuyur.'},
-    en: {eyebrow:'WORK PLAN',title:'Tasks',intro:'Choose a task source. Your selection is saved to your profile.',create:'Create task',refresh:'Reload list',search:'Search tasks',status:'Status',all:'All',open:'Open',completed:'Completed',windowHint:'Search and status apply to all accessible tasks in this source.',loading:'Loading tasks…',empty:'There are no tasks in this source.',noMatches:'No matching tasks.',error:'Could not load tasks. Reload the list.',stale:'Reload failed. The previously loaded list is shown.',denied:'Tasks in this source are currently unavailable.',auth:'Checking current access…',compactCount:'Tasks: {visible} / {shown}',count:'Showing {visible} of {shown} loaded · limit {limit}',more:'More tasks exist; this list is bounded.',source:'Where should the task be created?',nativeHint:'Internal CRM. An accessible deal is required.',kommoHint:'External CRM. Routing depends on the deal and assignee; the form explains it before saving.',cancel:'Cancel',close:'Close',view:'Open',edit:'Edit',complete:'Complete',reopen:'Reopen',archive:'Archive',deal:'Deal',assignee:'Assignee',due:'Due',none:'Not set',native:'Beintaskbot',kommo:'Kommo · saved data',saved:'Task saved. Current status: ',pending:'The request is awaiting approval. A task has not been created yet.',approvals:'Open approvals',unknown:'The save result is unconfirmed. Do not create another task; check the original request.',check:'Check original request',notConfirmed:'Saving is not confirmed. The original request is retained; it is never sent again automatically.',rejected:'The request was rejected. A new task has not been confirmed for it.',cacheUnavailable:'Creation is confirmed; current task data is unavailable. Do not create another task.',binding:'This link belongs to another company or has an invalid context. Choose a task in the current list.',unavailable:'This task is no longer available or was not found.',conflict:'The task changed. Your text is preserved. Load the current version and review it before saving.',unsafeComplete:'This external identifier cannot be completed with the current form.',confirmArchive:'Archive this task? Related records will be retained.',readAgain:'Load current task',writeDenied:'The current update permission is unavailable. Your input is preserved.',sync:'Administrative Kommo synchronization',syncHint:'Separate synchronization contacts Kommo. Reloading the list only reads saved tasks.'}
+    ru: {eyebrow:'ПЛАН РАБОТЫ',title:'Задачи',intro:'Выберите источник задач. Ваш выбор сохраняется в профиле.',create:'Создать задачу',refresh:'Обновить список',search:'Поиск по задачам',status:'Статус',all:'Все',open:'Открыта',completed:'Завершена',windowHint:'Поиск и фильтр применяются ко всем доступным задачам источника.',loading:'Загрузка…',empty:'В этом источнике задач нет.',emptyOpen:'Открытых задач нет.',emptyCompleted:'Завершённых задач нет.',noMatches:'По запросу совпадений нет.',error:'Не удалось загрузить задачи. Обновите список.',stale:'Обновление не удалось. Показан ранее загруженный список.',denied:'Задачи этого источника сейчас недоступны.',auth:'Проверяем текущий доступ…',compactCount:'Задач: {visible} / {shown}',count:'Показано {visible} из {shown} загруженных',more:'Есть ещё задачи.',source:'Где создать задачу?',nativeHint:'Собственная CRM. Требуется доступная сделка.',kommoHint:'Внешняя CRM. Маршрут зависит от сделки и исполнителя; форма объяснит его до сохранения.',cancel:'Отмена',close:'Закрыть',view:'Открыть',edit:'Редактировать',complete:'Завершить',reopen:'Открыть снова',archive:'Архивировать',deal:'Сделка',assignee:'Исполнитель',due:'Срок',none:'Не указан',native:'Beintaskbot',kommo:'Kommo · сохранённые данные',saved:'Задача сохранена. Текущий статус: ',pending:'Запрос ожидает согласования. Задача ещё не создана.',approvals:'Открыть согласования',unknown:'Результат сохранения не подтверждён. Не создавайте задачу повторно; проверьте прежний запрос.',check:'Проверить прежний запрос',notConfirmed:'Сохранение не подтверждено. Прежний запрос сохранён; автоматической повторной отправки нет.',rejected:'Запрос отклонён. Новая задача этим запросом не подтверждена.',cacheUnavailable:'Создание подтверждено; текущие данные задачи пока недоступны. Повторное создание не требуется.',binding:'Эта ссылка относится к другой компании или имеет неверный контекст. Выберите задачу в текущем списке.',unavailable:'Задача больше недоступна или не найдена.',conflict:'Задача изменилась. Ваш текст сохранён. Загрузите текущую версию и проверьте изменения перед сохранением.',unsafeComplete:'Завершение этого внешнего идентификатора недоступно в текущей форме.',confirmArchive:'Архивировать задачу? Связанные записи сохранятся.',readAgain:'Загрузить текущую задачу',writeDenied:'Текущее право изменения недоступно. Введённые данные сохранены.',sync:'Административная синхронизация Kommo',syncHint:'Отдельная синхронизация обращается к Kommo. Обновление списка только читает сохранённые задачи.'},
+    az: {eyebrow:'İŞ PLANI',title:'Tapşırıqlar',intro:'Tapşırıq mənbəyini seçin. Seçiminiz profilinizdə saxlanılır.',create:'Tapşırıq yarat',refresh:'Siyahını yenilə',search:'Tapşırıqlarda axtarış',status:'Vəziyyət',all:'Hamısı',open:'Açıq',completed:'Tamamlandı',windowHint:'Axtarış və filtr mənbədə görə bildiyiniz bütün tapşırıqlara aiddir.',loading:'Tapşırıqlar yüklənir…',empty:'Bu mənbədə tapşırıq yoxdur.',emptyOpen:'Açıq tapşırıq yoxdur.',emptyCompleted:'Tamamlanmış tapşırıq yoxdur.',noMatches:'Uyğunluq yoxdur.',error:'Tapşırıqları yükləmək mümkün olmadı. Siyahını yeniləyin.',stale:'Yeniləmə alınmadı. Əvvəl yüklənmiş siyahı göstərilir.',denied:'Bu mənbənin tapşırıqları hazırda əlçatan deyil.',auth:'Cari giriş yoxlanılır…',compactCount:'Tapşırıqlar: {visible} / {shown}',count:'{shown} yüklənmiş tapşırıqdan {visible} göstərilir',more:'Daha çox tapşırıq var.',source:'Tapşırıq harada yaradılsın?',nativeHint:'Daxili CRM. Əlçatan sövdələşmə tələb olunur.',kommoHint:'Xarici CRM. Marşrut sövdələşmədən və icraçıdan asılıdır; forma saxlamadan əvvəl bunu izah edəcək.',cancel:'Ləğv et',close:'Bağla',view:'Aç',edit:'Redaktə et',complete:'Tamamla',reopen:'Yenidən aç',archive:'Arxivlə',deal:'Sövdələşmə',assignee:'İcraçı',due:'Son tarix',none:'Göstərilməyib',native:'Beintaskbot',kommo:'Kommo · saxlanmış məlumatlar',saved:'Tapşırıq saxlanıldı. Cari vəziyyət: ',pending:'Sorğu təsdiq gözləyir. Tapşırıq hələ yaradılmayıb.',approvals:'Təsdiqlərə keç',unknown:'Saxlama nəticəsi təsdiqlənməyib. Yenidən yaratmayın; əvvəlki sorğunu yoxlayın.',check:'Əvvəlki sorğunu yoxla',notConfirmed:'Saxlama təsdiqlənməyib. Əvvəlki sorğu saxlanılıb; avtomatik təkrar göndərilmir.',rejected:'Sorğu rədd edilib. Bu sorğu ilə yeni tapşırıq təsdiqlənməyib.',cacheUnavailable:'Yaradılma təsdiqlənib; tapşırığın cari məlumatları hələ əlçatan deyil. Yenidən yaratmaq lazım deyil.',binding:'Bu keçid başqa şirkətə aiddir və ya konteksti yanlışdır. Cari siyahıdan tapşırıq seçin.',unavailable:'Tapşırıq artıq əlçatan deyil və ya tapılmadı.',conflict:'Tapşırıq dəyişib. Mətniniz saxlanılıb. Cari versiyanı yükləyib dəyişiklikləri yoxlayın.',unsafeComplete:'Bu xarici identifikatoru cari formada tamamlamaq mümkün deyil.',confirmArchive:'Tapşırıq arxivlənsin? Əlaqəli qeydlər saxlanılacaq.',readAgain:'Cari tapşırığı yüklə',writeDenied:'Cari dəyişiklik hüququ əlçatan deyil. Daxil etdiyiniz məlumatlar saxlanılıb.',sync:'Kommo inzibati sinxronizasiyası',syncHint:'Ayrıca sinxronizasiya Kommo-ya müraciət edir. Siyahının yenilənməsi yalnız saxlanmış tapşırıqları oxuyur.'},
+    en: {eyebrow:'WORK PLAN',title:'Tasks',intro:'Choose a task source. Your selection is saved to your profile.',create:'Create task',refresh:'Reload list',search:'Search tasks',status:'Status',all:'All',open:'Open',completed:'Completed',windowHint:'Search and status apply to all accessible tasks in this source.',loading:'Loading tasks…',empty:'There are no tasks in this source.',emptyOpen:'No open tasks.',emptyCompleted:'No completed tasks.',noMatches:'No matching tasks.',error:'Could not load tasks. Reload the list.',stale:'Reload failed. The previously loaded list is shown.',denied:'Tasks in this source are currently unavailable.',auth:'Checking current access…',compactCount:'Tasks: {visible} / {shown}',count:'Showing {visible} of {shown} loaded',more:'More tasks are available.',source:'Where should the task be created?',nativeHint:'Internal CRM. An accessible deal is required.',kommoHint:'External CRM. Routing depends on the deal and assignee; the form explains it before saving.',cancel:'Cancel',close:'Close',view:'Open',edit:'Edit',complete:'Complete',reopen:'Reopen',archive:'Archive',deal:'Deal',assignee:'Assignee',due:'Due',none:'Not set',native:'Beintaskbot',kommo:'Kommo · saved data',saved:'Task saved. Current status: ',pending:'The request is awaiting approval. A task has not been created yet.',approvals:'Open approvals',unknown:'The save result is unconfirmed. Do not create another task; check the original request.',check:'Check original request',notConfirmed:'Saving is not confirmed. The original request is retained; it is never sent again automatically.',rejected:'The request was rejected. A new task has not been confirmed for it.',cacheUnavailable:'Creation is confirmed; current task data is unavailable. Do not create another task.',binding:'This link belongs to another company or has an invalid context. Choose a task in the current list.',unavailable:'This task is no longer available or was not found.',conflict:'The task changed. Your text is preserved. Load the current version and review it before saving.',unsafeComplete:'This external identifier cannot be completed with the current form.',confirmArchive:'Archive this task? Related records will be retained.',readAgain:'Load current task',writeDenied:'The current update permission is unavailable. Your input is preserved.',sync:'Administrative Kommo synchronization',syncHint:'Separate synchronization contacts Kommo. Reloading the list only reads saved tasks.'}
   };
   const text = () => copy[window.tenantI18n?.language] || copy.az;
   const rows = {native:{rows:[],phase:'idle',serial:0,page:null},kommo:{rows:[],phase:'idle',serial:0,page:null}};
@@ -50,6 +50,17 @@
     return data;
   }
   let preferredSource='native', activeSource='native', preferenceSerial=0, preferenceBusy=false, preferenceMessage='';
+  const statuses = ['open', 'completed', 'all'];
+  let savedStatus = 'open', preferenceRead = null, statusWrites = Promise.resolve(), statusSerial = 0;
+  const taskStatus = () => {
+    const requested = new URL(location.href).searchParams.get('task_status');
+    return statuses.includes(requested) ? requested : savedStatus;
+  };
+  const preferencePath = '/api/platform/crm/task-view-preferences';
+  const pagers = {
+    native: window.tenantListPagination($('nativeTasksMore'), () => void refreshSource('native', {append:true})),
+    kommo: window.tenantListPagination($('tasksMore'), () => void refreshSource('kommo', {append:true}))
+  };
   const sourceCopy = () => ({ru:{label:'Источник задач',saving:'Сохраняем выбор…',failed:'Не удалось сохранить выбор. Повторите выбор источника.',loadFailed:'Сохранённый выбор не загрузился. Можно выбрать источник снова.'},az:{label:'Tapşırıq mənbəyi',saving:'Seçim saxlanılır…',failed:'Seçimi saxlamaq mümkün olmadı. Mənbəni yenidən seçin.',loadFailed:'Saxlanmış seçim yüklənmədi. Mənbəni yenidən seçə bilərsiniz.'},en:{label:'Task source',saving:'Saving selection…',failed:'Could not save your selection. Select the source again.',loadFailed:'Saved selection could not be loaded. You can select a source again.'}}[window.tenantI18n?.language] || {label:'Tapşırıq mənbəyi',saving:'Seçim saxlanılır…',failed:'Seçimi saxlamaq mümkün olmadı.',loadFailed:'Saxlanmış seçim yüklənmədi.'});
   function renderSourcePicker(){
     const select=$('taskFeedSource');if(!select)return;
@@ -61,32 +72,74 @@
     for(const option of select.options)option.disabled=unavailable(option.value)||sourceActions(option.value).view!==true;
     $('taskFeedSourceLabel').textContent=sourceCopy().label;
     $('taskFeedPreferenceNotice').textContent=preferenceBusy?sourceCopy().saving:preferenceMessage;
+    $('taskStatus').disabled = !allowed() || !!preferenceRead;
     for(const source of ['native','kommo']){
       const panel=$(source==='native'?'nativeTasksList':'tasksList')?.closest('.task-source-panel');
       if(panel)panel.hidden=source!==activeSource;
       const counter=$(source==='native'?'nativeTaskCount':'kommoTaskCount');if(counter)counter.hidden=source!==activeSource;
       const controls=$(source==='native'?'nativeTaskViewControls':'kommoTaskViewControls');if(controls)controls.hidden=source!==activeSource;
     }
+    for (const source of ['native','kommo']) renderPager(source);
   }
   async function loadSourcePreference(){
     if(!$('taskFeedSource')||!allowed())return;
     const serial=++preferenceSerial,scope=capture();preferenceBusy=true;preferenceMessage='';renderSourcePicker();
-    try{const result=await api('/api/platform/crm/task-view-preferences',{scope});if(serial!==preferenceSerial)return;if(!['native','kommo'].includes(result.source))throw new Error('invalid_preference');preferredSource=result.source;}
+    try {
+      const result = await api(preferencePath, {scope});
+      if (serial!==preferenceSerial) return;
+      if (!['native','kommo'].includes(result.source)) throw new Error('invalid_preference');
+      preferredSource = result.source;
+      savedStatus = statuses.includes(result.status) ? result.status : 'open';
+      $('taskStatus').value = taskStatus();
+    }
     catch(error){if(serial!==preferenceSerial||error.stale)return;preferenceMessage=sourceCopy().loadFailed;}
-    finally{if(serial===preferenceSerial&&current(scope)){preferenceBusy=false;renderSourcePicker();}}
+    finally {
+      if (serial===preferenceSerial && current(scope)) {
+        preferenceRead = null;
+        preferenceBusy = false;
+        renderSourcePicker();
+      }
+    }
   }
   async function saveSourcePreference(){
     const select=$('taskFeedSource'),chosen=select.value;if(!allowed()||preferenceBusy||sourceActions(chosen).view!==true)return;
     clearTarget();preferredSource=chosen;void refreshSource(chosen,{force:true});const serial=++preferenceSerial,scope=capture();preferenceBusy=true;preferenceMessage='';renderSourcePicker();
-    try{const result=await api('/api/platform/crm/task-view-preferences',{method:'POST',body:{source:chosen},scope});if(serial!==preferenceSerial)return;if(result.source!==chosen)throw new Error('invalid_preference');}
+    try{const result=await api(preferencePath,{method:'POST',body:{source:chosen},scope});if(serial!==preferenceSerial)return;if(result.source!==chosen)throw new Error('invalid_preference');}
     catch(error){if(serial!==preferenceSerial||error.stale)return;preferenceMessage=sourceCopy().failed;}
     finally{if(serial===preferenceSerial&&current(scope)){preferenceBusy=false;renderSourcePicker();}}
+  }
+  function saveStatusPreference(status) {
+    if (!allowed() || !statuses.includes(status)) return;
+    const scope = capture(), serial = ++statusSerial;
+    preferenceMessage = '';
+    renderSourcePicker();
+    statusWrites = statusWrites.then(async () => {
+      if (!current(scope) || serial!==statusSerial) return;
+      try {
+        const result = await api(preferencePath, {method:'POST', body:{status}, scope});
+        if (result.status!==status) throw new Error('invalid_preference');
+        savedStatus = status;
+      } catch (error) {
+        if (current(scope) && serial===statusSerial && !error.stale) {
+          preferenceMessage = ({ru:'Не удалось сохранить статус. Выберите его снова.',
+            az:'Vəziyyət saxlanmadı. Yenidən seçin.', en:'Could not save the status. Select it again.'}[window.tenantI18n?.language] || 'Vəziyyət saxlanmadı.');
+          renderSourcePicker();
+        }
+      }
+    });
   }
   const read = (source, extra={},scope=capture()) => api('/api/platform/crm/tasks?'+new URLSearchParams({flow:'1',source,...extra}),{scope});
   const cleanText = value => String(value||'').replace(/\n?\[CRM:[a-f0-9]{32}\]/g,'');
   function rowValid(source,row){return row&&row.source===source&&typeof row.id==='string'&&taskId(source,row.id)&&['open','completed'].includes(row.status)&&typeof row.text==='string';}
   const date = value => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleString(window.tenantI18n?.language||'az',{dateStyle:'medium',timeStyle:'short'}) : text().none;
-  const filters=()=>({search:$('taskSearch').value.trim().slice(0,160),status:$('taskStatus').value||'all'});
+  const filters=()=>({search:$('taskSearch').value.trim().slice(0,160),status:$('taskStatus').value||'open'});
+  const queryKey = query => JSON.stringify(query);
+  function renderPager(source) {
+    const state = rows[source];
+    pagers[source]({more: allowed() && visible() && source===activeSource &&
+                          state.query===queryKey(filters()) && Number.isSafeInteger(state.page?.next_offset),
+                    busy: !!state.promise, loadingLabel: text().loading});
+  }
   function filtered(source){const {search,status}=filters(),query=search.toLocaleLowerCase(),state=rows[source];
     return state.rows.filter(row=>(status==='all'||row.status===status)&&(!query||state.search===search||
       [row.display_title,row.text,row.deal_title,row.contact_name,row.company_name,row.responsible_name,row.phone]
@@ -107,7 +160,9 @@
     const state=rows[source],target=source==='native'?'nativeTasksList':'tasksList',notice=$(source==='native'?'nativeTasksNotice':'tasksNotice'),c=text(),selected=filtered(source);
     const phase=!allowed()?'auth':state.phase;
     notice.textContent=phase==='stale'?c.stale:phase==='error'?c.error:phase==='forbidden'?c.denied:'';notice.classList.toggle('show',!!notice.textContent);
-    const empty=phase==='loading'||phase==='idle'?c.loading:phase==='auth'?(profile?c.auth:c.loading):phase==='forbidden'?c.denied:phase==='error'?c.error:(state.rows.length||filters().search||filters().status!=='all')?c.noMatches:c.empty;
+    const {search, status} = filters();
+    const emptyResult = search ? c.noMatches : status==='open' ? c.emptyOpen : status==='completed' ? c.emptyCompleted : c.empty;
+    const empty=phase==='loading'||phase==='idle'?c.loading:phase==='auth'?(profile?c.auth:c.loading):phase==='forbidden'?c.denied:phase==='error'?c.error:emptyResult;
     const rendered=['ready','stale'].includes(phase)?selected:[];
     const settings={target,source,labels:c,canOpenDeal:row=>!!linkedDeal(source,row),onOpenDeal:id=>openLinkedDeal(source,id),empty,canMove:row=>(source==='kommo'?sourceActions(source).reschedule===true&&typeof row.source_revision==='string'&&!!row.source_revision:taskActions(source,row,sourceActions(source)).update===true)&&!pendingMove(source,row.id),moveNeedsSync:row=>source==='kommo'&&sourceActions(source).reschedule===true&&!row.source_revision,pendingMove:row=>!!pendingMove(source,row.id),onCheckMove:id=>checkMove(source,id),onMove:(id,due)=>moveDue(source,id,due),complete:sourceActions(source).complete===true,onOpen:id=>open(source,id),onEdit:id=>edit(id),onState:(id,action)=>changeState(id,action)};
     if(window.tenantChakraCRM?.renderTasks)window.tenantChakraCRM.renderTasks(rendered,settings);
@@ -118,7 +173,7 @@
     const showCount=state.page&&allowed();
     counter.textContent=showCount?c.compactCount.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length))+(state.page.has_more?' +':''):'';
     // Keep loaded-window details accessible without expanding the source header.
-    counter.title=showCount?c.count.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length)).replace('{limit}',String(state.page.limit))+(state.page.has_more?' · '+c.more:'')+' · '+c.windowHint:'';
+    counter.title=showCount?c.count.replace('{visible}',String(selected.length)).replace('{shown}',String(state.rows.length))+(state.page.has_more?' · '+c.more:'')+' · '+c.windowHint:'';
     if(counter.title)counter.setAttribute('aria-label',counter.title);else counter.removeAttribute('aria-label');
   }
   function render(){const c=text();$('taskSearch').placeholder=c.search;document.querySelectorAll('[data-task-flow-label]').forEach(node=>node.textContent=c[node.dataset.taskFlowLabel]||'');$('nativeTaskCreate').textContent='+ '+c.create;$('nativeTaskCreate').disabled=!allowed()||!['native','kommo'].some(canEnter);for(const option of $('taskStatus').options)option.textContent=c[option.value];for(const source of ['native','kommo'])renderSource(source);translateModal();renderSourcePicker();}
@@ -167,12 +222,68 @@
     }catch(error){if(current(scope)){const box=$('tasksFlowNotice');box.textContent=error.unknown?text().unknown:error.status===409?text().conflict:text().writeDenied;box.classList.add('show');}throw error;}
     finally{movingTasks.delete(lock);}
   }
-  async function refreshSource(source,{force=false}={}){
-    const state=rows[source];if(!allowed()||!visible()||routeTarget()?.error)return;if(state.promise&&!force)return state.promise;
-    const serial=++state.serial,scope=capture();if(!state.page){state.phase='loading';renderSource(source);}
-    const promise=(async()=>{try{const query=filters();const data=await read(source,query,scope);if(!current(scope)||serial!==state.serial||JSON.stringify(query)!==JSON.stringify(filters()))return;if(data.source!==source||!Array.isArray(data.tasks)||!data.tasks.every(row=>rowValid(source,row))||!Array.isArray(data.sources))throw new Error('invalid_task_list');state.search=query.search;state.rows=data.tasks;state.page=data;state.phase='ready';}
-      catch(error){if(!current(scope)||serial!==state.serial||error.stale)return;state.phase=error.status===403?'forbidden':state.page?'stale':'error';if(error.status===403){state.rows=[];state.page=null;}if(error.status===409)void proveAccess();}
-      finally{if(current(scope)&&serial===state.serial){state.promise=null;enforcePrivateAccess();render();window.tenantTaskBridge?.render();window.tenantExternalTasks?.render();window.tenantTaskCompletion?.render();}}})();state.promise=promise;return promise;
+  async function refreshSource(source, {force=false, append=false}={}) {
+    if (!allowed() || !visible() || routeTarget()?.error) return;
+    const scope = capture();
+    if (preferenceRead) await preferenceRead;
+    if (!current(scope) || !visible() || routeTarget()?.error) return;
+
+    const state = rows[source], query = filters(), key = queryKey(query);
+    const previous = state.query===key, offset = append ? state.page?.next_offset : 0;
+    if (append && (source!==activeSource || !previous || !Number.isSafeInteger(offset))) return;
+    if (state.promise && !force) return state.promise;
+    const serial = ++state.serial;
+    const requestCurrent = () => current(scope) && serial===state.serial && key===queryKey(filters());
+    if (!state.page) {
+      state.phase = 'loading';
+      renderSource(source);
+    }
+
+    const promise = (async () => {
+      try {
+        const incoming = [];
+        const target = !append && previous ? state.rows.length : 0;
+        const recentQuery = {...query, order:'recent'};
+        let page, next = offset;
+        do {
+          page = await read(source, next ? {...recentQuery, offset:next} : recentQuery, scope);
+          if (!requestCurrent()) return;
+          if (page.source!==source || !Array.isArray(page.tasks) ||
+              !page.tasks.every(row => rowValid(source,row)) || !Array.isArray(page.sources)) {
+            throw new Error('invalid_task_list');
+          }
+          incoming.push(...page.tasks);
+          next = Number.isSafeInteger(page.next_offset) && page.next_offset>next ? page.next_offset : null;
+        } while (next!==null && incoming.length<target);
+        const merged = append ? [...state.rows, ...incoming] : incoming;
+        state.search = query.search;
+        state.query = key;
+        state.rows = [...new Map(merged.map(row => [row.id, row])).values()];
+        state.page = {...page, next_offset:next};
+        state.phase = 'ready';
+      } catch (error) {
+        if (!requestCurrent() || error.stale) return;
+        const denied = error.status===401 || error.status===403;
+        state.phase = denied ? 'forbidden' : state.page ? 'stale' : 'error';
+        if (denied) {
+          state.rows = [];
+          state.page = null;
+        }
+        if (error.status===409) void proveAccess();
+      } finally {
+        if (current(scope) && serial===state.serial) {
+          state.promise = null;
+          enforcePrivateAccess();
+          render();
+          window.tenantTaskBridge?.render();
+          window.tenantExternalTasks?.render();
+          window.tenantTaskCompletion?.render();
+        }
+      }
+    })();
+    state.promise = promise;
+    renderPager(source);
+    return promise;
   }
   const refresh=()=>Promise.allSettled(['native','kommo'].map(source=>refreshSource(source)));
   const start=()=>Promise.allSettled(['native','kommo'].map(source=>rows[source].phase==='idle'?refreshSource(source):rows[source].promise));
@@ -181,7 +292,7 @@
   function translateModal(){const c=text(),modal=$('taskSourceModal');if(!modal)return;$('taskSourceTitle').textContent=c.source;modal.querySelector('[data-task-flow-close]').setAttribute('aria-label',c.close);for(const source of ['native','kommo']){const button=modal.querySelector(`[data-task-create-source="${source}"]`);button.textContent=(source==='native'?c.native:'Kommo')+((source==='native'?pending('native'):window.tenantExternalTasks?.hasPending())?' · '+c.check:'');button.disabled=!allowed()||!canEnter(source);modal.querySelector(`[data-task-source-hint="${source}"]`).textContent=c[source+'Hint'];}}
   function hide(modal,focus=true){modal.classList.remove('show');if(focus&&allowed())(opener?.isConnected?opener:$('nativeTaskCreate'))?.focus();}
   function clearCardPrivate(){for(const id of ['taskFlowCardTitle','taskFlowCardBody','taskFlowCardNotice','taskFlowCardActions'])$(id)?.replaceChildren();$('taskFlowCardNotice')?.classList.remove('show');}
-  function clear(){preferenceSerial++;preferenceBusy=false;preferenceMessage='';epoch++;routeRevision++;cardRevision++;editorProofSerial++;editorPaused=false;card=null;for(const value of Object.values(rows)){value.serial++;value.rows=[];value.page=null;value.phase='idle';value.promise=null;}$('taskFlowCard')?.classList.remove('show');clearCardPrivate();$('taskSourceModal')?.classList.remove('show');if(!proving||receiptContext!==`${profile?.member?.tenant_id}:${profile?.member?.telegram_id}`)$('taskSavedNotice').hidden=true;render();}
+  function clear(){preferenceSerial++;preferenceRead=null;statusSerial++;preferenceBusy=false;preferenceMessage='';epoch++;routeRevision++;cardRevision++;editorProofSerial++;editorPaused=false;card=null;for(const value of Object.values(rows)){value.serial++;value.rows=[];value.page=null;value.query=null;value.search='';value.phase='idle';value.promise=null;}$('taskFlowCard')?.classList.remove('show');clearCardPrivate();$('taskSourceModal')?.classList.remove('show');if(!proving||receiptContext!==`${profile?.member?.tenant_id}:${profile?.member?.telegram_id}`)$('taskSavedNotice').hidden=true;render();}
   const style=document.createElement('style');style.textContent='#view-tasks [hidden],.task-flow-modal [hidden]{display:none!important}#view-tasks .top{flex-wrap:wrap}#view-tasks .task-source-panel{margin-top:0;min-width:0}#view-tasks .task-flow-row{display:flex;justify-content:space-between;gap:12px;padding:16px;border-bottom:1px solid var(--line)}#view-tasks .task-flow-row>div{min-width:0}#view-tasks .task-flow-row button{min-height:44px;overflow-wrap:anywhere}#view-tasks .task-flow-open{text-align:left;background:none;border:0;color:var(--ink);font:inherit;font-weight:700}#view-tasks input,#view-tasks select{min-height:44px;min-width:0;max-width:100%}.task-flow-modal .modal-card{max-width:680px;width:calc(100% - 24px);max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box}.task-flow-modal button{min-height:44px;max-width:100%;white-space:normal}.task-flow-modal .modal-head{align-items:start}.task-flow-modal .modal-head h2{overflow-wrap:anywhere;min-width:0}.task-flow-modal .crm-modal-actions{display:flex;gap:10px;flex-wrap:wrap}.task-flow-modal p{overflow-wrap:anywhere}.task-flow-modal :focus-visible,#view-tasks :focus-visible{outline:3px solid #087c5c;outline-offset:3px}#taskSourceModal [data-task-create-source]{width:100%;text-align:left}';document.head.append(style);
   // The rest of the controller uses only authorized exact-read responses.
   const targetParams=['task_source','task_id','task_tenant'];
@@ -280,7 +391,7 @@
   function commandNotice(command){receiptContext=`${profile?.member?.tenant_id}:${profile?.member?.telegram_id}`;const box=$('taskSavedNotice');box.hidden=false;box.classList.add('show');box.textContent=text()[command.state==='created'?(command.task?'saved':'cacheUnavailable'):command.state==='approval_pending'?'pending':command.state==='rejected'?'rejected':command.state==='unknown'?'unknown':'notConfirmed'];if(command.state==='created'){if(command.task)confirmed(command.source,command.task);else savedRoute(command.source,command.task_id);void open(command.source,command.task_id,{push:false});}if(command.state==='approval_pending'){const nav=document.querySelector('.nav [data-view="approvals"]');if(nav&&!nav.hidden){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=text().approvals;button.onclick=()=>window.tenantAppNavigate('approvals',true);box.append(button);}}}
   async function saveNative(id,body,version,{replay=false}={}){const scope=capture(),command={...body,text:String(body.text||'').trim()};if(!id)savePending('native',command);let result;try{result=await api('/api/platform/crm/native/tasks'+(id?'/'+encodeURIComponent(id):''),{method:'POST',scope,body:{...command,...identity(),...(id?{action:'update',expected_updated_at:version}:{})}});const task=result.task,sameDue=task&&(command.due_at==null?task.due_at==null:task.due_at!=null&&!Number.isNaN(new Date(task.due_at).getTime())&&new Date(task.due_at).getTime()===new Date(command.due_at).getTime());if(!task||!taskId('native',task.id)||id&&task.id!==id||task.text!==command.text||String(task.responsible_id)!==String(command.responsible_id)||!sameDue||!id&&(task.deal_id!==command.deal_id||String(task.created_by)!==scope.expected_user_id)||!['open','completed'].includes(task.status))throw Object.assign(new Error('invalid_receipt'),{unknown:true});if(!id)clearPending('native',scope);return task;}
     catch(error){if(!id&&!replay&&!error.unknown&&!error.stale)clearPending('native',scope);throw error;}}
-  async function route(){const revision=++routeRevision;if(!visible()||!allowed())return;const target=routeTarget();bindingNotice(!!target?.error);if(target?.error){cardRevision++;card=null;$('taskFlowCard')?.classList.remove('show');clearCardPrivate();return;}const url=new URL(location.href);$('taskSearch').value=url.searchParams.get('task_q')||'';$('taskStatus').value=['all','open','completed'].includes(url.searchParams.get('task_status'))?url.searchParams.get('task_status'):'all';render();if(target){if(target.source==='native'&&$('nativeTaskModal').classList.contains('show')&&$('nativeTaskId').value===target.id)return;if(card?.source===target.source&&card.id===target.id&&card.task&&$('taskFlowCard')?.classList.contains('show'))return;await open(target.source,target.id,{push:false,revision});}else{$('taskFlowCard')?.classList.remove('show');cardRevision++;card=null;}if(history.state?.taskScroll&&!target)window.scrollTo?.(0,history.state.taskScroll);}
+  async function route(){const revision=++routeRevision;if(!visible()||!allowed())return;const target=routeTarget();bindingNotice(!!target?.error);if(target?.error){cardRevision++;card=null;$('taskFlowCard')?.classList.remove('show');clearCardPrivate();return;}const url=new URL(location.href);$('taskSearch').value=url.searchParams.get('task_q')||'';$('taskStatus').value=taskStatus();render();if(target){if(target.source==='native'&&$('nativeTaskModal').classList.contains('show')&&$('nativeTaskId').value===target.id)return;if(card?.source===target.source&&card.id===target.id&&card.task&&$('taskFlowCard')?.classList.contains('show'))return;await open(target.source,target.id,{push:false,revision});}else{$('taskFlowCard')?.classList.remove('show');cardRevision++;card=null;}if(history.state?.taskScroll&&!target)window.scrollTo?.(0,history.state.taskScroll);}
   function beginEditor(){editorProofSerial++;editorPaused=false;const box=$('tasksFlowNotice');if(box.dataset.taskEditorProof==='true'){box.replaceChildren();box.classList.remove('show');delete box.dataset.taskEditorProof;}}
   async function proveEditor({fromOptions=false}={}){const id=$('nativeTaskId').value,modal=$('nativeTaskModal');if(!id||!modal.classList.contains('show')||!allowed())return;const serial=++editorProofSerial,scope=capture(),token=window.tenantTaskBridge.snapshot();editorPaused=true;modal.style.visibility='hidden';window.tenantTaskBridge.render();const box=$('tasksFlowNotice');box.dataset.taskEditorProof='true';box.textContent=text().auth;box.classList.add('show');
     const relevant=()=>serial===editorProofSerial&&current(scope)&&window.tenantTaskBridge.same(token)&&$('nativeTaskId').value===id&&modal.classList.contains('show');
@@ -294,17 +405,17 @@
       if(serial!==proofSerial||scope.expected_tenant_id!==profile?.member?.tenant_id||scope.expected_user_id!==String(profile?.member?.telegram_id))return;
       for(const [id,source] of [['nativeTaskModal','native'],['tenantTaskModal','kommo'],['tenantCompleteModal','kommo'],['taskFlowCard',card?.source]])if($(id)&&source&&sourceActions(source).view===true&&rows[source].phase==='ready'&&(id!=='nativeTaskModal'||primaryConfirmed))$(id).style.visibility='';
     }catch{if(serial===proofSerial){paused=true;render();}}finally{proving=false;if(paused){const box=$('tasksFlowNotice');box.textContent=text().auth;box.classList.add('show');const retry=document.createElement('button');retry.className='outline';retry.textContent=text().readAgain;retry.onclick=()=>proveAccess();box.append(retry);}}}
-  function apply(data){const next=fingerprint(data);if(next===key&&!paused)return;const hadProfile=!!profile,same=profile?.member?.tenant_id===data?.member?.tenant_id&&String(profile?.member?.telegram_id)===String(data?.member?.telegram_id);if(hadProfile&&!same&&proving){proofSerial++;proving=false;}profile=data;key=next;paused=false;if(!same)preferredSource='native';clear();void loadSourcePreference();window.tenantTaskBridge?.render();if(hadProfile&&!same){$('taskSearch').value='';$('taskStatus').value='all';clearTarget();if(new URL(location.href).searchParams.get('view')==='tasks'){const url=new URL(location.href);url.searchParams.delete('task_q');url.searchParams.delete('task_status');history.replaceState(history.state,'',url);}}if(!allowed()){for(const id of ['nativeTaskModal','tenantTaskModal','tenantCompleteModal']){const modal=$(id);if(modal){modal.classList.remove('show');modal.querySelector('form')?.reset();}}}else if(visible()){if(hadProfile&&same&&!proving)void proveEditor();void route();void start();}if(proving){conceal();const serial=proofSerial;Promise.resolve().then(()=>{if(proving&&serial===proofSerial)conceal();});}}
+  function apply(data){const next=fingerprint(data);if(next===key&&!paused)return;const hadProfile=!!profile,same=profile?.member?.tenant_id===data?.member?.tenant_id&&String(profile?.member?.telegram_id)===String(data?.member?.telegram_id);if(hadProfile&&!same&&proving){proofSerial++;proving=false;}profile=data;key=next;paused=false;if(!same){preferredSource='native';savedStatus='open';statusWrites=Promise.resolve();}clear();preferenceRead=allowed()&&$('taskFeedSource')?loadSourcePreference():null;renderSourcePicker();window.tenantTaskBridge?.render();if(hadProfile&&!same){$('taskSearch').value='';$('taskStatus').value='open';clearTarget();if(new URL(location.href).searchParams.get('view')==='tasks'){const url=new URL(location.href);url.searchParams.delete('task_q');url.searchParams.delete('task_status');history.replaceState(history.state,'',url);}}if(!allowed()){for(const id of ['nativeTaskModal','tenantTaskModal','tenantCompleteModal']){const modal=$(id);if(modal){modal.classList.remove('show');modal.querySelector('form')?.reset();}}}else if(visible()){if(hadProfile&&same&&!proving)void proveEditor();void route();void start();}if(proving){conceal();const serial=proofSerial;Promise.resolve().then(()=>{if(proving&&serial===proofSerial)conceal();});}}
   let searchTimer;
   const rememberFilters=()=>{for(const state of Object.values(rows)){++state.serial;state.promise=null;}
-    clearTimeout(searchTimer);searchTimer=setTimeout(()=>void refreshSource(activeSource,{force:true}),250);render();if(new URL(location.href).searchParams.get('view')==='tasks'&&!routeTarget()?.error){const url=new URL(location.href);url.searchParams.set('task_q',$('taskSearch').value);url.searchParams.set('task_status',$('taskStatus').value);history.replaceState({...history.state,taskScroll:window.scrollY||0},'',url);}};
+    clearTimeout(searchTimer);const scope=capture();searchTimer=setTimeout(()=>{if(current(scope))void refreshSource(activeSource,{force:true});},250);render();if(new URL(location.href).searchParams.get('view')==='tasks'&&!routeTarget()?.error){const url=new URL(location.href);url.searchParams.set('task_q',$('taskSearch').value);url.searchParams.set('task_status',$('taskStatus').value);history.replaceState({...history.state,taskScroll:window.scrollY||0},'',url);}};
   if($('taskFeedSource'))$('taskFeedSource').onchange=saveSourcePreference;
-  $('tasksRefresh').onclick=()=>refresh();$('nativeTaskCreate').onclick=chooseSource;$('taskSearch').oninput=rememberFilters;$('taskStatus').onchange=rememberFilters;
+  $('tasksRefresh').onclick=()=>refresh();$('nativeTaskCreate').onclick=chooseSource;$('taskSearch').oninput=rememberFilters;$('taskStatus').onchange=()=>{rememberFilters();saveStatusPreference($('taskStatus').value);};
   document.addEventListener('tenant-profile',event=>apply(event.detail));
   document.addEventListener('tenant-auth-pending',()=>{paused=true;clear();});document.addEventListener('tenant-auth-invalid',()=>{paused=true;profile=null;key='';clear();});
   document.addEventListener('tenant-language',()=>{render();renderCard();});document.addEventListener('tenant-chakra-ready',render);
   document.addEventListener('tenant-view',()=>{if(visible()){void route();void refresh();}else{$('taskSourceModal')?.classList.remove('show');$('taskFlowCard')?.classList.remove('show');cardRevision++;window.tenantTaskBridge?.leave();window.tenantExternalTasks?.leave();window.tenantTaskCompletion?.leave();}});
-  window.addEventListener('popstate',()=>{if(!visible()){const origin=history.state?.taskOrigin;if(origin&&origin.tenant===profile?.member?.tenant_id&&origin.actor===String(profile?.member?.telegram_id)&&['deal','company'].includes(origin.type)&&uuid(origin.id))void window.tenantTaskBridge?.restoreOrigin(origin.type,origin.id);}void route();});
+  window.addEventListener('popstate',()=>{if(!visible()){const origin=history.state?.taskOrigin;if(origin&&origin.tenant===profile?.member?.tenant_id&&origin.actor===String(profile?.member?.telegram_id)&&['deal','company'].includes(origin.type)&&uuid(origin.id))void window.tenantTaskBridge?.restoreOrigin(origin.type,origin.id);}void route();if(visible() && rows[activeSource].query!==queryKey(filters()))void refreshSource(activeSource,{force:true});});
   document.addEventListener('tenant-crm-refresh-failed',()=>{if(visible()&&allowed()&&rows[activeSource].page){rows[activeSource].phase='stale';renderSource(activeSource);}});
   document.addEventListener('tenant-crm-reauthorized',()=>{if(visible()&&allowed())void refreshSource(activeSource);});
   document.addEventListener('tenant-crm-cache-refresh',event=>{if(event.detail?.resource==='tasks'&&event.detail.tenant_id===profile?.member?.tenant_id&&event.detail.expected_user_id===String(profile?.member?.telegram_id)&&activeSource==='native')void refreshSource('native');});

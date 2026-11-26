@@ -27,7 +27,15 @@ function installFixture(config={}){
       result={source,sources:f.flags,shown:items.length,limit:source==='native'?100:200,has_more:config.hasMore===true,scope:'tenant',state:items.length?'ready':'empty'};
       if(url.searchParams.has('request_id')){const request=url.searchParams.get('request_id');result.command=f.commands[request]||{source,request_id:request,state:'not_confirmed',task_id:null,task:null,cache_state:'not_applicable'};}
       else if(url.searchParams.has('task_id')){result.task=items.find(row=>row.id===url.searchParams.get('task_id'));if(!result.task)return response({success:false,error:'task_not_found'},404);}
-      else result.tasks=items;
+      else if (config.pageSize) {
+        const status=url.searchParams.get('status')||'all', offset=Number(url.searchParams.get('offset')||0);
+        const needle=(url.searchParams.get('search')||'').toLowerCase();
+        const matches=items.filter(row=>(status==='all'||row.status===status)&&row.text.toLowerCase().includes(needle));
+        result.tasks=matches.slice(offset,offset+config.pageSize);
+        result.has_more=offset+config.pageSize<matches.length;
+        result.next_offset=result.has_more?offset+config.pageSize:null;
+        result.shown=result.tasks.length;
+      } else result.tasks=items;
     }else if(url.pathname==='/api/platform/crm/tasks/options')result={executors:[{id:'11',name:'Owner',pipelines:[{pipeline_id:10,name:'Personal pipeline'}]},{id:'22',name:'No pipeline employee',pipelines:[]}],deals:[{id:'7',name:'Saved lead'}]};
     else if(url.pathname==='/api/platform/crm/tasks'&&method==='POST'){
       const existing=f.commands[body.request_id],row={source:'kommo',id:'9',text:body.text,status:'open',completed:false,due_at:body.due_at};

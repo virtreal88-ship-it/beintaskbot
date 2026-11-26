@@ -96,7 +96,7 @@ def test_shared_storage_keeps_task_deal_preferences_grants_and_tenants_independe
             database.query("INSERT INTO saas_tenant_workflow_policies VALUES(%s::uuid,'members',%s::jsonb,17,now())", (tenant, json.dumps(initial)))
         store.preferences(tenant_id=TENANT, actor_id=17, source='native')
         assert store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'native'}
-        assert task_store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo'}
+        assert task_store.preferences(tenant_id=TENANT, actor_id=17) == {'source': 'kommo', 'status': 'open'}
         def saved(tenant):
             return database.query("SELECT value FROM saas_tenant_workflow_policies WHERE tenant_id=%s::uuid", (tenant,))[0]['value']
         assert saved(TENANT) == {**initial, '17': {**initial['17'], 'deal_view': {'source': 'native'}}}
