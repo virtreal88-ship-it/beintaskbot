@@ -13,7 +13,7 @@ import tenant_operator_widget_transport as wire
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
 
 
-def test_personal_widget_binding_is_scoped_consumed_and_revocable(monkeypatch):
+def test_shared_widget_binding_is_scoped_consumed_and_revocable(monkeypatch):
     dsn = os.getenv("BEINTASKBOT_TEST_POSTGRES_DSN")
     if not dsn:
         pytest.skip("Set BEINTASKBOT_TEST_POSTGRES_DSN to disposable local PostgreSQL")
@@ -58,16 +58,15 @@ def test_personal_widget_binding_is_scoped_consumed_and_revocable(monkeypatch):
             assert db.execute("SELECT activated_at FROM saas_beinsystems_operator_pending_auth_v2").fetchone()["activated_at"]
             assert creds["token"] == "main-read"
             cur = db.cursor()
-            assert sender.employee_sender(cur,tenant,22,creds)["token"] == "staff-secret"
-            for t,actor,scope in [(tenant,11,creds),(str(uuid.uuid4()),22,creds),
-                                  (tenant,22,{**creds,"generation":"two"}),
-                                  (tenant,22,{**creds,"connection_instance_id":str(uuid.uuid4())})]:
-                assert sender.employee_sender(cur,t,actor,scope) is None
+            assert sender.widget_sender(cur,tenant,creds)["token"] == "staff-secret"
+            for t,scope in [(str(uuid.uuid4()),creds),(tenant,{**creds,"generation":"two"}),
+                            (tenant,{**creds,"connection_instance_id":str(uuid.uuid4())})]:
+                assert sender.widget_sender(cur,t,scope) is None
             cur.execute("UPDATE saas_beinsystems_operator_employee_links SET member_telegram_id=11")
             with pytest.raises(op.OperatorError):
-                sender.employee_sender(cur,tenant,11,creds)
+                sender.widget_sender(cur,tenant,creds)
             cur.execute("UPDATE saas_beinsystems_operator_employee_links SET revoked_at=now()")
-            assert sender.employee_sender(cur,tenant,11,creds) is None
+            assert sender.widget_sender(cur,tenant,creds) is None
         finally:
             db.rollback()
             db.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

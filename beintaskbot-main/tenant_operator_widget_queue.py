@@ -17,8 +17,8 @@ from tenant_operator_widget_sync import KEY, PROVIDER, SOURCE, enabled, scope
 def source(cur, profile, action="view"):
     if (
         str(profile.get("tenant_id")) != enabled()
-        or not widget_allowed(profile)
-        or not widget_allowed(profile, action)
+        or not widget_allowed(profile, assigned=True)
+        or not widget_allowed(profile, action, assigned=True)
     ):
         return None
     row = operator._operator_row(cur, str(profile["tenant_id"]))
@@ -33,17 +33,17 @@ def source(cur, profile, action="view"):
     return instance if cur.fetchone() else None
 
 
-def _allow_own_provider_assignment(cur, tenant, instance, actor, rows):
-    owned = [r for r in rows if not r["writable"] and r["state"] == "accepted"
-             and r["operator_id"] == actor and r.get("open_operator_login")]
+def _allow_provider_assignment(cur, tenant, instance, rows):
+    owned = [r for r in rows if not r["writable"] and r.get("open_operator_login")]
     if not owned:
         return
     cur.execute("""SELECT l.operator_login || '@' || l.operator_account AS login
                    FROM saas_beinsystems_operator_employee_links l JOIN saas_widget_sources s
                    ON s.tenant_id=l.tenant_id AND s.instance=l.connection_instance_id
                    AND s.generation=l.connection_generation WHERE l.tenant_id=%s AND s.instance=%s
-                   AND l.member_telegram_id=%s AND l.revoked_at IS NULL
-                   AND l.widget_reply_ciphertext IS NOT NULL FOR SHARE OF l""", (tenant, instance, actor))
+                   AND l.revoked_at IS NULL AND EXISTS (SELECT 1 FROM saas_tenant_members m
+                       WHERE m.tenant_id=l.tenant_id AND m.telegram_id=l.member_telegram_id AND m.active)
+                   AND l.widget_reply_ciphertext IS NOT NULL FOR SHARE OF l""", (tenant, instance))
     link = cur.fetchone()
     if link:
         for row in owned:
@@ -68,7 +68,10 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False):
     row = cur.fetchone()
     if not row or not replay and row["state"] == "accepted" and row["operator_id"] != actor:
         raise TenantLinearError("Диалог недоступен.", 403)
-    _allow_own_provider_assignment(cur, tenant, instance, actor, [row])
+    if not widget_allowed(policy.profile) or (update and not widget_allowed(policy.profile, "update")):
+        if row["state"] != "accepted" or row["operator_id"] != actor:
+            raise TenantLinearError("Диалог недоступен.", 403)
+    _allow_provider_assignment(cur, tenant, instance, [row])
     if update and not row["writable"]:
         raise TenantLinearError("Operator ограничил действия в этом чате.", 403)
     return row, actor, policy
@@ -173,16 +176,20 @@ def cards(cur, policy, mode, rollout):
            WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
            ORDER BY m.mid DESC LIMIT 1) last ON true
        WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
+         AND (%s OR (state='accepted' AND operator_id=%s))
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
-        (actor, tenant, instance, actor, mode, mode),
+        (actor, tenant, instance, actor, widget_allowed(profile), actor, mode, mode),
     )
     rows = cur.fetchall()
-    _allow_own_provider_assignment(cur, tenant, instance, actor, rows)
+    _allow_provider_assignment(cur, tenant, instance, rows)
     attach_companies(cur, policy, instance, rows)
     writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
-    return [card(row, actor, writable and row["writable"], rollout, online) for row in rows], {
+    own_writable = widget_allowed(profile, "update", assigned=True)
+    return [card(row, actor, row["writable"] and (writable or
+                 own_writable and row["state"] == "accepted" and row["operator_id"] == actor),
+                 rollout, online) for row in rows], {
         "id": PROVIDER + ":" + instance,
         "name": SOURCE,
     }
@@ -218,7 +225,8 @@ def history(profile, params, before=None):
         dialog = card(
             row,
             actor,
-            row["writable"] and widget_allowed(policy.profile, "update"),
+            row["writable"] and widget_allowed(policy.profile, "update",
+                assigned=row["state"] == "accepted" and row["operator_id"] == actor),
             rollout,
             is_online(cur, key[0], actor, source_channel=key[1]),
         )
@@ -229,6 +237,8 @@ def history(profile, params, before=None):
             (*key, before, before),
         )
         rows = cur.fetchall()
+        from tenant_operator_widget import confirmed_authors
+        crm_authors = confirmed_authors(cur, key[0], row["revision"], [str(m["mid"]) for m in rows])
         cur.execute(
             """SELECT id,author_name,note,created_at FROM saas_dialog_internal_comments WHERE
             tenant_id=%s AND provider=%s AND channel_id=%s AND conversation_id=%s AND lead_id=%s
@@ -246,13 +256,13 @@ def history(profile, params, before=None):
     if dialog["lifecycle"]["can_close"]:
         credentials = operator._credentials(key[0])
         if credentials["connection_instance_id"] == key[1]:
-            from tenant_operator_widget_sender import employee_sender
+            from tenant_operator_widget_sender import widget_sender
             try:
                 with operator._connect() as db, db.cursor() as cur:
-                    sender = employee_sender(cur, key[0], actor, credentials)
-                reason = ("widget_socket_auth_denied" if sender and row["open_operator_login"]
-                          and sender["widget_login"] != row["open_operator_login"]
-                          else socket_block_reason(sender or credentials))
+                    sender = widget_sender(cur, key[0], credentials)
+                reason = ("widget_socket_unavailable" if not sender else "widget_socket_auth_denied"
+                          if row["open_operator_login"] and sender["widget_login"] != row["open_operator_login"]
+                          else socket_block_reason(sender))
             except operator.OperatorError:
                 reason = "widget_socket_auth_denied"
             dialog.update(can_send=not reason, send_block_reason=reason)
@@ -264,8 +274,8 @@ def history(profile, params, before=None):
             "body": m["body"],
             "widget_attachment": m["attachment"],
             "direction": directions[m["sender"]],
-            "author_name": m["author"],
-            "author_type": authors[m["sender"]],
+            "author_name": crm_authors.get(str(m["mid"]), m["author"]) if m["sender"] == "operator" else m["author"],
+            "author_type": "employee" if m["sender"] == "operator" and str(m["mid"]) in crm_authors else authors[m["sender"]],
             "message_type": "text",
             "created_at": m["message_at"].isoformat(),
             "happened_at": m["message_at"].isoformat(),
@@ -311,7 +321,7 @@ def targets(cur, tenant, actor, instance, *, online_only=False):
     for item in cur.fetchall():
         emp = item["telegram_id"]
         profile = read_access_profile(cur, tenant, emp, lock=True)
-        if not profile or not widget_allowed(profile) or not widget_allowed(profile, "update"):
+        if not profile or not widget_allowed(profile, assigned=True) or not widget_allowed(profile, "update", assigned=True):
             continue
         check = is_sidebar_transfer_online if online_only else is_online
         if check(cur, tenant, emp, source_channel=instance, lock=True):

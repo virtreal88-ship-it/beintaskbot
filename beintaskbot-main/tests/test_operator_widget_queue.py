@@ -178,6 +178,13 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     sync.snapshot(cur,A,CREDENTIALS,widget._routes([assigned],CREDENTIALS),"integration")
     db.commit()
     with monkeypatch.context() as patch:
+        from tenant_policy import TenantPolicy
+        prior_scope = TenantPolicy.action_scope
+        def scope_for_actor(policy, module, action):
+            if int(policy.profile.get("telegram_id",0)) == 33 and module == "dialogs":
+                return "self"
+            return prior_scope(policy,module,action)
+        patch.setattr(TenantPolicy,"action_scope",scope_for_actor)
         patch.setattr(op,"_fernet",lambda: cipher)
         def upstream(path, body, credentials):
             assert credentials["token"] == CREDENTIALS["token"]
@@ -189,6 +196,14 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
             return {"state":"unknown"}
         patch.setattr(transport,"send_reply",dispatch)
         patch.setattr(transport,"socket_block_reason",lambda c: "" if c["token"]=="personal" else "widget_socket_auth_denied")
+        cur.execute("UPDATE saas_widget_dialogs SET state='waiting',operator_id=NULL WHERE " + sync.KEY,key)
+        db.commit()
+        with pytest.raises(TenantLinearError):
+            queue.history(recipient,params)
+        _, _, restricted = queue.access(cur,recipient)
+        assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0] == []
+        cur.execute("UPDATE saas_widget_dialogs SET state='accepted',operator_id=33 WHERE " + sync.KEY,key)
+        db.commit()
         assert queue.history(recipient,params)["dialog"]["can_send"]
         staff = {**PROFILE, **recipient,"role":"operator","permissions":["dialogs","operator_data","operator_api"]}
         command = {"action":"reply","chat_id":"15","revision":routes[15][1],
@@ -198,6 +213,33 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
         assert widget.handle(staff,command)["state"] == "unknown"
         assert widget.handle(staff,command)["state"] == "unknown"
         assert sent == [("staff@team","personal",CHAT["client_id"])]
+        # Transfer the conversation to the owner, who sends with the same
+        # upstream identity. The durable receipt and history identify the owner.
+        lifecycle.mutate(recipient,{**transfer,"target_employee_id":11,"request_id":str(uuid.uuid4()),
+            "expected_revision":queue.history(recipient,params)["dialog"]["lifecycle"]["revision"]})
+        with pytest.raises(op.OperatorError):
+            widget.handle(staff,{**command,"text":"no longer mine","request_id":str(uuid.uuid4())})
+        with pytest.raises(TenantLinearError):
+            queue.history(recipient,params)
+        _, _, restricted = queue.access(cur,recipient)
+        assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0] == []
+        def confirmed(credentials, row, text, request_id):
+            assert credentials["widget_login"] == "staff@team" and credentials["token"] == "personal"
+            return {"state":"saved","message_id":"71"}
+        patch.setattr(transport,"send_reply",confirmed)
+        message = {**command,"text":"owner reply","request_id":str(uuid.uuid4())}
+        assert widget.handle(PROFILE,message) == {"state":"saved","message_id":"71"}
+        cur.execute("""INSERT INTO saas_widget_messages
+            (tenant_id,instance,chat_id,identity,mid,sender,author,body,attachment,at,fresh)
+            VALUES(%s,%s,%s,%s,71,'operator','staff@team','owner reply',false,now(),true)""",key)
+        db.commit()
+        history = queue.history(PROFILE,params)["messages"]
+        assert [(m["author_name"],m["author_type"]) for m in history if m["id"]=="71"] == [("Owner","employee")]
+        cur.execute("DELETE FROM saas_widget_messages WHERE tenant_id=%s AND mid=71",(A,))
+        db.commit()
+        lifecycle.mutate(PROFILE,{**transfer,"request_id":str(uuid.uuid4()),
+            "expected_revision":page()["dialog"]["lifecycle"]["revision"]})
+        owned = queue.history(recipient,params)
         cur.execute("UPDATE saas_beinsystems_operator_employee_links SET revoked_at=now() WHERE id=%s",(link_id,))
         db.commit()
         assert not queue.history(recipient,params)["dialog"]["can_send"]

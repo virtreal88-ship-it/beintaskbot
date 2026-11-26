@@ -1,4 +1,4 @@
-"""Personal credentials bound to an existing CRM employee link, for widget replies only."""
+"""A workspace's approved upstream identity for replies to accepted widget chats."""
 import json
 import uuid
 
@@ -8,20 +8,19 @@ import tenant_beinsystems_operator as operator
 
 
 def _binding(tenant, link):
-    return {"purpose": "operator_widget_reply", "tenant": tenant, "link": str(link["id"]),
+    return {"purpose": "workspace_widget_reply", "tenant": tenant, "link": str(link["id"]),
             "actor": int(link["member_telegram_id"]), "instance": str(link["connection_instance_id"]),
             "generation": link["connection_generation"],
             "login": link["operator_login"] + "@" + link["operator_account"]}
 
 
-def employee_sender(cur, tenant, actor, credentials):
-    cur.execute("""SELECT id, member_telegram_id, connection_instance_id, connection_generation,
-                   operator_login, operator_account, widget_reply_ciphertext
-                   FROM saas_beinsystems_operator_employee_links
-                   WHERE tenant_id=%s AND member_telegram_id=%s AND connection_instance_id=%s
-                   AND connection_generation=%s AND revoked_at IS NULL
-                   AND widget_reply_ciphertext IS NOT NULL FOR SHARE""",
-                (tenant, actor, credentials["connection_instance_id"], credentials["generation"]))
+def widget_sender(cur, tenant, credentials):
+    cur.execute("""SELECT l.* FROM saas_beinsystems_operator_employee_links l JOIN saas_tenant_members m
+                   ON m.tenant_id=l.tenant_id AND m.telegram_id=l.member_telegram_id
+                   WHERE l.tenant_id=%s AND l.connection_instance_id=%s AND m.active
+                   AND l.connection_generation=%s AND l.revoked_at IS NULL
+                   AND l.widget_reply_ciphertext IS NOT NULL FOR SHARE OF l,m""",
+                (tenant, credentials["connection_instance_id"], credentials["generation"]))
     link = cur.fetchone()
     if not link:
         return None
