@@ -223,13 +223,14 @@
       if(!response.ok&&response.status<500&&result.keep_request===false){
         await store.releaseDraft(s.scope.key,entry.request_id,crypto.randomUUID());
         await load(s);
-        s.message=result.error||t('error');
+        s.message=window.tenantChatSend?.groupSendCopy(result.delivery_phase,result.error_code)||result.error||t('error');
         return;
       }
       // An uncertain rejection is retained as a no-resend receipt here. The
       // server is authoritative; no optimistic release after a lost response.
       await store.markUnknown(s.scope.key,entry.request_id);
       await load(s);
+      if(result.delivery_phase==='unknown')s.message=window.tenantChatSend?.groupSendCopy('unknown')||result.error;
     }catch{if(same(s))s.message=t('error');}
     finally{s.busy=false;draw(s);}
   }

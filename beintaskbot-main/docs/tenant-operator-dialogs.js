@@ -954,7 +954,14 @@
     if(!document?.body||version!==epoch||who!==identity(member))throw new Error(t('companyChanged'));
     if(!optionalScopedRead&&(response.status===401||response.status===403||((options.method||'GET')==='GET'&&response.status===409&&payload.scope_verified!==true))){profileChanged({});if(response.status===409)void window.tenantRequestCoordinator?.revalidateProfile().catch(()=>{});}
     if((options.method||'GET')!=='GET'){listFlight=null;lastListAt=0;}
-    if(!response.ok||!payload.success){const error=new Error(payload.error||t('error'));error.status=response.status;error.keepRequest=payload.keep_request!==false;throw error;}
+    if(!response.ok||!payload.success){
+      const error=new Error(payload.error||t('error'));
+      error.status=response.status;
+      error.keepRequest=payload.keep_request!==false;
+      error.deliveryPhase=payload.delivery_phase;
+      error.errorCode=payload.error_code;
+      throw error;
+    }
     return payload;
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;

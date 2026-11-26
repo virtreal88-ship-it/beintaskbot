@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
 
+	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/types"
 	"wacalls/internal/unified"
 )
@@ -34,32 +36,58 @@ func groupContainsAccount(info *types.GroupInfo, chat, account, ownLID types.JID
 	return false
 }
 
+type groupSessionIdentity struct {
+	epoch   uint64
+	account types.JID
+	lid     types.JID
+}
+
+func freshGroupMembership(ctx context.Context, chat types.JID, boundAccount string, current func() groupSessionIdentity, fetch func(context.Context, types.JID) (*types.GroupInfo, error)) (string, error) {
+	before := current()
+	if before.account.IsEmpty() || before.account.String() != boundAccount {
+		return "", unified.ErrGroupSession
+	}
+	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	info, err := fetch(ctx, chat)
+	if current() != before {
+		return "", unified.ErrGroupSession
+	}
+	if errors.Is(err, whatsmeow.ErrNotInGroup) || errors.Is(err, whatsmeow.ErrGroupNotFound) {
+		return "", unified.ErrGroupMembership
+	}
+	if err != nil || ctx.Err() != nil {
+		return "", unified.ErrGroupCheckUnavailable
+	}
+	if !groupContainsAccount(info, chat, before.account, before.lid) {
+		return "", unified.ErrGroupMembership
+	}
+	if before.lid.Server == types.HiddenUserServer && !before.lid.IsEmpty() {
+		return before.lid.String(), nil
+	}
+	return "", nil
+}
+
 func verifyManagedGroupMembership(ctx context.Context, session *Session, target, boundAccount string) (string, error) {
 	chat, err := types.ParseJID(target)
 	if err != nil || !groupPeer.MatchString(target) {
 		return "", unified.ErrGroupMembership
 	}
 	client := session.client
-	if !session.transportReady() || client.Store.GetJID().ToNonAD().String() != boundAccount {
+	if client == nil {
 		return "", unified.ErrGroupSession
 	}
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	defer cancel()
-	// The group overview uses a cached roster. Admission and dispatch need
-	// fresh evidence from the session that will actually send.
-	account, lid := client.Store.GetJID().ToNonAD(), client.Store.GetLID().ToNonAD()
-	info, err := client.GetGroupInfo(ctx, chat)
-	if session.client != client || !session.transportReady() ||
-		client.Store.GetJID().ToNonAD() != account || account.String() != boundAccount {
-		return "", unified.ErrGroupSession
+	current := func() groupSessionIdentity {
+		session.mu.Lock()
+		defer session.mu.Unlock()
+		if session.auth.State != "open" || session.client != client || !session.transportReady() {
+			return groupSessionIdentity{}
+		}
+		return groupSessionIdentity{session.connectionEpoch, client.Store.GetJID().ToNonAD(), client.Store.GetLID().ToNonAD()}
 	}
-	if err != nil || !groupContainsAccount(info, chat, account, lid) {
-		return "", unified.ErrGroupMembership
-	}
-	if lid.Server == types.HiddenUserServer && !lid.IsEmpty() {
-		return lid.String(), nil
-	}
-	return "", nil
+	// GetGroupInfo always sends a new WhatsApp group query. The cached roster
+	// used by the group overview cannot participate in this decision.
+	return freshGroupMembership(ctx, chat, boundAccount, current, client.GetGroupInfo)
 }
 
 func (s *server) handleManagedGroupMembership(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,20 @@
   const copy=(key,fallback)=>window.tenantI18n?.t(key)||fallback;
   const quoteCopy=state=>({ru:{pending:'Принято в очередь. Доставка ещё не подтверждена.',retrying:'Подготовка отправки. Доставка ещё не подтверждена.',unknown:'Результат требует проверки. Повторная отправка отключена.',failed:'Отправка не подтверждена. Проверьте статус перед новым действием.',sent:'Провайдер принял сообщение. Доставка клиенту ещё не подтверждена.',delivered:'Доставка подтверждена.',read:'Сообщение прочитано.'},az:{pending:'Növbəyə qəbul edildi. Çatdırılma təsdiqlənməyib.',retrying:'Göndərmə hazırlanır. Çatdırılma təsdiqlənməyib.',unknown:'Nəticə yoxlanmalıdır. Təkrar göndərmə söndürülüb.',failed:'Göndərmə təsdiqlənməyib. Yeni əməliyyatdan əvvəl vəziyyəti yoxlayın.',sent:'Provayder qəbul etdi. Müştəriyə çatdırılma təsdiqlənməyib.',delivered:'Çatdırılma təsdiqləndi.',read:'Mesaj oxunub.'},en:{pending:'Queued. Delivery is not confirmed.',retrying:'Preparing send. Delivery is not confirmed.',unknown:'Outcome needs checking. Resend disabled.',failed:'Send not confirmed. Check status before another action.',sent:'Provider accepted. Customer delivery is not confirmed.',delivered:'Delivery confirmed.',read:'Message read.'}}[window.tenantI18n?.language]||{})[state]||'Delivery is not confirmed.';
   const language=()=>['ru','az','en'].includes(window.tenantI18n?.language)?window.tenantI18n.language:'az';
+  function groupSendCopy(phase, code){
+    const messages={
+      ru:{unknown:'Доставка неизвестна. Проверьте статус перед повторной отправкой.',session:'Не отправлено. Выбранный номер WhatsApp недоступен.',membership:'Не отправлено. WhatsApp не подтвердил участие выбранного номера в группе.',check:'Не отправлено. Проверка участия номера в группе временно недоступна.'},
+      az:{unknown:'Çatdırılma məlum deyil. Təkrar göndərməzdən əvvəl statusu yoxlayın.',session:'Göndərilmədi. Seçilmiş WhatsApp nömrəsi əlçatan deyil.',membership:'Göndərilmədi. WhatsApp seçilmiş nömrənin qrupda iştirakını təsdiqləmədi.',check:'Göndərilmədi. Nömrənin qrupda iştirakını yoxlamaq müvəqqəti mümkün deyil.'},
+      en:{unknown:'Delivery unknown. Check the status before sending again.',session:'Not sent. The selected WhatsApp number is unavailable.',membership:'Not sent. WhatsApp did not confirm that the selected number belongs to the group.',check:'Not sent. The group membership check is temporarily unavailable.'}
+    }[language()];
+    if(phase==='unknown')return messages.unknown;
+    if(phase!=='not_sent')return '';
+    return messages[{
+      native_group_session_unavailable:'session',
+      native_group_membership_unconfirmed:'membership',
+      native_group_check_unavailable:'check'
+    }[code]||'check'];
+  }
   const diagnostic=sent=>{
     const lang=language();
     const reasons={
@@ -150,7 +164,17 @@
         // Settle the visible draft only for the same employee and physical dialog.
         if(activeSend?.scope===scope&&activeSend.current())await activeSend.accepted(pending,sent);
         else clearSavedDraft(pending.text);
-      }catch(e){const discard=!checking&&e.keepRequest===false&&!pending?.quote_message_id;if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}else if(isCurrent())presentPending(pending);if(isCurrent()){button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');alert(e.message);}}
+      }catch(e){
+        const discard=!checking&&e.keepRequest===false&&(!pending?.quote_message_id||e.deliveryPhase==='not_sent');
+        if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}
+        else if(isCurrent())presentPending(pending);
+        if(isCurrent()){
+          button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');
+          const groupMessage=groupSendCopy(e.deliveryPhase,e.errorCode);
+          if(groupMessage)showAccepted(groupMessage);
+          else alert(e.message);
+        }
+      }
       finally{button.disabled=false;button.classList.remove('loading');}
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
@@ -192,5 +216,5 @@
       finally{busy=false;button.disabled=false;choose.disabled=false;send.disabled=false;input.disabled=false;}
     };
   }
-  window.tenantChatSend={bind,renderDiagnostics:container=>activeReceiptDiagnostics(container),clearDiagnostics:()=>{activeReceiptDiagnostics=()=>{};}};
+  window.tenantChatSend={bind,groupSendCopy,renderDiagnostics:container=>activeReceiptDiagnostics(container),clearDiagnostics:()=>{activeReceiptDiagnostics=()=>{};}};
 })();

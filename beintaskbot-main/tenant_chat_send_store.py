@@ -34,7 +34,8 @@ def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status
             from tenant_dialog_group_work import active, snapshot
             if source and active(snapshot(cur,tenant,source['conversation_id'])):
                 from tenant_whatsapp_native_groups import membership_error
-                raise membership_error('native_group_session_unavailable') from None
+                raise membership_error('native_group_session_unavailable',
+                                       sending=lifecycle_status is None and lifecycle_receipt is None) from None
         raise
     if connect:
         require_source(cur,tenant,policy,'connect',connect['channel_id'],'update')

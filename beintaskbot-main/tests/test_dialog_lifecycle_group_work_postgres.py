@@ -4,13 +4,16 @@ The HTTP peer is a fixture. No WhatsApp session or customer data is used.
 """
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import asyncio
 import json
+import logging
 from threading import Barrier
 import uuid
 
 import psycopg
 from psycopg.rows import dict_row
 import pytest
+import requests
 
 import tenant_chat_send_store as sends
 import tenant_connect_transport as transport
@@ -148,7 +151,8 @@ def collaboration(episodes, monkeypatch):
             return GatewayResponse(409,{'error':'native_group_membership_unconfirmed'})
         assert json['verify_group_membership'] is True
         if not membership[scope['account']]:
-            return GatewayResponse(422,{'error':'native_group_membership_unconfirmed','confirmed':False})
+            return GatewayResponse(422,{'error':'native_group_membership_unconfirmed','confirmed':False,
+                                        'delivery_phase':'not_sent'})
         provider='OUTBOUND_'+str(len(delivered)+1)
         delivered.append((scope['source'],scope['account'],provider))
         return GatewayResponse(200,{'confirmed':True,'result':{'state':'accepted','provider_id':provider}})
@@ -311,6 +315,49 @@ def test_send_rechecks_at_dispatch(collaboration,failure):
     with pytest.raises(TenantLinearError):
         dispatch(item,route)
     assert not delivered
+
+
+@pytest.mark.parametrize('fault,phase,receipt', [
+    ('check_timeout','not_sent','blocked'),
+    ('removed_during_dispatch','not_sent','blocked'),
+    ('send_timeout','unknown','unknown'),
+])
+def test_group_reply_preserves_a_known_refusal_and_an_uncertain_send(collaboration, monkeypatch, fault, phase, receipt):
+    from tenant_chat_send_policy import send_error_payload
+    from tenant_chat_send_service import run
+
+    database,_,delivered=collaboration
+    join(database)
+    original=requests.post
+    attempts=[]
+
+    def post(url, *, json, **options):
+        assert json['scope']['source']==CB and json['scope']['account']==SOURCES[44][2]
+        if url.endswith('/group-membership'):
+            attempts.append('check')
+            if fault=='check_timeout':
+                raise requests.ReadTimeout()
+            return original(url,json=json,**options)
+        attempts.append('send')
+        if fault=='removed_during_dispatch':
+            return GatewayResponse(422,{'error':'native_group_membership_unconfirmed','confirmed':False,
+                                        'delivery_phase':'not_sent'})
+        raise requests.ReadTimeout()
+
+    monkeypatch.setattr(requests,'post',post)
+    command={'lead_id':SOURCES[44][1],'request_id':str(uuid.uuid4()),'text':'Fixture reply'}
+    with pytest.raises(TenantLinearError) as rejected:
+        asyncio.run(run(profile(44),command,None,None,logging.getLogger(__name__)))
+    error=send_error_payload(rejected.value)
+    assert error['delivery_phase']==phase and error['keep_request']==(phase=='unknown')
+    assert attempts==(['check'] if fault=='check_timeout' else ['check','send'])
+    assert not delivered
+    assert database.execute("SELECT state FROM saas_chat_send_receipts WHERE request_id=%s",
+                            (command['request_id'],))[0]['state']==receipt
+    if phase=='unknown':
+        with pytest.raises(TenantLinearError):
+            asyncio.run(run(profile(44),{**command,'request_id':str(uuid.uuid4())},None,None,logging.getLogger(__name__)))
+        assert attempts==['check','send']
 
 
 def test_pair_count_and_actor_read_cursor(collaboration):

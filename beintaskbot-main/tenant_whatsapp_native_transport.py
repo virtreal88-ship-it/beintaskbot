@@ -117,7 +117,6 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
     if not isinstance(content,bytes) or len(content)>limit:
         raise TenantPlatformError('native_media_invalid')
     from tenant_call_sources import service
-    url,token=service()
     with dispatch_cursor(route) as cur:
         current=bind(cur,route)
         if not current.get('native') or current['native']!=route.get('native'):
@@ -149,6 +148,12 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                 if code:
                     raise ConnectPreflightError(code) from None
                 raise
+        if route.get('verify_group_membership'):
+            from tenant_whatsapp_native_groups import require_membership
+            # A failure here proves that no send request was submitted. The
+            # engine rechecks immediately before dispatch, including after upload.
+            require_membership(current, sending=True)
+        url,token=service()
         # Keep the current source locked through dispatch. Caller also holds its
         # normal actor/dialogue authorization transaction. Never retry HTTP.
         try:
@@ -180,10 +185,11 @@ def submit(route, request_id, *, text='', kind='text', mime='', name='', content
                     from tenant_connect_transport import ConnectPreflightError
                     raise ConnectPreflightError('quoted_source_scope_conflict')
                 if (route.get('verify_group_membership') and response.status_code == 422
-                        and value.get('confirmed') is False and 'result' not in value
-                        and value.get('error') in {'native_group_membership_unconfirmed','native_group_session_unavailable'}):
-                    from tenant_whatsapp_native_groups import membership_error
-                    raise membership_error(value['error'])
+                        and value.get('confirmed') is False and value.get('delivery_phase')=='not_sent'
+                        and 'result' not in value):
+                    from tenant_whatsapp_native_groups import MEMBERSHIP_ERRORS, membership_error
+                    if value.get('error') in MEMBERSHIP_ERRORS:
+                        raise membership_error(value['error'], sending=True)
                 result=value.get('result',{})
                 provider=result.get('provider_id')
                 if (response.status_code!=200 or value.get('confirmed') is not True or

@@ -6,6 +6,15 @@ from tenant_linear_policy import TenantLinearError
 from tenant_chat_reader import read_conversations
 
 
+def send_error_payload(error):
+    payload = {'success': False, 'error': str(error), 'keep_request': getattr(error, 'keep_request', False)}
+    if phase := getattr(error, 'delivery_phase', None):
+        payload['delivery_phase'] = phase
+        if code := getattr(error, 'error_code', None):
+            payload['error_code'] = code
+    return payload
+
+
 def command(data: dict) -> dict:
     try:
         request_id = str(uuid.UUID(str(data.get('request_id') or '')))
