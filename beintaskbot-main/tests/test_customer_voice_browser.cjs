@@ -7,25 +7,29 @@ const { chromium, firefox, webkit } = require('playwright');
 
 const docs = path.resolve(__dirname, '../docs');
 const scripts = ['tenant-voice-recorder.js','tenant-microphone-lease.js','tenant-customer-voice-store.js','tenant-customer-voice-ui.js'];
+const composerScript = 'tenant-dialog-composer.js';
+const scriptVersions = [2,1,2,4,3];
 const appShell = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8');
-const appScripts = ['/assets/tenant-operator-dialogs.js', ...scripts.map(s=>`/assets/${s}?v=${s==='tenant-customer-voice-ui.js'?3:s==='tenant-customer-voice-store.js'?2:1}`)]
+const appScripts = ['/assets/tenant-operator-dialogs.js', ...[...scripts,composerScript].map((s,i)=>`/assets/${s}?v=${scriptVersions[i]}`)]
   .map(src=>appShell.indexOf(`<script src="${src}"></script>`));
 assert(appScripts.every(position=>position>=0) && appScripts.every((position,index)=>index===0||appScripts[index-1]<position),
   'app shell must load the recorder dependencies after dialog setup, in order');
-const html = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
+const html = assetScripts => `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><div id="view-dialogs" class="active"><div class="operator-chat-scrollarea" style="height:80px;overflow:auto"><div id="chatRows"><article data-customer-voice-status="true" data-customer-voice-lead="7" data-message-id="6b9f1ac1-d693-4f9f-a400-d9b8372306f8">voice</article></div></div><div class="operator-composer">
  <textarea id="chatText"></textarea><div class="operator-composer-actions"><button id="sendChat">send</button></div></div></div>
  <script>window.tenantI18n={language:'ru'};const parameters=new URLSearchParams(location.search),lead=parameters.get('lead')||'7';
  window.fixtureRoute={provider:'connect',lead_id:Number(lead),channel_id:parameters.get('channel')||'channel',conversation_id:parameters.get('group')||'chat-'+lead};
  window.tenantOperator={member:{tenant_id:'tenant',telegram_id:20},get currentDialog(){return window.fixtureRoute},openDialog:async()=>{window.reloads=(window.reloads||0)+1},updateCustomerVoiceDelivery:(id,state)=>{window.deliveryUpdate={id,state}}};
+ document.getElementById('sendChat').onclick=()=>{void fetch('/api/platform/crm/chat/send',{method:'POST',body:'synthetic'});};
  const contexts=[];Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:async()=>{if(window.denyMicrophone)throw new DOMException('denied','NotAllowedError');const c=new AudioContext(),o=c.createOscillator(),d=c.createMediaStreamDestination();o.connect(d);o.start();contexts.push([c,o]);return d.stream;}});</script>
- ${scripts.map(s=>`<script src="/assets/${s}"></script>`).join('')}
+ ${assetScripts.map(s=>`<script src="/assets/${s}"></script>`).join('')}
  <script>document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'))</script>`;
 
 async function main(){
   const server=http.createServer((req,res)=>{
-    const name=(req.url||'').split('?')[0].replace(/^\/assets\//,'');
-    if(scripts.includes(name)){res.setHeader('content-type','application/javascript');return res.end(fs.readFileSync(path.join(docs,name)));}
-    res.setHeader('content-type','text/html; charset=utf-8');res.end(html);
+    const url=new URL(req.url||'/', 'http://localhost');
+    const name=url.pathname.replace(/^\/assets\//,'');
+    if(scripts.includes(name)||name===composerScript){res.setHeader('content-type','application/javascript');return res.end(fs.readFileSync(path.join(docs,name)));}
+    res.setHeader('content-type','text/html; charset=utf-8');res.end(html(url.searchParams.has('composer')?[...scripts,composerScript]:scripts));
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const origin=`http://127.0.0.1:${server.address().port}`;
@@ -35,7 +39,7 @@ async function main(){
   let browser;
   try{browser=await browserType.launch({headless:true,timeout:15000,...(executablePath?{executablePath}:{}),...(engine==='chromium'?{args:['--no-sandbox']}:{})});}
   catch(error){await new Promise(resolve=>server.close(resolve));throw error;}
-  let posts=0,checks=0,capabilityCalls=0,accepted=false,enabled=true,capabilityDenied=false,capabilityStalled=false,holdSend=false,holdReceipt=false,directDelivery=null,releaseSend,releaseReceipt;
+  let posts=0,textPosts=0,checks=0,capabilityCalls=0,accepted=false,enabled=true,capabilityDenied=false,capabilityStalled=false,holdSend=false,holdReceipt=false,directDelivery=null,releaseSend,releaseReceipt;
   const group='120363000000700000@g.us',firstChannel='9644b2f2-786c-43f4-b58e-2b9b5f69d554',secondChannel='ed4b1adb-22f4-4f64-ab37-0f0a7267aa35';
   let groupRefusal=null;
   const groupCommands=[];
@@ -48,6 +52,7 @@ async function main(){
       return capabilityDenied?route.fulfill({status:403,json:{success:false}}):route.fulfill({json:{success:true,enabled,recovery_enabled:true}});
     }
     if(url.pathname.endsWith('/voice-status'))return route.fulfill({json:{success:true,delivery_state:'read'}});
+    if(url.pathname.endsWith('/send')){textPosts++;return route.fulfill({json:{success:true}});}
     if(url.pathname.endsWith('/send-voice')){
       posts++;
       const [,encoded] = route.request().postDataBuffer().toString().match(/\r\n\r\n(\{[^\r\n]+\})\r\n/) || [];
@@ -92,11 +97,11 @@ async function main(){
 
     await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-chat-close'));window.fixtureRoute={...window.fixtureRoute,lead_id:9,conversation_id:'chat-9'};document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
     await page.locator('.operator-voice-mic').waitFor({state:'visible'});
-    assert.equal(await page.locator('.operator-customer-voice button').filter({hasText:'Отправить голосовое'}).isVisible(),false,'other dialog cannot send old audio');
+    assert.equal(await page.locator('.operator-voice-send').isVisible(),false,'other dialog cannot send old audio');
     await page.evaluate(()=>{document.dispatchEvent(new CustomEvent('tenant-chat-close'));window.fixtureRoute={...window.fixtureRoute,lead_id:7,conversation_id:'chat-7'};document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));});
     await page.getByRole('button',{name:'Отправить голосовое'}).waitFor({state:'visible'});
 
-    await page.evaluate(()=>{const button=[...document.querySelectorAll('.operator-customer-voice button')].find(n=>n.textContent==='Отправить голосовое');button.click();button.click();});
+    await page.evaluate(()=>{const button=document.querySelector('.operator-voice-send');button.click();button.click();});
     await page.getByRole('button',{name:'Проверить статус'}).waitFor({state:'visible'});
     await page.getByText('Результат неизвестен. Проверьте чат WhatsApp вручную и не отправляйте повторно.').waitFor({state:'visible'});
     assert.equal(posts,1,'one explicit send');
@@ -185,6 +190,60 @@ async function main(){
       await groupPage.close();
     }
 
+    for(const [width,lead,channel] of [[1280,43,firstChannel],[390,44,secondChannel]]){
+      const conversation=await context.newPage();
+      await conversation.setViewportSize({width,height:844});
+      await conversation.goto(origin+'/?'+new URLSearchParams({lead,channel,group,composer:'1'}));
+      const primary=conversation.locator('#operatorComposerPrimary');
+      const toolbar=conversation.locator('.operator-voice-toolbar');
+      const voiceSend=toolbar.getByRole('button',{name:'Отправить голосовое'});
+      const textInput=conversation.locator('#chatText');
+      await conversation.locator('#operatorComposerPrimary[data-action="voice"]:enabled').click();
+      await toolbar.getByRole('button',{name:'Пауза',exact:true}).waitFor({state:'visible'});
+      await conversation.waitForFunction(()=>document.querySelector('.operator-voice-meter [role="timer"]').textContent!=='0:00');
+      await toolbar.getByRole('button',{name:'Пауза',exact:true}).click();
+      await toolbar.getByRole('button',{name:'Продолжить запись'}).waitFor({state:'visible'});
+      const clock=toolbar.getByRole('timer');
+      const pausedTime=await clock.textContent();
+      await conversation.waitForTimeout(1150);
+      assert.equal(await clock.textContent(),pausedTime,'the recording timer stops on pause');
+
+      // Text can already exist in the composer when an older voice draft is restored.
+      await textInput.evaluate(input=>{
+        input.value='Saved text';
+        input.dispatchEvent(new Event('input',{bubbles:true}));
+        input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));
+      });
+      await primary.waitFor({state:'hidden'});
+      await primary.evaluate(button=>button.click());
+      assert.equal(textPosts,0,'an open voice editor never forwards the text draft');
+      assert.equal(await textInput.isVisible(),false,'the voice toolbar replaces the text editor while active');
+      const layout=await toolbar.evaluate(bar=>{
+        const box=bar.getBoundingClientRect();
+        const controls=[...bar.querySelectorAll('button:not([hidden])')].map(button=>button.getBoundingClientRect());
+        return {fits:box.right<=window.innerWidth+1&&bar.scrollWidth<=bar.clientWidth+1,
+                inline:controls.every(control=>Math.abs(control.top-controls[0].top)<2&&control.width>=44)};
+      });
+      assert.deepEqual(layout,{fits:true,inline:true});
+
+      const count=groupCommands.length;
+      if(width===1280){
+        await toolbar.getByRole('button',{name:'Продолжить запись'}).click();
+        await toolbar.getByRole('button',{name:'Остановить'}).click();
+        await toolbar.locator('audio').waitFor({state:'visible'});
+        assert.equal(groupCommands.length,count,'stopping opens a draft without sending');
+      }
+      await voiceSend.evaluate(button=>{button.click();button.click();});
+      await conversation.waitForFunction(()=>window.reloads===1);
+      assert.equal(groupCommands.length,count+1,'the voice arrow submits exactly one recording');
+      assert.equal(groupCommands[count].expected_channel_id,channel);
+      assert.equal(textPosts,0);
+      assert.equal(await textInput.inputValue(),'Saved text','voice submission leaves the text draft intact');
+      await primary.waitFor({state:'visible'});
+      assert.equal(await primary.getAttribute('data-action'),'send');
+      await conversation.close();
+    }
+
     await page.evaluate(()=>{window.denyMicrophone=true;});await page.locator('.operator-voice-mic').click();
     await page.getByText('Доступ к микрофону запрещён. Разрешите микрофон в настройках сайта браузера и попробуйте снова.').waitFor({state:'visible'});
     enabled=false;await page.locator('.operator-voice-mic').click();
@@ -265,7 +324,7 @@ async function main(){
     releaseReceipt();holdReceipt=false;await stale.waitForTimeout(300);
     assert.equal(await stale.getByRole('button',{name:'Отправить голосовое'}).isVisible(),true,'stale receipt identity failure cannot close current dialog');
     assert.ok(await stale.evaluate(async()=>await createTenantVoiceStore().get(JSON.stringify(['tenant','20','18','channel','chat-18']))),'stale receipt cannot erase current draft');
-    console.log('PASS '+engine+': personal voice regression; group preview and draft recovery on desktop and 390 px, with exact source isolation');
+    console.log('PASS '+engine+': group recording toolbar, pause and resume, preserved text, one-shot send and draft recovery on desktop and 390 px');
   }finally{await context.close();await browser.close();await new Promise(resolve=>server.close(resolve));}
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

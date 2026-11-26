@@ -16,11 +16,19 @@
   let state = 'idle', error = '', stream = null, recorder = null, timer = null;
   let generation = 0, chunks = [], bytes = 0, blob = null, started = 0, durationMs = 0;
 
-  const snapshot = () => ({ state, error, durationMs: state === 'recording' ? Math.min(maxMs, Math.max(0, clock() - started)) : durationMs, size: blob?.size || 0, mime: blob?.type || '' });
+  const elapsed = () => state === 'recording' ? Math.min(maxMs, durationMs + Math.max(0, clock() - started)) : durationMs;
+  const canPause = () => typeof recorder?.pause === 'function' && typeof recorder?.resume === 'function';
+  const snapshot = () => ({ state, error, durationMs: elapsed(), canPause: canPause(), size: blob?.size || 0, mime: blob?.type || '' });
   const emit = () => notify(snapshot());
-  const release = () => {
+  const clearLimit = () => {
     if (timer !== null) clearTimer(timer);
     timer = null;
+  };
+  const armLimit = current => {
+    timer = setTimer(() => { if (generation === current && state === 'recording') stop(); }, maxMs - durationMs);
+  };
+  const release = () => {
+    clearLimit();
     if (stream) for (const track of stream.getTracks()) track.stop();
     stream = null;
   };
@@ -35,10 +43,27 @@
     release(); discard(); error = ''; state = 'idle'; emit();
   }
   function stop() {
-    if (state !== 'recording' || !recorder) return false;
-    durationMs = Math.min(maxMs, Math.max(0, clock() - started));
+    if (!['recording', 'paused'].includes(state) || !recorder) return false;
+    durationMs = elapsed();
+    clearLimit();
     state = 'stopping'; emit();
     try { recorder.stop(); } catch { recorder = null; fail('recording_failed'); }
+    return true;
+  }
+  function pause() {
+    if (state !== 'recording' || !canPause()) return false;
+    try { recorder.pause(); } catch { return false; }
+    durationMs = elapsed();
+    clearLimit();
+    state = 'paused'; emit();
+    return true;
+  }
+  function resume() {
+    if (state !== 'paused' || !canPause()) return false;
+    try { recorder.resume(); } catch { return false; }
+    started = clock(); state = 'recording';
+    armLimit(generation);
+    emit();
     return true;
   }
   async function start() {
@@ -66,7 +91,7 @@
       recorder = new Recorder(stream, { mimeType: mime });
       const active = recorder;
       active.ondataavailable = event => {
-        if (generation !== current || !['recording', 'stopping'].includes(state) || !event.data?.size) return;
+        if (generation !== current || !['recording', 'paused', 'stopping'].includes(state) || !event.data?.size) return;
         bytes += event.data.size;
         if (bytes > maxBytes) {
           generation++; recorder = null;
@@ -82,7 +107,7 @@
         fail('recording_failed');
       };
       active.onstop = () => {
-        if (generation === current && state === 'recording') { recorder = null; fail('recording_failed'); return; }
+        if (generation === current && ['recording', 'paused'].includes(state)) { recorder = null; fail('recording_failed'); return; }
         if (generation !== current || state !== 'stopping') return;
         recorder = null; release();
         blob = new BlobClass(chunks, { type: active.mimeType || mime }); chunks = [];
@@ -91,12 +116,12 @@
       };
       active.start(1000);
       started = clock(); state = 'recording';
-      timer = setTimer(() => { if (generation === current) stop(); }, maxMs);
+      armLimit(current);
       emit(); return true;
     } catch {
       recorder = null; fail('recording_failed'); return false;
     }
   }
-  return { start, stop, cancel, snapshot, recording: () => state === 'ready' ? blob : null,
+  return { start, stop, pause, resume, cancel, snapshot, recording: () => state === 'ready' ? blob : null,
     dispose() { if (state === 'disposed') return; cancel(); state = 'disposed'; emit(); } };
 });

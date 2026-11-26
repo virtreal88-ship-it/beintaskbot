@@ -5,20 +5,22 @@ const create = require('../docs/tenant-voice-recorder.js');
 function fixture({ permission, supported = true, maxBytes = 64, maxMs = 5000 } = {}) {
   const track = { stopped: 0, stop() { this.stopped++; } };
   const stream = { getTracks: () => [track] };
-  let instance, timeout, time = 100;
+  let instance, timeout, delay, time = 100;
   class FakeRecorder {
     static isTypeSupported(type) { return supported && type === 'audio/webm;codecs=opus'; }
     constructor(_stream, options) { instance = this; this.mimeType = options.mimeType; this.state = 'inactive'; }
     start() { this.state = 'recording'; }
     stop() { this.state = 'inactive'; }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
     data(value) { this.ondataavailable({ data: new Blob([value]) }); }
     ended() { this.state = 'inactive'; this.onstop(); }
   }
   const changes = [];
   const recorder = create({ mediaDevices: { getUserMedia: permission || (async () => stream) }, MediaRecorder: FakeRecorder,
-    maxBytes, maxMs, now: () => time, setTimeout: fn => { timeout = fn; return 1; }, clearTimeout: () => { timeout = null; },
+    maxBytes, maxMs, now: () => time, setTimeout: (fn, ms) => { timeout = fn; delay = ms; return 1; }, clearTimeout: () => { timeout = null; },
     onChange: value => changes.push(value) });
-  return { recorder, track, stream, changes, instance: () => instance, tick(ms) { time += ms; }, timeout: () => timeout?.() };
+  return { recorder, track, stream, changes, instance: () => instance, tick(ms) { time += ms; }, timeout: () => timeout?.(), delay: () => delay };
 }
 
 test('explicit stop makes a preview available and releases the microphone', async () => {
@@ -46,6 +48,27 @@ test('cancelling while permission is pending stops a late stream without startin
   assert.equal(f.track.stopped, 1);
   assert.equal(f.instance(), undefined);
   assert.equal(f.recorder.snapshot().state, 'idle');
+});
+
+test('pausing preserves queued audio and resumes with the remaining recording time', async () => {
+  const f = fixture({maxMs: 3000});
+  assert.equal(await f.recorder.start(), true);
+  f.instance().data('first'); f.tick(1100);
+  assert.equal(f.recorder.pause(), true);
+  f.instance().data(' queued');
+  f.tick(8000); f.timeout();
+  assert.equal(f.recorder.snapshot().state, 'paused');
+  assert.equal(f.recorder.snapshot().durationMs, 1100);
+  assert.equal(f.recorder.recording(), null);
+  assert.equal(f.recorder.resume(), true);
+  assert.equal(f.delay(), 1900);
+  f.tick(700); f.instance().data(' second');
+  assert.equal(f.recorder.pause(), true);
+  assert.equal(f.recorder.stop(), true);
+  f.instance().onstop();
+  assert.equal(f.recorder.snapshot().durationMs, 1800);
+  assert.equal(await f.recorder.recording().text(), 'first queued second');
+  assert.equal(f.track.stopped, 1);
 });
 
 test('cancel during recording ignores late events and discards data', async () => {
