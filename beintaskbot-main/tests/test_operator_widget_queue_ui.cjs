@@ -11,10 +11,11 @@ const wait = async predicate => {
 (async()=>{
   const dom = new JSDOM(read('tenant-app.html'),{url:'https://test.invalid/app?view=dialogs',runScripts:'outside-only'});
   const w=dom.window,d=w.document;
+  d.getElementById('view-dialogs').classList.add('active');
   Object.defineProperty(w,'crypto',{value:webcrypto}); w.TextEncoder=TextEncoder;
   w.matchMedia=()=>({matches:false,addListener(){},removeListener(){}});
   const profile={member:{tenant_id:'demo',telegram_id:11,role:'owner',active:true},
-    capabilities:{operator_widget:true,modules:{dialogs:true}}};
+    capabilities:{operator_widget:true,dialog_reply_templates:true,modules:{dialogs:true}}};
   w.localStorage.setItem('tenant-app-language','ru');
   w.tenantProfileSnapshot=profile;
   const site={provider:'operator_widget',channel_id:'instance',conversation_id:'verified-route',lead_id:15,
@@ -23,7 +24,7 @@ const wait = async predicate => {
     widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
   assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
-  const calls=[];
+  const calls=[];let outcome='unknown';
   w.fetch=async(url,opt={})=>{
     url=String(url);const data=opt.body&&JSON.parse(opt.body);
     calls.push({url,data});let result;
@@ -36,11 +37,13 @@ const wait = async predicate => {
     else if(url.includes('dialogs?'))result={dialogs:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:1};
     else if(url.includes('dialogs/read'))result={updated:true};
     else if(url.includes('dialogs/internal-comments'))result={comment:{id:'n',note:data.note,at:new Date().toISOString(),employee_name:'Tester'}};
-    else if(url.endsWith('/operator/widget'))return {ok:true,status:200,json:async()=>({success:true,state:'pending'})};
+    else if(url.includes('dialogs/reply-templates'))result={available:true,templates:[
+      {id:'t',name:'Greeting',body:'Salam!',visibility:'team'}],allowed_visibility:[]};
+    else if(url.endsWith('/operator/widget'))return {ok:true,status:200,json:async()=>({success:true,state:outcome})};
     else throw Error('Unexpected '+url);
     return {ok:true,status:200,json:async()=>({success:true,result})};
   };
-  for(const f of ['tenant-operator-i18n.js','tenant-dialog-source-tabs.js','tenant-operator-dialogs.js'])w.eval(read(f));
+  for(const f of ['tenant-operator-i18n.js','tenant-dialog-source-tabs.js','tenant-dialog-reply-templates.js','tenant-operator-dialogs.js'])w.eval(read(f));
   await tick();await tick();await w.tenantOperator.openDialog(site);
   const selected=()=>d.querySelector('.dialog-source-tabs [aria-pressed=true]');
   assert.deepEqual([...d.querySelectorAll('.dialog-source-tabs button')].map(b=>b.textContent),['Чат','WhatsApp','Комментарий']);
@@ -77,12 +80,20 @@ const wait = async predicate => {
   site.can_send=true;site.send_block_reason='';
   await w.tenantOperator.openDialog(site);
   d.querySelector('.dialog-source-tabs button').click();
-  const input=d.getElementById('chatText');input.value='test reply';
+  const input=d.getElementById('chatText');input.value='salam';
+  input.dispatchEvent(new w.Event('input',{bubbles:true}));
+  const suggestions=()=>d.querySelector('.operator-reply-template-suggestions');
+  await wait(()=>suggestions()&&!suggestions().hidden);
+  input.dispatchEvent(new w.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  await wait(()=>d.getElementById('operatorSendReason').textContent.includes('не подтверждена'));
+  assert.equal(input.value,'salam');assert(suggestions().hidden);
+  assert.equal(calls.filter(c=>c.url.endsWith('/operator/widget')).length,1);
+  outcome='pending';input.value='test reply';input.dispatchEvent(new w.Event('input',{bubbles:true}));
   d.getElementById('sendChat').click();
   await wait(()=>calls.some(c=>c.url.endsWith('/operator/widget')));
   await wait(()=>input.value==='');
   assert(d.getElementById('operatorSendReason').textContent.includes('Ответ доставлен'));
-  const reply=calls.find(c=>c.url.endsWith('/operator/widget')).data;
+  const reply=calls.filter(c=>c.url.endsWith('/operator/widget')).at(-1).data;
   assert.deepEqual([reply.chat_id,reply.text,reply.revision,reply.action],['15','test reply',site.widget_revision,'reply']);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
   Object.assign(site,{provider:'connect',channel_id:'wa',conversation_id:'994123456789@s.whatsapp.net',
@@ -102,7 +113,7 @@ const wait = async predicate => {
   assert(!modalSend.disabled);modalSend.click();
   await wait(()=>!d.getElementById('operatorInternalComment'));
   assert.equal(calls.filter(c=>c.url.includes('internal-comments')).at(-1).data.note,'modal staff only');
-  assert.equal(calls.filter(c=>c.url.endsWith('/operator/widget')).length,1);
+  assert.equal(calls.filter(c=>c.url.endsWith('/operator/widget')).length,2);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
   dom.window.close();
   console.log('Widget uses the regular conversation, keeps its source on acceptance, isolates notes and addresses only the selected chat.');

@@ -161,7 +161,7 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
         def log_message(self, *args):
             pass
 
-    provider = socketio.Server(async_mode="threading", async_handlers=False, ping_interval=1, ping_timeout=2)
+    provider = socketio.Server(async_mode="threading", async_handlers=True, ping_interval=1, ping_timeout=2)
     events = []
     registered = set()
 
@@ -171,8 +171,11 @@ def test_real_socket_protocol_on_loopback(monkeypatch):
 
     @provider.on("register_operator")
     def register(sid, data):
+        from time import sleep
         assert data == {}
+        sleep(0.15)  # Registration work finishes asynchronously on the provider.
         registered.add(sid)
+        provider.emit("active_chats_list", [{**CHAT, "id": 123456789}], to=sid)
 
     @provider.on("operator_message")
     def reply(sid, data):
@@ -219,6 +222,8 @@ def test_provider_outcome_without_saved(monkeypatch, events, expected):
 
     def emit(event, data):
         emitted.append(event)
+        if event == "register_operator":
+            handlers["active_chats_list"]([CHAT])
         if event == "operator_message":
             for name, details in events:
                 handlers[name]({"temp_id": data["temp_id"], **details})
@@ -233,6 +238,26 @@ def test_provider_outcome_without_saved(monkeypatch, events, expected):
     monkeypatch.setattr(wire.Event, "wait", lambda self, timeout: self.is_set())
     assert wire.send_reply(CREDENTIALS, CHAT, "hello", "test") == expected
     assert emitted == ["register_operator", "operator_message"]
+
+
+@pytest.mark.parametrize("roster", [None, [], [CHAT, CHAT],
+                         [{**CHAT, "channel": "whatsapp"}], [{**CHAT, "account": "other"}],
+                         [{**CHAT, "status": "closed"}], [{**CHAT, "operator": "other"}]])
+def test_unconfirmed_registration_never_emits_reply(monkeypatch, roster):
+    from contextlib import nullcontext
+    from unittest.mock import Mock
+    client, handlers = Mock(), {}
+    client.on.side_effect = handlers.__setitem__
+    def register(name, data):
+        assert name == "register_operator"
+        if roster is not None:
+            handlers["active_chats_list"](roster)
+    client.emit.side_effect = register
+    monkeypatch.setattr(wire, "_socket", lambda credentials: nullcontext(client))
+    monkeypatch.setattr(wire.Event, "wait", lambda self, timeout: self.is_set())
+    assert wire.send_reply(CREDENTIALS, CHAT, "hello", "test") == {
+        "state": "rejected", "reason": "widget_route_unconfirmed"}
+    client.emit.assert_called_once_with("register_operator", {})
 
 
 @pytest.mark.parametrize(("outcomes", "expected"), [

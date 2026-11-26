@@ -3837,7 +3837,11 @@
           const statuses={saved:copy[1],unknown:copy[2],rejected:copy[3],pending:copy[4]};
           reason.textContent=result.reason==='chat_not_owned'
             ? copy[5]+(result.operator?' · '+result.operator:'.')
-            : statuses[result.state]||copy[2];
+            : result.reason==='widget_route_unconfirmed'?({
+              ru:'Operator не подтвердил доступность этого диалога. Ответ не отправлен, текст сохранён.',
+              az:'Operator bu söhbətin əlçatanlığını təsdiqləmədi. Cavab göndərilmədi, mətn saxlanıldı.',
+              en:'Operator did not confirm this chat is available. Your reply was not sent. Your draft is kept.'
+            }[i18n.language]||copy[3]):statuses[result.state]||copy[2];
           if(result.state==='saved'||result.state==='pending'){
             message.value='';message.dispatchEvent(new Event('input',{bubbles:true}));
           }
