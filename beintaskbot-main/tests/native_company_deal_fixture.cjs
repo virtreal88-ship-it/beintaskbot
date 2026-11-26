@@ -10,7 +10,7 @@ function installNativeCompanyDealFixture(config={}){
  const a=f.profile.capabilities.actions;
  f.profile.capabilities.pages={profile:true,deals:Object.values(a.deals).some(Boolean),companies:Object.values(a.companies).some(Boolean),customers:Object.values(a.customers).some(Boolean),tasks:false};
  const rel=(source,kind)=>({['link_'+kind]:source,['unlink_'+kind]:source});
- f.companies=[{id:ids.company,name:'Source company',contacts:[],deals:[{id:ids.deal,title:'Existing linked deal'}],actions:{update:config.companyUpdate===true},relation_actions:{...rel(config.companyUpdate===true,'contact'),...rel(config.companyUpdate===true,'deal')}},{id:ids.otherCompany,name:'Available company',contacts:[],deals:[]}];
+ f.companies=[{id:ids.company,name:'Source company',operator_account:'test',contacts:[],deals:[{id:ids.deal,title:'Existing linked deal'}],actions:{update:config.companyUpdate===true},relation_actions:{...rel(config.companyUpdate===true,'contact'),...rel(config.companyUpdate===true,'deal')}},{id:ids.otherCompany,name:'Available company',contacts:[],deals:[]}];
  if(config.pagination)for(let i=1;i<=120;i++)f.companies.push({id:'synthetic-company-'+i,name:'Directory company '+i});
  f.deals=[{id:ids.deal,title:'Source deal',pipeline_id:'1',stage_id:'2',contact_id:ids.contact,contact_name:'Readable contact context',company_id:ids.company,company_name:'Source company',description:'',scoped_relations:f.scoped,actions:{update:config.dealUpdate===true},relation_actions:rel(config.dealUpdate===true,'company')},{id:ids.otherDeal,title:'Available deal',pipeline_id:'1',stage_id:'2',contact_id:null,company_id:null,scoped_relations:f.scoped,actions:{update:false},relation_actions:rel(false,'company')}];
  if(!f.scoped)for(const company of f.companies)delete company.relation_actions;
@@ -42,6 +42,9 @@ function installNativeCompanyDealFixture(config={}){
     const deal=f.deals.find(row=>row.id===(kind==='deals'?id:body.entity_id)),company=kind==='deals'?body.company_id:id,unlink=kind==='deals'?body.unlink:body.action==='unlink_deal';
     if(deal){deal.company_id=unlink?null:company;deal.company_name=unlink?null:f.companies.find(row=>row.id===company)?.name;for(const c of f.companies)c.deals=f.deals.filter(d=>d.company_id===c.id).map(d=>({id:d.id,title:d.title}))}
     return response({data:{id:deal?.id,company_id:company,linked:!unlink}});
+   }
+   if(kind==='companies'&&id&&body?.action==='update'&&config.companyUpdate){
+    const row=f.companies.find(item=>item.id===id);row.name=body.name;return response({data:clone(row)});
    }
    if(kind==='deals'){let row=f.deals.find(row=>row.id===id);if(row)Object.assign(row,body);else{row={id:'10000000-0000-4000-8000-000000000703',...body};f.deals.push(row)}return response({deal:clone(row)})}
    throw new Error('Unexpected write '+u.pathname);

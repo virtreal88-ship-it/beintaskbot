@@ -125,7 +125,17 @@ def get_company(tenant_id,company_id,*,actor_id=None):
             profile = current_access(cur, tenant_id, actor_id, 'companies', 'view')
             where, params = scoped_sql(profile, 'companies', 'view', 'c')
             columns, action_params = action_columns(profile, 'companies', 'c')
-            cur.execute(f"""SELECT c.id,c.name,c.phone,c.email,c.description,c.responsible_id,c.created_at,c.updated_at {columns}
+            # Read the stable identity only on this authorized company detail, never
+            # infer it from the editable name or make a request to Operator.
+            cur.execute(f"""SELECT c.id,c.name,c.phone,c.email,c.description,c.responsible_id,c.created_at,c.updated_at,
+              (SELECT CASE WHEN count(*)=1 THEN min(account) END FROM (
+                SELECT m.external_account AS account FROM saas_beinsystems_operator_company_imports m
+                  WHERE m.tenant_id=c.tenant_id AND m.company_id=c.id
+                UNION
+                SELECT l.external_id FROM saas_beinsystems_operator_links l
+                  WHERE l.tenant_id=c.tenant_id AND l.local_entity_id=c.id AND l.local_entity_type='company'
+                    AND l.external_entity_type='account' AND l.external_scope_id='' AND l.revoked_at IS NULL
+              ) AS identities) AS operator_account {columns}
               FROM saas_crm_native_companies c WHERE c.tenant_id=%s::uuid AND c.id=%s::uuid
               AND c.archived_at IS NULL AND ({where})""", [*action_params,tenant_id,ident,*params])
             row=public_row(cur.fetchone())
