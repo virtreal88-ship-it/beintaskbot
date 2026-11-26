@@ -157,11 +157,12 @@ async def test_handler_rejects_get_cross_origin_forged_account_and_never_caches(
 
 def test_company_profile_projects_only_exact_verified_account_and_keeps_zero():
     as_read = {'status':'success', 'data':{'account':ACCOUNT,'phone':'+994 50 123 45 67',
-        'balance':0,'partnerpin':'sensitive','email':'private@example.test'}}
+        'balance':0,'partner_name':'  Uniset  ','partnerpin':'sensitive','email':'private@example.test'}}
     assert link._company_profile_fields(as_read, ACCOUNT) == {
-        'registration_phone':'+994 50 123 45 67','balance':0}
+        'registration_phone':'+994 50 123 45 67','balance':0,'partner_name':'Uniset'}
     as_read['data']['phone'] = 'unknown'
     as_read['data']['balance'] = float('nan')
+    as_read['data']['partner_name'] = '   '
     assert link._company_profile_fields(as_read, ACCOUNT) == {'registration_phone':None,'balance':None}
     as_read['data']['account'] = 'different'
     with pytest.raises(operator.OperatorError) as denied:

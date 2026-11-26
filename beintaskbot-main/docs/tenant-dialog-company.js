@@ -19,9 +19,9 @@
     en:{label:'Customer link',copy:'Copy link',copied:'Link copied',error:'Could not retrieve the link. Try again.',copyError:'The browser could not copy the link. Try again.',unsupported:'Copying is unavailable in this browser.',notFound:'The link has not been created yet.'}
   };
   const profileLabels={
-    ru:{phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
-    az:{phone:'Telefon',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil',empty:'Məlumat yoxdur',denied:'Şirkət məlumatlarına giriş icazəsi yoxdur',error:'Operator sorğusu uğursuz oldu'},
-    en:{phone:'Phone',balance:'Company balance',unavailable:'Operator details are unavailable',empty:'No data',denied:'Access to company details denied',error:'Operator request failed'}
+    ru:{partner:'Партнёр',phone:'Телефон',balance:'Баланс компании',unavailable:'Данные Operator недоступны',empty:'Нет данных',denied:'Нет доступа к данным компании',error:'Ошибка запроса к Operator'},
+    az:{partner:'Tərəfdaş',phone:'Telefon',balance:'Şirkət balansı',unavailable:'Operator məlumatları əlçatan deyil',empty:'Məlumat yoxdur',denied:'Şirkət məlumatlarına giriş icazəsi yoxdur',error:'Operator sorğusu uğursuz oldu'},
+    en:{partner:'Partner',phone:'Phone',balance:'Company balance',unavailable:'Operator details are unavailable',empty:'No data',denied:'Access to company details denied',error:'Operator request failed'}
   };
   const profileText=key=>(profileLabels[window.tenantI18n?.language]||profileLabels.az)[key];
   const linkProblems={
@@ -39,12 +39,24 @@
   const headerHosts=new WeakMap();
   const current=s=>s===state&&s.section.isConnected&&s.isCurrent();
   const companyName=binding=>binding?.company_id&&typeof binding.company_name==='string'?binding.company_name:'';
-  function paintHeader(s){
-    const el=headerHosts.get(s.section);
+  function paintHeaderLabel(el,name){
     if(!el?.isConnected)return;
-    const name=current(s)?(s.binding===undefined?s.initialCompanyName:companyName(s.binding)):'';
     el.textContent=name;el.hidden=!name;
     if(name)el.title=name;else el.removeAttribute('title');
+  }
+  function paintHeader(s){
+    const {nameHost,partnerHost}=headerHosts.get(s.section);
+    const active=current(s);
+    paintHeaderLabel(nameHost,active?(s.binding===undefined?s.initialCompanyName:companyName(s.binding)):'');
+    paintHeaderLabel(partnerHost,active?s.partnerName||'':'');
+  }
+  const desktopPartner=s=>headerHosts.get(s.section).partnerHost?.isConnected&&
+    !window.matchMedia?.('(max-width:900px)')?.matches;
+  function paintPartner(s,name){
+    s.partnerName=name;
+    s.partnerValue.textContent=name;
+    s.partnerRow.hidden=!name;
+    paintHeader(s);
   }
   // Keep the route-owned scheduling control available if Company data is absent.
   function releaseReminder(s){
@@ -77,8 +89,8 @@
     }
     return payload;
   }
-  const linkCurrent=(s,company)=>current(s)&&s.section.closest('dialog')?.open===true&&
-    !s.writing&&s.binding?.company_id===company;
+  const profileCurrent=(s,company)=>!!company&&current(s)&&!s.writing&&s.binding?.company_id===company;
+  const linkCurrent=(s,company)=>profileCurrent(s,company)&&s.section.closest('dialog')?.open===true;
   function clearPublicLink(s){
     s.linkRequest?.abort();s.linkRequest=null;s.linkLookupRequest?.abort();s.linkLookupRequest=null;
     s.linkCompany=null;s.linkLoadedCompany=null;s.linkUrl='';
@@ -306,7 +318,7 @@
     }catch(error){if(active())body.textContent=profileText([401,403,424].includes(error.status)?'denied':'error');}
     finally{if(item.read===read){item.read=null;body.removeAttribute('aria-busy');}}
   }
-  function clearProfile(s){
+  function resetCompanySections(s){
     s.closeAction?.(false);
     s.actionPermissions=null;s.actionBinding=null;
     for(const item of s.panels.slice(1)){
@@ -314,21 +326,29 @@
       item.body.removeAttribute('aria-busy');item.toolbar?.replaceChildren();
     }
     selectTab(s,'main');
+  }
+  function clearProfile(s,keepPartner=false){
+    resetCompanySections(s);
     s.profileRequest?.abort();s.profileRequest=null;s.profileCompany=null;
+    s.refreshProfileOnOpen=false;
     s.profileBox.hidden=true;s.profileStatus.textContent='';
     s.registrationPhone.textContent=s.balance.textContent='—';
+    if(!keepPartner)paintPartner(s,'');
   }
   function syncProfile(s){
     const company=s.binding?.company_id;
-    if(!company||!linkCurrent(s,company)){clearProfile(s);return;}
-    if(s.profileCompany===company)return;
-    clearProfile(s);
+    const panelOpen=linkCurrent(s,company);
+    if(!profileCurrent(s,company)||(!panelOpen&&!desktopPartner(s))){clearProfile(s);return;}
+    const sameCompany=s.profileCompany===company;
+    if(sameCompany&&(!s.refreshProfileOnOpen||!panelOpen||s.profileRequest))return;
+    clearProfile(s,sameCompany);
     s.profileCompany=company;s.profileBox.hidden=false;
     const read=new AbortController();s.profileRequest=read;
-    const active=()=>s.profileRequest===read&&linkCurrent(s,company);
+    const active=()=>s.profileRequest===read&&profileCurrent(s,company);
     void request(endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
       .then(({company_profile:profile})=>{
         if(!active())return;
+        paintPartner(s,profile?.state==='available'&&typeof profile.partner_name==='string'?profile.partner_name.trim():'');
         if(profile?.state!=='available'){
           s.profileStatus.textContent=['not_connected','not_linked'].includes(profile?.state)
             ?linkProblem(profile.state):profileText(profile?.state==='not_found'?'empty':'error');
@@ -339,7 +359,11 @@
         if(typeof profile.registration_phone==='string')s.registrationPhone.textContent=profile.registration_phone;
         if(Number.isFinite(profile.balance))s.balance.textContent=new Intl.NumberFormat(
           window.tenantI18n?.language||'az',{style:'currency',currency:'AZN'}).format(profile.balance);
-      },error=>{if(active())s.profileStatus.textContent=profileText([401,403].includes(error.status)?'denied':'error');})
+      },error=>{
+        if(!active())return;
+        paintPartner(s,'');
+        s.profileStatus.textContent=profileText([401,403].includes(error.status)?'denied':'error');
+      })
       .finally(()=>{if(s.profileRequest===read)s.profileRequest=null;});
   }
   const actionLabels={
@@ -472,11 +496,13 @@
     s.profileStatus=node('p');s.profileStatus.setAttribute('role','status');
     const field=(key)=>{
       const row=node('div'),label=node('small',profileText(key)),value=node('span','—');
-      row.append(label,value);s.profileBox.append(row);return {label,value};
+      row.append(label,value);s.profileBox.append(row);return {row,label,value};
     };
-    const phone=field('phone'),balance=field('balance');
+    const partner=field('partner'),phone=field('phone'),balance=field('balance');
+    partner.row.dataset.companyPartner='';partner.row.hidden=true;partner.value.textContent='';
+    s.partnerRow=partner.row;s.partnerValue=partner.value;
     s.registrationPhone=phone.value;s.balance=balance.value;
-    s.labelProfile=()=>{phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
+    s.labelProfile=()=>{partner.label.textContent=profileText('partner');phone.label.textContent=profileText('phone');balance.label.textContent=profileText('balance');};
     s.profileBox.append(s.profileStatus);s.main.append(s.profileBox);
   }
   function writePendingClipboard(pending){
@@ -550,7 +576,7 @@
     if(!current(s))return;
     const same=s.binding?.company_id===binding?.company_id;
     s.binding=binding;
-    paintHeader(s);
+    if(same)paintHeader(s);else paintPartner(s,'');
     const name=companyName(binding);
     s.value.textContent=name||t(binding?'unknown':'unavailable');
     s.value.title=s.value.textContent;
@@ -712,7 +738,7 @@
     };
     s.sync();
   }
-  function mount({host,nameHost,reminderHost,route,member,isCurrent,onChanged}){
+  function mount({host,nameHost,partnerHost,reminderHost,route,member,isCurrent,onChanged}){
     if(!host?.isConnected||!route?.provider||!route?.lead_id
         ||typeof route.conversation_id!=='string'||typeof route.channel_id!=='string'
         ||(route.provider==='connect'&&(!route.channel_id||!route.conversation_id))
@@ -721,25 +747,27 @@
       channel_id:route.channel_id,conversation_id:route.conversation_id};
     const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),exact]);
     const snapshot=route.company_binding;
+    const lifecycle=JSON.stringify([route.lifecycle?.state,route.lifecycle?.operator_id]);
     if(state?.key===key){
       const s=state;
       s.isCurrent=isCurrent;s.onChanged=onChanged;s.member=member;
       if(s.section.parentElement!==host)host.append(s.section);
-      headerHosts.set(s.section,nameHost);
+      headerHosts.set(s.section,{nameHost,partnerHost});
       placeReminder(s,reminderHost);attachTabs(s);labelPublicLink(s);s.labelProfile();s.labelTabs();
+      if(s.lifecycle!==lifecycle){s.lifecycle=lifecycle;clearProfile(s);}
       if(snapshot!==undefined&&snapshot!==s.snapshot&&!s.writing){
         s.snapshot=snapshot;s.read?.abort();s.read=null;paint(s,snapshot);
-      }else{paintHeader(s);s.sync();}
+      }else{paintHeader(s);s.sync();syncProfile(s);}
       return;
     }
     clear();
     const section=node('div'),value=node('span',t('loading')),status=node('p');
-    headerHosts.set(section,nameHost);
+    headerHosts.set(section,{nameHost,partnerHost});
     section.dataset.operatorDialogCompany='';
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
-    const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,initialCompanyName,read:null};
+    const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,lifecycle,initialCompanyName,read:null};
     host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);placeReminder(s,reminderHost);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
@@ -844,6 +872,8 @@
     #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
+    [data-company-profile]>[data-company-partner][hidden]{display:none}
+    @media(min-width:901px){[data-company-profile]>[data-company-partner]{display:none}}
     [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:12px;line-height:1.35}
     [data-company-profile]>p{margin:0}
     [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
@@ -868,6 +898,13 @@
   document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
   window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
     refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},
-    hidePublicLink(){if(state){clearPublicLink(state);clearProfile(state);}}
+    hidePublicLink(){
+      if(!state)return;
+      clearPublicLink(state);
+      if(desktopPartner(state)){
+        resetCompanySections(state);
+        state.refreshProfileOnOpen=!state.profileRequest;
+      }else clearProfile(state);
+    }
   };
 })();
