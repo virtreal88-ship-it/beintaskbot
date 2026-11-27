@@ -164,6 +164,7 @@ async function verifyTaskCompany(browser){
       const panel=task.getByRole('dialog',{name:'Компания Operator',exact:true});
       const input=panel.locator('#operatorDialogueCompanySearch');
       if(canManage){
+        await panel.locator('#operatorDialogueCompanySearch:not([readonly])').waitFor();
         await input.pressSequentially('task');
         await panel.getByRole('button',{name:'@task-company',exact:true}).click();
       }else{
