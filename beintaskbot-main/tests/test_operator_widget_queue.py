@@ -284,6 +284,21 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     change("dismiss", individual_no_reply=True, message_id="2")
     assert page()["dialog"]["lifecycle"]["state"] == "accepted"
     assert page()["dialog"]["lifecycle"]["no_reply_needed"]
+    # Operator can revoke its reply route after the CRM operator accepts.
+    # The accepted owner can finish locally, without permission to send or transfer.
+    foreign = {**CHAT, "operator": "foreign@team"}
+    sync.snapshot(cur, A, CREDENTIALS, widget._routes([foreign], CREDENTIALS), "integration")
+    db.commit()
+    dialog = page()["dialog"]
+    assert dialog["lifecycle"]["can_close"]
+    assert not dialog["can_send"] and not dialog["lifecycle"]["can_transfer"]
+    assert not dialog["can_add_internal_comment"] and not dialog["lifecycle"]["can_dismiss"]
+    assert queue.cards(cur, policy, "active", queue.guard(cur, A))[0][0]["lifecycle"]["can_close"]
+    with pytest.raises(TenantLinearError):
+        lifecycle.mutate(recipient, {**params, "action": "close", "request_id": str(uuid.uuid4()),
+                                     "expected_revision": dialog["lifecycle"]["revision"]})
+    with pytest.raises(TenantLinearError):
+        change("transfer", target_employee_id=33)
     change("close")
     send(2, start + timedelta(seconds=1))
     assert page()["dialog"]["lifecycle"]["state"] == "closed"
