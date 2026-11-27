@@ -289,7 +289,7 @@ class _ListAccessCursor:
             assert 'w.tenant_id=c.tenant_id' in sql and 'c.tenant_id=%s::uuid' in sql
             self.result = ([] if self.missing else [dict(channel_id=c, conversation_id=g,
                 state='accepted' if self.transferred else 'waiting',
-                operator_id=44 if self.transferred else None) for c, g in self.routes])
+                operator_id=44 if self.transferred else None, shared_route=False) for c, g in self.routes])
         else:
             raise AssertionError('Unexpected SQL: ' + sql)
 
