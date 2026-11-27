@@ -334,3 +334,90 @@ def test_phone_from_tiktok_message_can_find_and_link_an_exact_whatsapp_chat(sale
         WHERE tenant_id=%s
     """, (A,)) == [{'kommo_phone_message_id':number_message,'kommo_contact_id':'312'}]
     db.commit()
+
+
+def test_phone_lookup_links_an_existing_confirmed_crm_send_without_a_contact(sale):
+    from tenant_connect_transport import _upsert_conversation
+    from tenant_dialog_lifecycle import mutate, record_message
+
+    db, _ = sale
+    peer = '994555000103@s.whatsapp.net'
+    selected, sent = str(uuid.uuid4()), str(uuid.uuid4())
+    with db.cursor() as cur:
+        lead = _upsert_conversation(cur, A, CA, peer, {'kind':'contact'})
+        cur.execute("""
+            INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+            VALUES(%s::uuid,%s::uuid,%s,'TIKTOK_PRIOR_NUMBER','tiktok_kommo','incoming','0555000103','text')
+        """, (selected, A, int(LEAD)))
+    db.commit()
+    accepted = mutate(PROFILE, {'provider':'connect','channel_id':CA,'conversation_id':peer,
+        'lead_id':lead,'action':'accept','expected_revision':0,'request_id':str(uuid.uuid4())})
+    assert accepted
+    receipt = {'fromMe':True,'channelId':CA,'conversationId':peer,'status':'sent',
+               'externalMessageId':'TEST_NATIVE_SENT'}
+    with db.cursor() as cur:
+        cur.execute("""
+            INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,raw)
+            VALUES(%s::uuid,%s::uuid,%s,'connect:TEST_NATIVE_SENT',%s,'outgoing',%s,%s::jsonb)
+        """, (sent, A, lead, 'connect:'+CA, TEXT, json.dumps(receipt)))
+        record_message(cur, A, CA, peer, sent)
+    db.commit()
+    assert links.phone_candidates(PROFILE, LEAD, selected) == {'candidates':[]}
+
+    receipt['_crm_native_send_receipt'] = True
+    db.execute("UPDATE saas_crm_messages SET raw=%s::jsonb WHERE id=%s::uuid", (json.dumps(receipt), sent))
+    db.commit()
+    candidates = links.phone_candidates(PROFILE, LEAD, selected)['candidates']
+    assert len(candidates) == 1 and candidates[0]['conversation_id'] == peer
+    assert not db.execute("""
+        SELECT contact_id FROM saas_crm_native_contact_conversations
+        WHERE tenant_id=%s AND channel_id=%s AND conversation_id=%s
+    """, (A, CA, peer))
+    db.commit()
+
+    request = {key:value for key,value in candidates[0].items() if key!='channel_name'}
+    request.update(deal_source='kommo',deal_id=LEAD,phone_message_id=selected,suggested=False)
+    existing = str(uuid.uuid4())
+    db.execute("""
+        INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone)
+        VALUES(%s::uuid,%s::uuid,'Unverified contact','055 500 01 03')
+    """, (existing, A))
+    db.commit()
+    with pytest.raises(TenantLinearError) as unresolved:
+        links.attach(PROFILE, request)
+    assert unresolved.value.status == 404
+    assert not db.execute("SELECT id FROM saas_crm_deal_dialog_links")
+    db.execute("DELETE FROM saas_crm_native_contacts WHERE tenant_id=%s AND id=%s", (A, existing))
+    db.commit()
+
+    automatic = {'deal_id':LEAD, 'auto_phone':True}
+    related = '919'
+    kommo_deal(db, lead=related, name='Another eligible deal for this client')
+    assert links.attach(PROFILE, automatic) == {'linked':False}
+    db.execute("DELETE FROM saas_crm_deals WHERE tenant_id=%s AND kommo_lead_id=%s", (A,int(related)))
+    db.commit()
+    unrelated = '920'
+    kommo_deal(db, lead=unrelated, contact=313)
+    db.execute("""
+        INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+        VALUES(%s::uuid,%s::uuid,%s,'TIKTOK_SAME_NUMBER','tiktok_kommo','incoming','+994 55 500 01 03','text')
+    """, (str(uuid.uuid4()),A,int(unrelated)))
+    db.commit()
+    assert links.attach(PROFILE, automatic) == {'linked':False}
+    assert not db.execute("SELECT id FROM saas_crm_deal_dialog_links")
+    assert not db.execute("SELECT id FROM saas_crm_native_contacts WHERE phone=%s", ('994555000103',))
+    db.execute("DELETE FROM saas_crm_deals WHERE tenant_id=%s AND kommo_lead_id=%s", (A,int(unrelated)))
+    db.commit()
+
+    saved = asyncio.run(attach_from_browser(automatic))
+    assert [m['body'] for m in links.history(PROFILE,'kommo',LEAD,saved['link_id'])['messages']] == [TEXT]
+    assert db.execute("""
+        SELECT count(*) AS n FROM saas_crm_native_contact_identities
+        WHERE tenant_id=%s AND identity_type='whatsapp_phone' AND identity_value='994555000103'
+    """, (A,)) == [{'n':1}]
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_deal_dialog_links") == [{'n':1}]
+    assert db.execute("SELECT count(*) AS n FROM saas_crm_deals WHERE tenant_id=%s", (A,)) == [{'n':1}]
+    assert db.execute("""SELECT action FROM saas_tenant_audit_events
+        WHERE entity_id=%s AND entity_type='deal_dialog_link'""", (saved['link_id'],)) == [
+            {'action':'deal_dialog_auto_link'}]
+    db.commit()

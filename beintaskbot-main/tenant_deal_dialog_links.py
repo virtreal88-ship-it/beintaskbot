@@ -3,7 +3,7 @@ import os
 import re
 import uuid
 
-from kommo_phone_duplicates import normalize_phone
+from kommo_phone_duplicates import normalize_phone, variants
 from tenant_connect_direct_identity import direct_identity, verified_phone_jid
 from tenant_crm_native_access import scoped_sql
 from tenant_crm_relation_identity import current_binding
@@ -19,12 +19,16 @@ def enabled(tenant):
     return str(tenant) in os.getenv('CRM_DEAL_DIALOG_LINK_TENANTS', '').replace(',', ' ').split()
 
 
-def _contact(cur, tenant, channel, conversation, *, expected_number=None):
+def _route_number(cur, tenant, channel, conversation):
     from tenant_connect_identity import conflicted
     if not direct_identity(conversation) or conflicted(cur, tenant, channel, conversation):
-        return None
-    number = verified_phone_jid(cur, tenant, channel, conversation).split('@', 1)[0]
-    if not number or (expected_number is not None and number != expected_number):
+        return ''
+    return verified_phone_jid(cur, tenant, channel, conversation).split('@', 1)[0]
+
+
+def _contact(cur, tenant, channel, conversation):
+    number = _route_number(cur, tenant, channel, conversation)
+    if not number:
         return None
     cur.execute("""
         SELECT l.contact_id::text AS contact_id FROM saas_crm_native_contact_conversations l
@@ -65,6 +69,28 @@ def _subject(cur, tenant, channel, conversation, lead, workflow):
             and (raw.get('source') == 'linked_phone' or raw.get('authorshipUncertain') is True)):
         return ('message_id', rows[0]['id'])
     return None
+
+
+def _confirmed_outbound(cur, tenant, channel, conversation, lead, subject):
+    # A pre-pilot conversation may lack a native contact. Only a persisted
+    # provider receipt in the selected context can resolve that exact route.
+    if subject[0] == 'episode_id':
+        selected = """EXISTS (SELECT 1 FROM saas_dialog_episode_messages e
+            WHERE e.tenant_id=m.tenant_id AND e.message_id=m.id AND e.episode_id=%s::uuid)"""
+    else:
+        selected = 'm.id=%s::uuid'
+    cur.execute(f"""
+        SELECT m.external_id FROM saas_crm_messages m
+        WHERE m.tenant_id=%s::uuid AND m.channel=%s AND m.kommo_lead_id=%s
+          AND m.direction='outgoing' AND m.external_id LIKE 'connect:%%'
+          AND m.raw->>'fromMe'='true' AND m.raw->>'message_deleted' IS DISTINCT FROM 'true'
+          AND m.raw->>'channelId'=%s AND m.raw->>'conversationId'=%s
+          AND (m.raw->>'_crm_signed_outbound_receipt'='true' OR m.raw->>'_crm_native_send_receipt'='true')
+          AND ({selected})
+        ORDER BY m.created_at,m.id LIMIT 1
+    """, (tenant, 'connect:'+channel, lead, channel, conversation, subject[1]))
+    row = cur.fetchone()
+    return row['external_id'].removeprefix('connect:') if row else None
 
 
 def _existing(cur, tenant, subject):
@@ -157,7 +183,7 @@ def _unavailable():
     return TenantLinearError('Связь со сделкой недоступна.', 404)
 
 
-def _phone_evidence(cur, tenant, binding, policy, deal_id, message_id, *, lock=False):
+def _phone_evidence(cur, tenant, binding, policy, deal_id, message_id=None, *, lock=False):
     from tenant_kommo_deal_details import _relations
     from tenant_policy import positive_id
 
@@ -169,25 +195,88 @@ def _phone_evidence(cur, tenant, binding, policy, deal_id, message_id, *, lock=F
     if not external_contact:
         raise _unavailable()
 
-    # This is the visible message selected by the employee. It is a lookup
-    # hint only and never becomes a contact identity or a stored contact phone.
+    # Message text is a lookup hint only. In automatic mode require one
+    # normalized number across the visible TikTok messages for this deal.
     require_source(cur, tenant, policy, 'kommo', action='view')
-    cur.execute("""
-        SELECT body FROM saas_crm_messages WHERE tenant_id=%s::uuid AND id=%s::uuid
+    selected = 'id=%s::uuid' if message_id else "length(body)<=80 AND btrim(body) ~ '^[+0-9 ()-]+$'"
+    parameters = [message_id] if message_id else []
+    cur.execute(f"""
+        SELECT id::text AS id,body FROM saas_crm_messages WHERE tenant_id=%s::uuid
           AND kommo_lead_id=%s AND direction='incoming' AND message_type='text'
           AND lower(channel) IN ('tiktok','tiktok_kommo')
           AND raw->>'message_deleted' IS DISTINCT FROM 'true'
           AND created_at>=%s::timestamptz
+          AND ({selected})
+        ORDER BY created_at DESC,id LIMIT 101
     """ + (' FOR SHARE' if lock else ''),
-        (tenant, message_id, deal_id, binding.connection_generation.split(':', 1)[1]))
-    row = cur.fetchone()
-    if not row:
+        (tenant, deal_id, binding.connection_generation.split(':', 1)[1], *parameters))
+    messages = cur.fetchall()
+    numbers = {}
+    for row in messages:
+        try:
+            numbers.setdefault(normalize_phone(row['body'])[1:], row['id'])
+        except ValueError:
+            if message_id:
+                raise TenantLinearError('В сообщении нужен полный номер телефона.', 422) from None
+    if len(messages) > 100 or len(numbers) != 1:
         raise _unavailable()
-    try:
-        number = normalize_phone(row['body'])[1:]
-    except ValueError:
-        raise TenantLinearError('В сообщении нужен полный номер телефона.', 422) from None
-    return number, str(external_contact)
+    number, proof_id = next(iter(numbers.items()))
+    return number, str(external_contact), proof_id
+
+
+def _phone_routes(cur, tenant, number):
+    aliases = [number+'@s.whatsapp.net', number+'@c.us']
+    cur.execute("""
+            SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
+                   s.name AS channel_name
+            FROM saas_connect_channels s JOIN LATERAL (
+                SELECT conversation_id FROM saas_connect_conversations
+                WHERE tenant_id=s.tenant_id AND connect_channel_id=s.connect_channel_id
+                  AND conversation_id=ANY(%s::text[])
+                UNION
+                SELECT canonical_conversation_id FROM saas_connect_direct_identities
+                WHERE tenant_id=s.tenant_id AND connect_channel_id=s.connect_channel_id
+                  AND identity_key=ANY(%s::text[])
+            ) x ON TRUE
+            JOIN saas_connect_conversations c ON c.tenant_id=s.tenant_id
+              AND c.connect_channel_id=s.connect_channel_id AND c.conversation_id=x.conversation_id
+            WHERE s.tenant_id=%s::uuid AND s.active AND c.conversation_kind='contact'
+            ORDER BY s.connect_channel_id,c.conversation_id
+    """, (aliases, aliases, tenant))
+    return cur.fetchall()
+
+
+def _phone_candidates(cur, tenant, actor, policy, binding, number, external_contact, routes, *, allow_existing=False):
+    from tenant_dialog_lifecycle import _row, enabled as lifecycle_enabled
+    active = lifecycle_enabled(cur, tenant)
+    result = []
+    for row in routes:
+        channel, conversation, lead = row['channel_id'], row['conversation_id'], row['lead_id']
+        try:
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+            assert_route(cur, tenant, policy, 'connect', conversation, channel, lead)
+        except TenantLinearError as error:
+            if error.status not in (403, 404):
+                raise
+            continue
+        if _route_number(cur, tenant, channel, conversation) != number:
+            continue
+        workflow = _row(cur, tenant, channel, conversation) if active else None
+        if workflow and workflow.get('operator_id') != actor:
+            continue
+        subject = _subject(cur, tenant, channel, conversation, lead, workflow)
+        if not subject or (not allow_existing and _existing(cur, tenant, subject)):
+            continue
+        contact = _contact(cur, tenant, channel, conversation)
+        if contact:
+            if kommo_contact(cur, tenant, contact, binding) not in (None, external_contact):
+                continue
+        elif not _confirmed_outbound(cur, tenant, channel, conversation, lead, subject):
+            continue
+        result.append({**row, 'context_id':subject[1]})
+    if binding != current_binding(cur, tenant, lock=False):
+        raise _unavailable()
+    return result
 
 
 def phone_candidates(profile, deal_id, phone_message_id):
@@ -198,52 +287,59 @@ def phone_candidates(profile, deal_id, phone_message_id):
     with _connect() as conn, conn.cursor() as cur:
         tenant, actor, policy = access(cur, profile, action='update')
         binding = current_binding(cur, tenant, lock=False)
-        number, external_contact = _phone_evidence(cur, tenant, binding, policy, ident, message_id)
-        from tenant_dialog_lifecycle import _row, enabled as lifecycle_enabled
-        active = lifecycle_enabled(cur, tenant)
-        cur.execute("""
-            SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
-                   l.contact_id::text AS contact_id,s.name AS channel_name
-            FROM saas_crm_native_contact_identities i
-            JOIN saas_crm_native_contact_conversations l ON l.tenant_id=i.tenant_id
-              AND l.contact_id=i.contact_id AND l.provider='connect'
-            JOIN saas_connect_conversations c ON c.tenant_id=l.tenant_id
-              AND c.connect_channel_id=l.channel_id AND c.conversation_id=l.conversation_id
-            JOIN saas_connect_channels s ON s.tenant_id=c.tenant_id AND s.connect_channel_id=l.channel_id
-            WHERE i.tenant_id=%s::uuid AND i.identity_type='whatsapp_phone' AND i.identity_value=%s
-              AND s.active AND c.conversation_kind='contact'
-            ORDER BY c.connect_channel_id,c.conversation_id
-        """, (tenant, number))
-        result = []
-        for row in cur.fetchall():
-            channel, conversation, lead = row['channel_id'], row['conversation_id'], row['lead_id']
-            try:
-                require_source(cur, tenant, policy, 'connect', channel, 'update')
-                assert_route(cur, tenant, policy, 'connect', conversation, channel, lead)
-            except TenantLinearError as error:
-                if error.status not in (403, 404):
-                    raise
-                continue
-            contact = _contact(cur, tenant, channel, conversation, expected_number=number)
-            if (contact != row['contact_id']
-                    or kommo_contact(cur, tenant, contact, binding) not in (None, external_contact)):
-                continue
-            workflow = _row(cur, tenant, channel, conversation) if active else None
-            if workflow and workflow.get('operator_id') != actor:
-                continue
-            subject = _subject(cur, tenant, channel, conversation, lead, workflow)
-            if subject and not _existing(cur, tenant, subject):
-                result.append({'channel_id':channel,'conversation_id':conversation,'lead_id':lead,
-                               'channel_name':row['channel_name'],'context_id':subject[1]})
-        if binding != current_binding(cur, tenant, lock=False):
-            raise _unavailable()
-        return {'candidates':result}
+        number, external, _ = _phone_evidence(cur, tenant, binding, policy, ident, message_id)
+        return {'candidates':_phone_candidates(cur, tenant, actor, policy, binding, number,
+                                               external, _phone_routes(cur, tenant, number))}
+
+
+def _auto_attach(profile, deal_id):
+    # Count matching routes before filtering by employee access. Never select
+    # the only visible route if another match is hidden from this employee.
+    try:
+        with _connect() as conn, conn.cursor() as cur:
+            tenant, actor, policy = access(cur, profile, action='update')
+            binding = current_binding(cur, tenant, lock=False)
+            number, external, message_id = _phone_evidence(cur, tenant, binding, policy, deal_id)
+            routes = _phone_routes(cur, tenant, number)
+            if len(routes) != 1:
+                return {'linked':False}
+            eligible = _phone_candidates(cur, tenant, actor, policy, binding, number, external, routes,
+                                         allow_existing=True)
+        if not eligible:
+            return {'linked':False}
+        candidate = {key:value for key, value in eligible[0].items() if key != 'channel_name'}
+        return attach(profile, {**candidate,'deal_source':'kommo','deal_id':deal_id,
+                                'suggested':True,'phone_message_id':message_id})
+    except TenantLinearError as error:
+        if error.status not in (403, 404, 409, 422):
+            raise
+        return {'linked':False}
+
+
+def _other_tiktok_deal_for_number(cur, tenant, binding, deal_id, number):
+    # Unverified text in another open deal is enough to block automatic
+    # matching, but is never used to grant access to that deal.
+    numbers = {item.removeprefix('+') for item in variants('+'+number)} | {'00'+number}
+    cur.execute("""
+        SELECT 1 FROM saas_crm_messages m
+        JOIN saas_crm_deals d ON d.tenant_id=m.tenant_id AND d.kommo_lead_id=m.kommo_lead_id
+        WHERE m.tenant_id=%s::uuid AND m.kommo_lead_id<>%s AND d.deleted_at IS NULL
+          AND d.status_id>0 AND d.status_id NOT IN (142,143)
+          AND m.direction='incoming' AND m.message_type='text' AND lower(m.channel) IN ('tiktok','tiktok_kommo')
+          AND m.raw->>'message_deleted' IS DISTINCT FROM 'true' AND m.created_at>=%s::timestamptz
+          AND length(m.body)<=80 AND btrim(m.body) ~ '^[+0-9 ()-]+$'
+          AND regexp_replace(m.body,'[^0-9]','','g')=ANY(%s::text[])
+        LIMIT 1
+    """, (tenant, deal_id, binding.connection_generation.split(':', 1)[1], sorted(numbers)))
+    return bool(cur.fetchone())
 
 
 def attach(profile, data):
     tenant = identifier(profile.get('tenant_id'))
     if not enabled(tenant):
         raise _unavailable()
+    if set(data) == {'auto_phone','deal_id'} and data['auto_phone'] is True:
+        return _auto_attach(profile, _deal_id('kommo', data['deal_id']))
     required = {'channel_id','conversation_id','lead_id','context_id','deal_source','deal_id','suggested'}
     if set(data) not in (required, required|{'phone_message_id'}):
         raise TenantLinearError('Некорректный запрос.', 400)
@@ -253,7 +349,7 @@ def attach(profile, data):
     lead = data['lead_id']
     phone_message_id = identifier(data['phone_message_id']) if 'phone_message_id' in data else None
     if (type(suggested) is not bool or type(lead) is not int or not 0 < lead < 2**63
-            or phone_message_id and (source != 'kommo' or suggested)
+            or phone_message_id and source != 'kommo'
             or not isinstance(conversation, str) or direct_identity(conversation) != conversation or not conversation):
         raise TenantLinearError('Выберите личный диалог WhatsApp.', 400)
 
@@ -274,7 +370,7 @@ def attach(profile, data):
         if route.get('conversation_kind') == 'group':
             raise _unavailable()
         contact = _contact(cur, tenant, channel, conversation)
-        if not contact:
+        if not contact and not phone_message_id:
             raise _unavailable()
         binding = current_binding(cur, tenant, lock=False)
         cur.execute("""
@@ -297,10 +393,27 @@ def attach(profile, data):
             raise TenantLinearError('История изменилась. Обновите диалог.', 409)
         explicit_contact = ''
         if phone_message_id:
-            number, explicit_contact = _phone_evidence(cur, tenant, binding, policy, ident, phone_message_id, lock=True)
-            if (verified_phone_jid(cur, tenant, channel, conversation) != number+'@s.whatsapp.net'
-                    or kommo_contact(cur, tenant, contact, binding) not in (None, explicit_contact)):
+            number, explicit_contact, proof_id = _phone_evidence(
+                cur, tenant, binding, policy, ident, None if suggested else phone_message_id, lock=True)
+            if suggested and (proof_id != phone_message_id or len(_phone_routes(cur, tenant, number)) != 1
+                              or _other_tiktok_deal_for_number(cur, tenant, binding, ident, number)):
+                raise TenantLinearError('Совпадение перестало быть однозначным.', 409)
+            if _route_number(cur, tenant, channel, conversation) != number:
                 raise _unavailable()
+            if not contact:
+                evidence = _confirmed_outbound(cur, tenant, channel, conversation, lead, subject)
+                if not evidence:
+                    raise _unavailable()
+                from tenant_crm_native_contacts import upsert_whatsapp_contact
+                contact = upsert_whatsapp_contact(cur, tenant, channel, conversation, number,
+                                                  message_id=evidence, adopt_by_phone=False)
+            if not contact or kommo_contact(cur, tenant, contact, binding) not in (None, explicit_contact):
+                raise _unavailable()
+            if suggested:
+                available, unique = choices(cur, tenant, contact, binding, policy,
+                                            verified_kommo_contact=explicit_contact)
+                if not unique or (available[0]['source'], available[0]['id']) != ('kommo', ident):
+                    raise TenantLinearError('Совпадение перестало быть однозначным.', 409)
         else:
             if not _deal(cur, tenant, binding, policy, source, ident, contact, update=True):
                 raise _unavailable()
@@ -324,11 +437,12 @@ def attach(profile, data):
               source, ident, *scope, actor, phone_message_id, explicit_contact))
         if not cur.fetchone():
             raise TenantLinearError('Переписку уже привязали. Обновите диалог.', 409)
+        audit_action = 'deal_dialog_auto_link' if phone_message_id and suggested else 'deal_dialog_link'
         cur.execute("""
             INSERT INTO saas_tenant_audit_events
               (id,tenant_id,actor_telegram_id,action,entity_type,entity_id)
-            VALUES (%s::uuid,%s::uuid,%s,'deal_dialog_link','deal_dialog_link',%s)
-        """, (str(uuid.uuid4()), tenant, actor, link_id))
+            VALUES (%s::uuid,%s::uuid,%s,%s,'deal_dialog_link',%s)
+        """, (str(uuid.uuid4()), tenant, actor, audit_action, link_id))
         return {'linked':True,'link_id':link_id}
 
 

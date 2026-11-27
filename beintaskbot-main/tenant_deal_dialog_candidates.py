@@ -59,7 +59,7 @@ def _catalog_complete(cur, tenant, binding, external_contact):
     return bool(cur.fetchone())
 
 
-def choices(cur, tenant, contact, binding, policy):
+def choices(cur, tenant, contact, binding, policy, *, verified_kommo_contact=None):
     """Count before employee filtering. An incomplete catalog permits explicit choice."""
     native_view, view_args = scoped_sql(policy.profile, 'deals', 'view', 'd')
     native_update, update_args = scoped_sql(policy.profile, 'deals', 'update', 'd')
@@ -77,7 +77,7 @@ def choices(cur, tenant, contact, binding, policy):
         ORDER BY d.id
     """, (*view_args, *update_args, *kommo_scope(binding), tenant, contact))
     native = cur.fetchall()
-    external_contact = kommo_contact(cur, tenant, contact, binding)
+    external_contact = verified_kommo_contact or kommo_contact(cur, tenant, contact, binding)
     complete = _catalog_complete(cur, tenant, binding, external_contact)
     mirrors = {str(row['external_id']) for row in native if row.get('external_id')}
     kommo = []

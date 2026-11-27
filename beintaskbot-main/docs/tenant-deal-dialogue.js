@@ -25,7 +25,7 @@
     panel.append(tools,body);
     const slot=document.createComment('deal chat position');
     let active=false,disposed=false,resumeNeeded=false,request,conversation,routes,selection,historyRequest;
-    let phoneRequest,canFindWhatsApp=false;
+    let phoneRequest,autoLinkRequest,canFindWhatsApp=false;
     const snapshots=new Map();
     const visible=()=>active&&!disposed&&current()&&panel.isConnected&&!panel.hidden;
     const button=(label,callback)=>{
@@ -45,6 +45,8 @@
       historyRequest=null;
       phoneRequest?.abort();
       phoneRequest=null;
+      autoLinkRequest?.abort();
+      autoLinkRequest=null;
       if(conversation){
         const snapshot=conversation.release();
         if(keep&&snapshot&&selection)snapshots.set(selection,snapshot);
@@ -105,6 +107,36 @@
         tools.append(...actions);
       }catch(error){
         if(currentPhone())status.textContent=whatsappCopy.error;
+      }
+    }
+    async function attemptAutoLink(route){
+      if(!visible()||selection!==route||phoneRequest||autoLinkRequest)return;
+      const controller=new AbortController();
+      autoLinkRequest=controller;
+      const currentLink=()=>visible()&&selection===route&&!controller.signal.aborted;
+      try{
+        const payload=await api('/api/platform/ai/dialogs/deal-link',{
+          method:'POST',signal:controller.signal,body:JSON.stringify({
+            deal_id:String(id),auto_phone:true,
+            expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id
+          })
+        });
+        const linkId=payload.result?.link_id;
+        if(!currentLink()||!linkId)return;
+        const query=new URLSearchParams({source,deal_id:id,
+          expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+        const refreshed=await api('/api/platform/ai/dialogs/for-deal?'+query,{signal:controller.signal});
+        if(!currentLink())return;
+        const next=refreshed.result?.dialogs||[];
+        const linked=next.find(item=>item.deal_link_id===linkId);
+        if(!linked)return;
+        routes=next;
+        const label=['WhatsApp',linked.channel_name==='WhatsApp'?'':linked.channel_name];
+        tools.append(button(label.filter(Boolean).join(' · '),()=>show(linked)));
+      }catch{
+        // A failed or ambiguous automatic attempt leaves the chat and manual action available.
+      }finally{
+        if(autoLinkRequest===controller)autoLinkRequest=null;
       }
     }
     function choose(){
@@ -188,8 +220,12 @@
       });
       if(!conversation){stopConversation(false);message(c.empty);return;}
       const opening=conversation;
-      if(!await opening.open()&&visible()&&conversation===opening){
+      const opened=await opening.open();
+      if(!opened&&visible()&&conversation===opening){
         tools.append(button(c.retry,()=>{stopConversation(false);void show(route,full);}));
+      }else if(opened&&conversation===opening&&route.provider==='kommo'
+          &&canFindWhatsApp&&!routes.some(item=>item.deal_link_id)){
+        void attemptAutoLink(route);
       }
     }
     async function resolve(preferredLink=null){

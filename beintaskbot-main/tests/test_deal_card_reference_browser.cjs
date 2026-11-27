@@ -17,7 +17,7 @@ const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace
       fs.readFileSync(path.join(docs, file), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '';
   });
 
-function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot, phoneInChat}) {
+function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot, phoneInChat, autoLink}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
   const channel = '10000000-0000-4000-8000-000000000301';
   const route = {provider:'connect', channel_id:channel,
@@ -96,6 +96,12 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/deal-board-preferences')return json({catalog:[]});
     if(p==='/api/platform/ai/dialogs/deal-link'&&pilot){
       const data=JSON.parse(options.body);
+      if(data.auto_phone===true){
+        if(method!=='POST'||data.deal_id!=='7')return json({},400);
+        if(!autoLink)return json({result:{linked:false}});
+        dealProof.linked=true;
+        return json({result:{linked:true,link_id:'test-link'}});
+      }
       if(method!=='POST'||data.deal_id!=='7'||data.context_id!=='first-message'||
         (phoneInChat?data.suggested||data.phone_message_id!=='number-message':!data.suggested))
         return json({},400);
@@ -209,27 +215,34 @@ async function checkMultichannelPilot(browser,width) {
   await page.close();
 }
 
-async function checkNumberInTikTokMessage(browser) {
-  const page=await browser.newPage({viewport:{width:1300,height:900}}),errors=[];
+async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={}) {
+  const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
   page.setDefaultTimeout(7000);
   page.on('pageerror',error=>errors.push(error.message));
   await page.addInitScript(installFixture,{});
-  await page.addInitScript(installDealResponses,{native:false,linking:'linked',pilot:true,phoneInChat:true});
+  await page.addInitScript(installDealResponses,{native:false,linking:'linked',pilot:true,phoneInChat:true,autoLink});
   await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
   await page.goto('https://fixture.test/app?view=deals&lang=ru');
   const modal=await open(page,false);
   await modal.getByRole('tab',{name:'Диалог',exact:true}).click();
-  const lookup=modal.getByRole('button',{name:'Найти WhatsApp',exact:true});
-  await lookup.click();
-  await modal.getByText('По этому номеру пока нет доступного WhatsApp-диалога.',{exact:true}).waitFor();
-  await page.evaluate(()=>{dealProof.phoneReady=true;});
-  await lookup.click();
-  await modal.getByRole('button',{name:'Привязать WhatsApp · Test · …101',exact:true}).click();
+  if(autoLink){
+    const linked=modal.getByRole('button',{name:'WhatsApp · Test · …101',exact:true});
+    await linked.waitFor();
+    assert(await modal.getByText('055 500 01 03',{exact:true}).isVisible());
+    await linked.click();
+  }else{
+    const lookup=modal.getByRole('button',{name:'Найти WhatsApp',exact:true});
+    await lookup.click();
+    await modal.getByText('По этому номеру пока нет доступного WhatsApp-диалога.',{exact:true}).waitFor();
+    await page.evaluate(()=>{dealProof.phoneReady=true;});
+    await lookup.click();
+    await modal.getByRole('button',{name:'Привязать WhatsApp · Test · …101',exact:true}).click();
+  }
   await modal.getByText('First WhatsApp reply from the phone',{exact:true}).waitFor();
   assert.equal(await modal.getByText('055 500 01 03',{exact:true}).count(),0);
   const requests=await page.evaluate(()=>dealProof.requests.filter(r=>r.method==='POST'&&r.p.includes('deal')));
-  assert.deepEqual(requests.map(r=>[r.p,r.body.phone_message_id]),
-    [['/api/platform/ai/dialogs/deal-link','number-message']]);
+  if(autoLink)assert.deepEqual(requests.map(r=>[r.body.auto_phone,r.body.deal_id]),[[true,'7']]);
+  else assert.deepEqual(requests.filter(r=>!r.body.auto_phone).map(r=>r.body.phone_message_id),['number-message']);
   assert.deepEqual(errors,[]);
   await page.close();
 }
@@ -425,6 +438,7 @@ async function checkNumberInTikTokMessage(browser) {
     }
     for(const width of [1440,390])await checkMultichannelPilot(browser,width);
     await checkNumberInTikTokMessage(browser);
+    for(const width of [1300,390])await checkNumberInTikTokMessage(browser,{width,autoLink:true});
     console.log('PASS deal card: Chromium native + Kommo, scoped WhatsApp linkage, responsive layout, stage/edit, lazy related data, authorised and missing routes');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
