@@ -164,11 +164,12 @@ async function verifyTaskCompany(browser){
       const panel=task.getByRole('dialog',{name:'Компания Operator',exact:true});
       const input=panel.locator('#operatorDialogueCompanySearch');
       if(canManage){
-        await panel.locator('#operatorDialogueCompanySearch:not([readonly])').waitFor();
+        await panel.getByPlaceholder('Найти компанию',{exact:true}).waitFor();
+        await input.focus();
         await input.pressSequentially('task');
         await panel.getByRole('button',{name:'@task-company',exact:true}).click();
       }else{
-        await input.waitFor();
+        await panel.getByPlaceholder('Нет доступа к выбору компании',{exact:true}).waitFor();
         assert.equal(await input.getAttribute('readonly'),'');
         assert.equal(await panel.getByRole('button',{name:'Снять связь',exact:true}).count(),0);
       }
@@ -248,6 +249,7 @@ async function verifyTaskCompany(browser){
         const panel=modal.getByRole('dialog',{name:'Компания Operator',exact:true});
         const search=panel.locator('#operatorDialogueCompanySearch');
         if(!limited){
+          await panel.getByPlaceholder('Найти компанию',{exact:true}).waitFor();
           await search.focus();
           await search.pressSequentially('deal');
           await panel.getByRole('button',{name:'@deal-company',exact:true}).click();
