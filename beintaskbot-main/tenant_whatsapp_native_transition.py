@@ -23,7 +23,7 @@ def admission(cur, tenant, source):
         raise TenantLinearError('Номер переключается на единый WhatsApp. Повторите после завершения переключения.',409)
 
 
-def source_lock(cur,tenant,source):
+def source_lock(cur,tenant,source,*,allow_inactive=False):
     from tenant_browser_calls import _lock
     cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('whatsapp-source-mode:'+tenant+':'+source,))
     cur.execute('SELECT gateway_id FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,source))
@@ -32,8 +32,9 @@ def source_lock(cur,tenant,source):
     _lock(cur,{'tenant_id':tenant,'gateway_id':str(first['gateway_id'])})
     cur.execute('''SELECT s.* FROM saas_browser_call_sources s JOIN saas_connect_channels c
       ON c.tenant_id=s.tenant_id AND c.connect_channel_id=s.channel_id
-      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.enabled AND c.active
-        AND s.gateway_id=%s::uuid AND s.public_key<>'' FOR UPDATE OF s,c''',(tenant,source,first['gateway_id']))
+      WHERE s.tenant_id=%s::uuid AND s.channel_id=%s::uuid AND s.enabled AND s.gateway_id=%s::uuid
+        AND ((c.active AND s.public_key<>'') OR (%s AND NOT c.active))
+      FOR UPDATE OF s,c''',(tenant,source,first['gateway_id'],allow_inactive))
     row=cur.fetchone()
     if not row:raise TenantLinearError('native_transition_source_changed',409)
     return row

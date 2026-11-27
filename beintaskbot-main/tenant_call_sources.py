@@ -41,20 +41,25 @@ def service():
     return url,token
 
 
-def remote(path, payload=None):
+def remote(path, payload=None, *, missing_ok=False):
     url,token=service()
     try:
         with requests.request('POST' if payload is not None else 'GET',url+path,
             headers={'Authorization':'Bearer '+token,'Accept':'application/json'},json=payload,
             timeout=(5,25),allow_redirects=False,stream=True) as response:
-            if response.status_code not in (200,201):
+            missing=missing_ok and payload is None and response.status_code==404
+            if not missing and response.status_code not in (200,201):
                 raise TenantLinearError('Сервер звонков не подтвердил действие.',503)
             chunks=[];size=0
             for chunk in response.iter_content(8192):
                 size+=len(chunk)
                 if size>32768:raise ValueError()
                 chunks.append(chunk)
-            data=json.loads(b''.join(chunks))
+            raw=b''.join(chunks)
+            if missing:
+                if raw==b'source_not_found':return None
+                raise TenantLinearError('Сервер звонков не подтвердил действие.',503)
+            data=json.loads(raw)
         if not isinstance(data,dict):raise ValueError()
         return data
     except (requests.RequestException,ValueError):
@@ -101,13 +106,9 @@ def provision(profile,channel):
         tenant,actor=_owner(cur,profile,channel)
         from tenant_whatsapp_native_rollout import staged
         pending=staged(cur,tenant,channel)
-        if pending:
-            cur.execute('SELECT * FROM saas_browser_call_sources WHERE tenant_id=%s::uuid AND channel_id=%s::uuid',(tenant,channel))
-            paired=cur.fetchone()
     if pending:
-        remote('/v1/sources/'+str(paired['gateway_id']),{'tenant_id':tenant,'channel_id':channel,
-            'account_jid':paired['account_jid'],'gateway_token':_fernet().decrypt(bytes(paired['encrypted_token'])).decode()})
-        return source_status(profile,channel)
+        from tenant_whatsapp_integration import continue_pairing
+        return continue_pairing(profile,channel)
     account=confirmed_account(profile,channel)
     service()  # Fail before reserving any binding if hosting is not configured.
     with _connect() as conn,conn.cursor() as cur:

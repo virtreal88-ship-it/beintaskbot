@@ -111,7 +111,7 @@ def staged(cur,tenant,source):
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id
         AND s.gateway_id=g.gateway_id AND s.account_jid=g.account_jid
       WHERE r.tenant_id=%s::uuid AND r.channel_id=%s::uuid AND NOT r.enabled AND NOT g.enabled
-        AND s.enabled AND NOT r.legacy_fallback''',(tenant,source))
+        AND s.enabled AND NOT r.paused AND NOT r.legacy_fallback''',(tenant,source))
     return bool(cur.fetchone())
 
 
@@ -121,7 +121,8 @@ def modes(cur,tenant,*,conversation=None):
     group_filter = (''' AND EXISTS(SELECT 1 FROM saas_connect_conversations cv
       WHERE cv.tenant_id=r.tenant_id AND cv.connect_channel_id=r.channel_id AND cv.conversation_id=%s)'''
       if conversation is not None else '')
-    cur.execute('''SELECT r.channel_id,r.enabled,r.paused,c.active,s.account_jid,s.state,c.name,
+    cur.execute('''SELECT r.channel_id,r.enabled,r.paused,r.generation,c.active,s.account_jid,s.state,c.name,
+      s.public_key<>'' AS registered,
       g.enabled AS capture_enabled,s.enabled AS gateway_enabled FROM saas_whatsapp_native_routes r
       JOIN saas_whatsapp_capture_generations g USING(tenant_id,channel_id,generation)
       JOIN saas_browser_call_sources s ON s.tenant_id=g.tenant_id AND s.channel_id=g.channel_id

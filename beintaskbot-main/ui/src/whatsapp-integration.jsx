@@ -67,38 +67,50 @@ export function WhatsAppIntegration({profile, onStatus}) {
     try{await action();}catch(e){if(alive.current)setError(e.message);}
     finally{if(alive.current)setBusy(false);}
   };
+  const disconnectable=channels.filter(c=>c.state!=='preparing');
   if(invalid)return <Text role="alert">Доступ изменился. Откройте интеграцию заново.</Text>;
   if(!owner)return <Text>Подключением номеров управляет владелец компании. Доступ сотрудников к диалогам и звонкам задаётся в правах источника.</Text>;
   return <Stack gap="4" data-whatsapp-integration="true">
     <Text color="app.muted">Один QR для переписки и звонков. Connect остаётся отдельной резервной интеграцией.</Text>
     {error && <Box role="alert" p="3" borderWidth="1px" borderRadius="lg">{error}</Box>}
-    {confirm && <Box role="alertdialog" aria-label="Подтверждение отключения" p="4" borderWidth="1px" borderRadius="xl">
-      <Text fontWeight="700">{confirm.all?'Отключить все номера Ватсапп?':'Отключить номер '+confirm.name+'?'}</Text>
-      <Text mt="2">Переписка и звонки в Beintaskbot остановятся. История, записи и права сохранятся. Подключение можно включить снова здесь.</Text>
-      <Flex gap="2" mt="3"><Button disabled={busy} onClick={()=>run(async()=>{try{await request({action:confirm.all?'disconnect_all':'disconnect',sources:confirm.sources});setConfirm(null);}finally{await load();}})}>Отключить</Button>
+    {confirm && <Box role="alertdialog" aria-label={confirm.remove?'Подтверждение удаления':'Подтверждение отключения'} p="4" borderWidth="1px" borderRadius="xl">
+      <Text fontWeight="700">{confirm.remove?'Удалить номер '+confirm.name+' из списка?':confirm.all?'Отключить все номера Ватсапп?':'Отключить номер '+confirm.name+'?'}</Text>
+      <Text mt="2">{confirm.remove?'История переписки, записи звонков и права сохранятся. Номер можно добавить снова.':'Переписка и звонки в Beintaskbot остановятся. История, записи и права сохранятся. Подключение можно включить снова здесь.'}</Text>
+      <Flex gap="2" mt="3"><Button colorPalette={confirm.remove?'red':undefined} disabled={busy} onClick={()=>run(async()=>{
+        const data=confirm.remove?{action:'remove',source:confirm.source}:{action:confirm.all?'disconnect_all':'disconnect',sources:confirm.sources};
+        try{await request(data);}catch(e){await load().catch(()=>{});throw e;}
+        if(alive.current)setConfirm(null);
+        await load();
+      })}>{confirm.remove?'Удалить':'Отключить'}</Button>
         <Button variant="outline" disabled={busy} onClick={()=>setConfirm(null)}>Отмена</Button></Flex>
     </Box>}
     {!form ? <>
       <Flex gap="2" wrap="wrap">
-        <Button onClick={()=>{setPair(null);setPhone('');setName('');setForm(true);setError('');}}>Подключить номер</Button>
+        <Button disabled={busy} onClick={()=>{setPair(null);setPhone('');setName('');setForm(true);setError('');}}>Подключить номер</Button>
         <Button variant="outline" disabled={busy} onClick={()=>run(load)}>Обновить</Button>
-        {channels.length>0 && <Button variant="outline" disabled={busy} onClick={()=>setConfirm({all:true,sources:channels.map(c=>c.id)})}>Отключить интеграцию</Button>}
+        {disconnectable.length>0 && <Button variant="outline" disabled={busy} onClick={()=>setConfirm({all:true,sources:disconnectable.map(c=>c.id)})}>Отключить интеграцию</Button>}
       </Flex>
       {channels.length===0 && <Text color="app.muted">Подключённых номеров пока нет.</Text>}
-      {channels.map(c=><Box key={c.id} p="4" borderWidth="1px" borderRadius="xl">
+      {channels.map(c=><Box key={c.id} p="4" borderWidth="1px" borderRadius="xl" data-whatsapp-source={c.id}>
         <Flex justify="space-between" gap="3" wrap="wrap"><Box><Text fontWeight="700">{c.name}</Text><Text color="app.muted">+{c.phone}</Text></Box>
           <Flex gap="2" wrap="wrap">
-          {c.state!=='stopping' && <Button size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{const data=c.paused?{action:'resume',source:c.id}:c.activation_pending?{action:'begin',phone:c.phone,name:c.name}:null;const value=await request(data,data?null:c.id);if(alive.current){setPair(value);setForm(true);}})}>{c.paused?'Подключить снова':c.activation_pending?'Продолжить подключение':'Подключение'}</Button>}
-          {c.state!=='stopped' && <Button size="sm" variant="outline" disabled={busy} onClick={()=>setConfirm({sources:[c.id],name:'+'+c.phone})}>{c.state==='stopping'?'Повторить отключение':'Отключить номер'}</Button>}
+          {c.state!=='stopping' && !c.duplicate_pending && <Button size="sm" variant="outline" disabled={busy} onClick={()=>run(async()=>{
+            const action=c.paused?'resume':c.activation_pending?'continue':null;
+            const value=action?await request({action,source:c.id}):await request(null,c.id);
+            if(alive.current){setPair(value);setForm(true);}
+          })}>{c.paused?'Подключить снова':c.activation_pending?'Продолжить подключение':'Подключение'}</Button>}
+          {c.state!=='stopped' && c.state!=='preparing' && (!c.duplicate_pending || c.state==='stopping') && <Button size="sm" variant="outline" disabled={busy} onClick={()=>setConfirm({sources:[c.id],name:'+'+c.phone})}>{c.state==='stopping'?'Повторить отключение':'Отключить номер'}</Button>}
+          {c.can_remove && <Button size="sm" variant="outline" colorPalette="red" disabled={busy} onClick={()=>setConfirm({remove:true,source:c.id,name:'+'+c.phone})}>Удалить</Button>}
           </Flex>
         </Flex>
+        {c.duplicate_pending && <Text mt="2" fontSize="sm" color="app.muted">Повторная запись. У номера уже есть другой источник.</Text>}
         {c.paused?<Text mt="2" fontSize="sm">{c.state==='stopped'?'Номер отключён. История сохранена.':'Новые операции остановлены. Подтверждение отключения ещё не получено; повторите отключение.'}</Text>:<Flex gap="4" mt="2" wrap="wrap"><Text fontSize="sm">Переписка: {c.messages_ready?'подключена':c.activation_pending?'ожидает подключения':'недоступна'}</Text><Text fontSize="sm">Звонки: {c.calls_ready?'подключены':'недоступны'}</Text></Flex>}
       </Box>)}
     </> : <Box p="4" borderWidth="1px" borderRadius="xl">
       <Stack gap="3">
         <Text fontWeight="700">Подключение номера</Text>
         {!pair && <>
-          <Text fontSize="sm">Если номер уже есть в Connect, сначала отключите его там. Здесь укажите тот же номер — источник, история и права сохранятся.</Text>
+          <Text fontSize="sm">Для повторного подключения укажите тот же номер. Существующий источник, история и права сохранятся. Если номер работает через Connect, сначала отключите его там.</Text>
           <label>Номер WhatsApp<Input aria-label="Номер WhatsApp" type="tel" autoComplete="tel" placeholder="+994…" value={phone} onChange={e=>setPhone(e.target.value)} disabled={busy}/></label>
           <label>Название источника<Input aria-label="Название источника" maxLength={100} value={name} onChange={e=>setName(e.target.value)} disabled={busy}/></label>
           <Button disabled={busy || !/^\+?[1-9][0-9]{5,21}$/.test(phone)} onClick={()=>run(async()=>{const value=await request({action:'begin',phone,name});if(alive.current)setPair(value);})}>{busy?'Подготовка…':'Сгенерировать QR'}</Button>
