@@ -13,6 +13,8 @@ on:
       - 'beintaskbot-main/docs/tenant-operator-company-import.js'
       - 'beintaskbot-main/tenant_beinsystems_operator_access.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_api.py'
+      - 'beintaskbot-main/tenant_crm_operator_company.py'
+      - 'beintaskbot-main/tests/test_deal_operator_company.py'
       - 'beintaskbot-main/tenant_beinsystems_operator_schema.py'
       - 'beintaskbot-main/bot.py'
       - 'beintaskbot-main/docs/tenant-operator-dialogs.js'
@@ -63,7 +65,7 @@ jobs:
           python -m pip install -r requirements.txt pytest
           npm install --prefix .support-test-deps --no-save jsdom@26.1.0 @electric-sql/pglite@0.6.0
       - name: Run Operator Python and PostgreSQL regressions
-        run: python -m pytest -q tests/test_operator_widget.py tests/test_operator_widget_queue.py tests/test_operator_widget_sender.py tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_beinsystems_operator_first_batch.py tests/test_beinsystems_operator_first_batch_postgres.py tests/test_tenant_web_routes.py
+        run: python -m pytest -q tests/test_operator_widget.py tests/test_operator_widget_queue.py tests/test_operator_widget_sender.py tests/test_beinsystems_operator.py tests/test_beinsystems_operator_postgres.py tests/test_deal_operator_company.py tests/test_beinsystems_operator_first_batch.py tests/test_beinsystems_operator_first_batch_postgres.py tests/test_tenant_web_routes.py
       - name: Run Operator settings UI regression
         run: |
           node tests/test_operator_widget_queue_ui.cjs
