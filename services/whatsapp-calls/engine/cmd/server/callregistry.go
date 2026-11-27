@@ -9,6 +9,7 @@ import (
 )
 
 type activeCall struct {
+	diagnostic   callAudioDiagnostic
 	id           string
 	launchMu     sync.Mutex
 	prepared     atomic.Bool

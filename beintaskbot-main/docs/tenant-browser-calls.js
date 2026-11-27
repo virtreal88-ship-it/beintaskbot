@@ -168,12 +168,23 @@
       const payload=await response.json();if(!response.ok){const error=new Error(payload.error||'Не удалось подтвердить звонок');error.status=response.status;throw error;}return payload.result;
     }finally{clearTimeout(timeout);}
   }
-  function release(s){if(!s)return;clearTimeout(s.connectTimer);s.media?.close();s.media=null;s.release?.();s.release=null;}
+  function release(s){if(!s)return;clearTimeout(s.connectTimer);clearInterval(s.diagnosticTimer);s.media?.close();s.media=null;s.release?.();s.release=null;}
+  function diagnostic(s,reason='ongoing'){
+    s.diagnostics??={version:1,seq:0,context_suspensions:0};
+    const d=s.diagnostics;
+    if(reason!=='ongoing'&&!d.reason)d.reason=reason;
+    return {...d,reason:d.reason||reason,seq:++d.seq,at_ms:Date.now()};
+  }
+  function reportDiagnostic(s,reason='ongoing'){
+    if(!s?.call?.id)return;
+    void api({...s.route,op:'diagnostics',call_id:s.call.id,request_id:s.request,
+              diagnostics:diagnostic(s,reason)},s.owner,true).catch(()=>{});
+  }
   async function stop(s=session,hide=false){
     if(!s){if(hide)closeModal();return;}
     const closingModal=modal;
-    s.stopping=true;release(s);draw();
-    try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
+    s.stopping=true;const evidence=diagnostic(s,'user_end');release(s);draw();
+    try{const result=await api({...s.route,op:'end',call_id:s.call?.id,request_id:s.request,diagnostics:evidence},s.owner,true);if(result.state==='not_started'){s.call={state:'failed',recording_state:'none'};s.preparing=false;s.stopping=false;s.closeError='';s.error=s.error||'Звонок отменён до подключения.';draw();}}catch(error){if(session===s&&!terminal(s.call)){s.closeError='Завершение пока не подтверждено. Микрофон выключен; сервер продолжает закрытие звонка.';draw();}}
     if(hide&&session===s&&modal===closingModal)closeModal();void poll();
   }
   function closeModal(){stopRing();stopRingback();if(modal){clearInterval(modal.clockTimer);modal.cleanupDrag();modal.node.close();modal.node.remove();modal=null;}if(session&&!busy()){release(session);session=null;}}
@@ -296,14 +307,20 @@
     const managed=s.transport==='websocket',pc=managed?null:new RTCPeerConnection({iceServers:[]});
     let dc=pc?.createDataChannel('pcm',{ordered:true})||null,closed=false;
     const ctx=new AudioContext({sampleRate:16000});if(dc)dc.binaryType='arraybuffer';
+    s.diagnostics={version:1,seq:0,context_suspensions:0};
+    ctx.onstatechange=()=>{if(!closed&&ctx.state==='suspended')s.diagnostics.context_suspensions++;};
     const handle={pc,setMuted(muted){stream.getAudioTracks().forEach(track=>{track.enabled=!muted;});},close(){if(closed)return;closed=true;stream.getTracks().forEach(t=>t.stop());dc?.close(s.mediaCloseCode||1000);pc?.close();void ctx.close().catch(()=>{});}};s.media=handle;
     try{
       await ctx.audioWorklet.addModule('/assets/browser-call-audio.js');await ctx.resume();
       const capture=new AudioWorkletNode(ctx,'bein-call-capture'),playback=new AudioWorkletNode(ctx,'bein-call-playback');
-      capture.port.postMessage('bounded');
+      capture.port.postMessage('bounded');capture.port.postMessage('diagnostics');playback.port.postMessage('diagnostics');
+      playback.port.onmessage=e=>{if(e.data?.diagnostics){s.diagnostics.playback_underrun_samples=e.data.playback_underrun_samples;s.diagnostics.playback_overflow_samples=e.data.playback_overflow_samples;}};
       ctx.createMediaStreamSource(stream).connect(capture);capture.connect(ctx.destination);playback.connect(ctx.destination);
-      capture.port.onmessage=e=>{try{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){s.mediaCloseCode=4001;void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);s.pcmSent=true;}finally{capture.port.postMessage('consumed');}};
-      const onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
+      capture.port.onmessage=e=>{if(e.data?.diagnostics){s.diagnostics.capture_dropped_samples=e.data.capture_dropped_samples;return;}try{if(closed||!dc||dc.readyState!==(managed?WebSocket.OPEN:'open'))return;if(dc.bufferedAmount>65536){s.mediaCloseCode=4001;diagnostic(s,'audio_backpressure');void stop(s);return;}const floats=e.data,pcm=new Int16Array(floats.length);for(let i=0;i<floats.length;i++)pcm[i]=Math.round(Math.max(-1,Math.min(1,floats[i]))*32767);dc.send(pcm.buffer);s.pcmSent=true;}finally{capture.port.postMessage('consumed');}};
+      const onmessage=e=>{if(closed||!(e.data instanceof ArrayBuffer)||e.data.byteLength>6400||e.data.byteLength%2)return;const now=Date.now(),metrics=s.diagnostics.worker_to_browser??={frames:0,gaps_over_200ms:0,max_gap_ms:0,last_gap_at_ms:0,last_frame_at_ms:0};
+        if(metrics.last_frame_at_ms){const gap=now-metrics.last_frame_at_ms;if(gap>200){metrics.gaps_over_200ms++;metrics.max_gap_ms=Math.max(metrics.max_gap_ms,gap);metrics.last_gap_at_ms=now;}}
+        metrics.frames++;metrics.last_frame_at_ms=now;
+        const raw=new Int16Array(e.data),floats=new Float32Array(raw.length);for(let i=0;i<raw.length;i++)floats[i]=raw[i]/32768;playback.port.postMessage(floats,[floats.buffer]);};
       if(managed){
         handle.connect=()=>new Promise((resolve,reject)=>{
           if(closed||s.stopping||key()!==s.identity||!s.call?.id){reject(new Error('Звонок отменён'));return;}
@@ -313,12 +330,12 @@
           const timeout=setTimeout(()=>{reject(new Error('Не удалось подключить звук'));dc.close();},7000);
           dc.onopen=()=>{clearTimeout(timeout);if(closed||s.stopping||key()!==s.identity){dc.close();reject(new Error('Звонок отменён'));}else resolve();};
           dc.onerror=()=>{clearTimeout(timeout);reject(new Error('Не удалось подключить звук'));};
-          dc.onclose=()=>{clearTimeout(timeout);reject(new Error('Аудиосоединение закрыто'));if(!closed&&!s.stopping)void stop(s);};
+          dc.onclose=event=>{if(!closed){s.diagnostics.close_code=[1000,1001,1002,1003,1006,1007,1008,1009,1010,1011,1012,1013,1014,1015,4001].includes(event?.code)?event.code:0;diagnostic(s,'audio_closed');}clearTimeout(timeout);reject(new Error('Аудиосоединение закрыто'));if(!closed&&!s.stopping)void stop(s);};
         });
         if(closed||s.stopping)throw new Error('Звонок отменён');return '';
       }
       dc.onmessage=onmessage;
-      pc.onconnectionstatechange=()=>{if(!closed&&['failed','closed'].includes(pc.connectionState))void stop(s);};
+      pc.onconnectionstatechange=()=>{if(!closed&&['failed','closed'].includes(pc.connectionState)){diagnostic(s,'connection_failed');void stop(s);}};
       const offer=await pc.createOffer();await pc.setLocalDescription(offer);
       await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>{pc.removeEventListener('icegatheringstatechange',done);reject(new Error('Не удалось подготовить аудиосоединение.'));},10000);function done(){if(pc.iceGatheringState==='complete'){clearTimeout(timeout);pc.removeEventListener('icegatheringstatechange',done);resolve();}}pc.addEventListener('icegatheringstatechange',done);done();});
       if(closed||s.stopping)throw new Error('Звонок отменён');return pc.localDescription.sdp;
@@ -333,9 +350,9 @@
     try{
       const offer=await media(s);if(s.stopping||session!==s||key()!==s.identity){release(s);return;}
       s.sent=true;const call=await api({...s.route,op:m.call?'accept':'start',call_id:m.call?.id,request_id:s.request,media:s.transport,sdp_offer:offer,consent_confirmed:true},s.owner);
-      s.call=call;s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}
-      s.connectTimer=setTimeout(()=>{if(session===s&&!s.stopping&&!terminal(s.call)&&(!s.pcmSent||s.call.direction==='inbound'&&s.call.state!=='connected')){s.error='Не удалось подтвердить подключение звука. Завершаем попытку; после подтверждения можно повторить.';void stop(s);}},20000);draw();void poll();
-    }catch(e){release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
+      s.call=call;s.diagnosticTimer=setInterval(()=>reportDiagnostic(s),10000);s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}
+      s.connectTimer=setTimeout(()=>{if(session===s&&!s.stopping&&!terminal(s.call)&&(!s.pcmSent||s.call.direction==='inbound'&&s.call.state!=='connected')){diagnostic(s,'connect_timeout');s.error='Не удалось подтвердить подключение звука. Завершаем попытку; после подтверждения можно повторить.';void stop(s);}},20000);draw();void poll();
+    }catch(e){diagnostic(s,s.sent?'control_unavailable':'audio_setup_failed');release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
   }
   async function poll(){
     if(polling||!identity||!enabled)return;polling=true;const generation=revision;
@@ -347,9 +364,9 @@
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
-        if(call){s.call=call;updateRingback(s);if(call.state==='connected')clearTimeout(s.connectTimer);if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
-          if(terminal(call)){release(s);s.stopping=false;s.preparing=false;s.closeError='';trackRecording(s,call);if(session===s&&call.state==='ended'&&!s.error)closeModal();}
-          if(call.error_code&&!terminal(call)&&!s.stopping){s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
+        if(call){s.call=call;updateRingback(s);if(call.state==='connected')clearTimeout(s.connectTimer);if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ diagnostic(s,'audio_setup_failed');s.error='Не удалось подключить звук.';void stop(s);}}
+          if(terminal(call)){if(!s.diagnosticFinalReported){s.diagnosticFinalReported=true;reportDiagnostic(s,'server_ended');}release(s);s.stopping=false;s.preparing=false;s.closeError='';trackRecording(s,call);if(session===s&&call.state==='ended'&&!s.error)closeModal();}
+          if(call.error_code&&!terminal(call)&&!s.stopping){diagnostic(s,'connection_failed');s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
       }
       const incoming=calls.find(c=>c.state==='incoming'&&!c.claimed);
       if(incoming&&!busy()&&(!modal||terminal(session?.call||modal.call))){closeModal();session=null;show(incoming,incoming);}
@@ -363,9 +380,9 @@
       if(e.status===429&&s?.call?.id&&s.media&&!s.stopping&&!terminal(s.call)){
         const now=performance.now();s.controlBusySince??=now;
         if(now-s.controlBusySince<6000){s.controlWarning='Сервер занят. Проверяем состояние звонка…';draw();return;}
-        s.controlWarning='';s.error='Связь управления не восстановлена. Завершаем звонок.';
+        diagnostic(s,'control_unavailable');s.controlWarning='';s.error='Связь управления не восстановлена. Завершаем звонок.';
       }
-      online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;pendingRecordings.clear();closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
+      if(s)diagnostic(s,e.status===403?'auth_changed':'control_unavailable');online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;pendingRecordings.clear();closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
     finally{polling=false;schedule();}
   }
   function schedule(){clearTimeout(timer);if(identity&&enabled)timer=setTimeout(()=>void poll(),2000);}
@@ -378,11 +395,11 @@
     button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg>';
     button.onclick=()=>{if(session&&terminal(session.call)){release(session);session=null;}show(route);};host.append(button);
   }
-  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){void stop(session);release(session);session=null;}closeModal();pendingRecordings.clear();identity=fresh;enabled=true;calls=[];sources=[];online=false;}mount();void poll();}
+  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){diagnostic(session,'auth_changed');void stop(session);release(session);session=null;}closeModal();pendingRecordings.clear();identity=fresh;enabled=true;calls=[];sources=[];online=false;}mount();void poll();}
   document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-chat-attachments-ready',mount);
   document.addEventListener('tenant-calls-updated',event=>{enabled=true;const route=window.tenantOperator?.currentDialog;if(route&&String(route.channel_id)===String(event.detail?.channel_id)&&!String(route.conversation_id).endsWith('@g.us'))route.browser_call_available=true;mount();void poll();});
   document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';sources=[];pendingRecordings.clear();enabled=false;closeModal();});
-  window.addEventListener('pagehide',()=>{stopRing();stopRingback();clearTimeout(timer);clearInterval(modal?.clockTimer);if(busy())void stop(session);release(session);});
+  window.addEventListener('pagehide',()=>{stopRing();stopRingback();clearTimeout(timer);clearInterval(modal?.clockTimer);if(busy()){diagnostic(session,'page_hidden');void stop(session);}release(session);});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)void poll();});
   changed();
 })();

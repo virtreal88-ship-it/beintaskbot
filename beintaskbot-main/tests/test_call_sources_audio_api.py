@@ -9,7 +9,15 @@ import tenant_call_sources as sources
 from tenant_call_sources_api import handler
 
 
-def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch):
+@pytest.fixture(autouse=True)
+def diagnostic_sink(monkeypatch):
+    import tenant_call_sources_api as api
+    saved=[]
+    monkeypatch.setattr(api,'save_relay',lambda *args:saved.append(args))
+    return saved
+
+
+def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch, diagnostic_sink):
     async def run():
         tenant='00000000-0000-0000-0000-000000000001';call='00000000-0000-0000-0000-000000000002'
         gateway='00000000-0000-0000-0000-000000000003';nonce='00000000-0000-0000-0000-000000000004'
@@ -44,6 +52,13 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch):
                     ended=await asyncio.wait_for(socket.receive(),5)
                     assert ended.type in {WSMsgType.CLOSE,WSMsgType.CLOSED}
                 assert connections==[f'/v1/sources/{gateway}/audio/provider-synthetic/{call}']
+        assert len(diagnostic_sink)==1
+        saved_profile,authority,saved_nonce,evidence=diagnostic_sink[0]
+        assert saved_profile==profile and authority==(gateway,'provider-synthetic',call) and saved_nonce==nonce
+        assert evidence['code']=='authority_denied'
+        assert evidence['browser_to_worker']['frames']==evidence['engine_to_worker']['frames']==1
+        from tenant_call_diagnostics import checked
+        assert checked(evidence,'relay')==evidence
     asyncio.run(run())
 
 

@@ -22,6 +22,7 @@ async function main(){
    if(d.op==='end'&&failEnd)return r.fulfill({status:503,json:{error:'Temporary end failure'}});
    if(d.op==='start'||d.op==='accept'){if(managed){assert.equal(d.media,'websocket');assert.equal(d.sdp_offer,'');}else assert(d.sdp_offer.startsWith('v=0'));const c={...d,id:d.call_id||'call-'+posts.length,nonce:d.request_id,direction:d.op==='start'?'outbound':'inbound',state:holdConnection?'starting':holdAnswer&&d.op==='start'?'ringing':'connected',owned:true,claimed:true,recording_state:'pending'};calls=[c];if(dropStart)return r.abort('failed');return r.fulfill({json:{result:c}});}
    if(d.op==='end'){const c=calls.find(c=>c.id===d.call_id||c.nonce===d.request_id);if(c)c.state='ended';if(delayEnd){delayEnd=false;await new Promise(resolve=>resumeEndReply=resolve);}return r.fulfill({json:{result:c||{state:'not_started'}}});}
+   if(d.op==='diagnostics')return r.fulfill({json:{result:{saved:true}}});
    if(d.op==='reject'){calls=calls.map(c=>({...c,state:'ended'}));return r.fulfill({json:{result:calls[0]}});}
    throw Error('Unexpected action');
  });
@@ -58,6 +59,13 @@ async function main(){
     for(const frame of captured){const bytes=captured.filter(x=>x.at>=frame.at&&x.at<frame.at+1000).reduce((n,x)=>n+x.bytes,0);assert(bytes<=65536,'main-thread stall must not flush an over-limit PCM burst: '+bytes);}
     assert.equal(calls[0].state,'connected');
   }
+  if(managed){
+    for(let attempt=0;attempt<30&&!posts.some(cmd=>cmd.op==='diagnostics');attempt++)await p.waitForTimeout(500);
+    const report=posts.find(cmd=>cmd.op==='diagnostics');
+    assert(report&&report.diagnostics.version===1&&report.diagnostics.seq>0);
+    assert(report.diagnostics.capture_dropped_samples>0,'capture stall is retained as numeric evidence');
+    assert(!JSON.stringify(report.diagnostics).includes('pcm'),'diagnostics contain counters only');
+  }
   assert.equal(await p.locator('dialog').evaluate(e=>e.matches(':modal')),false,'call panel must not block the workspace');
   const beforeBusyEnds=posts.filter(x=>x.op==='end').length;
   busyReads=1;await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
@@ -65,7 +73,7 @@ async function main(){
   assert.equal(posts.filter(x=>x.op==='end').length,beforeBusyEnds,'one temporary status 429 must not hang up');
   assert.equal(calls[0].state,'connected');assert(await p.evaluate(()=>streams.some(s=>s.getTracks().some(t=>t.readyState==='live'))));
   await p.getByText('Сервер занят. Проверяем состояние звонка…',{exact:true}).waitFor({state:'hidden',timeout:10000});assert.equal(busyReplies,1);
-  const duration=p.getByRole('timer',{name:'Длительность разговора'});await duration.waitFor();await p.waitForFunction(()=>/^00:0[1-9]$/.test(document.querySelector('[role=timer]').textContent));
+  const duration=p.getByRole('timer',{name:'Длительность разговора'});await duration.waitFor();await p.waitForFunction(()=>/^00:[0-5][0-9]$/.test(document.querySelector('[role=timer]').textContent)&&document.querySelector('[role=timer]').textContent!=='00:00');
   const clockBefore=await duration.innerText();await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await p.waitForTimeout(300);assert((await duration.innerText())>=clockBefore,'status refresh must not reset duration');
   await p.getByLabel('Черновик другого клиента').fill('Несохранённый ответ');await p.getByRole('button',{name:'Другой диалог',exact:true}).click();assert.equal(await p.evaluate(()=>window.backgroundClicks),1);assert.equal(calls[0].state,'connected');
   const nameBox=await p.locator('.browser-call-panel h2').boundingBox(),sourceBox=await p.locator('.browser-call-phone').boundingBox(),stateBox=await p.locator('.browser-call-state').boundingBox();assert(sourceBox.y>=nameBox.y+nameBox.height&&sourceBox.y+sourceBox.height<=stateBox.y,'customer phone is directly below contact name');assert(!/минут|хранится|записывается|24 часа|30 дней/.test(await p.locator('dialog').innerText()),'staff panel omits policy footer');

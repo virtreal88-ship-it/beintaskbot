@@ -3,6 +3,7 @@ package main
 // Private, authenticated health metadata. Never expose identities, packet bytes,
 // transcripts, keys, or upstream error strings through this snapshot.
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -71,7 +72,7 @@ func (s *Session) diagnostics() map[string]any {
 		"logged_in": s.client != nil && s.client.IsLoggedIn(), "offer_events": s.diag.offers.Load(),
 		"offer_notice_events": s.diag.offerNotices.Load(), "unknown_call_events": s.diag.unknownEvents.Load(),
 		"historical_offers_ignored": s.diag.historicalOffers.Load(),
-		"last_offer_at_ms": s.diag.lastOffer.Load(), "capacity_rejections": s.diag.capacityRejected.Load(),
+		"last_offer_at_ms":          s.diag.lastOffer.Load(), "capacity_rejections": s.diag.capacityRejected.Load(),
 		"observed_at_ms": time.Now().UnixMilli()}
 	var attached, started, input, output uint64
 	s.reg.mu.Lock()
@@ -100,4 +101,74 @@ func (s *Session) diagnostics() map[string]any {
 		out["last_recording_quality"] = s.mgr.recordings.lastQuality.Load()
 	}
 	return out
+}
+
+// Counters measure PCM arrivals at the engine, including beyond the recording
+// retention limit. No sample values or identities enter these snapshots.
+type audioArrival struct {
+	mu          sync.Mutex
+	last        time.Time
+	Frames      uint64 `json:"frames"`
+	Gaps        uint64 `json:"gaps_over_200ms"`
+	MaxGapMS    int64  `json:"max_gap_ms"`
+	LastGapAtMS int64  `json:"last_gap_at_ms"`
+}
+type audioArrivalSnapshot struct {
+	Frames        uint64 `json:"frames"`
+	Gaps          uint64 `json:"gaps_over_200ms"`
+	MaxGapMS      int64  `json:"max_gap_ms"`
+	LastGapAtMS   int64  `json:"last_gap_at_ms"`
+	LastFrameAtMS int64  `json:"last_frame_at_ms"`
+}
+
+func (a *audioArrival) add(now time.Time) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.last.IsZero() {
+		gap := now.Sub(a.last).Milliseconds()
+		if gap > 200 {
+			a.Gaps++
+			if gap > a.MaxGapMS {
+				a.MaxGapMS = gap
+			}
+			a.LastGapAtMS = now.UnixMilli()
+		}
+	}
+	a.last = now
+	a.Frames++
+}
+func (a *audioArrival) snapshot() audioArrivalSnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	last := int64(0)
+	if !a.last.IsZero() {
+		last = a.last.UnixMilli()
+	}
+	return audioArrivalSnapshot{a.Frames, a.Gaps, a.MaxGapMS, a.LastGapAtMS, last}
+}
+
+type callAudioDiagnostic struct {
+	browser  audioArrival
+	whatsapp audioArrival
+	end      atomic.Pointer[callEndDiagnostic]
+	stream   atomic.Pointer[streamEndDiagnostic]
+}
+type perCallDiagnostic struct {
+	Version  int                  `json:"version"`
+	AtMS     int64                `json:"at_ms"`
+	End      *callEndDiagnostic   `json:"end,omitempty"`
+	Stream   *streamEndDiagnostic `json:"stream,omitempty"`
+	Browser  audioArrivalSnapshot `json:"browser_to_engine"`
+	WhatsApp audioArrivalSnapshot `json:"whatsapp_to_engine"`
+}
+
+func (a *activeCall) audioDiagnostic() *perCallDiagnostic {
+	end := a.diagnostic.end.Load()
+	if end == nil {
+		if origin := a.endOrigin.Load(); origin != nil {
+			end = &callEndDiagnostic{*origin, "unknown", time.Now().UnixMilli()}
+		}
+	}
+	return &perCallDiagnostic{1, time.Now().UnixMilli(), end, a.diagnostic.stream.Load(),
+		a.diagnostic.browser.snapshot(), a.diagnostic.whatsapp.snapshot()}
 }

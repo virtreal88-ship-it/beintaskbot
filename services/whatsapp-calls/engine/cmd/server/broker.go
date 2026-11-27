@@ -17,18 +17,19 @@ const (
 )
 
 type CallRecord struct {
-	RemoteAnswered bool            `json:"-"`
-	Caller         *callerIdentity `json:"-"` // immutable, private offer evidence
-	Recording      bool            `json:"recording"`
-	SessionID      string          `json:"sessionId"`
-	CallID         string          `json:"callId"`
-	Owner          *string         `json:"owner"`
-	Direction      string          `json:"direction"`
-	Peer           string          `json:"peer"`
-	StartedAt      int64           `json:"startedAt"`
-	Status         CallStatus      `json:"status"`
-	EndedAt        *int64          `json:"endedAt,omitempty"`
-	EndReason      string          `json:"endReason,omitempty"`
+	Diagnostic     *perCallDiagnostic `json:"-"`
+	RemoteAnswered bool               `json:"-"`
+	Caller         *callerIdentity    `json:"-"` // immutable, private offer evidence
+	Recording      bool               `json:"recording"`
+	SessionID      string             `json:"sessionId"`
+	CallID         string             `json:"callId"`
+	Owner          *string            `json:"owner"`
+	Direction      string             `json:"direction"`
+	Peer           string             `json:"peer"`
+	StartedAt      int64              `json:"startedAt"`
+	Status         CallStatus         `json:"status"`
+	EndedAt        *int64             `json:"endedAt,omitempty"`
+	EndReason      string             `json:"endReason,omitempty"`
 }
 
 type AuthSnapshot struct {
@@ -264,4 +265,19 @@ func writeSSE(w http.ResponseWriter, f http.Flusher, ev any) {
 	data, _ := json.Marshal(ev)
 	w.Write(append(append([]byte("data: "), data...), '\n', '\n'))
 	f.Flush()
+}
+
+func (b *Broker) setCallDiagnostic(id string, diagnostic *perCallDiagnostic) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if current := b.calls[id]; current != nil {
+		current.Diagnostic = diagnostic
+		return
+	}
+	for i := len(b.history) - 1; i >= 0; i-- {
+		if b.history[i].CallID == id {
+			b.history[i].Diagnostic = diagnostic
+			return
+		}
+	}
 }

@@ -133,7 +133,9 @@ func (s *Session) wireCall(cm *call.CallManager, callID string, caller *callerId
 			if value := ac.endOrigin.Load(); value != nil {
 				origin = *value
 			}
-			s.diag.lastEnd.Store(&callEndDiagnostic{origin, safeEndCode(string(c.StateData.EndReason)), time.Now().UnixMilli()})
+			ended := &callEndDiagnostic{origin, safeEndCode(string(c.StateData.EndReason)), time.Now().UnixMilli()}
+			s.diag.lastEnd.Store(ended)
+			ac.diagnostic.end.Store(ended)
 		}
 		s.removeCall(c.CallID, c.StateData.EndReason == core.EndCallReasonUserEnded)
 		s.mgr.broker.endCall(c.CallID, string(c.StateData.EndReason))
@@ -157,6 +159,7 @@ func (s *Session) wireCall(cm *call.CallManager, callID string, caller *callerId
 		if !ok {
 			return
 		}
+		ac.diagnostic.whatsapp.add(time.Now())
 		if h := ac.recording.Load(); h != nil {
 			h.capture.Add(1, pcm16, time.Now())
 		}
@@ -375,6 +378,7 @@ func (s *Session) removeCall(callID string, graceful ...bool) {
 	if bridge := ac.bridge.Swap(nil); bridge != nil {
 		bridge.Close()
 	}
+	s.mgr.broker.setCallDiagnostic(callID, ac.audioDiagnostic())
 	if h := ac.recording.Load(); h != nil {
 		h.finish(len(graceful) > 0 && graceful[0] && !ac.interrupted.Load())
 	}
@@ -396,8 +400,13 @@ func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
 	_ = ac.cm.EndCall(context.Background(), reason)
 }
 
-func (s *Session) teardownAllCalls() {
+func (s *Session) teardownAllCalls(cause ...string) {
+	origin := "gateway_shutdown"
+	if len(cause) > 0 {
+		origin = cause[0]
+	}
 	for _, ac := range s.reg.drain() {
+		ac.markEnd(origin)
 		ac.launchMu.Lock()
 		ac.interrupted.Store(true)
 		_ = ac.cm.EndCall(context.Background(), core.EndCallReasonUserEnded)
@@ -407,6 +416,7 @@ func (s *Session) teardownAllCalls() {
 		if bridge := ac.bridge.Swap(nil); bridge != nil {
 			bridge.Close()
 		}
+		s.mgr.broker.setCallDiagnostic(ac.id, ac.audioDiagnostic())
 		if h := ac.recording.Load(); h != nil {
 			h.finish(false)
 		}

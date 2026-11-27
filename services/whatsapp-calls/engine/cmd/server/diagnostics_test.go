@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"go.mau.fi/whatsmeow/types/events"
 	"wacalls/internal/recording"
@@ -54,5 +55,43 @@ func TestEndReasonIsAllowlistedAndOriginIsFirstWriter(t *testing.T) {
 	ac.markEnd("audio_transport")
 	if *ac.endOrigin.Load() != "whatsapp_terminate" {
 		t.Fatal("cleanup overwrote initiating event")
+	}
+}
+
+func TestPerCallEvidenceSurvivesSubsequentCallsAndKeepsDirections(t *testing.T) {
+	first, second := &activeCall{}, &activeCall{}
+	start := time.Unix(1000, 0)
+	first.diagnostic.browser.add(start)
+	first.diagnostic.browser.add(start.Add(20 * time.Millisecond))
+	first.diagnostic.whatsapp.add(start)
+	first.diagnostic.whatsapp.add(start.Add(700 * time.Millisecond))
+	first.diagnostic.end.Store(&callEndDiagnostic{"whatsapp_terminate", "user_ended", start.Add(time.Second).UnixMilli()})
+	first.diagnostic.stream.Store(&streamEndDiagnostic{"call_closed", 2, 2, start.UnixMilli()})
+	broker := NewBroker()
+	broker.upsertCall(CallRecord{CallID: "one", SessionID: "session", Peer: "peer", Direction: "inbound"})
+	broker.setCallDiagnostic("one", first.audioDiagnostic())
+	broker.endCall("one", "user_ended")
+	broker.upsertCall(CallRecord{CallID: "two", SessionID: "session", Peer: "peer", Direction: "inbound"})
+	second.markEnd("audio_transport")
+	broker.endCall("two", "user_ended")
+	broker.setCallDiagnostic("two", second.audioDiagnostic())
+	rows := broker.historyRows("session", 20)
+	if len(rows) != 2 {
+		t.Fatal("missing history")
+	}
+	byID := map[string]*perCallDiagnostic{}
+	for _, row := range rows {
+		byID[row.CallID] = row.Diagnostic
+	}
+	one, two := byID["one"], byID["two"]
+	if one.End.Origin != "whatsapp_terminate" || two.End.Origin != "audio_transport" {
+		t.Fatal("later call replaced original cause")
+	}
+	if one.WhatsApp.Gaps != 1 || one.WhatsApp.MaxGapMS != 700 || one.Browser.Gaps != 0 {
+		t.Fatal("audio leg evidence mixed")
+	}
+	first.diagnostic.browser.add(start.Add(2 * time.Second))
+	if one.Browser.Frames != 2 {
+		t.Fatal("published snapshot was mutable")
 	}
 }

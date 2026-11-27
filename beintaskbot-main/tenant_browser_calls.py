@@ -62,6 +62,8 @@ def migrate(cur):
       retired_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY(tenant_id,gateway_id,boot_id))''')
     from tenant_call_sources import migrate as migrate_sources
     migrate_sources(cur)
+    from tenant_call_diagnostics import migrate as migrate_diagnostics
+    migrate_diagnostics(cur)
 
 
 def config():
@@ -282,7 +284,7 @@ def action(profile,data):
 
 def _action(profile,data,c):
     op=data.get('op')
-    if op not in {'start','accept','reject','end'}:raise TenantLinearError('Действие недоступно.',400)
+    if op not in {'start','accept','reject','end','diagnostics'}:raise TenantLinearError('Действие недоступно.',400)
     try:request=str(uuid.UUID(str(data['request_id'])))
     except (KeyError,ValueError,TypeError):raise TenantLinearError('Нет идентификатора запроса.',400) from None
     sdp=data.get('sdp_offer','')
@@ -306,7 +308,7 @@ def _action(profile,data,c):
         # Cancelling a failed/pending accept must not first require a successful
         # dialog admission. Fresh source grants and exact call ownership below
         # remain mandatory, as for rejecting an unclaimed incoming call.
-        actor,target=authorize(cur,profile,data,c,write=True,require_accepted=op not in {'reject','end'})
+        actor,target=authorize(cur,profile,data,c,write=True,require_accepted=op not in {'reject','end','diagnostics'})
         cur.execute('SELECT *,last_seen>now()-interval \'10 seconds\' AS fresh FROM saas_browser_call_gateways WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid FOR UPDATE',(c['tenant_id'],c['gateway_id']))
         gateway=cur.fetchone()
         if op in {'start','accept'}:
@@ -346,6 +348,17 @@ def _action(profile,data,c):
             row=cur.fetchone()
             if not row or any(str(row[k])!=str(data.get(k)) for k in ('channel_id','conversation_id','lead_id')):raise TenantLinearError('Звонок не относится к диалогу.',404)
             if row['actor_id'] is not None and row['actor_id']!=actor:raise TenantLinearError('Звонок принят другим сотрудником.',409)
+            if 'diagnostics' in data:
+                from tenant_call_diagnostics import save_browser
+                try:
+                    save_browser(cur,c['tenant_id'],actor,row,request,data['diagnostics'])
+                except TenantLinearError:
+                    if op!='end':
+                        raise
+            if op=='diagnostics':
+                if 'diagnostics' not in data:
+                    raise TenantLinearError('call_diagnostics_invalid',400)
+                return {'saved':True}
             if row['state'] in FINAL:return _public(row,actor)
             if op=='accept':
                 if row['state']!='incoming' or not gateway or not gateway['fresh']:raise TenantLinearError('Вызов уже изменился.',409)
@@ -405,7 +418,11 @@ def sync(c,data):
                 # owning this same durable source has exited. A timer or a
                 # missing call snapshot is never accepted as this proof.
                 cur.execute('''UPDATE saas_browser_calls SET state='ended',ended_at=COALESCE(ended_at,now()),updated_at=now(),
-                  recording_state=CASE WHEN recording_state='pending' THEN 'unconfirmed' ELSE recording_state END
+                  recording_state=CASE WHEN recording_state='pending' THEN 'unconfirmed' ELSE recording_state END,
+                  diagnostics=jsonb_set(diagnostics,'{gateway}',
+                    COALESCE(diagnostics->'gateway','{}'::jsonb)||
+                    jsonb_build_object('version',1,'end',jsonb_build_object('origin','process_closed',
+                      'code','unknown','at_ms',floor(extract(epoch FROM clock_timestamp())*1000)::bigint)))
                   WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid AND state NOT IN ('ended','failed')''',
                   (c['tenant_id'],c['gateway_id'],str(old['boot_id'])))
                 cur.execute('''UPDATE saas_browser_call_commands q SET state='done',payload='{}'::jsonb,
@@ -433,6 +450,11 @@ def sync(c,data):
                       {'busy','scope_denied','microphone_setup_failed','call_ended','call_reject_unconfirmed','provider_start_failed','command_uncertain','recording_unavailable'} else ''}
                 cur.execute("UPDATE saas_browser_call_commands SET state='done',result=%s::jsonb,payload='{}'::jsonb WHERE id=%s::uuid",(_json(safe),result['id']))
                 cur.execute('UPDATE saas_browser_calls SET provider_id=COALESCE(provider_id,%s),updated_at=now() WHERE id=%s::uuid',(provider,str(command['call_id'])))
+                if not result['ok']:
+                    cur.execute("""UPDATE saas_browser_calls SET diagnostics=jsonb_set(diagnostics,'{control}',
+                      jsonb_build_object('reason',%s::text,'at_ms',floor(extract(epoch FROM clock_timestamp())*1000)::bigint))
+                      WHERE tenant_id=%s::uuid AND id=%s::uuid AND NOT diagnostics ? 'control'""",
+                      (safe['error_code'] or 'command_unconfirmed',c['tenant_id'],str(command['call_id'])))
                 if result.get('not_started') is True and not provider and command['op']=='start' and not result['ok']:
                     cur.execute("UPDATE saas_browser_calls SET state='failed',recording_state='none',ended_at=now() WHERE id=%s::uuid",(str(command['call_id']),))
             for item in ended:
@@ -498,6 +520,8 @@ def sync(c,data):
                     if c.get('managed'):
                         from tenant_dialog_lifecycle import note_inbound_call
                         note_inbound_call(cur,c['tenant_id'],c['channel_id'],target['conversation_id'],incoming_id)
+            from tenant_call_diagnostics import save_gateway
+            save_gateway(cur,c,boot,active+ended)
             cur.execute('''UPDATE saas_browser_call_commands q SET payload='{}'::jsonb,result=result-'sdp_answer'
               FROM saas_browser_calls c WHERE c.id=q.call_id AND c.tenant_id=%s::uuid AND c.state IN ('ended','failed')''',(c['tenant_id'],))
             cur.execute('''INSERT INTO saas_browser_call_gateways(tenant_id,gateway_id,boot_id,seq,connected,max_seconds)
@@ -511,6 +535,12 @@ def sync(c,data):
                 if row['browser_gone']:raise TenantLinearError('browser_gone',409)
                 authorize(cur,{'tenant_id':c['tenant_id'],'telegram_id':row['actor_id']},row,c,write=True)
             except TenantLinearError:
+                cause='browser_gone' if row['browser_gone'] else 'authority_denied'
+                cur.execute("""UPDATE saas_browser_calls
+                  SET diagnostics=jsonb_set(diagnostics,'{control}',jsonb_build_object('reason',%s::text,
+                    'at_ms',floor(extract(epoch FROM clock_timestamp())*1000)::bigint))
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid AND NOT diagnostics ? 'control'""",
+                  (cause,c['tenant_id'],str(row['id'])))
                 _command(cur,c,row,'end')
                 cur.execute("UPDATE saas_browser_calls SET state='ending',updated_at=now() WHERE id=%s::uuid",(str(row['id']),))
         cur.execute('''SELECT q.id,q.call_id,q.op,q.payload,c.provider_id,c.peer_jid,c.actor_id,c.state AS call_state
