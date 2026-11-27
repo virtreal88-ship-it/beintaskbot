@@ -85,6 +85,19 @@
       #supportDetail .support-save-actions{position:sticky;bottom:-20px;z-index:3;background:var(--card);padding:12px 0;border-top:1px solid var(--line);justify-content:flex-end}
       #supportHistory{display:flex;flex-direction:column;gap:8px;padding:12px 0}#supportHistory .support-message{max-width:85%;margin:0;align-self:flex-start;min-width:140px;box-sizing:border-box}#supportHistory .support-message[data-direction=outgoing]{align-self:flex-end;margin:0}#supportHistory .support-message small{font-size:11px;margin-top:5px}#supportDetail .support-history-actions{justify-content:flex-end}
       #supportDetail .support-history-actions+.sub{display:none}
+      #supportDetail .support-modal-card{width:min(1440px,100%);height:min(92dvh,980px);max-height:92dvh;box-sizing:border-box;padding:0;display:flex;flex-direction:column;overflow:hidden}
+      #supportDetail .support-card-header{position:static;flex:none;padding:12px 18px 0;background:var(--card);border-bottom:1px solid var(--line)}
+      #supportDetail .support-heading{flex-wrap:nowrap}
+      #supportDetail .support-case-tabs{display:flex;position:static;gap:4px;padding:0;border:0}
+      #supportDetail .support-case-tabs button{min-height:42px;padding:4px 12px;border:0;border-radius:0}
+      #supportDetail .support-case-tabs [aria-selected=true]{background:transparent;border:0;box-shadow:inset 0 -2px var(--brand);font-weight:600}
+      #supportDetail .support-primary-actions{padding:8px 0;border:0}
+      #supportDetailContent>#supportDetailNotice{flex:none;margin:0 18px}
+      #supportDetail .support-card-columns{flex:1;min-height:0;display:grid;grid-template-columns:minmax(285px,36%) minmax(0,1fr);gap:10px;padding:12px;background:var(--app-surface,var(--paper))}
+      #supportDetail .support-card-columns>[data-support-panel]{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+      #supportDetail .support-card-columns>[data-support-panel="history"]{grid-column:2;grid-row:1}
+      #supportDetail .support-card-columns>[data-support-panel="details"],#supportDetail .support-card-columns>[data-support-panel="developer"]{grid-column:1;grid-row:1}
+      #supportDetail .support-save-actions{bottom:-16px}
       @media(max-width:1000px){#supportInbox .support-table-head,#supportInbox .support-row{grid-template-columns:minmax(180px,2fr) minmax(105px,1fr) minmax(110px,1fr);gap:12px}#supportInbox .support-table-head>span:last-child{display:none}#supportInbox .support-date-cell{grid-column:1/-1;font-size:11px}#supportDetail .support-work-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:600px){
         #supportInbox .top{gap:8px}#supportInbox #supportRefresh{width:40px;min-height:40px;padding:0;font-size:0}#supportInbox #supportRefresh:before{content:'↻';font-size:22px}#supportInbox .support-count-line{font-size:12px;flex-wrap:wrap}
@@ -94,7 +107,11 @@
         #supportInbox .support-row{grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:16px}
         #supportInbox .support-case-cell{grid-column:1/-1}#supportInbox .support-state-cell{grid-row:2;grid-column:1}#supportInbox .support-owner-cell{grid-row:2;grid-column:2;text-align:right;max-width:145px}
         #supportInbox .support-date-cell{grid-column:1/-1}#supportInbox .support-date-cell .support-cell-label{display:inline;margin-right:5px}
-        #supportDetail .support-modal-card{padding:16px;border-radius:0}#supportDetail .support-card-header{top:-16px}
+        #supportDetail .support-modal-card{height:100%;max-height:100%;padding:0;border-radius:0}#supportDetail .support-card-header{padding:8px 12px 0}
+        #supportDetail .support-card-columns{display:flex;flex-direction:column;padding:0;gap:0}
+        #supportDetail .support-card-columns>[data-support-panel]{flex:1;border:0;border-radius:0;padding:12px}
+        #supportDetail .support-case-tabs{overflow-x:auto}
+        #supportDetail .support-case-tabs button{flex:1;min-width:0}
         #supportDetail .support-primary-actions{gap:6px}#supportDetail .support-primary-actions button{min-height:44px;padding:8px;font-size:12px}
         #supportDetail #supportResolve{width:auto;padding:8px}#supportDetail #supportMoreActions>summary{width:44px;height:44px}#supportDetail .support-save-actions{bottom:-16px}
       }`;document.head.append(style);
@@ -118,28 +135,40 @@
   function appendMaterialMessages(){const host=$('supportHistory');if(!host||!detailData)return;const items=materialMessages(),known=new Map([...host.querySelectorAll('[data-message-id]')].map(node=>[node.dataset.messageId,node]));if(!known.size&&items.length)host.replaceChildren();for(let index=0;index<items.length;index++){const item=items[index],key=String(item.id);if(known.has(key)){const body=known.get(key).querySelector('[data-message-body]');if(body)body.textContent=item.body||mediaTitle(item.message_type);continue;}const template=document.createElement('template');template.innerHTML=messages([item],detailData.ticket);const node=template.content.firstElementChild;const next=items.slice(index+1).map(row=>known.get(String(row.id))).find(Boolean);host.insertBefore(node,next||null);known.set(key,node);}}
   function refreshMaterialControls(){if(detailData&&selected===detailData.ticket.id)renderConsultations(detailData.ticket);}
   const tabText=key=>({ru:{history:'История диалога',details:'Данные обращения',developer:'Разработчики',tabs:'Обращение',materials:'Материалы обращения',historyHint:'История от принятия диалога до создания обращения. Для старых обращений показывается сохранённый фрагмент.'},az:{history:'Dialoq tarixçəsi',details:'Müraciət məlumatları',developer:'Tərtibatçılar',tabs:'Müraciət',materials:'Müraciət materialları',historyHint:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə. Köhnə müraciətlərdə saxlanmış fraqment göstərilir.'},en:{history:'Dialogue history',details:'Case details',developer:'Developers',tabs:'Case',materials:'Case materials',historyHint:'History from accepting the dialogue to creating the case. Older cases show the saved fragment.'}}[i18n.language]||{})[key]||key;
+  function syncCasePanels(){
+    if(!detailData||!modalOpen)return;
+    const mobile=window.matchMedia?.('(max-width: 600px)').matches??window.innerWidth<=600;
+    const active=detailData.activeTab;
+    for(const panel of $('supportDetailContent').querySelectorAll('[data-support-panel]')){
+      const name=panel.dataset.supportPanel;
+      panel.hidden=mobile?name!==active:name==='history'?false:name==='developer'?active!=='developer':active==='developer';
+      if(panel.hidden)panel.querySelectorAll('audio,video').forEach(media=>media.pause?.());
+    }
+  }
   function selectCaseTab(name,{focus=false,persist=true,clearReply=false}={}){
     if(!detailData||!['history','details','developer'].includes(name))return;
     $('supportMoreActions')?.removeAttribute('open');
     const host=$('supportDetailContent'),previous=detailData.activeTab;
-    if(previous)detailData.tabScroll[previous]=host.scrollTop;
+    if(previous)detailData.tabScroll[previous]=$('supportPanel-'+previous)?.scrollTop||0;
     detailData.activeTab=name;
     for(const tab of host.querySelectorAll('[data-support-tab]')){const active=tab.dataset.supportTab===name;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;if(active&&focus)tab.focus({preventScroll:true});}
-    for(const panel of host.querySelectorAll('[data-support-panel]')){panel.hidden=panel.dataset.supportPanel!==name;panel.querySelectorAll('audio,video').forEach(media=>{if(panel.hidden)media.pause?.();});}
-    host.scrollTop=detailData.tabScroll[name]||0;
+    syncCasePanels();
+    const activePanel=$('supportPanel-'+name);
+    if(activePanel)activePanel.scrollTop=detailData.tabScroll[name]||0;
     caseTabs.set(identity(member)+':'+selected,name);
     if(persist&&new URLSearchParams(location.search).get('support_ticket_id')===selected){const url=new URL(location.href);url.searchParams.set('support_ticket_tab',name);if(clearReply)url.searchParams.delete('consultation_reply_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}
     if(name==='history')void loadDialogueHistory();
   }
   function installCaseTabs(ticket){
     const host=$('supportDetailContent'),notice=$('supportDetailNotice'),tabs=document.createElement('div');tabs.className='support-case-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',tabText('tabs'));
-    const panels={};for(const name of ['history','details','developer']){const tab=document.createElement('button');tab.type='button';tab.id='supportTab-'+name;tab.dataset.supportTab=name;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','supportPanel-'+name);tab.textContent=tabText(name);tab.onclick=()=>selectCaseTab(name,{clearReply:true});tabs.append(tab);const panel=document.createElement('section');panel.id='supportPanel-'+name;panel.dataset.supportPanel=name;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);panel.tabIndex=0;panels[name]=panel;}
+    const panels={};for(const name of ['details','history','developer']){const tab=document.createElement('button');tab.type='button';tab.id='supportTab-'+name;tab.dataset.supportTab=name;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','supportPanel-'+name);tab.textContent=tabText(name);tab.onclick=()=>selectCaseTab(name,{clearReply:true});tabs.append(tab);const panel=document.createElement('section');panel.id='supportPanel-'+name;panel.dataset.supportPanel=name;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);panel.tabIndex=0;panels[name]=panel;}
     while(notice.nextSibling)panels.details.append(notice.nextSibling);
-    const header=document.createElement('header');header.className='support-card-header';host.prepend(header);header.append(host.querySelector('.support-heading'),tabs);host.append(panels.history,panels.details,panels.developer);
+    const header=document.createElement('header');header.className='support-card-header';host.prepend(header);header.append(host.querySelector('.support-heading'),tabs);
+    const columns=document.createElement('div');columns.className='support-card-columns';columns.append(panels.details,panels.history,panels.developer);host.append(columns);
     const earlier=$('supportEarlier'),history=$('supportHistory');
     panels.history.innerHTML=`<p class="sub">${esc(detailData.historyContext?.boundary_status==='accepted_interval'?({ru:'История от принятия диалога до создания обращения.',az:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə.',en:'History from accepting the dialogue to creating the case.'}[i18n.language]||tabText('historyHint')):({ru:'Время принятия не сохранено. Показаны сохранённые сообщения обращения.',az:'Qəbul vaxtı saxlanmayıb. Müraciətin saxlanmış mesajları göstərilir.',en:'Acceptance time was not saved. Showing saved case messages.'}[i18n.language]||tabText('historyHint')))}</p><p id="supportDialogueNotice" role="status" aria-live="polite"></p>`;
     panels.history.append(earlier,history);
-    tabs.onkeydown=event=>{const names=['history','details','developer'],index=names.indexOf(event.target.dataset.supportTab);if(index<0)return;const next=event.key==='Home'?0:event.key==='End'?2:event.key==='ArrowRight'?(index+1)%3:event.key==='ArrowLeft'?(index+2)%3:-1;if(next>=0){event.preventDefault();selectCaseTab(names[next],{focus:true,clearReply:true});}};
+    tabs.onkeydown=event=>{const names=['details','history','developer'],index=names.indexOf(event.target.dataset.supportTab);if(index<0)return;const next=event.key==='Home'?0:event.key==='End'?2:event.key==='ArrowRight'?(index+1)%3:event.key==='ArrowLeft'?(index+2)%3:-1;if(next>=0){event.preventDefault();selectCaseTab(names[next],{focus:true,clearReply:true});}};
   }
   async function loadDialogueHistory(earlier=false,refresh=false){
     const state=detailData;if(!state||!modalOpen||state.historyLoading)return;
@@ -244,7 +273,7 @@
     $('supportEarlier').onclick=()=>void loadDialogueHistory(true);
     renderConsultations(ticket);organizeTicketWorkspace(ticket);
     if(result.capabilities?.update===false){for(const id of ['supportSave','supportTake','supportResolve','supportDescription','supportNextSteps','supportEditStatus','supportEditAssignee']){const control=$(id);if(control)control.disabled=true;}}
-    const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'history';selectCaseTab(['history','details','developer'].includes(tab)?tab:'history');
+    const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'details';selectCaseTab(['history','details','developer'].includes(tab)?tab:'details');
   }
 
   function renderConsultations(ticket){
@@ -382,7 +411,7 @@
 
   });
   function profileChanged(data){const rightsChanged=JSON.stringify(accessCapabilities)!==JSON.stringify(data.capabilities||{});accessCapabilities=data.capabilities||{};operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');const person=data.member;if(rightsChanged||!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportCount'))$('supportCount').textContent='';if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
-  const syncSupportViewport=()=>{const host=$('supportDetail');if(!host)return;host.style.setProperty('--support-visual-top',(window.visualViewport?.offsetTop||0)+'px');host.style.setProperty('--support-visual-height',(window.visualViewport?.height||window.innerHeight)+'px');};window.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('scroll',syncSupportViewport);
+  const syncSupportViewport=()=>{const host=$('supportDetail');if(!host)return;host.style.setProperty('--support-visual-top',(window.visualViewport?.offsetTop||0)+'px');host.style.setProperty('--support-visual-height',(window.visualViewport?.height||window.innerHeight)+'px');syncCasePanels();};window.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('scroll',syncSupportViewport);
   document.addEventListener('keydown',trapTicketFocus);
   window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search),id=query.get('support_ticket_id');if(id===selected&&modalOpen&&document.querySelector('.operator-photo-viewer'))return;if(id&&query.get('view')==='support'){directTicketKey='';openDirectTicket();}else if(modalOpen)closeTicketModal(true);});
   document.addEventListener('tenant-profile',event=>profileChanged(event.detail));
