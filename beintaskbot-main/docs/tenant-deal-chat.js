@@ -10,7 +10,7 @@
   function mount({api,id,member,signal,isCurrent,line,first,box=$('chatRows'),refreshProvider=true,onMessages}) {
     const scroller=box.closest('.deal-chat-history'),c=copy();
     const status=document.createElement('div');status.className='deal-chat-status';status.style.cssText='font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;gap:6px;align-items:center';status.setAttribute('role','status');box.before(status);
-    let loaded=false,paging=false,flight=null,queued=null,refreshFlight=null,revision=0;
+    let loaded=false,paging=false,flight=null,queued=null,refreshFlight=null,revision=0,pagination=null;
     const valid=()=>isCurrent()&&!signal.aborted&&box===$('chatRows');
     const announce=(name,detail={})=>document.dispatchEvent(new CustomEvent(name,{detail:{lead_id:id,...detail}}));
     const notice=(message,action,label=c.retry)=>{status.replaceChildren(document.createTextNode(message));if(action){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=label;button.onclick=action;status.append(' ',button);}};
@@ -27,7 +27,7 @@
       onMessages?.(messages,reset);
       if(!loaded||reset||!nodes.size){
         announce('tenant-chat-history-reset');box.innerHTML=messages.map(line).join('');
-        loaded=true;paging=!!data.next_cursor;announce('tenant-chat-loaded',{messages,next_cursor:data.next_cursor,render_message:line,reload_cache:()=>load(false)});
+        loaded=true;paging=!!data.next_cursor;pagination={messages,next_cursor:data.next_cursor,render_message:line,reload_cache:()=>load(false)};announce('tenant-chat-loaded',pagination);
       }else{
         let next=null;
         for(const message of [...messages].reverse()){
@@ -43,7 +43,7 @@
         announce('tenant-chat-history-added');
         // A previously complete short cache may gain older rows on refresh.
         // Install its first cursor without resetting an existing older-page chain.
-        if(!paging&&data.next_cursor){paging=true;announce('tenant-chat-pagination-available',{next_cursor:data.next_cursor});}
+        if(!paging&&data.next_cursor){paging=true;pagination={...pagination,next_cursor:data.next_cursor};announce('tenant-chat-pagination-available',{next_cursor:data.next_cursor});}
       }
       notice(data.stale?c.stale:(messages.length||box.children.length?'':c.empty),data.stale?()=>load(true):null);
       if(scroller&&(bottom||reset||!nodes.size))scroller.scrollTop=scroller.scrollHeight;
@@ -67,7 +67,7 @@
       return flight;
     }
     void load(refreshProvider,first);
-    return {reload:()=>load(false)};
+    return {reload:()=>load(false),resume:()=>{if(pagination)announce('tenant-chat-loaded',pagination);return load(!loaded&&refreshProvider);}};
   }
   window.tenantDealChat={read,mount};
 })();

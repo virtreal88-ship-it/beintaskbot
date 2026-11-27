@@ -58,7 +58,7 @@
     function current(){
       const latest=identity();
       return !authorizing&&!lifetime.signal.aborted&&input.isConnected&&!input.disabled&&!input.readOnly&&
-        root.closest('#view-dialogs.active')&&routeIsCurrent()&&
+        root.closest('#view-dialogs.active,.deal-linked-dialog:not([hidden])')&&routeIsCurrent()&&
         latest?.expected_tenant_id===owner.expected_tenant_id&&latest?.expected_user_id===owner.expected_user_id;
     }
     function hide(){

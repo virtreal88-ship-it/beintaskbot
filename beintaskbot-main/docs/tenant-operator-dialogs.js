@@ -23,7 +23,7 @@
   let filterPopoverCleanup=()=>{},filterPreferencesLoaded=false,filterPreferencesFlight=null,filterSaveQueue=Promise.resolve();
   let companyPanelPreference=null;
   const isMobileCompanyPanelViewport=()=>window.matchMedia?.('(max-width: 900px)').matches===true;
-  const shouldRestoreCompanyPanel=()=>!isMobileCompanyPanelViewport();
+  const shouldRestoreCompanyPanel=()=>!embeddedConversation&&!isMobileCompanyPanelViewport();
   function panelPreference(){
     const key=identity(member);
     if(companyPanelPreference?.key!==key)companyPanelPreference={key,open:false,changed:false,load:null,save:Promise.resolve()};
@@ -57,7 +57,8 @@
       catch{const status=$('operatorCompanyPanelSaveStatus');if(status&&pref===companyPanelPreference&&pref.key===identity(member))status.textContent=panelSaveFailed();}
     });
   }
-  const colleagueId=()=>$('operatorColleague')?.value||'';
+  let embeddedConversation=null;
+  const colleagueId=()=>embeddedConversation?'':$('operatorColleague')?.value||'';
   const colleagueText=key=>({ru:{label:'Оператор',self:'Мои диалоги',read:'Только просмотр'},az:{label:'Operator',self:'Dialoqlarım',read:'Yalnız baxış'},en:{label:'Operator',self:'My chats',read:'Read only'}}[i18n.language]||{})[key]||'';
   let colleagueChoicesFlight=null;
   function changeColleague(){
@@ -249,7 +250,7 @@
   const dialogKey=row=>[row?.provider||'connect',row?.channel_id||'',row?.conversation_id||'',row?.lead_id||''].join(':');
   const sameDialog=(a,b)=>!!a&&!!b&&dialogKey(a)===dialogKey(b);
   let groupWorkTimer=null,groupWorkRequest=null;
-  const groupWorkVisible=()=>!document.hidden&&$('view-dialogs')?.classList.contains('active');
+  const groupWorkVisible=()=>!document.hidden&&inDialogsView();
   function stopGroupWorkRefresh(){
     clearTimeout(groupWorkTimer);
     groupWorkTimer=null;
@@ -431,7 +432,7 @@
     if(!previous||state.revision>=previous.revision)lifecycleListStates.set(key,{state:state.state,revision:state.revision,id:state.id,operator_id:state.operator_id,no_reply_needed:state.no_reply_needed===true});
   }
   const queueMode=()=>$('operatorLifecycle')?.value||'all';
-  const ownerOverviewMode=()=>member?.role==='owner'&&queueMode()==='all';
+  const ownerOverviewMode=()=>member?.role==='owner'&&(!!embeddedConversation||queueMode()==='all');
   let ownerOverviewWasActive=false;
   const rememberOwnerOverviewMode=()=>{ownerOverviewWasActive=ownerOverviewMode();};
   function setQueueModes(){const select=$('operatorLifecycle');if(!select)return;const value=select.value||'all';select.innerHTML=['all','active','completed'].map(key=>`<option value="${key}">${({all:{ru:'Все диалоги',az:'Bütün dialoqlar',en:'All dialogues'},active:{ru:'В работе',az:'İşdə',en:'Active'},completed:{ru:'Завершённые',az:'Tamamlanmış',en:'Completed'}})[key][i18n.language]||key}</option>`).join('');select.value=value;select.setAttribute('aria-label',({ru:'Состояние очереди',az:'Növbənin vəziyyəti',en:'Queue state'})[i18n.language]||'Queue state');rememberOwnerOverviewMode();}
@@ -562,7 +563,7 @@
     // The receipt proves the transition, not fresh permissions. Retrieve only
     // the selected route's capability and leave history/scroll/reminders alone.
     const revision=view.route.lifecycle.revision;
-    const same=()=>current()&&$('view-dialogs')?.classList.contains('active')&&
+    const same=()=>current()&&inDialogsView()&&
       sameDialog(currentDialog,view.route)&&currentPage&&
       view.revision===openRevision&&view.serial===dialogReadSerial&&
       currentDialog.lifecycle?.revision===revision;
@@ -1028,6 +1029,13 @@
     return payload;
   }
   const api=async(path,method='GET',data)=>(await rawApi(endpoint+path,{method,...(data?{body:JSON.stringify({...data,expected_tenant_id:member?.tenant_id,expected_user_id:member?.telegram_id})}:{})})).result;
+  async function readDialogHistory(route, page, groupWorkRefresh){
+    const path='dialogs/history?'+timelineHistoryQuery(route,page,groupWorkRefresh);
+    if(!embeddedConversation)return api(path);
+    const {controller}=embeddedConversation;
+    const response=await rawApi(endpoint+path,{signal:controller.signal},{optionalScopedRead:true});
+    return response.result;
+  }
   const duplicateCopy=(key)=>({
     ru:{title:'Поиск дублей',phone:'По номеру',name:'По имени',missing:'Диалоги без номера',search:'Найти',query:'Имя или последние 7 цифр номера',close:'Закрыть',open:'Открыть',prev:'Предыдущая',next:'Следующая',count:'{index} из {total}',more:'Ещё',empty:'Диалоги не найдены.',unavailable:'Объединение пока недоступно',noPhone:'Нет подтверждённого номера',noName:'Без имени',failed:'Не удалось выполнить действие. Обновите поиск и попробуйте снова.',busy:'Загрузка…',manual:'Указать номер для отображения',save:'Сохранить'},
     az:{title:'Təkrar dialoqları tap',phone:'Nömrəyə görə',name:'Ada görə',missing:'Nömrəsiz dialoqlar',search:'Axtar',query:'Ad və ya nömrənin son 7 rəqəmi',close:'Bağla',open:'Aç',prev:'Əvvəlki',next:'Növbəti',count:'{index} / {total}',more:'Daha çox',empty:'Dialoq tapılmadı.',unavailable:'Birləşdirmə hələ mümkün deyil',noPhone:'Təsdiqlənmiş nömrə yoxdur',noName:'Adsız',failed:'Əməliyyat baş tutmadı. Axtarışı yeniləyib təkrar yoxlayın.',busy:'Yüklənir…',manual:'Göstəriləcək nömrə',save:'Yadda saxla'},
@@ -1491,6 +1499,10 @@
     if(!hasInitialDialogSnapshot){hasInitialDialogSnapshot=true;lastDialogSnapshotAt=snapshotTime;}return selectedChanged;
   }
   function refresh(append=false,reuse=false,options={}){
+    if(embeddedConversation){
+      if(document.hidden||!currentDialog||pendingDialogRoute||lifecycleInFlight.size)return Promise.resolve();
+      return refreshEmbeddedConversation();
+    }
     if(!hasRight('dialogs'))return Promise.resolve();install();
     if(!filterPreferencesLoaded){const version=epoch;return loadFilterPreferences().then(()=>{if(version===epoch&&hasRight('dialogs'))return refresh(append,reuse,options);});}
     const search=searchValue($('operatorSearch')).trim(),overview=ownerOverviewMode()||Boolean(search);
@@ -1706,7 +1718,9 @@
     &&!((verifiedDialogPhone(route)||deviceDisplayPhone(route))&&hasContactName(route))
     &&/^[1-9][0-9]{5,21}@lid$/.test(route.conversation_id||'');
   const canLookupRowContact=route=>canLookupContact(route)&&/^[a-f0-9]{64}$/.test(route.contact_source_revision||'');
-  const inDialogsView=()=>hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active');
+  const inDialogsView=()=>hasRight('dialogs')&&(embeddedConversation
+    ?embeddedConversation.host.getClientRects().length>0
+    :$('view-dialogs')?.classList.contains('active'));
   function lookupContactDetails(route,fromList=false){
     let entry=contactDetails(route);
     if(entry){if(!fromList)entry.fromList=false;return entry.flight;}
@@ -2293,7 +2307,7 @@
   async function markDialogReadIfVisible(page=currentPage){
     const route=page?.dialog,chat=$('chatRows'),messages=page?.messages||[],last=messages[messages.length-1],readId=Object.prototype.hasOwnProperty.call(page||{},'read_through_message_id')?page.read_through_message_id:last?.id;
     const groupTargets=page?.group_read_targets;
-    if(!route||route.archive_read_only||!last?.id||!(readId||groupTargets?.length)||displayedPage!==page||!chat?.isConnected||document.hidden||!$('view-dialogs')?.classList.contains('active')||!sameDialog(route,currentDialog))return;
+    if(!route||route.archive_read_only||!last?.id||!(readId||groupTargets?.length)||displayedPage!==page||!chat?.isConnected||document.hidden||!inDialogsView()||!sameDialog(route,currentDialog))return;
     if(!atBottom(chat))return;
     if(page.anchor_message_id&&String(page.anchor_message_id)!==String(last.id))return;
     const owner=identity(member),generation=epoch,key=owner+':'+generation+':'+dialogKey(route);
@@ -2533,6 +2547,44 @@
       finally{if(current())older.disabled=false;}
     };
   }
+  function refreshEmbeddedConversation(){
+    const session=embeddedConversation;
+    if(!session||!inDialogsView()||!currentDialog)return Promise.resolve();
+    if(!session.refreshing){
+      session.refreshing=openDialog(currentDialog,true,'',{revalidateAccess:true})
+        .finally(()=>{session.refreshing=null;});
+    }
+    return session.refreshing;
+  }
+  function parkConversation(){
+    if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);
+  }
+  function mountConversation(host,route,{snapshot=null,onAccessLost=()=>{}}={}){
+    if(embeddedConversation||!hasRight('dialogs'))return null;
+    install();
+    const pane=$('operatorConversationPane'),origin=pane?.parentElement;
+    if(!origin)return null;
+    const previousSelection=selectedDialog,previousOwner=selectedDialogOwner;
+    parkConversation();
+    const session={host,controller:new AbortController(),snapshot,onAccessLost,refreshing:null};
+    embeddedConversation=session;
+    host.append(pane);
+    return {
+      open:()=>openDialog(route,true,'',{userOpened:true}),
+      release(){
+        if(embeddedConversation!==session)return null;
+        const page=displayedPage&&sameDialog(currentDialog,displayedPage.dialog)?displayedPage:null;
+        session.controller.abort();
+        parkConversation();
+        embeddedConversation=null;
+        origin.append(pane);
+        selectedDialog=previousSelection;
+        selectedDialogOwner=previousOwner;
+        stopGroupWorkRefresh();
+        return page;
+      }
+    };
+  }
   async function openDialog(route,fromHistory=false,caseLocationKey='',options={}){
     if(colleagueId()||route.colleague_read_only)return openColleagueDialog(route,fromHistory);
     if(!hasRight('dialogs')){notice(t('noAccess'));return false;}
@@ -2550,19 +2602,27 @@
     }
     const workspace=$('operatorWorkspace'),operatorHost=$('operatorDialogs'),content=$('operatorConversationContent');
     currentDialog={...route};selectedDialog=currentDialog;selectedDialogOwner=identity(member);
-    if(!fromHistory)rememberDialogHistory(route);
-    try{sessionStorage.setItem(contextKey('route',route),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));}catch{}
+    if(!fromHistory&&!embeddedConversation)rememberDialogHistory(route);
+    if(!embeddedConversation)try{sessionStorage.setItem(contextKey('route',route),JSON.stringify({provider:route.provider||'connect',lead_id:route.lead_id,channel_id:route.channel_id,conversation_id:route.conversation_id}));}catch{}
     if(workspace)workspace.dataset.selected='true';if(operatorHost)operatorHost.dataset.conversationOpen='true';
-    const cached=retained||route.lifecycle_enabled?null:cachedDialogPage(route);
-    if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached);}
+    const cached=embeddedConversation
+      ?(!retained&&sameDialog(embeddedConversation.snapshot?.dialog,route)?embeddedConversation.snapshot:null)
+      :retained||route.lifecycle_enabled?null:cachedDialogPage(route);
+    if(cached){cached.dialog={...cached.dialog,dialog_company_name:route.dialog_company_name??cached.dialog.dialog_company_name,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};delete cached.dialog.company_binding;currentDialog=cached.dialog;selectedDialog=cached.dialog;currentPage=cached;renderRows();renderDialog(cached,{suppressRead:!!embeddedConversation});}
     else if(!retained){currentPage=null;renderRows();renderDialogSkeleton(route);}
     content?.setAttribute('aria-busy','true');notice('');
-    try{const page=verifiedMergePages.delete(options.verifiedMergePage)?options.verifiedMergePage:await api('dialogs/history?'+timelineHistoryQuery(route,knownTimeline,options.groupWorkRefresh));if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(page.combined_dialog){
+    try{const page=verifiedMergePages.delete(options.verifiedMergePage)?options.verifiedMergePage:await readDialogHistory(route,knownTimeline||cached,options.groupWorkRefresh);if(version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial)return false;if(page.combined_dialog){
       const combined=page.combined_dialog;
       if(options.keepExactMergeRoute||historyMergeReadRoutes(route).length||options.followedCombinedDialog||route.case_attachment||route.source_message_id||combined.provider!=='connect'||combined.channel_id!==route.channel_id||sameDialog(combined,route))throw new Error(t('error'));
       return openDialog(combined,false,'',{...options,followedCombinedDialog:true});
     }if(!sameDialog(page.dialog,route))throw new Error(t('error'));pendingDialogRoute=null;const replaceMergedHistory=historyMergeChanged(displayedPage,page);if(replaceMergedHistory)discardHistoryMergeWindow(route);const lifecycleFloor=lifecycleListStates.get(contextKey('lifecycle-list',route)),incomingRevision=page.dialog.lifecycle?.revision,validRevision=Number.isSafeInteger(incomingRevision)&&incomingRevision>=0;if(lifecycleFloor&&validRevision&&incomingRevision<lifecycleFloor.revision){if(replaceMergedHistory)discardHistoryMergeWindow(route,{wipe:true});return false;}if(page.dialog.lifecycle_enabled&&!validRevision){const state=page.dialog.lifecycle?.state;page.dialog={...page.dialog,can_send:false,lifecycle:{state}};}if(!Object.prototype.hasOwnProperty.call(page.dialog,'phone')&&sameDialog(currentDialog,page.dialog)&&page.dialog.customer_kind!=='group'&&page.dialog.conversation_kind!=='group'&&verifiedDialogPhone(currentDialog))page.dialog.phone=currentDialog.phone;if(route.search_overview_read_only===true)page.dialog.search_overview_query=route.search_overview_query;currentDialog={...page.dialog,...(route.case_attachment?{case_attachment:route.case_attachment}:{})};page.dialog=currentDialog;updateLifecycleList(currentDialog,currentDialog.lifecycle);if(caseLocationKey)consumeCaseLocation(caseLocationKey);selectedDialog=page.dialog;selectedDialogOwner=identity(member);if(!replaceMergedHistory)restoreOperatorEventsWindow(page,knownTimeline);else currentPage=null;retainDeliveryEvidence(currentPage,page);currentPage=page;page.scroll_to_latest=Number(route.unread_count)>0&&!page.anchor_message_id;rememberDialogPage(route,page);renderRows();renderDialog(page,{suppressRead:options.suppressRead===true,replaceMergedHistory});notice('');if(options.userOpened&&!currentDialog.archive_read_only)window.tenantSharedReminders?.dialogOpened(currentDialog);const markRead=()=>{if(!options.suppressRead&&version===epoch&&revision===openRevision&&readSerial===dialogReadSerial&&currentPage===displayedPage&&sameDialog(route,currentDialog))void markDialogReadIfVisible(currentPage);};if(window.matchMedia?.('(max-width: 900px)').matches)afterLayout(markRead);else markRead();return true;}
-    catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){if(lifecycleUnavailable(error,route))return false;
+    catch(error){if(version===epoch&&revision===openRevision&&readSerial===dialogReadSerial){
+      if(embeddedConversation&&[401,403,404,409].includes(error.status)){
+        closeDialog(false,true);
+        embeddedConversation.onAccessLost(error);
+        return false;
+      }
+      if(lifecycleUnavailable(error,route))return false;
       if(historyMergeId(displayedPage)&&sameDialog(displayedPage.dialog,route))discardHistoryMergeWindow(route,{wipe:true});
       if(options.revalidateAccess&&error.status===404){removeLifecycleDialog(route);notice(error.message);return false;}
       if(error.message!=='Request scope changed')pendingDialogRoute=null;notice(error.message);const status=$('operatorChatError');if(status)status.textContent=error.message;else if(content)content.innerHTML=`<section class="operator-dialog-shell" role="status"><p class="operator-error">${esc(error.message)}</p></section>`;document.dispatchEvent(new CustomEvent('tenant-operator-error',{detail:{message:error.message}}));}return false;}
@@ -2697,7 +2757,7 @@
     const nameHost=$('operatorDialogCompanyName');
     if(!nameHost)return;
     const label=route?.provider==='operator_widget'?widgetCompany(route):capabilities.dialog_company_binding===true&&route?.archive_read_only
-      &&$('view-dialogs')?.classList.contains('active')&&$('operatorDialogs')?.style.visibility!=='hidden'
+      &&inDialogsView()&&$('operatorDialogs')?.style.visibility!=='hidden'
       &&!route.owner_overview_read_only&&!route.search_overview_read_only
       &&typeof route.dialog_company_name==='string'?route.dialog_company_name:'';
     const companyRow=$('operatorWidgetCompanyRow');
@@ -2723,7 +2783,7 @@
     }
     if(capabilities.dialog_company_binding!==true){window.tenantDialogueCompany?.clear();return;}
     const host=$('operatorClientCompanyHost'),owner=identity(member);
-    const current=()=>capabilities.dialog_company_binding===true&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&
+    const current=()=>capabilities.dialog_company_binding===true&&inDialogsView()&&
       owner===identity(member)&&host?.isConnected&&sameDialog(route,currentDialog);
     window.tenantDialogueCompany?.mount({host,nameHost:$('operatorDialogCompanyName'),partnerHost:$('operatorDialogPartnerName'),reminderHost:$('operatorClientSharedReminderHost'),route:useSnapshot?route:{...route,company_binding:undefined},member,isCurrent:current,
       onChanged:async binding=>{
@@ -2879,7 +2939,7 @@
     const groupBlock=card.querySelector('[data-group-participants]')?.closest('details');
     const dialogueBlock=card.querySelector('#operatorClientDeveloperHost').closest('details');
     let authorized=true,opener=trigger;
-    const current=()=>authorized&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active')&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
+    const current=()=>authorized&&inDialogsView()&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
     const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
     groupBlock?.addEventListener('toggle',loadRoster);
     const caseSlot=card.querySelector('[data-client-support-case]');
@@ -2911,7 +2971,7 @@
     const mobileCompany=()=>companyPanel?.open===true&&companyPanelViewport?.matches===true;
     const inertBefore=new Map();
     const syncChatInteraction=()=>{
-      const chat=$('operatorDialogs'),behind=new Set();
+      const chat=embeddedConversation?.host||$('operatorDialogs'),behind=new Set();
       // Isolate the chat, never the panel itself. Its in-panel close control
       // stays reachable while the full mobile viewport is covered.
       if(mobileCompany()&&chat?.contains(companyPanel)){
@@ -2992,7 +3052,7 @@
         if(mobileCompany()){
           // The animated conversation pane establishes a fixed-position containing
           // block and clips its children. Keep the mobile sheet above that pane.
-          const root=$('operatorDialogs');if(root&&companyPanel.parentElement!==root)root.append(companyPanel);
+          const root=embeddedConversation?.host||$('operatorDialogs');if(root&&companyPanel.parentElement!==root)root.append(companyPanel);
           companyPanel.style.setProperty('--operator-company-mobile-top',top+'px');
           companyPanel.style.setProperty('--operator-company-mobile-left',(viewport?.offsetLeft||0)+'px');
           companyPanel.style.setProperty('--operator-company-mobile-width',(viewport?.width||window.innerWidth)+'px');
@@ -3967,7 +4027,7 @@
     await refresh();document.dispatchEvent(new CustomEvent('tenant-dialog-state',{detail:{route,result}}));if(action==='handoff')document.dispatchEvent(new CustomEvent('tenant-support-changed'));return result;
   }
   function assignmentReason(reason){return ['no_eligible_agent','agent_already_assigned'].includes(reason)?t(reason):i18n.reason(reason);}
-  function closeDialog(forget=true,fromHistory=false){if(forget===true&&!fromHistory&&window.matchMedia?.('(max-width: 900px)').matches&&(($('operatorCopilot')&&!$('operatorCopilot').hidden)||helperHistoryClosing)){if(!helperHistoryClosing)closeCopilotPanel();return;}if(currentDialog&&!currentDialog.colleague_read_only&&$('operatorConversationContent'))captureDialogInteractionState(currentDialog,$('operatorConversationContent'));if(forget===true&&!fromHistory&&history.state?.operatorDialog&&$('view-dialogs')?.classList.contains('active')){if(history.state.operatorDialogHistoryEntry!==false)history.back();else{const state={...history.state};for(const key of ['operatorDialog','operatorDialogOwner','operatorDialogHistoryEntry','operatorHelper'])delete state[key];history.replaceState(state,'');}}else if(history.state?.operatorHelper){const state={...history.state};delete state.operatorHelper;history.replaceState(state,'');}cancelCaseLink();pendingDialogRoute=null;copilotDeferredPage=null;displayedPage=null;if(forget===true){sessionStorage.removeItem(contextKey('route'));if(!fromHistory){viewReturnDialog=null;viewReturnDialogOwner='';}}closeDialogDiagnostics(false);closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
+  function closeDialog(forget=true,fromHistory=false){if(forget===true&&!fromHistory&&window.matchMedia?.('(max-width: 900px)').matches&&(($('operatorCopilot')&&!$('operatorCopilot').hidden)||helperHistoryClosing)){if(!helperHistoryClosing)closeCopilotPanel();return;}if(currentDialog&&!currentDialog.colleague_read_only&&$('operatorConversationContent'))captureDialogInteractionState(currentDialog,$('operatorConversationContent'));if(forget===true&&!fromHistory&&history.state?.operatorDialog&&$('view-dialogs')?.classList.contains('active')){if(history.state.operatorDialogHistoryEntry!==false)history.back();else{const state={...history.state};for(const key of ['operatorDialog','operatorDialogOwner','operatorDialogHistoryEntry','operatorHelper'])delete state[key];history.replaceState(state,'');}}else if(history.state?.operatorHelper){const state={...history.state};delete state.operatorHelper;history.replaceState(state,'');}cancelCaseLink();pendingDialogRoute=null;copilotDeferredPage=null;displayedPage=null;if(forget===true&&!embeddedConversation){sessionStorage.removeItem(contextKey('route'));if(!fromHistory){viewReturnDialog=null;viewReturnDialogOwner='';}}closeDialogDiagnostics(false);closeGroupSettings();document.dispatchEvent(new CustomEvent('tenant-chat-close'));openRevision++;currentDialog=null;currentPage=null;const workspace=$('operatorWorkspace');if(workspace)workspace.dataset.selected='false';const host=$('operatorDialogs');if(host)host.dataset.conversationOpen='false';const header=$('operatorConversationHeader'),content=$('operatorConversationContent');if(header)header.innerHTML=`<div class="operator-conversation-empty">${t('chooseDialog')}</div>`;if(content)content.innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorRows'))renderRows();}
   let notificationRouteHandled=false;
   function notificationDialogRoute(){
     try{
@@ -4012,9 +4072,10 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
   document.addEventListener('visibilitychange',()=>{
     if($('operatorRows'))hydrateRowContacts();
     if(document.hidden){if(window.Notification?.permission==='granted')scheduleAutoRefresh();else stopAutoRefresh();}
+    else if(embeddedConversation)void refreshEmbeddedConversation();
     else if(!window.tenantRequestCoordinator){refresh();scheduleAutoRefresh();if($('view-dialogs')?.classList.contains('active'))void markDialogReadIfVisible(currentPage);}
   });
-  window.addEventListener('focus',()=>{scheduleGroupWorkRefresh();updateBrowserNoticeButton();if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
+  window.addEventListener('focus',()=>{scheduleGroupWorkRefresh();updateBrowserNoticeButton();if(embeddedConversation)void refreshEmbeddedConversation();else if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
   window.addEventListener('beforeunload',stopAutoRefresh);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{syncDuplicateButton();closeDuplicateSearch(true);updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
@@ -4102,7 +4163,7 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
     const article=[...document.querySelectorAll('#chatRows [data-message-id]')].find(node=>node.dataset.messageId===String(id));
     const footer=article?.querySelector('[data-message-footer-actions]');if(footer)footer.innerHTML=deliveryMarkup(message)+copyControlMarkup(message);
   }
-  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,refreshSentAttachment,hasRight,updateCustomerVoiceDelivery,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
+  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,refreshSentAttachment,hasRight,updateCustomerVoiceDelivery,mountConversation,parkConversation,inDialogsView,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();
 

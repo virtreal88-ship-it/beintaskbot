@@ -22,7 +22,7 @@ const pause=()=>new Promise(resolve=>setTimeout(resolve,70));
  assert.equal(info.hidden,true);assert.equal(d.querySelector('.chat-placeholder').hidden,false);
  d.getElementById('chatText').value='Draft';d.querySelector('[data-deal-tab=feed]').click();await pause();
  assert.equal(host.querySelectorAll('[data-related-task]').length,1);assert.equal(host.querySelectorAll('.kommo-note-card img').length,0);assert.match(host.querySelector('.kommo-note-card').textContent,/<img/);assert.equal(host.querySelector('[data-related-create]').hidden,false);
- data.click();assert.equal(info.hidden,false);assert.equal(d.querySelector('.chat-placeholder').hidden,true);assert(info.querySelector('[data-duplicate-search]'));assert.match(info.textContent,/Client.*\+994000000000/);assert(!d.querySelector('#dealModal .modal-head').textContent.includes('Client'));
+ data.click();assert.equal(info.hidden,false);assert.equal(d.querySelector('.chat-placeholder').hidden,true);assert(host.querySelector('.deal-chat-header [data-duplicate-search]'));assert.match(info.textContent,/Client.*\+994000000000/);assert(!d.querySelector('#dealModal .modal-head').textContent.includes('Client'));
  chat.click();assert.equal(info.hidden,true);assert.equal(d.querySelector('.chat-placeholder').hidden,false);assert.equal(d.getElementById('chatText').value,'Draft');assert.equal(d.getElementById('modalTitle').textContent,'Deal title');
  d.getElementById('taskFlowCard').classList.remove('show');d.getElementById('tenantTaskModal').classList.remove('show');
  // Stage header uses the existing move command and policy; no live provider calls.

@@ -139,13 +139,13 @@
     refresh();
   }
   const style=document.createElement('style');style.textContent=`
-#view-dialogs .operator-composer { position:relative; padding-bottom:4px; margin-bottom:4px }
-#view-dialogs .operator-composer #chatText {
+:is(#view-dialogs,.deal-linked-dialog) .operator-composer { position:relative; padding-bottom:4px; margin-bottom:4px }
+:is(#view-dialogs,.deal-linked-dialog) .operator-composer #chatText {
   background:transparent!important; border:0!important; outline:none!important;
   box-shadow:none!important; padding:5px 7px!important; min-height:38px;
 }
 @media(max-width:900px) {
-  #view-dialogs #operatorDialogs[data-conversation-open=true] .operator-composer {
+  #view-dialogs #operatorDialogs[data-conversation-open=true] .operator-composer, .deal-linked-dialog .operator-composer {
     margin-bottom:max(4px,env(safe-area-inset-bottom));
   }
 }
