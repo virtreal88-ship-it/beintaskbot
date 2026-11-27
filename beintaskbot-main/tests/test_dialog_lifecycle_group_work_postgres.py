@@ -163,7 +163,6 @@ def collaboration(episodes, monkeypatch):
     for module in (tenant_platform,dialogs,sends,transport,native):
         monkeypatch.setattr(module,'_connect',connection)
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
-    monkeypatch.setenv('BEINTASKBOT_WHATSAPP_GROUP_COLLABORATION',json.dumps({A:[GROUP]}))
     monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND','1')
     monkeypatch.setenv(presence.STATUS_ENABLED_ENV,'true')
     monkeypatch.setenv(presence.ROUTING_SOURCES_ENV,','.join((CA,CB)))
@@ -376,19 +375,61 @@ def test_simultaneous_first_accept_across_sources(collaboration):
 
 def test_existing_source_episode_finishes_before_shared_admission(collaboration,monkeypatch):
     database,_,_=collaboration
-    flag='BEINTASKBOT_WHATSAPP_GROUP_COLLABORATION'
-    monkeypatch.delenv(flag)
-    old=action(33,'accept')['lifecycle']['id']
-    monkeypatch.setenv(flag,json.dumps({A:[GROUP]}))
-    assert 'group_work' not in card(33)['lifecycle']
-    assert card(44)['lifecycle']['can_accept'] is False
+    # Create an accepted source-local episode as if it predated the release.
+    with monkeypatch.context() as before_rollout:
+        before_rollout.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND','0')
+        old=action(33,'accept')['lifecycle']['id']
+    incumbent=history(33)['dialog']
+    assert 'group_work' not in incumbent['lifecycle']
+    assert incumbent['can_send'] and incumbent['lifecycle']['can_close']
+    owner=dialogs.history(profile(11),'connect',SOURCES[33][1],CA,GROUP,owner_overview=True)['dialog']
+    assert owner['owner_overview_read_only'] and not owner['lifecycle']['can_takeover']
+    with pytest.raises(TenantLinearError,match='ранее принятые'):
+        lifecycle.mutate(profile(11),{'provider':'connect','channel_id':CA,'conversation_id':GROUP,
+            'lead_id':SOURCES[33][1],'request_id':str(uuid.uuid4()),'action':'takeover',
+            'expected_revision':row(database,33)['revision']})
+    waiting=history(44)['dialog']
+    assert waiting['lifecycle']['can_accept'] is False
+    assert 'group_work' not in waiting['lifecycle']
     with pytest.raises(TenantLinearError,match='ранее принятые'):
         action(44,'accept')
     assert action(33,'close',row(database,33)['revision'])['lifecycle']['state']=='closed'
+    available=history(44)['dialog']
+    assert available['lifecycle']['can_accept'] is True
+    assert available['group_work_revision'] != waiting['group_work_revision']
     assert action(44,'accept')['group_changed']
+    observer=dialogs.history(profile(11),'connect',SOURCES[44][1],CB,GROUP,owner_overview=True)['dialog']
+    assert observer['owner_overview_read_only'] and not observer['lifecycle']['can_takeover']
+    # A colleague on a different eligible source may now join (existing
+    # archived routes retain their existing source-level access rules).
+    assert history(33)['dialog']['lifecycle']['group_work']['can_join']
     assert database.execute("""SELECT group_leader_channel_id,closed_at IS NOT NULL AS closed
       FROM saas_dialog_episodes WHERE tenant_id=%s AND id=%s""",(A,old))==[
           {'group_leader_channel_id':None,'closed':True}]
+
+
+
+def test_old_pilot_selector_cannot_exclude_a_native_group(collaboration, monkeypatch):
+    monkeypatch.setenv('BEINTASKBOT_WHATSAPP_GROUP_COLLABORATION','{}')
+    assert history(33)['dialog']['lifecycle']['group_available']
+    assert action(33,'accept')['group_changed']
+
+
+def test_group_with_a_legacy_sender_preserves_source_local_work(collaboration):
+    database,membership,_=collaboration
+    database.execute('DELETE FROM saas_whatsapp_native_routes WHERE tenant_id=%s AND channel_id=%s',(A,CB))
+    database.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status)
+      VALUES(%s::uuid,'connect','connected') ON CONFLICT DO NOTHING""",(A,))
+    database.commit()
+    # No group membership probe should be needed to start either source's
+    # preexisting local text workflow. Voice still checks at send time.
+    membership[SOURCES[33][2]]=False
+    assert not history(33)['dialog']['lifecycle'].get('group_available')
+    first=action(33,'accept')
+    other=action(44,'accept')
+    assert not first.get('group_changed') and not other.get('group_changed')
+    assert first['lifecycle']['id'] != other['lifecycle']['id']
+    assert history(33)['dialog']['can_send'] and history(44)['dialog']['can_send']
 
 
 def test_failed_membership_at_join_keeps_the_existing_leader(collaboration):

@@ -3,7 +3,6 @@
 Each participating operator owns a separate physical workflow route. The
 existing dialogue lock already serializes these routes on the group JID.
 """
-import json
 import os
 import re
 import uuid
@@ -50,14 +49,16 @@ def migrate(cur):
           ON saas_chat_send_receipts(tenant_id,(route->>'group_provider_id')) WHERE route ? 'group_provider_id'""")
 
 
-def configured(tenant, conversation):
-    if not group_jid(conversation):
-        return False
-    try:
-        selection = json.loads(os.environ.get('BEINTASKBOT_WHATSAPP_GROUP_COLLABORATION', '{}')).get(str(tenant))
-    except (ValueError, AttributeError):
-        return False
-    return selection == '*' or isinstance(selection, list) and conversation in selection
+def source_available(mode):
+    """Collaboration is native-source scoped, not selected by a group pilot."""
+    return bool(os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_SEND') == '1'
+                and mode.get('enabled') and mode.get('active') and not mode.get('paused')
+                and mode.get('capture_enabled') and mode.get('gateway_enabled'))
+
+
+def source_selection(modes):
+    return {'sources': [channel for channel, mode in modes.items() if source_available(mode)],
+            'native_markers': list(modes)}
 
 
 def ready(cur):
@@ -65,12 +66,18 @@ def ready(cur):
     return cur.fetchone()['ready']
 
 
-def snapshots(cur, tenant, conversations):
+def snapshots(cur, tenant, conversations, *, sources=(), native_markers=()):
     groups = sorted({chat for chat in conversations if group_jid(chat)})
     if not groups or not ready(cur):
         return {}
     cur.execute("""SELECT requested.chat,latest.id::text AS id,latest.operator_id,
         latest.group_leader_channel_id::text AS leader_source,latest.closed_at,
+        EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid
+          AND c.conversation_id=requested.chat AND c.connect_channel_id=ANY(%s::uuid[]))
+        AND NOT EXISTS(SELECT 1 FROM saas_connect_conversations c
+          JOIN saas_connect_channels ch USING(tenant_id,connect_channel_id)
+          WHERE c.tenant_id=%s::uuid AND c.conversation_id=requested.chat AND ch.active
+            AND NOT (c.connect_channel_id=ANY(%s::uuid[]))) AS configured,
         CASE WHEN latest.closed_at IS NULL THEN (
           SELECT jsonb_agg(jsonb_build_object('id',p.id,'channel_id',p.channel_id,
             'actor_id',p.actor_id,'account_jid',p.account_jid,'generation',p.generation,
@@ -87,17 +94,16 @@ def snapshots(cur, tenant, conversations):
         SELECT id,operator_id,group_leader_channel_id,closed_at FROM saas_dialog_episodes
         WHERE tenant_id=%s::uuid AND conversation_id=requested.chat AND group_leader_channel_id IS NOT NULL
         ORDER BY (closed_at IS NULL) DESC,accepted_at DESC,id DESC LIMIT 1
-      ) latest ON TRUE""",(tenant, tenant, groups, tenant))
+      ) latest ON TRUE""",(tenant, list(sources), tenant, list(native_markers), tenant, tenant, groups, tenant))
     result={}
     for row in cur.fetchall():
-        enabled=configured(tenant,row['chat'])
-        if row['id'] or enabled:
-            result[row['chat']]={**row,'configured':enabled}
+        if row['id'] or row['configured']:
+            result[row['chat']]=row
     return result
 
 
-def snapshot(cur, tenant, conversation):
-    return snapshots(cur, tenant, [conversation]).get(conversation)
+def snapshot(cur, tenant, conversation, **selection):
+    return snapshots(cur, tenant, [conversation], **selection).get(conversation)
 
 
 def active(group):
@@ -105,7 +111,7 @@ def active(group):
 
 
 def revision(group, workflow):
-    return f"{group['id'] or '-'}:{int(active(group))}:{(workflow or {}).get('revision', 0)}"
+    return f"{group['id'] or '-'}:{int(active(group))}:{int(group['legacy_active'])}:{(workflow or {}).get('revision', 0)}"
 
 
 def read_revision(profile, channel, conversation, lead_id):
@@ -124,7 +130,9 @@ def read_revision(profile, channel, conversation, lead_id):
             cur.execute("SET LOCAL lock_timeout = '250ms'")
             tenant,_,policy=access(cur,profile,'dialogs')
             assert_route(cur,tenant,policy,'connect',conversation,channel,int(lead_id))
-            group=snapshot(cur,tenant,conversation) if enabled(cur,tenant) else None
+            from tenant_whatsapp_native_rollout import modes
+            group = (snapshot(cur,tenant,conversation,**source_selection(modes(cur,tenant,conversation=conversation)))
+                     if enabled(cur,tenant) else None)
             return {'revision':revision(group,_row(cur,tenant,channel,conversation)) if group else ''}
     except LockNotAvailable:
         return {}
@@ -318,16 +326,25 @@ def send_context(cur, tenant, actor, policy, route):
 
 def decorate(dialog, actor, group, workflow, *, source, admission, can_update, online):
     """Only expose an operator's own route and the names of joined colleagues."""
-    if not group or dialog.get('archive_read_only'):
+    if not group:
         return
     state = dialog['lifecycle']
+    ready_source = source_available(source)
+    shared = active(group)
+    if shared or ready_source and group['configured']:
+        # An owner observing someone else's route must never take over a
+        # collaborative group, including a source-local episode still draining.
+        state['can_takeover'] = False
+    if dialog.get('archive_read_only'):
+        return
+    if ready_source and (group['configured'] or shared):
+        dialog['group_work_revision'] = revision(group, workflow)
     if group['legacy_active']:
-        if group['configured']:
+        if ready_source and group['configured']:
             state['can_accept'] = state['can_start'] = False
         return
-    ready_source = bool(source.get('enabled') and source.get('active'))
-    if ready_source and (group['configured'] or active(group)):
-        dialog['group_work_revision'] = revision(group, workflow)
+    if not shared and not ready_source:
+        return
     if not active(group):
         if group['closed_at'] and state['state']=='waiting':
             state['has_inbound'] = queue_has_inbound(group, workflow, state['has_inbound'])
@@ -371,7 +388,7 @@ def join_options(cur, tenant, actor, policy, conversation, group, channels, mode
     from tenant_dialog_presence import is_online
 
     remaining = [channel for channel in channels
-                 if modes.get(channel,{}).get('enabled') and modes[channel].get('active')
+                 if source_available(modes.get(channel,{}))
                  and not any(p['channel_id']==channel or p['account_jid']==modes[channel]['account_jid']
                              for p in group['participants'])]
     if not remaining or participant(group,actor):

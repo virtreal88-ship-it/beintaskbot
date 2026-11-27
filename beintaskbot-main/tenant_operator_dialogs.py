@@ -1297,11 +1297,13 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 presence_online=is_online(cur,tenant,int(profile['telegram_id']))
                 presence_sources=work_status_routing_sources(tenant)
                 import tenant_dialog_group_work as group_work
-                group_work_snapshots=group_work.snapshots(cur,tenant,
-                    [r['conversation_id'] for r in rows if r['provider']=='connect'])
-                if group_work_snapshots:
+                group_conversations=[r['conversation_id'] for r in rows
+                                     if r['provider']=='connect' and group_jid(r['conversation_id'])]
+                if group_conversations:
                     from tenant_whatsapp_native_rollout import modes as native_modes
                     group_modes=native_modes(cur,tenant)
+                    group_work_snapshots=group_work.snapshots(cur,tenant,group_conversations,
+                        **group_work.source_selection(group_modes))
                 if completion_preview:
                     import tenant_dialog_company_completion as completion
                     if completion.enabled(tenant):
@@ -1320,7 +1322,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
                     group=group_work_snapshots.get(r['conversation_id']) if r['provider']=='connect' else None
                     group_source=group_modes.get(r['channel_id'],{})
-                    if group and not group['legacy_active'] and group_source.get('enabled') and group_source.get('active'):
+                    if group and (group['configured'] or group_work.active(group)) and not group['legacy_active'] and group_work.source_available(group_source):
                         r['can_send']=action_capabilities.get('update',False) and r.get('tenant_status')=='active'
                     lifecycle_decorate(cur,tenant,actor,r,details=False,allow_closed_archive=allow_closed_archive,owner_observer=observer,
                         search_observer=search_observer,
@@ -1707,8 +1709,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['wecall']=bool(group_mode.get('enabled'))
                 if not shared_archive and lifecycle_enabled(cur,tenant):
                     import tenant_dialog_group_work as group_work
-                    group_dialog=group_work.snapshot(cur,tenant,conversation)
-                    if group_dialog and not group_dialog['legacy_active'] and group_mode.get('enabled') and group_mode.get('active'):
+                    group_dialog=group_work.snapshot(cur,tenant,conversation,**group_work.source_selection(group_modes))
+                    if group_dialog and (group_dialog['configured'] or group_work.active(group_dialog)) and not group_dialog['legacy_active'] and group_work.source_available(group_mode):
                         dialog['can_send']=dialog.get('tenant_status')=='active'
             if paired_history:
                 dialog['history_pair_id']=paired_history['id']
@@ -1890,6 +1892,15 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             lifecycle_decorate(cur,tenant,actor,dialog,_workflow=workflow,allow_closed_archive=closed_archive,owner_observer=owner_observer,
                 search_observer=search_observer or colleague,
                 _can_update=not colleague and action_capabilities.get('update',False),_policy=policy)
+            if owner_observer:
+                # The owner dashboard deliberately retains archive isolation;
+                # consult group state only to suppress legacy takeover, never
+                # hydrate a colleague's sender routes or grant action rights.
+                import tenant_dialog_group_work as group_work
+                protected_group=group_work.snapshot(cur,tenant,conversation,**group_work.source_selection(group_modes))
+                if protected_group:
+                    group_work.decorate(dialog,actor,protected_group,workflow,source=group_mode,
+                        admission=False,can_update=False,online=False)
             if group_dialog:
                 from tenant_dialog_presence import is_online
                 group_work.decorate(dialog,actor,group_dialog,workflow,source=group_mode,

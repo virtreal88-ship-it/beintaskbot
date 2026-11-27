@@ -661,7 +661,8 @@ def _transition_controls(cur, tenant, actor, channel, conversation, lead, curren
         controls['can_submit_case'] = bool(closed_episode and not closed_episode['case_id'])
     if group:
         from tenant_dialog_group_work import decorate as decorate_group
-        decorate_group(view,actor,group,current,source={'enabled':True,'active':active},
+        from tenant_whatsapp_native_rollout import modes
+        decorate_group(view,actor,group,current,source=modes(cur,tenant).get(channel,{}),
             admission=rollout.admission_enabled,can_update=True,online=True)
     group_revision = view.get('group_work_revision')
     return {'lifecycle':controls,'can_send':view['can_send'],
@@ -821,18 +822,25 @@ def _mutate_once(profile, payload):
             promoted=None
             row=_row(cur,tenant,channel,conversation)
             if (int(row['revision']) if row else 0)!=revision: raise TenantLinearError('Диалог уже изменился. Обновите его.',409)
-            group=group_work.snapshot(cur,tenant,conversation)
+            from tenant_ai_group_coordination import group_jid
+            selection = {}
+            if group_jid(conversation) and action in {'accept','start','takeover'}:
+                from tenant_whatsapp_native_rollout import modes
+                mode = modes(cur,tenant,conversation=conversation)
+                if group_work.source_available(mode.get(channel,{})):
+                    if not group_work.ready(cur):
+                        raise TenantLinearError('Совместная работа в группе ещё недоступна.',409)
+                    selection = group_work.source_selection(mode)
+            group=group_work.snapshot(cur,tenant,conversation,**selection)
             shared=group_work.active(group)
-            configured_group=group_work.configured(tenant,conversation)
-            if configured_group and group and group['legacy_active'] and action in {'accept','start'}:
+            configured_group=bool(group and group['configured'])
+            if configured_group and group['legacy_active'] and action in {'accept','start','takeover'}:
                 raise TenantLinearError('Сначала завершите ранее принятые диалоги этой группы.',409)
             managed=bool(configured_group and not (group or {}).get('legacy_active'))
             grouped=shared or managed and action in {'accept','start'}
             if grouped or action in group_work.MEMBER_ACTIONS:
                 if not exact_route:
                     raise TenantLinearError('Выберите точный источник группы.',409)
-                if managed and not group:
-                    raise TenantLinearError('Совместная работа в группе ещё недоступна.',409)
             if shared and action in {'accept','start','takeover','transfer'}:
                 raise TenantLinearError('Группу уже ведёт сотрудник. Обновите диалог и подключитесь со своего номера.',409)
             if shared and action=='close':
@@ -941,7 +949,7 @@ def _mutate_once(profile, payload):
                 result['group_changed']=True
                 if action in {'accept','start'}:
                     result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
-                        current,rollout,policy,None,group=group_work.snapshot(cur,tenant,conversation))
+                        current,rollout,policy,None,group=group_work.snapshot(cur,tenant,conversation,**selection))
             elif (action=='accept' and exact_route) or individual_close:
                 result['controls']=_transition_controls(cur,tenant,actor,channel,conversation,route['lead_id'],
                                                         current,rollout,policy,closed_episode)
