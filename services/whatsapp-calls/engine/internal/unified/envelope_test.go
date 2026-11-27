@@ -15,6 +15,38 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestWhatsAppSharedContentEnvelope(t *testing.T) {
+	jid := types.NewJID("15550000002", types.DefaultUserServer)
+	event := &events.Message{Info: types.MessageInfo{MessageSource: types.MessageSource{Chat: jid, Sender: jid}, ID: "SHARED_MESSAGE_1"}}
+	card := &waE2E.ContactMessage{Vcard: proto.String("BEGIN:VCARD\r\nFN:Synthetic\r\nTEL;type=CELL;waid=15550000003:+1 (555)\r\n 000-0003\r\nEMAIL:anonymous@example.invalid\r\nEND:VCARD"),
+		ContextInfo: &waE2E.ContextInfo{StanzaID: proto.String("ORIGINAL_MESSAGE")}}
+	event.Message = &waE2E.Message{ContactMessage: card}
+	id, got, retained, err := MessageEnvelope(event)
+	if err != nil || !retained || id == "" || got.MessageType != "contact" || got.QuoteID != "ORIGINAL_MESSAGE" ||
+		len(got.Contacts) != 1 || got.Contacts[0].Name != "Synthetic" || len(got.Contacts[0].Phones) != 1 ||
+		got.Contacts[0].Phones[0] != "+15550000003" || got.MediaKind != "" || got.Text != "" {
+		t.Fatal("single contact lost its display facts")
+	}
+	event.Message = &waE2E.Message{ContactsArrayMessage: &waE2E.ContactsArrayMessage{Contacts: []*waE2E.ContactMessage{
+		card, {DisplayName: proto.String("Second")},
+	}}}
+	_, got, _, _ = MessageEnvelope(event)
+	if got.MessageType != "contact" || len(got.Contacts) != 2 || got.Contacts[1].Name != "Second" {
+		t.Fatal("contact list lost an entry")
+	}
+	for _, msg := range []*waE2E.Message{
+		{LocationMessage: &waE2E.LocationMessage{DegreesLatitude: proto.Float64(0), DegreesLongitude: proto.Float64(-48.3), Name: proto.String("Point")}},
+		{LiveLocationMessage: &waE2E.LiveLocationMessage{DegreesLatitude: proto.Float64(0), DegreesLongitude: proto.Float64(-48.3), Caption: proto.String("Point")}},
+	} {
+		event.Message = msg
+		_, got, _, _ = MessageEnvelope(event)
+		if got.MessageType != "location" || got.Location == nil || got.Location.Latitude != 0 ||
+			got.Location.Longitude != -48.3 || got.Location.Name != "Point" || got.MediaKind != "" {
+			t.Fatal("location lost its coordinates")
+		}
+	}
+}
+
 func TestGroupSenderKeyAndContentWithSameProviderID(t *testing.T) {
 	for _, reverse := range []bool{false, true} {
 		for _, fast := range []bool{false, true} {

@@ -45,6 +45,8 @@ type Envelope struct {
 	ReactionParticipantAlt string          `json:"reaction_participant_alt,omitempty"`
 	Edit                   *MessageEdit    `json:"edit,omitempty"`
 	Revoke                 *MessageRevoke  `json:"revoke,omitempty"`
+	Contacts               []SharedContact `json:"contacts,omitempty"`
+	Location               *SharedLocation `json:"location,omitempty"`
 }
 
 // MessageEdit and MessageRevoke contain only the exact target identity. The
@@ -104,6 +106,22 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 	case event.Message.GetStickerMessage() != nil:
 		m := event.Message.GetStickerMessage()
 		context, out.MessageType = m.GetContextInfo(), "sticker"
+	case event.Message.GetContactMessage() != nil:
+		m := event.Message.GetContactMessage()
+		context, out.MessageType = m.GetContextInfo(), "contact"
+		out.Contacts = sharedContacts([]*waE2E.ContactMessage{m})
+	case event.Message.GetContactsArrayMessage() != nil:
+		m := event.Message.GetContactsArrayMessage()
+		context, out.MessageType = m.GetContextInfo(), "contact"
+		out.Contacts = sharedContacts(m.GetContacts())
+	case event.Message.GetLocationMessage() != nil:
+		m := event.Message.GetLocationMessage()
+		context, out.MessageType = m.GetContextInfo(), "location"
+		out.Location = sharedLocation(m.DegreesLatitude, m.DegreesLongitude, m.GetName(), m.GetAddress())
+	case event.Message.GetLiveLocationMessage() != nil:
+		m := event.Message.GetLiveLocationMessage()
+		context, out.MessageType = m.GetContextInfo(), "location"
+		out.Location = sharedLocation(m.DegreesLatitude, m.DegreesLongitude, m.GetCaption(), "")
 	}
 	if context != nil {
 		out.QuoteID, out.QuoteChat, out.QuoteSender = context.GetStanzaID(), context.GetRemoteJID(), context.GetParticipant()
@@ -121,6 +139,7 @@ func MessageEnvelope(event *events.Message) (identity string, out Envelope, reta
 		variant = hex.EncodeToString(hash[:])
 		// Do not project an edit/reaction/protocol payload as a fresh user turn.
 		out.Variant, out.MessageType = "control", "unsupported"
+		out.Contacts, out.Location = nil, nil
 	}
 	if out.Variant == "control" {
 		observeMessageControl(event, &out)
