@@ -24,16 +24,24 @@ const wait = async predicate => {
     widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
   assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
-  const calls=[];let outcome='unknown';
+  const calls=[];let outcome='unknown',denyClosedHistory=false;
   w.fetch=async(url,opt={})=>{
     url=String(url);const data=opt.body&&JSON.parse(opt.body);
     calls.push({url,data});let result;
     if(url.endsWith('/me'))return {ok:true,json:async()=>profile};
     if(url.includes('dialogs_lifecycle')){
-      site.lifecycle={state:'accepted',operator_id:11,revision:2,can_close:true,can_dismiss:true,last_inbound_id:'2'};
-      site.can_add_internal_comment=true;site.send_block_reason='widget_socket_unavailable';
+      if(data.action==='close'){
+        site.lifecycle={state:'closed',operator_id:11,revision:3,can_close:false,last_inbound_id:'2'};
+        Object.assign(site,{can_add_internal_comment:false,can_send:false,archive_read_only:true});
+      }else{
+        site.lifecycle={state:'accepted',operator_id:11,revision:2,can_close:true,can_dismiss:true,last_inbound_id:'2'};
+        site.can_add_internal_comment=true;site.send_block_reason='widget_socket_unavailable';
+      }
       result={lifecycle:site.lifecycle};
-    }else if(url.includes('dialogs/history'))result={dialog:{...site},messages:[{id:'2',body:'test',direction:'incoming'}]};
+    }else if(url.includes('dialogs/history')){
+      if(denyClosedHistory&&site.lifecycle.state==='closed')return {ok:false,status:403,json:async()=>({error:'Only assigned active dialogues are visible'})};
+      result={dialog:{...site},messages:[{id:'2',body:'test',direction:'incoming'}]};
+    }
     else if(url.includes('dialogs?'))result={dialogs:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:1};
     else if(url.includes('dialogs/read'))result={updated:true};
     else if(url.includes('dialogs/internal-comments'))result={comment:{id:'n',note:data.note,at:new Date().toISOString(),employee_name:'Tester'}};
@@ -48,6 +56,8 @@ const wait = async predicate => {
   const selected=()=>d.querySelector('.dialog-source-tabs [aria-pressed=true]');
   assert.deepEqual([...d.querySelectorAll('.dialog-source-tabs button')].map(b=>b.textContent),['Чат','WhatsApp','Комментарий']);
   assert.equal(selected().textContent,'Чат');
+  const closeControl=()=>d.querySelector('[data-operator-lifecycle=close]');
+  assert(!closeControl(),'waiting dialogue cannot be completed');
   d.querySelector('[data-operator-lifecycle=accept]').click();
   await wait(()=>d.querySelector('.dialog-source-tabs button:last-child')?.disabled===false);
   assert.equal(selected().textContent,'Чат');
@@ -63,6 +73,9 @@ const wait = async predicate => {
   assert(d.getElementById('operatorSendReason').textContent.includes('Нет соединения'));
   assert.equal(d.getElementById('chatText').disabled,false);
   d.querySelector('.dialog-source-tabs button:last-child').click();
+  assert.equal(closeControl().getAttribute('aria-label'),'Завершить диалог');
+  assert(closeControl().closest('#operatorConversationHeader'),'close must remain available when the note tab hides the composer');
+  assert(!closeControl().closest('.dialog-channel-muted,[hidden]'));
   const assertNoteEditor = root => {
     const field=root.querySelector('.dialog-note-composer textarea');
     const send=root.querySelector('.dialog-note-composer button[type=submit]');
@@ -96,7 +109,22 @@ const wait = async predicate => {
   const reply=calls.filter(c=>c.url.endsWith('/operator/widget')).at(-1).data;
   assert.deepEqual([reply.chat_id,reply.text,reply.revision,reply.action],['15','test reply',site.widget_revision,'reply']);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
-  Object.assign(site,{provider:'connect',channel_id:'wa',conversation_id:'994123456789@s.whatsapp.net',
+  denyClosedHistory=true;
+  const cutoff=calls.length;
+  closeControl().click();
+  await wait(()=>d.getElementById('operatorNotice').textContent==='Диалог завершён');
+  assert(!w.tenantOperator.currentDialog);
+  assert(!closeControl());
+  const afterClose=calls.slice(cutoff);
+  assert.deepEqual(afterClose.filter(c=>c.url.includes('dialogs_lifecycle')).map(c=>[
+    c.data.action,c.data.provider,c.data.channel_id,c.data.conversation_id,c.data.lead_id,c.data.expected_revision
+  ]),[['close','operator_widget','instance','verified-route',15,2]]);
+  assert(!afterClose.some(c=>c.url.includes('dialogs/history')||c.url.endsWith('/operator/widget')),
+    'completion neither reloads inaccessible history nor sends a provider message');
+  denyClosedHistory=false;
+  await w.tenantOperator.openDialog(site);
+  assert(!closeControl(),'archive has no close control');
+  Object.assign(site,{provider:'connect',archive_read_only:false,channel_id:'wa',conversation_id:'994123456789@s.whatsapp.net',
     lead_id:29,can_send:false,can_add_internal_comment:false,send_block_reason:'dialog_accept_required',
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'5',can_accept:true}});
   await w.tenantOperator.openDialog(site);
