@@ -392,6 +392,39 @@ def test_active_filter_keeps_accepted_without_inbound_and_does_not_write(active)
     assert before=={table:active.execute('SELECT count(*) AS n FROM '+table)[0]['n'] for table in tables}
 
 
+def test_active_keeps_confirmed_missed_call_until_operator_accepts(active):
+    active.execute("DELETE FROM saas_crm_messages WHERE tenant_id=%s::uuid AND channel=%s AND kommo_lead_id=41", (A,'connect:'+CA))
+    active.commit()
+    message(active,929,direction='outgoing')
+    missed=message(active,930,direction='system',message_type='call_missed')
+    add_rows(active,2)
+    message(active,931,lead=1001,direction='system',message_type='call_observed')
+    message(active,932,lead=1002,direction='system',message_type='call_invalidated')
+    listing=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    assert [row['lead_id'] for row in listing['dialogs']]==[41]
+    assert listing['total_count']==1
+    assert listing['dialogs'][0]['missed_call_pending'] is True
+
+    # Opening and reading the call does not accept the dialogue.
+    page=dialogs.history(PROFILE,'connect',41,CA,'client')
+    assert page['read_through_message_id']==missed
+    dialogs.mark_read(PROFILE,dict(provider='connect',lead_id=41,channel_id=CA,
+        conversation_id='client',message_id=missed))
+    listing=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    assert listing['dialogs'][0]['missed_call_pending'] is True
+
+    # Unlike the attention queue, bulk completion only works with text
+    # inbound tokens; a missed call is not a rhetorical question.
+    preview=dialogs.listing(PROFILE,lifecycle='active',completion_preview=True,
+        all_rows=True,channel='connect:'+CA)
+    assert next(row for row in preview['dialogs'] if row['lead_id']==41)['lifecycle']['bulk_waiting'] is False
+    lifecycle.mutate(PROFILE,dict(provider='connect',channel_id=CA,conversation_id='client',lead_id=41,
+        action='accept',expected_revision=0,request_id=str(uuid.uuid4())))
+    listing=dialogs.listing(PROFILE,lifecycle='active',channel='connect:'+CA)
+    assert listing['dialogs'][0]['lifecycle']['state']=='accepted'
+    assert listing['dialogs'][0]['missed_call_pending'] is False
+
+
 def test_active_excludes_empty_routes_before_count_and_pagination(active):
     message(active,92)
     add_rows(active,61)
