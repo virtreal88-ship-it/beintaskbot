@@ -181,6 +181,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/for-deal', operator_handler(member, origin, logger, 'deal_dialogs'), ('GET',)),
         ('dialogs/deal-link', operator_handler(member, origin, logger, 'deal_dialog_link'), ('POST',)),
         ('dialogs/deal-history', operator_handler(member, origin, logger, 'deal_dialog_history'), ('GET',)),
+        ('dialogs/deal-phone-candidates', operator_handler(member, origin, logger, 'deal_dialog_phone_candidates'), ('GET',)),
         ('dialogs/new', dialog_compose_handler(member, origin, context.crm_request, context.wait_slot, logger), ('GET','POST')),
         ('dialogs/company-panel/preferences', operator_handler(member, origin, logger, 'company_panel_preferences'), ('GET','POST')),
         ('dialogs/preferences', operator_handler(member, origin, logger, 'view_preferences'), ('GET','POST')),

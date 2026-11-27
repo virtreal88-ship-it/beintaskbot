@@ -16,6 +16,8 @@ def migrate(cur):
             deal_id TEXT NOT NULL,
             account_id TEXT NOT NULL,
             connection_generation TEXT NOT NULL,
+            kommo_phone_message_id UUID,
+            kommo_contact_id TEXT NOT NULL DEFAULT '',
             created_by BIGINT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
             PRIMARY KEY (tenant_id,id),
@@ -25,6 +27,8 @@ def migrate(cur):
             CHECK ((deal_source='native') = (account_id='' AND connection_generation=''))
         )
     """)
+    cur.execute("ALTER TABLE saas_crm_deal_dialog_links ADD COLUMN IF NOT EXISTS kommo_phone_message_id UUID")
+    cur.execute("ALTER TABLE saas_crm_deal_dialog_links ADD COLUMN IF NOT EXISTS kommo_contact_id TEXT NOT NULL DEFAULT ''")
     cur.execute("""
         CREATE INDEX IF NOT EXISTS saas_crm_deal_dialog_links_deal_idx
         ON saas_crm_deal_dialog_links (tenant_id,deal_source,deal_id,account_id,connection_generation)

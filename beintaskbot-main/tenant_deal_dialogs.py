@@ -79,5 +79,13 @@ def linked_dialogs(profile, source, deal_id):
                 dialogs.append(dict(row))
             attached = routes(cur, tenant, policy, source, deal_id, binding)
             attached_keys = {(row['provider'],row['channel_id'],row['conversation_id']) for row in attached}
-            return {'dialogs': [row for row in dialogs
-                                if (row['provider'],row['channel_id'],row['conversation_id']) not in attached_keys]+attached}
+            result = {'dialogs': [row for row in dialogs
+                                  if (row['provider'],row['channel_id'],row['conversation_id']) not in attached_keys]+attached}
+            if (source == 'kommo' and deal_links_enabled(tenant)
+                    and any(row['provider']=='kommo' and row['channel_name'].lower() in ('tiktok','tiktok_kommo')
+                            for row in dialogs)):
+                from tenant_deal_dialog_candidates import allowed_kommo
+                if (deal['status_id'] > 0 and deal['status_id'] not in (142,143) and allowed_kommo(policy, deal, update=True)
+                        and policy.allows_action('dialogs', 'update')):
+                    result['can_find_whatsapp'] = True
+            return result

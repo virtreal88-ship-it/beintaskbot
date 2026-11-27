@@ -64,6 +64,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/for-deal', ('GET',)),
     ('dialogs/deal-link', ('POST',)),
     ('dialogs/deal-history', ('GET',)),
+    ('dialogs/deal-phone-candidates', ('GET',)),
     ('dialog-consultations/developer-marker', ('POST',)),
     ('dialog-consultations/destinations', ('GET',)),
     ('dialog-consultations/preview', ('POST',)),

@@ -17,10 +17,11 @@ const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace
       fs.readFileSync(path.join(docs, file), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '';
   });
 
-function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot}) {
+function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot, phoneInChat}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
   const channel = '10000000-0000-4000-8000-000000000301';
-  const route = {provider:'connect', channel_id:channel, conversation_id:'15550101010@s.whatsapp.net',
+  const route = {provider:'connect', channel_id:channel,
+    conversation_id:phoneInChat?'994555000103@s.whatsapp.net':'15550101010@s.whatsapp.net',
     lead_id:77, can_send:true, last_message_at:'2026-11-25T16:00:00Z'};
   const whatsapp = {...route,customer_kind:'contact',channel_name:'Test · …101',customer_name:'Test buyer'};
   const tiktokRoute = {provider:'kommo',lead_id:7,channel_id:'TikTok',conversation_id:'',channel_name:'TikTok'};
@@ -32,6 +33,7 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     responsible_name:'Айдан Алиева', description:'Подключить кассовый модуль для новой точки в Баку и согласовать время настройки.',
     pipeline_name:'Подключение', stage_name:'В работе', price:320};
   const kommo = {...detail, responsible_id:99, responsible_name:'',kommo_lead_id:7, pipeline_id:1, status_id:2};
+  if(phoneInChat)Object.assign(kommo,{contact_phone:'',phone:''});
   if(longDetails)Object.assign(kommo,{contact_name:'',contact_phone:'',phone:'',company_name:'',
     detail_fields:Array.from({length:26},(_,i)=>({label:'Custom field '+i,value:'Value '+i}))});
   const local = {...detail, id:f.deal, pipeline_id:'1', stage_id:'2', actions:{view:true,update:!limited},
@@ -94,11 +96,17 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/deal-board-preferences')return json({catalog:[]});
     if(p==='/api/platform/ai/dialogs/deal-link'&&pilot){
       const data=JSON.parse(options.body);
-      if(method!=='POST'||data.deal_id!=='7'||data.context_id!=='first-message'||!data.suggested)
+      if(method!=='POST'||data.deal_id!=='7'||data.context_id!=='first-message'||
+        (phoneInChat?data.suggested||data.phone_message_id!=='number-message':!data.suggested))
         return json({},400);
       dealProof.linked=true;
       sessionStorage.setItem('fixture-deal-dialog-link','saved');
       return json({result:{linked:true,link_id:'test-link'}});
+    }
+    if(p==='/api/platform/ai/dialogs/deal-phone-candidates'&&phoneInChat){
+      if(url.searchParams.get('message_id')!=='number-message'||url.searchParams.get('deal_id')!=='7')
+        return json({error:'Unavailable'},404);
+      return json({result:{candidates:dealProof.phoneReady?[{...whatsapp,context_id:'first-message'}]:[]}});
     }
     if(p==='/api/platform/ai/dialogs/deal-history'&&pilot){
       if(dealProof.denied||url.searchParams.get('link_id')!=='test-link'||url.searchParams.get('deal_id')!=='7')
@@ -107,7 +115,8 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     }
     if(p==='/api/platform/ai/dialogs/for-deal'){
       if(linking==='denied')return json({error:'Forbidden'},403);
-      if(pilot)return json({result:{dialogs:[tiktokRoute,...(dealProof.linked?[{...whatsapp,deal_link_id:'test-link'}]:[])]}});
+      if(pilot)return json({result:{dialogs:[tiktokRoute,...(dealProof.linked?[{...whatsapp,deal_link_id:'test-link'}]:[])],
+        can_find_whatsapp:phoneInChat===true}});
       const selected={...route,provider:native?'connect':'kommo',lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник'};
       return json({result:{dialogs:['linked','empty'].includes(linking)?[selected]:[]}});
     }
@@ -116,7 +125,10 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
         if(url.searchParams.get('provider')==='kommo')return json({result:{dialog:{...tiktokRoute,
           customer_kind:'contact',customer_name:'Test buyer',can_send:false,available_actions:[]},
           messages:[{id:'test-tiktok',direction:'incoming',source:'kommo',message_type:'text',
-            body:'TikTok test enquiry',created_at:'2026-11-25T16:00:00Z'}],next_before:null}});
+            body:'TikTok test enquiry',channel:'tiktok_kommo',created_at:'2026-11-25T16:00:00Z'},
+            ...(phoneInChat?[{id:'number-message',direction:'incoming',source:'kommo',message_type:'text',
+              body:'055 500 01 03',channel:'tiktok_kommo',created_at:'2026-11-25T16:05:00Z'}]:[])],
+          next_before:null}});
         const proposal=dealProof.linked?{linked:true}:{suggested:true,context_id:'first-message',
           deals:[{source:'kommo',id:'7',title:'Test TikTok sale'}]};
         return json({result:{dialog:{...whatsapp,channel_active:true,available_actions:[],deal_proposal:proposal},
@@ -193,6 +205,31 @@ async function checkMultichannelPilot(browser,width) {
   await modal.getByRole('button',{name:'WhatsApp · Test · …101',exact:true}).click();
   await modal.getByText('К сделке не привязан доступный диалог.',{exact:true}).filter({visible:true}).waitFor();
   assert.equal(await modal.getByText('First WhatsApp reply from the phone',{exact:true}).count(),0);
+  assert.deepEqual(errors,[]);
+  await page.close();
+}
+
+async function checkNumberInTikTokMessage(browser) {
+  const page=await browser.newPage({viewport:{width:1300,height:900}}),errors=[];
+  page.setDefaultTimeout(7000);
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.addInitScript(installFixture,{});
+  await page.addInitScript(installDealResponses,{native:false,linking:'linked',pilot:true,phoneInChat:true});
+  await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
+  await page.goto('https://fixture.test/app?view=deals&lang=ru');
+  const modal=await open(page,false);
+  await modal.getByRole('tab',{name:'Диалог',exact:true}).click();
+  const lookup=modal.getByRole('button',{name:'Найти WhatsApp',exact:true});
+  await lookup.click();
+  await modal.getByText('По этому номеру пока нет доступного WhatsApp-диалога.',{exact:true}).waitFor();
+  await page.evaluate(()=>{dealProof.phoneReady=true;});
+  await lookup.click();
+  await modal.getByRole('button',{name:'Привязать WhatsApp · Test · …101',exact:true}).click();
+  await modal.getByText('First WhatsApp reply from the phone',{exact:true}).waitFor();
+  assert.equal(await modal.getByText('055 500 01 03',{exact:true}).count(),0);
+  const requests=await page.evaluate(()=>dealProof.requests.filter(r=>r.method==='POST'&&r.p.includes('deal')));
+  assert.deepEqual(requests.map(r=>[r.p,r.body.phone_message_id]),
+    [['/api/platform/ai/dialogs/deal-link','number-message']]);
   assert.deepEqual(errors,[]);
   await page.close();
 }
@@ -387,6 +424,7 @@ async function checkMultichannelPilot(browser,width) {
       await page.close();
     }
     for(const width of [1440,390])await checkMultichannelPilot(browser,width);
+    await checkNumberInTikTokMessage(browser);
     console.log('PASS deal card: Chromium native + Kommo, scoped WhatsApp linkage, responsive layout, stage/edit, lazy related data, authorised and missing routes');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

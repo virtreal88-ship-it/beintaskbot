@@ -2461,7 +2461,14 @@
     const content=deleted?`<div class="operator-message-deleted" data-message-deleted>${esc(deletedLabel)}</div>`:missed?`<div ${observed?'data-observed-call':invalidated?'data-invalidated-call':rejected?'data-rejected-call':'data-missed-call'}>${esc(observed?observedCallLabel(m.call_is_video===true):invalidated?invalidatedCallLabel(m.call_is_video===true):rejected?rejectedCallLabel(m.call_is_video===true):missedCallLabel(m.call_is_video===true))}</div>`:shared?sharedMessageMarkup(m):media?`${caption&&!m.has_transcription?`<div class="operator-message-caption" data-user-content>${esc(caption)}</div>`:''}<div class="operator-media-card" ${directAudio?'data-native-audio="true" data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"':'data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"'} data-message-row-id="${esc(m.id||'')}" data-media-filename="${esc(m.media_filename||m.file_name||'')}" data-media-version="${esc(m.media_version||'')}" data-media-duration="${esc(m.duration_seconds||'')}">${directAudio?`<div class="operator-audio-heading"><span data-media-title>${esc(label)}${Number.isFinite(Number(m.duration_seconds))&&Number(m.duration_seconds)>0?` <span class="operator-audio-duration">· ${esc(duration(m.duration_seconds))}</span>`:``}</span><span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span></div><div class="operator-audio-controls" aria-disabled="true" inert><audio class="operator-native-audio" controls preload="none" tabindex="-1" aria-label="${esc(label)}"></audio></div><button type="button" data-media-open hidden>${esc(t('loadAttachment'))}</button>${audioActions}`:`<span data-media-title>${esc(label)}</span><button type="button" class="outline" data-media-open ${video?'hidden':m.message_type==='image'?`data-photo-preview aria-label="${esc(photoLoadLabel())}"`:``}>${m.message_type==='image'?photoPreviewMarkup(m):esc(mediaAction(m))}</button>${mediaActions}`}<span data-media-load-status role="status" aria-live="polite"></span>${directAudio||m.message_type==='image'?`<details class="${directAudio?'operator-audio-analysis':'operator-photo-analysis'}"><summary>${esc(({ru:'AI-анализ',az:'AI təhlili',en:'AI analysis'})[i18n.language]||'AI analysis')}</summary><span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span></details>`:`<span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span>`}${directAudio?'':`<span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span>`}</div>`:`<div data-user-content>${esc(m.body||t('attachment'))}</div>`;
     const actionLabels=globalThis.window?.tenantWhatsAppMessageActions;
     const actionStatus=deleted?`<span class="operator-message-deleted-status">${esc(actionLabels?.t('messageDeleted')||deletedLabel)}</span>`:m.wa_edited?`<span class="operator-message-edited-status">${esc(actionLabels?.t('edited')||'Edited')}</span>`:'';
-    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${transcript}${reactionMarkup(m)}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${actionStatus}${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
+    const number=String(m.body||'').trim();
+    const phoneLookup=!readOnly&&embeddedConversation?.onPhoneLookup&&route?.provider==='kommo'
+      &&['tiktok','tiktok_kommo'].includes(String(m.channel||'').toLowerCase())
+      &&m.direction==='incoming'&&m.message_type==='text'&&!deleted&&m.id
+      &&number.length<=80&&/^\+?[0-9 ()-]+$/.test(number)&&number.replace(/\D/g,'').length>=9;
+    const lookupLabel=({ru:'Найти WhatsApp',az:'WhatsApp söhbətini tap',en:'Find WhatsApp chat'})[i18n.language];
+    const phoneAction=phoneLookup?`<button type="button" class="outline" data-deal-phone-message="${esc(m.id)}">${esc(lookupLabel)}</button>`:'';
+    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${phoneAction}${transcript}${reactionMarkup(m)}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${actionStatus}${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
   }).join('');}
 
   // The case history uses the same presentation without activating a composer or dialogue side effects.
@@ -2563,14 +2570,14 @@
   function parkConversation(){
     if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);
   }
-  function mountConversation(host,route,{snapshot=null,onAccessLost=()=>{}}={}){
+  function mountConversation(host,route,{snapshot=null,onAccessLost=()=>{},onPhoneLookup=null}={}){
     if(embeddedConversation||!hasRight('dialogs'))return null;
     install();
     const pane=$('operatorConversationPane'),origin=pane?.parentElement;
     if(!origin)return null;
     const previousSelection=selectedDialog,previousOwner=selectedDialogOwner;
     parkConversation();
-    const session={host,controller:new AbortController(),snapshot,onAccessLost,refreshing:null};
+    const session={host,controller:new AbortController(),snapshot,onAccessLost,onPhoneLookup,refreshing:null};
     embeddedConversation=session;
     host.append(pane);
     return {
@@ -3801,6 +3808,11 @@
       finally{delete menu.dataset.posting;if(!audioScopeCurrent())menu._audioReconcile?.();}
     }
     chatRowsHost.addEventListener('toggle',event=>{const menu=event.target;if(!menu.matches?.('[data-audio-transcription-menu]'))return;if(menu.open)void loadAudioTranscriptionMenu(menu);else menu.dataset.loaded='false';},true);
+    chatRowsHost.addEventListener('click',event=>{
+      const button=event.target.closest('[data-deal-phone-message]');
+      if(!button||!same()||!chatRowsHost.contains(button))return;
+      embeddedConversation?.onPhoneLookup?.(button.dataset.dealPhoneMessage);
+    });
     chatRowsHost.addEventListener('click',event=>{const action=event.target.closest('[data-audio-transcription-action]');if(action){event.preventDefault();const menu=action.closest('[data-audio-transcription-menu]'),message=page.messages.find(item=>String(item.id)===menu?.dataset.messageRowId&&String(item.external_id)===menu?.dataset.messageId);if(menu&&message)void runAudioTranscription(menu,message,action.dataset.audioTranscriptionAction);}});
     const reactionInFlight=new Set();
     const reactionStorageKey=message=>contextKey('reaction:'+message.id,route);

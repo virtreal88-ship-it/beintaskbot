@@ -11,12 +11,21 @@
       az:{full:'Söhbətin tam tarixçəsini aç',scoped:'Sövdələşmənin yazışmasına qayıt',earlier:'Əvvəlki mesajlar',empty:'Bu sövdələşmədə hələ mesaj yoxdur.'},
       en:{full:'Open full conversation history',scoped:'Back to deal messages',earlier:'Earlier messages',empty:'This deal has no messages from this conversation yet.'}
     })[window.tenantI18n?.language||'az'];
+    const whatsappCopy=({
+      ru:{loading:'Ищем WhatsApp-диалог…',empty:'По этому номеру пока нет доступного WhatsApp-диалога.',
+        attach:'Привязать WhatsApp',error:'Не удалось проверить WhatsApp-диалог. Повторите поиск.',close:'Закрыть поиск'},
+      az:{loading:'WhatsApp dialoqu axtarılır…',empty:'Bu nömrə üçün əlçatan WhatsApp dialoqu hələ yoxdur.',
+        attach:'WhatsApp dialoqunu bağla',error:'WhatsApp dialoqu yoxlanmadı. Yenidən axtarın.',close:'Axtarışı bağla'},
+      en:{loading:'Finding the WhatsApp chat…',empty:'There is no accessible WhatsApp chat for this number yet.',
+        attach:'Link WhatsApp chat',error:'Could not verify the WhatsApp chat. Search again.',close:'Close search'}
+    })[window.tenantI18n?.language||'az'];
     const tools=document.createElement('div'),body=document.createElement('div');
     tools.className='deal-linked-dialog-tools';
     body.className='deal-linked-dialog-body';
     panel.append(tools,body);
     const slot=document.createComment('deal chat position');
     let active=false,disposed=false,resumeNeeded=false,request,conversation,routes,selection,historyRequest;
+    let phoneRequest,canFindWhatsApp=false;
     const snapshots=new Map();
     const visible=()=>active&&!disposed&&current()&&panel.isConnected&&!panel.hidden;
     const button=(label,callback)=>{
@@ -34,6 +43,8 @@
     function stopConversation(keep=true){
       historyRequest?.abort();
       historyRequest=null;
+      phoneRequest?.abort();
+      phoneRequest=null;
       if(conversation){
         const snapshot=conversation.release();
         if(keep&&snapshot&&selection)snapshots.set(selection,snapshot);
@@ -41,6 +52,60 @@
       }
       if(slot.parentNode)slot.replaceWith(chat);
       body.replaceChildren();
+    }
+    async function findWhatsApp(route,messageId){
+      if(!visible()||selection!==route)return;
+      phoneRequest?.abort();
+      const controller=new AbortController();
+      phoneRequest=controller;
+      const currentPhone=()=>visible()&&selection===route&&!controller.signal.aborted;
+      const status=document.createElement('span');
+      status.setAttribute('role','status');
+      status.textContent=whatsappCopy.loading;
+      const dismiss=button(whatsappCopy.close,()=>{
+        controller.abort();
+        tools.replaceChildren();
+        if(routes.length>1)tools.append(button(c.back,choose));
+      });
+      tools.replaceChildren(status,dismiss);
+      const query=new URLSearchParams({deal_id:id,message_id:messageId,
+        expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+      try{
+        const payload=await api('/api/platform/ai/dialogs/deal-phone-candidates?'+query,{signal:controller.signal});
+        if(!currentPhone())return;
+        const candidates=payload.result?.candidates||[];
+        status.textContent=candidates.length?'':whatsappCopy.empty;
+        const actions=candidates.map(candidate=>button(
+          [whatsappCopy.attach,candidate.channel_name].filter(Boolean).join(' · '),async()=>{
+            if(!currentPhone())return;
+            for(const action of actions)action.disabled=true;
+            dismiss.disabled=true;
+            try{
+              const result=await api('/api/platform/ai/dialogs/deal-link',{
+                method:'POST',signal:controller.signal,body:JSON.stringify({
+                  channel_id:candidate.channel_id,conversation_id:candidate.conversation_id,
+                  lead_id:Number(candidate.lead_id),context_id:candidate.context_id,
+                  deal_source:source,deal_id:String(id),suggested:false,phone_message_id:messageId,
+                  expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id
+                })
+              });
+              if(!currentPhone())return;
+              if(!result.result?.link_id)throw Error(whatsappCopy.error);
+              stopConversation();
+              selection=null;
+              routes=null;
+              void resolve(result.result.link_id);
+            }catch(error){
+              if(!currentPhone())return;
+              status.textContent=whatsappCopy.error;
+              for(const action of actions)action.disabled=false;
+              dismiss.disabled=false;
+            }
+          }));
+        tools.append(...actions);
+      }catch(error){
+        if(currentPhone())status.textContent=whatsappCopy.error;
+      }
     }
     function choose(){
       stopConversation();
@@ -111,7 +176,9 @@
       resumeNeeded=true;
       const cached=snapshots.get(route);
       conversation=window.tenantOperator?.mountConversation(body,cached?.dialog||route,{
-        snapshot:cached,onAccessLost:error=>{
+        snapshot:cached,
+        onPhoneLookup:canFindWhatsApp&&route.provider==='kommo'?messageId=>findWhatsApp(route,messageId):null,
+        onAccessLost:error=>{
           snapshots.delete(route);
           stopConversation(false);
           routes=null;
@@ -125,7 +192,7 @@
         tools.append(button(c.retry,()=>{stopConversation(false);void show(route,full);}));
       }
     }
-    async function resolve(){
+    async function resolve(preferredLink=null){
       if(!visible()||request)return;
       if(!member||!window.tenantOperator?.hasRight('dialogs')){message(c.empty);return;}
       const controller=new AbortController();
@@ -136,7 +203,10 @@
         const response=await api('/api/platform/ai/dialogs/for-deal?'+query,{signal:controller.signal});
         if(!visible()||controller.signal.aborted)return;
         routes=response.result?.dialogs||[];
-        if(routes.length===1)void show(routes[0]);
+        canFindWhatsApp=response.result?.can_find_whatsapp===true;
+        const selected=typeof preferredLink==='string'&&routes.find(route=>route.deal_link_id===preferredLink);
+        if(selected)void show(selected);
+        else if(routes.length===1)void show(routes[0]);
         else if(routes.length)choose();
         else message(c.empty);
       }catch(error){

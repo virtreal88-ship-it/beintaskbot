@@ -292,3 +292,45 @@ def test_one_click_uses_the_exact_accepted_episode_without_kommo(sale, monkeypat
     saved = links.attach(PROFILE,command(present,deal_source='native',deal_id=native))
     assert tenant_deal_dialogs.linked_dialogs(PROFILE,'native',native)['dialogs'][0]['deal_link_id'] == saved['link_id']
     assert [m['body'] for m in links.history(PROFILE,'native',native,saved['link_id'])['messages']] == ['In this episode']
+
+
+def test_phone_from_tiktok_message_can_find_and_link_an_exact_whatsapp_chat(sale):
+    db, reference = sale
+    number_message = str(uuid.uuid4())
+    other_message = str(uuid.uuid4())
+    db.execute("DELETE FROM saas_crm_relation_identities WHERE tenant_id=%s", (A,))
+    db.execute("""
+        INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body,message_type)
+        VALUES(%s::uuid,%s::uuid,%s,'TIKTOK_NUMBER','tiktok_kommo','incoming','055 500 01 03','text'),
+              (%s::uuid,%s::uuid,%s,'TIKTOK_NUMBER_2','tiktok_kommo','outgoing','055 500 01 03','text')
+    """, (number_message,A,int(LEAD),other_message,A,int(LEAD)))
+    db.commit()
+    assert tenant_deal_dialogs.linked_dialogs(PROFILE, 'kommo', LEAD)['can_find_whatsapp'] is True
+    assert links.phone_candidates(PROFILE, LEAD, number_message) == {'candidates':[]}
+    with pytest.raises(TenantLinearError) as outside:
+        links.phone_candidates(PROFILE, LEAD, other_message)
+    assert outside.value.status == 404
+
+    peer = '994555000103@s.whatsapp.net'
+    consume(phone_event(reference, chat=peer, alternate=''))
+    candidates = links.phone_candidates(PROFILE, LEAD, number_message)['candidates']
+    assert len(candidates) == 1 and candidates[0]['conversation_id'] == peer
+    request = {key:value for key,value in candidates[0].items() if key!='channel_name'}
+    request.update(deal_source='kommo',deal_id=LEAD,phone_message_id=number_message,suggested=False)
+    kommo_deal(db, lead='918', contact=313)
+    with pytest.raises(TenantLinearError) as other_deal:
+        links.attach(PROFILE, {**request, 'deal_id':'918'})
+    assert other_deal.value.status == 404
+    saved = asyncio.run(attach_from_browser(request))
+    assert links.attach(PROFILE, request) == saved
+    assert [m['body'] for m in links.history(PROFILE, 'kommo', LEAD, saved['link_id'])['messages']] == [TEXT]
+    assert db.execute("""
+        SELECT phone, raw#>'{_embedded,contacts}' AS contacts FROM saas_crm_deals
+        WHERE tenant_id=%s AND kommo_lead_id=%s
+    """, (A,int(LEAD))) == [{'phone':'','contacts':[{'id':312,'is_main':True}]}]
+    assert not db.execute("SELECT internal_id FROM saas_crm_relation_identities WHERE tenant_id=%s", (A,))
+    assert db.execute("""
+        SELECT kommo_phone_message_id::text, kommo_contact_id FROM saas_crm_deal_dialog_links
+        WHERE tenant_id=%s
+    """, (A,)) == [{'kommo_phone_message_id':number_message,'kommo_contact_id':'312'}]
+    db.commit()

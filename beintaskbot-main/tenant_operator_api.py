@@ -103,6 +103,10 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     from tenant_deal_dialog_links import history as deal_history
                     result=await asyncio.to_thread(deal_history,profile,query.get('source'),
                         query.get('deal_id'),query.get('link_id'),query.get('before'))
+                elif resource=='deal_dialog_phone_candidates':
+                    _expected(query,profile)
+                    from tenant_deal_dialog_links import phone_candidates
+                    result=await asyncio.to_thread(phone_candidates,profile,query.get('deal_id'),query.get('message_id'))
                 elif resource=='contact_phone':
                     from tenant_contact_phone import get_phone
                     result=await get_phone(profile,dict(query))
