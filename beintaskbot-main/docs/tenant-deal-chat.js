@@ -7,7 +7,7 @@
     // Attach rejection immediately: the deal request can finish after this read.
     return api('/api/platform/crm/chat/history?'+query,{signal}).then(data=>({data}),error=>({error}));
   }
-  function mount({api,id,member,signal,isCurrent,line,first,box=$('chatRows'),refreshProvider=true}) {
+  function mount({api,id,member,signal,isCurrent,line,first,box=$('chatRows'),refreshProvider=true,onMessages}) {
     const scroller=box.closest('.deal-chat-history'),c=copy();
     const status=document.createElement('div');status.className='deal-chat-status';status.style.cssText='font-size:13px;color:var(--muted);white-space:normal;overflow-wrap:anywhere;display:flex;flex-wrap:wrap;gap:6px;align-items:center';status.setAttribute('role','status');box.before(status);
     let loaded=false,paging=false,flight=null,queued=null,refreshFlight=null,revision=0;
@@ -15,7 +15,7 @@
     const announce=(name,detail={})=>document.dispatchEvent(new CustomEvent(name,{detail:{lead_id:id,...detail}}));
     const notice=(message,action,label=c.retry)=>{status.replaceChildren(document.createTextNode(message));if(action){const button=document.createElement('button');button.type='button';button.className='outline';button.textContent=label;button.onclick=action;status.append(' ',button);}};
     const denied=error=>[401,403,404,409].includes(error.status);
-    function failure(error){if(!valid()||error.name==='AbortError')return;if(denied(error)){revision++;loaded=false;box.replaceChildren();announce('tenant-chat-history-reset');notice(error.message);document.querySelectorAll('#chatText,#sendChat,#tcComposerPrimary,#tcAiMenuToggle').forEach(n=>n.disabled=true);}else notice(loaded?c.stale:error.message,()=>load(true));}
+    function failure(error){if(!valid()||error.name==='AbortError')return;if(denied(error)){revision++;loaded=false;box.replaceChildren();onMessages?.([],true);announce('tenant-chat-history-reset');notice(error.message);document.querySelectorAll('#chatText,#sendChat,#tcComposerPrimary,#tcAiMenuToggle').forEach(n=>n.disabled=true);}else notice(loaded?c.stale:error.message,()=>load(true));}
     function apply(data,reset=false){
       if(!valid())return;
       const messages=data.messages||[],nodes=new Map([...box.querySelectorAll('[data-chat-id]')].map(n=>[n.dataset.chatId,n]));
@@ -24,6 +24,7 @@
       if(loaded&&!reset&&nodes.size&&messages.length&&data.next_cursor&&!messages.some(m=>nodes.has(String(m.external_id)))){
         notice(c.gap,()=>load(false,undefined,true),c.latest);return;
       }
+      onMessages?.(messages,reset);
       if(!loaded||reset||!nodes.size){
         announce('tenant-chat-history-reset');box.innerHTML=messages.map(line).join('');
         loaded=true;paging=!!data.next_cursor;announce('tenant-chat-loaded',{messages,next_cursor:data.next_cursor,render_message:line,reload_cache:()=>load(false)});

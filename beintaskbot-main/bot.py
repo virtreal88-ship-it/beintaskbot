@@ -18657,10 +18657,12 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
         platform_error=TenantPlatformError, pending_error=TaskCommandPending,
         logger=logger,
     ))
+    from tenant_kommo_deal_details import DealDetails
+    deal_details = DealDetails(_tenant_kommo_service.request_bound)
     deal_api = tenant_deal_handlers(DealApiContext(
         member=_tenant_member_from_request, policy=TenantPolicy,
         sync_crm=_sync_tenant_crm, sync_status=tenant_crm_sync_status,
-        list_deals=list_tenant_crm_deals, get_deal=get_tenant_crm_deal,
+        list_deals=list_tenant_crm_deals, get_deal=get_tenant_crm_deal, deal_details=deal_details.read,
         platform_error=TenantPlatformError, logger=logger,
     ))
     workflow_api = tenant_workflow_handlers(WorkflowApiContext(

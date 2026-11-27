@@ -17,14 +17,14 @@ const event=(state='synced',index=1)=>({event_id:'20000000-0000-4000-8000-'+Stri
     const before=await page.evaluate(()=>syncHistoryFixture.calls.length);
     await page.locator(`[data-native-open="${type}:${id}"]`).click();
     if(type==='deal'){
-     const tab=page.locator('[data-deal-tab=history]');
+     const tab=page.locator('[data-deal-tab=feed]');
      await tab.waitFor();
      assert.equal(await page.evaluate(()=>syncHistoryFixture.calls.length),before,'opening the deal does not eagerly fetch history');
      await tab.click();
     }
    };
    await open();await page.locator('[data-sync-history-event]').waitFor();const history=page.locator('[data-sync-history]');assert.match(await history.textContent(),/journal recorded completion/);assert.match(await history.textContent(),/current external state is not verified/);assert.equal(await page.locator('[data-native-card-edit]').isHidden(),true);
-   const bounds=await history.boundingBox();assert(bounds&&bounds.x>=0&&bounds.x+bounds.width<=width+1,'history fits viewport');assert.equal(await history.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'history does not overflow');await page.screenshot({path:'/tmp/crm-history-'+type+'-'+width+'.png'});
+   const bounds=await history.boundingBox();assert(bounds&&bounds.x>=0&&bounds.x+bounds.width<=width+1,'history fits viewport '+type+' '+width+' '+JSON.stringify(bounds));assert.equal(await history.evaluate(node=>node.scrollWidth<=node.clientWidth+1),true,'history does not overflow');await page.screenshot({path:'/tmp/crm-history-'+type+'-'+width+'.png'});
    await page.evaluate(()=>syncHistoryFixture.replies.push({hold:true}));await page.locator('[data-sync-history-refresh]').click();await page.waitForFunction(()=>syncHistoryFixture.pending.length===1);await page.evaluate(()=>document.querySelector('[data-sync-history-refresh]').click());assert.equal(await page.evaluate(()=>syncHistoryFixture.calls.length),2,'repeat click does not duplicate read');
    await page.locator('[data-native-card-close]').first().click();await page.evaluate(()=>syncHistoryFixture.pending.shift()());assert.equal(await page.locator('[data-sync-history-event]').count(),0,'closed card clears rows');assert.equal(await page.locator('#nativeEntityCard').isVisible(),false);
    await open();await page.locator('[data-sync-history-event]').waitFor();await page.evaluate(()=>syncHistoryFixture.replies.push({status:403}));await page.locator('[data-sync-history-refresh]').click();await page.waitForFunction(()=>document.querySelector('[data-sync-history-status]').textContent.includes('unavailable'));assert.equal(await page.locator('[data-sync-history-event]').count(),0);

@@ -89,6 +89,8 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                 options = dict(source=params.get('source'), task_id=params.get('task_id'),
                                request_id=params.get('request_id'), search=search, status=query.get('status'),
                                offset=params.get('offset', 0), recent=params.get('order') == 'recent')
+                if 'deal_filter' in params:
+                    options['deal_filter'] = params['deal_filter']
                 result = await asyncio.to_thread(read_flow, profile, **options)
                 # Resolve provider type labels only after the scoped read grants access.
                 if search and result.get('source') == 'kommo' and 'tasks' in result:

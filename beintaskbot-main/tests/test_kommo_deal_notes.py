@@ -14,8 +14,17 @@ class Notes(unittest.TestCase):
             {'id':3,'entity_id':12,'note_type':'call_in','params':{'text':'secret url'}}]},'_links':{'next':{'href':'untrusted'}}}
         result=notes.sanitize_notes(body,'12')
         self.assertEqual([x['text'] for x in result['notes']],['hello']);self.assertTrue(result['has_more'])
+        self.assertEqual(notes.sanitize_notes(body,'12',include_events=True)['calls'],
+                         [{'id':'3','type':'call_in','created_at':None}])
         body['_embedded']['notes'][0]['entity_id']=13
         with self.assertRaises(TaskFlowError):notes.sanitize_notes(body,'12')
+    def test_stage_event_only_for_exact_lead(self):
+        row={'id':'event','type':'lead_status_changed','entity_type':'lead','entity_id':12,'created_at':100,
+             'value_after':[{'lead_status':{'id':3,'pipeline_id':1}}]}
+        payload={'_embedded':{'events':[row]}}
+        self.assertEqual(notes.sanitize_stage_events(payload,'12'),
+                         ([{'id':'event','created_at':100,'stage_id':'3','pipeline_id':'1'}],False))
+        with self.assertRaises(TaskFlowError):notes.sanitize_stage_events(payload,'13')
     def run_read(self, remote, *, cached=None, allowed=True):
         cur=Mock();cur.fetchone.return_value=cached or {'tenant_id':TENANT,'kommo_lead_id':12,'pipeline_id':2,'raw':{}}
         conn=Mock();conn.cursor.return_value.__enter__=Mock(return_value=cur);conn.cursor.return_value.__exit__=Mock(return_value=False)
