@@ -36,7 +36,7 @@ assert(app.includes('data-view="companies"') && app.includes('data-crm-nav-label
 assert(app.includes("ru:{group:'CRM'") && app.includes("en:{group:'CRM'") && app.includes('tenant-language'), 'CRM navigation supports RU/AZ/EN');
 // Contact handlers moved into the real directory asset; the contact/deal/task
 // workflow suite exercises the actual buttons rather than opening fake modals.
-assert(app.includes('/assets/tenant-contacts-directory.js') && contacts.includes("nativeContactCreate').onclick=()=>void openForm('create')") && app.includes("nativeDealCreate').onclick=async") && app.includes("nativeTaskCreate').onclick=async") && app.includes("nativeCompanyCreate').onclick=async"), 'all four create buttons bind their working forms in the current modules');
+assert(app.includes('/assets/tenant-contacts-directory.js') && contacts.includes("nativeContactCreate').onclick=()=>void openForm('create')") && app.includes("nativeDealCreate').onclick=()=>openNativeDealCreate()") && app.includes("nativeTaskCreate').onclick=async") && app.includes("nativeCompanyCreate').onclick=async"), 'all four create buttons bind their working forms in the current modules');
 assert(contacts.includes("nativeContactForm').onsubmit=saveForm") && contacts.includes('async function saveForm(event)') && app.includes("nativeDealForm').onsubmit=async") && app.includes("nativeTaskForm').onsubmit=async") && app.includes("nativeCompanyForm').onsubmit=async"), 'all entity forms persist through their current API controllers');
 assert(!app.includes('id="nativeTaskReset"'), 'task modal has only one save/create action');
 assert(!app.includes('id="nativeDealReset"')&&!app.includes('id="nativeCompanyReset"'),'deal/company cards have no duplicate create/reset action');
