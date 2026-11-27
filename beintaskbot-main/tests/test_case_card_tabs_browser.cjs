@@ -29,18 +29,25 @@ function installCaseTabsFixture(){
  const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://test');if(u.pathname.startsWith('/assets/')){const name=path.basename(u.pathname);if(![...assets,'tenant-chat-attachments.js'].includes(name)){res.writeHead(404);res.end();return;}res.setHeader('content-type','text/javascript');res.end(fs.readFileSync(path.join(docs,name)));return;}res.setHeader('content-type','text/html');res.end(appHtml().replace('</body>','<script src="/assets/tenant-chat-attachments.js"></script></body>'));});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin='http://127.0.0.1:'+server.address().port;
  const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||process.env.CHROMIUM_PATH||(fs.existsSync('/usr/bin/chromium')?'/usr/bin/chromium':fs.existsSync('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')?'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe':undefined)});
- const active=page=>page.locator('#supportDetail [role=tab][aria-selected=true]').getAttribute('data-support-tab');
+ const active=page=>page.locator('#supportDetail [role=tab][aria-selected=true]:visible').getAttribute('data-support-tab');
+ const showData=async page=>{const tab=page.locator('#supportTab-details');if(await tab.isVisible())await tab.click();};
  async function mount(width,query=''){
-  const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];
+  const context=await browser.newContext({viewport:{width,height:900},colorScheme:'dark'}),page=await context.newPage(),errors=[];
   await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installCaseTabsFixture);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view=support&lang=ru'+query);await page.locator('[data-support-id]').first().waitFor();return {context,page,errors};
  }
  try{
   for(const width of [320,390,1280]){const {context,page,errors}=await mount(width);try{
-   await page.locator('[data-support-id]').first().click();await page.locator('#supportDescription').waitFor();
-   assert.equal(await active(page),'details');assert.equal(await page.locator('#supportDetail [role=tab]').count(),3);
+   await page.locator('[data-support-id]').first().click();await page.locator('#supportHistory').waitFor();
+   assert.equal(await active(page),'history');
+   const tabs=page.locator('#supportDetail [role=tab]:visible');
+   assert.deepEqual(await tabs.allTextContents(),width>=900?['Чат','Лента','Диалог']:['Чат','Данные','Лента','Диалог']);
+   assert.equal(await page.locator('.support-card-header [role=tab]').count(),0);
+   assert.equal(await page.locator('#supportEditStatus').isVisible(),width>=900);
+   if(width>=900){const [left,right,strip]=await Promise.all([page.locator('#supportPanel-details').boundingBox(),page.locator('.support-case-main').boundingBox(),tabs.first().boundingBox()]);assert(left.x+left.width<=right.x&&left.y===right.y&&strip.x>=right.x);}
+   await page.locator('#supportDetailContent').screenshot({path:path.join(artifacts,'reference-'+width+'.png')});
    await page.locator('#supportTab-history').click();await page.locator('#supportHistory [data-message-id=history-photo]').waitFor();
-   for(const [locale,label]of [['az','Tərtibatçılar'],['en','Developers'],['ru','Разработчики']]){await page.evaluate(value=>tenantI18n.setLanguage(value),locale);await page.waitForFunction(text=>document.getElementById('supportTab-developer')?.textContent===text,label);const sizes=await page.locator('.support-case-tabs').evaluate(tabs=>({overflow:tabs.scrollWidth>tabs.clientWidth+1,words:[...tabs.querySelectorAll('button')].flatMap(button=>{const text=button.firstChild;if(!text||text.nodeType!==Node.TEXT_NODE)return[];return [...text.textContent.matchAll(/\S+/g)].map(match=>{const range=document.createRange();range.setStart(text,match.index);range.setEnd(text,match.index+match[0].length);const rects=[...range.getClientRects()],box=button.getBoundingClientRect();return{word:match[0],lines:rects.length,fits:rects.every(r=>r.left>=box.left&&r.right<=box.right+1)};});})}));assert.equal(sizes.overflow,false,locale+' tabs fit '+width);for(const word of sizes.words){assert.equal(word.lines,1,word.word+' never splits inside the word at '+width);assert(word.fits,word.word+' fits its tab at '+width);}}
+   for(const [locale,label]of [['az','Lent'],['en','Activity'],['ru','Лента']]){await page.evaluate(value=>tenantI18n.setLanguage(value),locale);await page.waitForFunction(text=>document.getElementById('supportTab-developer')?.textContent===text,label);const sizes=await page.locator('.support-case-tabs').evaluate(tabs=>({overflow:tabs.scrollWidth>tabs.clientWidth+1,words:[...tabs.querySelectorAll('button:not([hidden])')].flatMap(button=>{const text=button.firstChild;if(!text||text.nodeType!==Node.TEXT_NODE)return[];return [...text.textContent.matchAll(/\S+/g)].map(match=>{const range=document.createRange();range.setStart(text,match.index);range.setEnd(text,match.index+match[0].length);const rects=[...range.getClientRects()],box=button.getBoundingClientRect();return{word:match[0],lines:rects.length,fits:rects.every(r=>r.left>=box.left&&r.right<=box.right+1)};});})}));assert.equal(sizes.overflow,false,locale+' tabs fit '+width);for(const word of sizes.words){assert.equal(word.lines,1,word.word+' never splits inside the word at '+width);assert(word.fits,word.word+' fits its tab at '+width);}}
 
    assert.equal(await page.locator('#supportHistory [data-message-id=outside-case]').count(),0,'out-of-case messages never expand the history');
    assert.equal(await page.evaluate(()=>notificationCaseFixture.historyCalls.length),0,'never calls unrestricted dialogue history');
@@ -49,16 +56,26 @@ function installCaseTabsFixture(){
    await page.locator('#supportHistory [data-message-id=history-photo] [data-ticket-media-open]').click();await page.locator('#supportHistory .support-media-preview img').waitFor();
    assert.equal(await page.evaluate(()=>notificationCaseFixture.mediaCalls[0].conversation_id===notificationCaseFixture.route.conversation_id),true,'attachment retains exact conversation guard');
    await page.locator('#supportEarlier').click();await page.locator('#supportHistory [data-message-id=oldest]').waitFor();assert.equal(await page.locator('#supportEarlier').isVisible(),false);
-   for(const tab of ['history','details','developer']){await page.locator('#supportTab-'+tab).click();assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),width>600?2:1);assert.equal(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,tab+' fits '+width);
+   await page.locator('.support-case-compose').getByRole('button',{name:'Сообщение клиенту'}).click();
+   await page.locator('#supportLinkedDialog #chatText').waitFor();
+   assert.equal(await active(page),'dialog');
+   assert.equal(await page.locator('#supportLinkedDialog #chatText').evaluate(node=>node===document.activeElement),true);
+   const request=await page.evaluate(()=>notificationCaseFixture.historyCalls[0]);
+   assert.equal(request.channel_id,await page.evaluate(()=>notificationCaseFixture.channel));
+   assert.equal(request.conversation_id,await page.evaluate(()=>notificationCaseFixture.route.conversation_id));
+   await page.locator('#supportTab-history').click();
+   assert.equal(await page.locator('#supportLinkedDialog #operatorConversationPane').count(),0);
+   assert.equal(await page.locator('#supportHistory [data-message-id=outside-case]').count(),0);
+   for(const tab of (width>=900?['history','developer','dialog']:['history','details','developer','dialog'])){await page.locator('#supportTab-'+tab).click();assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);assert.equal(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,tab+' fits '+width);
     await page.locator('#supportClose').focus();for(let step=0;step<18;step++){await page.keyboard.press(step<9?'Tab':'Shift+Tab');assert.equal(await page.evaluate(()=>document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,'focus remains in visible modal controls');}
     await page.screenshot({path:path.join(artifacts,width+'-'+tab+'.png')});}
-   await page.locator('#supportTab-details').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),'history');await page.keyboard.press('End');assert.equal(await active(page),'developer');await page.keyboard.press('Home');assert.equal(await active(page),'details');
-   await page.locator('#supportTab-details').click();await page.locator('#supportDescription').fill('Private unsaved case draft');await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Printer remains offline');
+   await page.locator('#supportTab-history').focus();await page.keyboard.press('ArrowRight');assert.equal(await active(page),width>=900?'developer':'details');await page.keyboard.press('End');assert.equal(await active(page),'dialog');await page.keyboard.press('Home');assert.equal(await active(page),'history');
+   await showData(page);await page.locator('#supportCaseEdit>summary').click();await page.locator('#supportDescription').fill('Private unsaved case draft');await page.locator('#supportTab-developer').click();await page.locator('#consultCreate').click();await page.locator('#consultReason').fill('Printer remains offline');
    assert.equal(await page.locator('#caseConsultFirst,#caseConsultLast,#caseConsultRecipientConfirm,#caseConsultIdentityConsent').count(),0);assert.equal(await page.evaluate(()=>notificationCaseFixture.prepared.length),0);
-   await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Private unsaved case draft');await page.locator('#supportTab-developer').click();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
+   await showData(page);assert.equal(await page.locator('#supportDescription').inputValue(),'Private unsaved case draft');await page.locator('#supportTab-developer').click();assert.equal(await page.locator('#consultReason').inputValue(),'Printer remains offline');
    await page.locator('#caseConsultSend').click();await page.waitForFunction(()=>notificationCaseFixture.dispatched.length===1);
    const sends=await page.evaluate(()=>({prepared:notificationCaseFixture.prepared,dispatched:notificationCaseFixture.dispatched}));assert.equal(sends.prepared.length,1);assert.equal(sends.prepared[0].public_dialog_version,1);assert.equal(sends.prepared[0].include_customer_identity,false);assert.equal(sends.prepared[0].automatic_case_history,true);assert.equal(sends.prepared[0].case_history_hash,'c'.repeat(64));for(const key of ['message_ids','media_ids','public_sender_versions','public_header_source_versions','question_draft_request_id'])assert.equal(key in sends.prepared[0],false);assert.equal(sends.prepared[0].request_id,sends.dispatched[0].request_id);
-   await page.locator('#supportTab-details').click();await page.reload();await page.locator('#supportDescription').waitFor();assert.equal(await active(page),'details','reload restores exact case tab');
+   await page.locator('#supportTab-history').click();await showData(page);await page.reload();await page.locator('#supportEditStatus').waitFor();assert.equal(await active(page),width>=900?'history':'details','reload restores exact case tab');
    await page.keyboard.press('Escape');await page.locator('#supportDetail').waitFor({state:'hidden'});assert.equal(await page.locator('#supportDetail').evaluate(n=>n.contains(document.activeElement)),false);
    assert.deepEqual(errors,[]);console.log('PASS scoped case tabs '+width+': history, lazy media, pagination, retired controls, ARIA, focus, drafts, explicit send, reload');
   }finally{await context.close();}}
