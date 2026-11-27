@@ -26,7 +26,9 @@ def linked_dialogs(profile, source, deal_id):
         predicate = "provider='connect' AND channel_id=%s AND conversation_id=%s"
         params = (str(channel), conversation)
     elif source == 'kommo' and isinstance(deal_id, str) and deal_id.isascii() and deal_id.isdecimal() and len(deal_id) < 20 and 0 < int(deal_id) < 2**63:
-        predicate = "lead_id=%s AND (provider='connect' OR last_message_at IS NOT NULL OR conversation_id<>'')"
+        # Connect and Kommo allocate IDs independently. A matching numeric ID
+        # across providers is insufficient to authorize a conversation link.
+        predicate = "provider='kommo' AND lead_id=%s AND (last_message_at IS NOT NULL OR conversation_id<>'')"
         params = (int(deal_id),)
     else:
         raise TenantLinearError('Сделка не найдена.', 404)

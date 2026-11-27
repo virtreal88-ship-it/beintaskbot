@@ -50,14 +50,21 @@ def test_kommo_uses_exact_lead_with_proof_for_the_current_connection(db, monkeyp
         cur.execute("""INSERT INTO saas_crm_deals(tenant_id,kommo_lead_id,name,raw)
                        SELECT %s::uuid,i,'Identical title',jsonb_build_object('id',i)
                        FROM generate_series(1,100) i""", (A,))
-        cur.execute('UPDATE saas_connect_conversations SET lead_id=97 WHERE tenant_id=%s::uuid', (A,))
+        cur.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+                       VALUES(%s::uuid,%s::uuid,97,'km1','kommo','incoming','Kommo message')""",
+                    (str(uuid.uuid4()), A))
         binding = current_binding(cur, A)
         cur.execute("""INSERT INTO saas_crm_board_provenance(tenant_id,resource,external_id,account_id,
                        connection_generation,raw_digest,source_revision)
                        VALUES (%s::uuid,'leads',97,%s,%s,%s,'verified')""",
                     (A, binding.account_id, binding.connection_generation, digest({'id': 97})))
     db.commit()
-    assert [row['lead_id'] for row in linked.linked_dialogs(PROFILE, 'kommo', '97')['dialogs']] == [97]
+    assert [(row['provider'], row['lead_id']) for row in linked.linked_dialogs(PROFILE, 'kommo', '97')['dialogs']] == [('kommo',97)]
+    db.execute('UPDATE saas_connect_conversations SET lead_id=97 WHERE tenant_id=%s::uuid', (A,))
+    db.commit()
+    assert linked.linked_dialogs(PROFILE, 'kommo', '97') == {'dialogs': []}
+    db.execute('UPDATE saas_connect_conversations SET lead_id=41 WHERE tenant_id=%s::uuid', (A,))
+    db.commit()
     assert linked.linked_dialogs(PROFILE, 'kommo', '99') == {'dialogs': []}
     db.execute("UPDATE saas_tenant_integrations SET account_domain='two.kommo.com' WHERE tenant_id=%s::uuid", (A,))
     db.commit()

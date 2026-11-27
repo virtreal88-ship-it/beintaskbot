@@ -84,11 +84,11 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/deal-board-preferences')return json({catalog:[]});
     if(p==='/api/platform/ai/dialogs/for-deal'){
       if(linking==='denied')return json({error:'Forbidden'},403);
-      const selected={...route,lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник'};
+      const selected={...route,provider:native?'connect':'kommo',lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник'};
       return json({result:{dialogs:['linked','empty'].includes(linking)?[selected]:[]}});
     }
     if(p==='/api/platform/ai/dialogs/history'){
-      const dialog={...route,lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник',
+      const dialog={...route,provider:native?'connect':'kommo',lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник',
         customer_kind:'contact',channel_active:true,state:'human',can_send:!limited,available_actions:[]};
       return json({result:{dialog,messages:[{id:'quoted-incoming',direction:'incoming',
         body:'Запись операторского диалога',provider_message_id:'quote-provider-1',message_type:'text',
