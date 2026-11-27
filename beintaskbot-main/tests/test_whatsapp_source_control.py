@@ -75,3 +75,70 @@ def test_stop_cross_tenant_and_changed_all_list_denied(active):
     with pytest.raises(TenantLinearError):control.disconnect(PROFILE,[source,CA],all_sources=True)
     provider.assert_not_called()
 
+
+def test_remove_only_stopped_source_and_restore_same_channel(active):
+    db,source,row,good,provider=active
+    db.execute('UPDATE saas_connect_conversations SET connect_channel_id=%s WHERE tenant_id=%s',(source,A))
+    conversations=db.execute('SELECT * FROM saas_connect_conversations ORDER BY tenant_id');db.commit()
+    history=db.execute('SELECT * FROM saas_crm_messages ORDER BY tenant_id,id');db.commit()
+    original_gateway=db.execute('SELECT gateway_id,encrypted_token FROM saas_browser_call_sources')[0];db.commit()
+    with pytest.raises(TenantLinearError,match='Сначала отключите'):
+        control.remove(PROFILE,source)
+    with pytest.raises(TenantLinearError):
+        control.remove({'tenant_id':B,'telegram_id':22},source)
+    db.execute("INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name) VALUES(%s,12,'operator','Operator')",(A,));db.commit()
+    with pytest.raises(TenantLinearError) as rejected:
+        control.remove({'tenant_id':A,'telegram_id':12},source)
+    assert rejected.value.status==403
+    provider.assert_not_called()
+
+    control.disconnect(PROFILE,[source])
+    assert control.remove(PROFILE,source)=={'removed':source}
+    provider.reset_mock()
+    assert control.remove(PROFILE,source)=={'removed':source}
+    provider.assert_not_called()
+    assert app.inventory(PROFILE)['channels']==[]
+    for operation in (app.pairing,app.continue_pairing,app.activate,control.resume):
+        with pytest.raises(TenantLinearError) as hidden:
+            operation(PROFILE,source)
+        assert hidden.value.status==404
+    assert app.begin(PROFILE,'+'+row['account_jid'].split('@')[0],'Keep the original')['channel_id']==source
+    assert db.execute('SELECT gateway_id,encrypted_token FROM saas_browser_call_sources')==[original_gateway]
+    assert db.execute('SELECT * FROM saas_connect_conversations ORDER BY tenant_id')==conversations
+    assert db.execute('SELECT * FROM saas_crm_messages ORDER BY tenant_id,id')==history;db.commit()
+
+
+def test_remove_failed_duplicate_only_after_gateway_proves_it_does_not_exist(setup,monkeypatch):
+    db,account,legacy,remote=setup
+    phone=account.split('@')[0]
+    remote.side_effect=TenantLinearError('Provisioning rejected',503)
+    with pytest.raises(TenantLinearError,match='Provisioning rejected'):
+        app.begin(PROFILE,phone,'Duplicate')
+    duplicate=str(db.execute('SELECT channel_id FROM saas_whatsapp_onboarding')[0]['channel_id'])
+    gateway_id=str(db.execute('SELECT gateway_id FROM saas_browser_call_sources')[0]['gateway_id'])
+    db.commit()
+    remote.side_effect=None
+    rollout=app.rollout
+    rollout.stage(PROFILE,CA,account,'original-g1')
+    monkeypatch.setattr(control,'_connect',lambda:db)
+    status=Mock(side_effect=lambda _,source: {'state':'pairing'} if source==CA else {'state':'unavailable'})
+    monkeypatch.setattr(sources,'source_status',status)
+    items={row['id']:row for row in app.inventory(PROFILE)['channels']}
+    assert items[duplicate]['duplicate_pending'] and items[duplicate]['can_remove']
+    assert not items[CA]['duplicate_pending']
+
+    provider=Mock(side_effect=TenantLinearError('Timeout',503))
+    monkeypatch.setattr(control,'remote',provider)
+    with pytest.raises(TenantLinearError,match='Timeout'):
+        control.remove(PROFILE,duplicate)
+    assert {row['id'] for row in app.inventory(PROFILE)['channels']}=={CA,duplicate}
+    provider.reset_mock(side_effect=True)
+    provider.return_value=None
+    assert control.remove(PROFILE,duplicate)=={'removed':duplicate}
+    provider.assert_called_once_with('/v1/sources/'+gateway_id,missing_ok=True)
+    assert [row['id'] for row in app.inventory(PROFILE)['channels']]==[CA]
+    assert db.execute('SELECT enabled,paused FROM saas_whatsapp_native_routes WHERE tenant_id=%s AND channel_id=%s',(A,CA))==[
+        {'enabled':False,'paused':False}]
+    assert db.execute('SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s AND connect_channel_id=%s',(A,duplicate))
+    db.commit()
+

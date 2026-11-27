@@ -46,3 +46,27 @@ def test_disconnect_controls_keep_origin_and_identity_guards(monkeypatch):
             assert (await client.post(url,json={'action':'resume','source':'source'},headers=headers)).status==200
             resume.assert_called_once_with(profile,'source')
     asyncio.run(run())
+
+
+def test_continue_and_remove_are_scoped_mutations(monkeypatch):
+    continuation=Mock(return_value={'state':'pairing'})
+    remove=Mock(return_value={'removed':'source'})
+    monkeypatch.setattr(store,'continue_pairing',continuation)
+    monkeypatch.setattr(control,'remove',remove)
+    profile={'tenant_id':'tenant-a','telegram_id':11}
+
+    async def run():
+        app=web.Application();app.router.add_post('/whatsapp',handler(lambda _:profile,'https://app.invalid',Mock()))
+        async with TestClient(TestServer(app)) as client:
+            url='/whatsapp?expected_tenant_id=tenant-a&expected_user_id=11'
+            headers={'Origin':'https://app.invalid'}
+            for action,operation in (('continue',continuation),('remove',remove)):
+                data={'action':action,'source':'source'}
+                assert (await client.post(url,json=data,headers={'Origin':'https://foreign.invalid'})).status==403
+                assert (await client.post(url.replace('tenant-a','tenant-b'),json=data,headers=headers)).status==409
+                assert (await client.post(url.replace('=11','=22'),json=data,headers=headers)).status==409
+                assert (await client.post(url,json={**data,'phone':'994100000777'},headers=headers)).status==400
+                operation.assert_not_called()
+                assert (await client.post(url,json=data,headers=headers)).status==200
+                operation.assert_called_once_with(profile,'source')
+    asyncio.run(run())

@@ -15,6 +15,32 @@ import tenant_call_recordings as recordings
 MANAGED=str(uuid.UUID(int=605));TOKEN='z'*48
 
 
+@pytest.mark.parametrize('method,status,body,missing_ok,absent',[
+    ('GET',404,b'source_not_found',True,True),
+    ('GET',404,b'source_not_found',False,False),
+    ('GET',404,b'not found',True,False),
+    ('GET',503,b'source_not_found',True,False),
+    ('POST',404,b'source_not_found',True,False),
+])
+def test_gateway_absence_requires_exact_status_and_body(monkeypatch,method,status,body,missing_ok,absent):
+    from unittest.mock import MagicMock
+    response=MagicMock(status_code=status)
+    response.__enter__.return_value=response
+    response.iter_content.return_value=[body[:6],body[6:]]
+    monkeypatch.setattr(sources,'service',lambda:('https://calls.invalid','synthetic'))
+    request=Mock(return_value=response)
+    monkeypatch.setattr(sources.requests,'request',request)
+    payload=None if method=='GET' else {'scope':'synthetic'}
+    path='/v1/sources/'+MANAGED
+    if absent:
+        assert sources.remote(path,payload,missing_ok=missing_ok) is None
+    else:
+        with pytest.raises(TenantLinearError) as error:
+            sources.remote(path,payload,missing_ok=missing_ok)
+        assert error.value.status==503
+    assert request.call_args.args==(method,'https://calls.invalid'+path)
+
+
 @pytest.fixture
 def managed(gateway,monkeypatch):
     db,key,legacy=gateway

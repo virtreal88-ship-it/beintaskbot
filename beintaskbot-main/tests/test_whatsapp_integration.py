@@ -22,7 +22,9 @@ def setup(staged_source,monkeypatch):
     remote.return_value={'public_key':'a'*64,'qr':'YWJj'}
     for flag in ('INBOX','PROJECTION','SEND'):monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_'+flag,'1')
     yield db,account,legacy,remote
-    db.rollback();db.execute('DROP TABLE IF EXISTS saas_whatsapp_onboarding');db.commit()
+    db.rollback()
+    db.execute('DROP TABLE IF EXISTS saas_whatsapp_integration_removals')
+    db.execute('DROP TABLE IF EXISTS saas_whatsapp_onboarding');db.commit()
 
 
 def test_fresh_number_retries_same_source_gateway_and_activates_exact_account(setup):
@@ -41,6 +43,50 @@ def test_fresh_number_retries_same_source_gateway_and_activates_exact_account(se
     assert app.activate(PROFILE,source)['activation_pending'] is False
     assert app.activate(PROFILE,source)['state']=='ready'
     assert db.execute('SELECT enabled,projection_enabled FROM saas_whatsapp_capture_generations')[0]=={'enabled':True,'projection_enabled':True};db.commit()
+
+
+def test_reconnect_reuses_staged_original_without_onboarding_even_with_failed_duplicate(setup):
+    db,account,legacy,remote=setup
+    phone=account.split('@')[0]
+    remote.side_effect=TenantLinearError('Gateway refused to provision duplicate',503)
+    with pytest.raises(TenantLinearError,match='refused'):
+        app.begin(PROFILE,phone,'Retry after cutover')
+    duplicate=str(db.execute('SELECT channel_id FROM saas_whatsapp_onboarding')[0]['channel_id'])
+    db.commit()
+    remote.side_effect=None
+    rollout.stage(PROFILE,CA,account,'existing-cutover')
+    legacy.reset_mock();remote.reset_mock()
+    before=db.execute('SELECT * FROM saas_connect_channels ORDER BY tenant_id,connect_channel_id');db.commit()
+
+    for result in (app.continue_pairing(PROFILE,CA),app.begin(PROFILE,'+'+phone,'Do not rename')):
+        assert result['channel_id']==CA
+        assert result['qr']=='YWJj'
+    with pytest.raises(TenantLinearError,match='другой источник'):
+        app.continue_pairing(PROFILE,duplicate)
+    assert db.execute('SELECT * FROM saas_connect_channels ORDER BY tenant_id,connect_channel_id')==before;db.commit()
+    assert remote.call_count==2
+    assert all(len(call.args)==1 for call in remote.call_args_list)
+    legacy.assert_not_called()
+
+
+def test_expired_qr_is_reissued_only_for_the_existing_gateway(setup):
+    db,account,legacy,remote=setup
+    rollout.stage(PROFILE,CA,account,'existing-cutover')
+    before=db.execute('SELECT channel_id,gateway_id,encrypted_token FROM saas_browser_call_sources');db.commit()
+    remote.reset_mock()
+    remote.side_effect=[{'connection_state':'logged_out'},{'public_key':'a'*64},{'qr':'YWJj'}]
+
+    result=app.continue_pairing(PROFILE,CA)
+
+    assert result['channel_id']==CA and result['qr']=='YWJj'
+    first,setup_call,last=remote.call_args_list
+    path='/v1/sources/'+str(before[0]['gateway_id'])
+    assert first.args==last.args==(path,)
+    assert setup_call.args[0]==path
+    assert setup_call.args[1]['channel_id']==CA
+    assert setup_call.args[1]['messaging_generation']=='existing-cutover'
+    assert db.execute('SELECT channel_id,gateway_id,encrypted_token FROM saas_browser_call_sources')==before
+    assert not db.execute('SELECT 1 FROM saas_whatsapp_onboarding');db.commit()
 
 
 @pytest.mark.parametrize('local_active',[False,True])

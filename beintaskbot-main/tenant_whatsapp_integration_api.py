@@ -24,6 +24,11 @@ def handler(member,origin,logger):
                     result=await asyncio.to_thread(store.begin,profile,data['phone'],data['name'])
                 elif set(data)=={'action','source'} and data['action']=='activate':
                     result=await asyncio.to_thread(store.activate,profile,data['source'])
+                elif set(data)=={'action','source'} and data['action']=='continue':
+                    result=await asyncio.to_thread(store.continue_pairing,profile,data['source'])
+                elif set(data)=={'action','source'} and data['action']=='remove':
+                    from tenant_whatsapp_source_control import remove
+                    result=await asyncio.to_thread(remove,profile,data['source'])
                 elif set(data)=={'action','source'} and data['action']=='resume':
                     from tenant_whatsapp_source_control import resume
                     result=await asyncio.to_thread(resume,profile,data['source'])
