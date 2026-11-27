@@ -400,9 +400,13 @@ func (s *Session) terminateCall(callID string, reason core.EndCallReason) {
 	_ = ac.cm.EndCall(context.Background(), reason)
 }
 
-func (s *Session) teardownAllCalls() {
+func (s *Session) teardownAllCalls(cause ...string) {
+	origin := "gateway_shutdown"
+	if len(cause) > 0 {
+		origin = cause[0]
+	}
 	for _, ac := range s.reg.drain() {
-		ac.markEnd("gateway_shutdown")
+		ac.markEnd(origin)
 		ac.launchMu.Lock()
 		ac.interrupted.Store(true)
 		_ = ac.cm.EndCall(context.Background(), core.EndCallReasonUserEnded)

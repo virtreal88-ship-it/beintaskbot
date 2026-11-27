@@ -352,7 +352,7 @@
       s.sent=true;const call=await api({...s.route,op:m.call?'accept':'start',call_id:m.call?.id,request_id:s.request,media:s.transport,sdp_offer:offer,consent_confirmed:true},s.owner);
       s.call=call;s.diagnosticTimer=setInterval(()=>reportDiagnostic(s),10000);s.preparing=false;if(s.stopping||session!==s||key()!==s.identity){void stop(s);return;}
       s.connectTimer=setTimeout(()=>{if(session===s&&!s.stopping&&!terminal(s.call)&&(!s.pcmSent||s.call.direction==='inbound'&&s.call.state!=='connected')){diagnostic(s,'connect_timeout');s.error='Не удалось подтвердить подключение звука. Завершаем попытку; после подтверждения можно повторить.';void stop(s);}},20000);draw();void poll();
-    }catch(e){diagnostic(s,'audio_setup_failed');release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
+    }catch(e){diagnostic(s,s.sent?'control_unavailable':'audio_setup_failed');release(s);s.preparing=false;s.error=e.message;if(s.sent||s.call&&!terminal(s.call)){if(!s.call)s.call={state:'unknown'};void stop(s);}else{s.call={state:'failed',recording_state:'none'};draw();}}
   }
   async function poll(){
     if(polling||!identity||!enabled)return;polling=true;const generation=revision;
@@ -364,9 +364,9 @@
       if(s&&!s.call?.id){const recovered=calls.find(c=>c.request_matches&&sameRoute(c,s.route));if(recovered)s.call=recovered;}
       if(s?.call?.id){
         const call=calls.find(c=>c.id===s.call.id);
-        if(call){s.call=call;updateRingback(s);if(call.state==='connected')clearTimeout(s.connectTimer);if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ s.error='Не удалось подключить звук.';void stop(s);}}
+        if(call){s.call=call;updateRingback(s);if(call.state==='connected')clearTimeout(s.connectTimer);if(!terminal(call)&&(call.sdp_answer||call.audio_ready)&&s.media&&!s.answered&&!s.stopping){s.answered=true;try{if(s.transport==='websocket')await s.media.connect();else await s.media.pc.setRemoteDescription({type:'answer',sdp:call.sdp_answer});}catch{ diagnostic(s,'audio_setup_failed');s.error='Не удалось подключить звук.';void stop(s);}}
           if(terminal(call)){if(!s.diagnosticFinalReported){s.diagnosticFinalReported=true;reportDiagnostic(s,'server_ended');}release(s);s.stopping=false;s.preparing=false;s.closeError='';trackRecording(s,call);if(session===s&&call.state==='ended'&&!s.error)closeModal();}
-          if(call.error_code&&!terminal(call)&&!s.stopping){s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
+          if(call.error_code&&!terminal(call)&&!s.stopping){diagnostic(s,'connection_failed');s.error='Не удалось подключить звонок. Завершаем соединение.';void stop(s);}}
       }
       const incoming=calls.find(c=>c.state==='incoming'&&!c.claimed);
       if(incoming&&!busy()&&(!modal||terminal(session?.call||modal.call))){closeModal();session=null;show(incoming,incoming);}
@@ -395,7 +395,7 @@
     button.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3H4a1 1 0 0 0-1 1c0 9.4 7.6 17 17 17a1 1 0 0 0 1-1v-3l-5-2-2 2a14 14 0 0 1-7-7l2-2-2-5Z"/></svg>';
     button.onclick=()=>{if(session&&terminal(session.call)){release(session);session=null;}show(route);};host.append(button);
   }
-  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){void stop(session);release(session);session=null;}closeModal();pendingRecordings.clear();identity=fresh;enabled=true;calls=[];sources=[];online=false;}mount();void poll();}
+  function changed(){const fresh=key();if(fresh!==identity){revision++;if(session){diagnostic(session,'auth_changed');void stop(session);release(session);session=null;}closeModal();pendingRecordings.clear();identity=fresh;enabled=true;calls=[];sources=[];online=false;}mount();void poll();}
   document.addEventListener('tenant-profile',changed);document.addEventListener('tenant-chat-attachments-ready',mount);
   document.addEventListener('tenant-calls-updated',event=>{enabled=true;const route=window.tenantOperator?.currentDialog;if(route&&String(route.channel_id)===String(event.detail?.channel_id)&&!String(route.conversation_id).endsWith('@g.us'))route.browser_call_available=true;mount();void poll();});
   document.addEventListener('tenant-auth-invalid',()=>{revision++;clearTimeout(timer);release(session);session=null;identity='';sources=[];pendingRecordings.clear();enabled=false;closeModal();});

@@ -4,7 +4,7 @@ import time
 from tenant_linear_policy import TenantLinearError
 
 END_ORIGINS = {'unknown','command_end','command_reject','audio_transport','duration_limit','whatsapp_terminate',
-               'whatsapp_reject','server_end','gateway_shutdown','process_closed'}
+               'whatsapp_reject','server_end','gateway_shutdown','gateway_sync_timeout','process_closed'}
 END_CODES = {'unknown','user_ended','declined','timeout','busy','cancelled','failed','do_not_disturb'}
 STREAM_CODES = {'call_closed','provider_start_failed','output_backpressure','handshake_failed',
                 'stream_finished','output_write_error','output_write_timeout','input_closed',

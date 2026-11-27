@@ -298,7 +298,7 @@ func (g *appGateway) run(ctx context.Context) {
 		response, err := g.request(ctx, "/sync", "application/json", raw)
 		if err != nil {
 			if time.Since(lastOK) > 15*time.Second {
-				sess.teardownAllCalls()
+				sess.teardownAllCalls("gateway_sync_timeout")
 			}
 			continue
 		}
