@@ -221,6 +221,9 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 			if r.Status == StatusRinging && r.RemoteAnswered && r.Direction == "outbound" {
 				item["remote_answered"] = true
 			}
+			if ac, ok := sess.reg.get(r.CallID); ok {
+				item["diagnostics"] = ac.audioDiagnostic()
+			}
 			active = append(active, item)
 		}
 	}
@@ -228,7 +231,11 @@ func (g *appGateway) snapshot(sess *Session) map[string]any {
 	for _, r := range g.server.broker.historyRows(g.cfg.Session, 20) {
 		if g.allowed(r.Peer) {
 			offerCallers[r.CallID] = r.Caller
-			ended = append(ended, map[string]any{"provider_id": r.CallID, "peer_jid": r.Peer, "state": "ended", "direction": r.Direction})
+			item := map[string]any{"provider_id": r.CallID, "peer_jid": r.Peer, "state": "ended", "direction": r.Direction}
+			if r.Diagnostic != nil {
+				item["diagnostics"] = r.Diagnostic
+			}
+			ended = append(ended, item)
 		}
 	}
 	info := sess.info()
@@ -613,6 +620,7 @@ func (g *appGateway) makeBridge(sess *Session, id, owner, sdp string) (string, e
 		}
 		bridge := newStreamBridge(func(pcm []float32) {
 			if current, ok := sess.reg.get(id); ok && current == ac {
+				ac.diagnostic.browser.add(time.Now())
 				if h := ac.recording.Load(); h != nil {
 					h.capture.Add(0, pcm, time.Now())
 				}
@@ -629,7 +637,7 @@ func (g *appGateway) makeBridge(sess *Session, id, owner, sdp string) (string, e
 				}
 			}()
 		})
-		bridge.stream.onDiagnosis = func(d streamEndDiagnostic) { sess.diag.lastStream.Store(&d) }
+		bridge.stream.onDiagnosis = func(d streamEndDiagnostic) { sess.diag.lastStream.Store(&d); ac.diagnostic.stream.Store(&d) }
 		sess.setBridge(id, bridge)
 		return "", nil
 	}

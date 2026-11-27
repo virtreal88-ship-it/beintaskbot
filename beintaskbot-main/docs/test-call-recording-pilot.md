@@ -62,3 +62,29 @@ reported gaps in decoded frame delivery, so the artifact remains marked
 incomplete; a silence interval alone cannot prove packet loss or complete
 capture. Recording acceptance does not establish production call reliability,
 video support, phone-side parallel recording, or all failure scenarios.
+
+
+## Per-call diagnostics
+
+Before releasing the Worker and calls engine, run
+`tenant_call_diagnostics.migrate(cursor)` in a short transaction with local
+`lock_timeout='2s'` and `statement_timeout='30s'`. This adds the JSONB
+`diagnostics` column to `saas_browser_calls`.
+
+Each call keeps gateway, relay, browser and control evidence under its existing
+tenant and call ID. The gateway preserves the first end origin and fixed end
+code, stream closure and PCM arrival counters. Engine counters cover the full
+call duration. The relay measures both incoming directions. Browser reports
+arrivals, capture drops, playback underruns and overflows, context suspensions
+and its first stop reason every ten seconds and on completion. Gap counters use
+a 200 ms threshold and retain the largest gap and last occurrence. All payloads
+use bounded numbers and fixed enums.
+
+Match per-leg timestamps and counters to locate the first observed interruption.
+A gap reports delayed PCM arrival at that observation point. Provider-side
+arrival gaps alone cannot distinguish network loss from upstream audio delivery.
+A confirmed engine-process exit records `process_closed` for its open calls.
+
+After deployment, reload the CRM and use a dedicated incoming call lasting
+3–5 minutes. Check gateway, relay and browser evidence on the same call, then
+place another test call and verify that the previous evidence remains.

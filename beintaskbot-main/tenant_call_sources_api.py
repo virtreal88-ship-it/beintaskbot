@@ -1,6 +1,8 @@
 """Owner source pairing and authenticated same-origin PCM relay."""
 import asyncio
 import json
+import time
+from tenant_call_diagnostics import Arrivals, save_relay
 from asyncio import wait as _wait_relay_tasks
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
 from tenant_ai_agents_api import _expected, _origin
@@ -69,6 +71,7 @@ async def relay(request,profile,member,logger):
             socket.headers.update(HEADERS)
             await socket.prepare(request)
             received={'browser':False,'provider':False}
+            arrivals={'browser':Arrivals(),'provider':Arrivals()}
             async def transfer(source,target,side):
                 start=asyncio.get_running_loop().time();size=0
                 async for message in source:
@@ -76,6 +79,7 @@ async def relay(request,profile,member,logger):
                     if not message.data or len(message.data)>6400 or len(message.data)%2:return side+'_invalid_pcm'
                     received[side]=True
                     now=asyncio.get_running_loop().time()
+                    arrivals[side].add(now)
                     if now-start>=1:start=now;size=0
                     size+=len(message.data)
                     if size>65536:return side+'_rate_limit'
@@ -113,4 +117,13 @@ async def relay(request,profile,member,logger):
                 logger.info('call_audio_transport_end browser_code=%s browser_error=%s provider_code=%s provider_error=%s',
                             browser_code,browser_error,provider_code,provider_error)
                 await socket.close()
+                evidence={'version':1,'code':code,'at_ms':int(time.time()*1000),
+                          'browser_to_worker':arrivals['browser'].snapshot(),
+                          'engine_to_worker':arrivals['provider'].snapshot(),
+                          'browser_close':{'close_code':browser_code,'error':browser_error},
+                          'engine_close':{'close_code':provider_code,'error':provider_error}}
+                try:
+                    await asyncio.to_thread(save_relay,profile,authority,nonce,evidence)
+                except Exception:
+                    logger.warning('call_diagnostics_save_failed stage=relay')
             return socket
