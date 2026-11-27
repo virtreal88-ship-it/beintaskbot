@@ -20,7 +20,7 @@ import tenant_whatsapp_native_transport as native
 from tenant_connect_group_history import page as group_history
 from test_dialog_lifecycle_group_work_postgres import (
     A, CB, GROUP, LIDS, SOURCES, GatewayResponse, action, collaboration, database,
-    db, episodes, history, join, profile,
+    add_shared_source_operator, db, episodes, history, join, profile, row,
 )
 
 ORIGIN = 'http://localhost'
@@ -156,6 +156,24 @@ async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_
             replay_status, replay = await upload(client, data)
         assert replay_status == 200 and replay['message_id'] == message_id
     assert len(gateway['attempts']) == 2
+
+
+@pytest.mark.asyncio
+async def test_group_voice_keeps_employee_attribution_on_a_shared_number(voice_group, monkeypatch):
+    database, _, gateway = voice_group
+    add_shared_source_operator(database,monkeypatch,55)
+    workflow=row(database,33)
+    database.commit()
+    action(55,'join_group',workflow['revision'],expected_group_episode_id=str(workflow['id']))
+    account=SOURCES[33][2]
+    for actor in (33,55):
+        async with app_client(actor) as client:
+            status, result=await upload(client,command(actor))
+        assert status==200 and result['provider_accepted'] and result['participant_jid']==account
+    assert [number for number,_ in gateway['attempts']]==[account,account]
+    assert {(m['author_name'],m['sending_number']) for m in history(55)['messages']
+            if m['message_type']=='audio'}=={
+        ('Operator A','+994500000111'),('Operator 55','+994500000111')}
 
 
 @pytest.mark.asyncio

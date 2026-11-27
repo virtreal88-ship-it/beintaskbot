@@ -735,7 +735,7 @@
           const status=$('operatorChatError');if(status&&sameDialog(route,currentDialog))status.textContent=error.message;
           return;
         }
-        if(error.status===409&&(groupId||route.lifecycle?.group_available)){
+        if([403,409].includes(error.status)&&(groupId||route.lifecycle?.group_available)){
           closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
           await openDialog(route,true,'',{suppressRead:true,revalidateAccess:true});
           if(sameDialog(route,currentDialog)&&$('operatorChatError'))$('operatorChatError').textContent=error.message;
@@ -759,9 +759,9 @@
     }
   }
   const groupWorkText=key=>({
-    ru:{join:'Подключиться со своего номера',leave:'Выйти',transfer:'Передать ведение',accepting:'Принимаем…',starting:'Начинаем…',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
-    az:{join:'Öz nömrəmlə qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',accepting:'Qəbul edilir…',starting:'Başladılır…',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
-    en:{join:'Join from my number',leave:'Leave',transfer:'Transfer lead',accepting:'Accepting…',starting:'Starting…',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
+    ru:{join:'Присоединиться',leave:'Выйти',transfer:'Передать ведение',accepting:'Принимаем…',starting:'Начинаем…',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
+    az:{join:'Qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',accepting:'Qəbul edilir…',starting:'Başladılır…',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
+    en:{join:'Join',leave:'Leave',transfer:'Transfer lead',accepting:'Accepting…',starting:'Starting…',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
   }[i18n.language]||{})[key];
   function openGroupWorkModal(route){
     closeLifecycleModal();
@@ -2280,6 +2280,22 @@
         slot.append(button);
       }
       if(work.role||sources.length<2&&currentAvailable)return;
+    }
+    if(work&&!work.role&&!currentAvailable&&sources.length===1){
+      const original=currentDialog, source=sources[0];
+      const button=document.createElement('button');button.type='button';button.className='primary';
+      button.textContent=[groupWorkText('join'),source.number].filter(Boolean).join(' · ');
+      button.dataset.groupJoinSource='true';
+      button.onclick=async()=>{
+        if(!sameDialog(original,currentDialog)||button.disabled)return;
+        button.disabled=true;
+        if(!await openDialog(source))return;
+        const action=$('operatorComposerSource')?.querySelector('[data-operator-lifecycle="join_group"]');
+        if(action&&sameDialog(source,currentDialog)&&currentDialog.lifecycle?.group_work?.can_join)
+          await lifecycleAction(currentDialog,'join_group',action);
+      };
+      slot.append(button);
+      return;
     }
     if(slot.hidden)return;
     const label=document.createElement('label');

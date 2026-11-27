@@ -230,6 +230,123 @@ def join(connection):
     return episode
 
 
+def test_eligible_employee_reuses_a_closed_group_source(collaboration):
+    database,_,sent=collaboration
+    previous=action(44,'accept')['lifecycle']['id']
+    action(44,'close',row(database,44)['revision'],expected_group_episode_id=previous)
+    database.execute('''INSERT INTO saas_dialog_source_members(tenant_id,provider,source_id,employee_id,updated_by)
+      VALUES(%s,'connect',%s,33,11)''',(A,CB))
+    database.commit()
+
+    # Another visible employee may start from the closed source even when
+    # only the current Native WhatsApp connection is configured.
+    archive=dialogs.history(profile(33),'connect',1002,CB,GROUP)['dialog']
+    assert archive['archive_read_only'] and not archive['can_send']
+    assert archive['lifecycle']['can_start']
+    command={'provider':'connect','channel_id':CB,'conversation_id':GROUP,'lead_id':1002}
+    started=lifecycle.mutate(profile(33),{**command,'action':'start','request_id':str(uuid.uuid4()),
+        'expected_revision':archive['lifecycle']['revision']})
+    assert started['controls']['can_send']
+    assert started['lifecycle']['id']!=previous
+    lifecycle.mutate(profile(33),{**command,'action':'close','request_id':str(uuid.uuid4()),
+        'expected_group_episode_id':started['lifecycle']['id'],
+        'expected_revision':started['lifecycle']['revision']})
+
+    own=history(33)['dialog']
+    assert own['lifecycle']['can_start']
+    active=action(33,'start',own['lifecycle']['revision'],
+                  expected_group_episode_id=own['lifecycle']['group_restart_episode_id'])
+    episode=active['lifecycle']['id']
+    archived_peer=history(44)['dialog']
+    assert archived_peer['archive_read_only'] and not archived_peer['can_send']
+    assert not archived_peer['lifecycle']['can_start']
+    work=archived_peer['lifecycle']['group_work']
+    assert work['can_join'] and [source['channel_id'] for source in work['sources']]==[CB]
+    action(44,'join_group',archived_peer['lifecycle']['revision'],expected_group_episode_id=episode)
+    assert history(44)['dialog']['can_send']
+    assert history(44)['dialog']['lifecycle']['group_work']['role']=='participant'
+    assert history(33)['dialog']['lifecycle']['group_work']['role']=='leader'
+    assert not sent
+    assert database.execute('SELECT accepted_by FROM saas_dialog_episodes WHERE id=%s',(previous,))==[
+        {'accepted_by':44}]
+
+
+def add_shared_source_operator(database, monkeypatch, actor, update='self'):
+    monkeypatch.setitem(SOURCES,actor,SOURCES[33])
+    database.execute("""INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions)
+      VALUES(%s,%s,'operator',%s,'["dialogs","support"]')""",(A,actor,f'Operator {actor}'))
+    database.execute("""UPDATE saas_tenant_workflow_policies SET value=value||%s::jsonb
+      WHERE tenant_id=%s AND policy_key='members'""",
+      (json.dumps({str(actor):{'access_scopes':{'dialogs':{'view':'self','update':update}}}}),A))
+    database.execute("""INSERT INTO saas_dialog_source_members(tenant_id,provider,source_id,employee_id,updated_by)
+      VALUES(%s,'connect',%s,%s,11)""",(A,SOURCES[actor][0],actor))
+    database.execute("""INSERT INTO saas_dialog_employee_presence(tenant_id,employee_id,status,updated_by)
+      VALUES(%s,%s,'online',%s)""",(A,actor,actor))
+    database.commit()
+
+
+def test_operators_can_share_an_authorized_whatsapp_source(collaboration, monkeypatch):
+    database,_,delivered=collaboration
+    episode=join(database)
+    add_shared_source_operator(database,monkeypatch,55)
+    add_shared_source_operator(database,monkeypatch,66,'none')
+
+    candidate=card(55)
+    assert candidate['channel_id']==CA and not candidate['can_send']
+    assert candidate['lifecycle']['group_work']['can_join']
+    peer=history(55)['dialog']
+    assert peer['lifecycle']['group_work']['can_join'] and not peer['can_send']
+    assert [source['channel_id'] for source in peer['lifecycle']['group_work']['sources']]==[CA]
+    assert not history(66)['dialog']['lifecycle']['group_work']['can_join']
+    with pytest.raises(TenantLinearError):
+        prepare(55)
+    with pytest.raises(TenantLinearError):
+        action(66,'join_group',row(database,66)['revision'],expected_group_episode_id=episode)
+    with pytest.raises(TenantLinearError):
+        action(55,'join_group',row(database,44)['revision'],expected_group_episode_id=episode,
+               channel_id=CB,lead_id=1002)
+
+    # Simulate the two indexes still present in an existing installation.
+    for column in ('channel_id','account_jid'):
+        database.execute(f"""CREATE UNIQUE INDEX saas_dialog_group_active_{column}_idx
+          ON saas_dialog_group_participants(tenant_id,episode_id,{column}) WHERE left_at IS NULL""")
+    database.commit()
+    with pytest.raises(TenantLinearError, match='после обновления CRM'):
+        action(55,'join_group',peer['lifecycle']['revision'],expected_group_episode_id=episode)
+    with database.cursor() as cur:
+        group_work.migrate(cur)
+        group_work.migrate(cur)
+    database.commit()
+
+    action(55,'join_group',peer['lifecycle']['revision'],expected_group_episode_id=episode)
+    assert row(database,55)['operator_id']==33
+    own=history(55)['dialog']
+    assert own['can_send'] and own['lifecycle']['group_work']['role']=='participant'
+    assert card(55)['lifecycle']['group_work']['role']=='participant'
+    for actor in (33,55):
+        item,author,route=prepare(actor)
+        result=dispatch(item,route)
+        assert delivered[-1][:2]==(CA,SOURCES[33][2])
+        transport.record_outbound(A,item['command']['lead_id'],route,item['command']['text'],result['message_id'],
+            author=author['display_name'],actor=actor,receipt=result['receipt'])
+        sends.finish(item,'accepted',result['message_id'])
+    assert {(m['author_name'],m['sending_number']) for m in history(55)['messages'] if m.get('sending_number')}=={
+        ('Operator A','+994500000111'),('Operator 55','+994500000111')}
+
+    action(33,'leave_group',row(database,33)['revision'],expected_group_episode_id=episode)
+    assert row(database,55)['operator_id']==55 and row(database,55)['state']=='accepted'
+    assert history(55)['dialog']['lifecycle']['group_work']['role']=='leader'
+    assert history(44)['dialog']['can_send']
+    assert not history(33)['dialog']['can_send']
+    with pytest.raises(TenantLinearError):
+        prepare(33)
+    action(44,'leave_group',row(database,44)['revision'],expected_group_episode_id=episode)
+    action(55,'close',row(database,55)['revision'],expected_group_episode_id=episode)
+    assert row(database,55)['state']=='closed'
+    assert not database.execute("""SELECT 1 FROM saas_dialog_group_participants
+      WHERE episode_id=%s AND left_at IS NULL""",(episode,))
+
+
 def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collaboration):
     database,_,_=collaboration
     episode=join(database)
