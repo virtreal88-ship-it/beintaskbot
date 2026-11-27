@@ -101,6 +101,7 @@
       #supportDetail .support-case-scroll .support-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
       #supportDetail .support-case-compose{flex:none;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
       #supportDetail .support-case-compose .operator-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin:0;padding:0}
+      #supportDetail .support-case-compose .operator-composer[hidden]{display:none}
       #supportDetail .support-case-compose textarea{margin:0;min-height:44px;max-height:min(160px,20dvh);font:inherit;resize:vertical}
       #supportDetail .support-case-compose button{min-height:44px}
       #supportDetail .support-case-compose [role=status]{margin:0 0 6px}

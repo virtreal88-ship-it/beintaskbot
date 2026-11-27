@@ -20,6 +20,7 @@ function installCaseTabsFixture(){
   }
   if(p.endsWith('/crm/chat/send')&&options.method==='POST'){
    f.sends.push(body);
+   if(f.sendOutcome==='denied')return new Response(JSON.stringify({success:false,keep_request:false,error:'Denied'}),{status:403});
    const accepted=f.sendOutcome==='accepted';
    if(accepted)f.caseReplies.push({caseId:body.support_ticket_id,id:body.request_id,external_id:'connect:'+body.request_id,direction:'outgoing',author_name:'Synthetic operator',body:body.text,message_type:'text',happened_at:'2026-11-27T12:00:00Z'});
    return new Response(JSON.stringify(accepted?{success:true,state:'accepted',message_id:body.request_id}:{success:false,keep_request:true,error:'Unknown'}),{status:accepted?200:503});
@@ -107,6 +108,14 @@ function installCaseTabsFixture(){
     await page.locator('#supportTab-developer').click();
     await page.evaluate(()=>{notificationCaseFixture.replyAllowed=true});
     await page.locator('#supportTab-history').click();
+   }
+   if(width===320){
+    await page.evaluate(()=>{notificationCaseFixture.sendOutcome='denied'});
+    await send.click();
+    await page.getByText('Отправка из этого обращения недоступна.').waitFor();
+    assert.equal(await composer.isVisible(),false);
+    assert.equal(await composer.inputValue(),'Unsent case reply draft');
+    await page.evaluate(()=>{notificationCaseFixture.sendOutcome='accepted'});
    }
    for(const tab of (width>=900?['history','developer','dialog']:['history','details','developer','dialog'])){await page.locator('#supportTab-'+tab).click();assert.equal(await page.locator('#supportDetail [role=tabpanel]:visible').count(),1);assert.equal(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true,tab+' fits '+width);
     await page.locator('#supportClose').focus();for(let step=0;step<18;step++){await page.keyboard.press(step<9?'Tab':'Shift+Tab');assert.equal(await page.evaluate(()=>document.querySelector('#supportDetailContent').contains(document.activeElement)&&!document.activeElement.closest('[hidden],[inert]')),true,'focus remains in visible modal controls');}
