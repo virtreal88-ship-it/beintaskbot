@@ -73,21 +73,22 @@ def migrate_operator_identity_links(cur) -> None:
       ON saas_operator_widget_replies(tenant_id,signature) WHERE state='unknown'""")
     migrate_customer_links(cur)
     migrate_company_actions(cur)
-    cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_deal_accounts (
-      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
-      source TEXT NOT NULL CHECK(source IN ('native','kommo')),
-      deal_id TEXT NOT NULL CHECK(length(deal_id) BETWEEN 1 AND 36),
-      deal_scope TEXT NOT NULL,
-      binding_id UUID NOT NULL,
-      account TEXT CHECK(length(account) BETWEEN 2 AND 120),
-      generation TEXT,
-      instance_id UUID,
-      updated_by BIGINT NOT NULL CHECK(updated_by>0),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      PRIMARY KEY(tenant_id,source,deal_id,deal_scope),
-      CHECK((account IS NULL AND generation IS NULL AND instance_id IS NULL) OR
-            (account IS NOT NULL AND generation IS NOT NULL AND instance_id IS NOT NULL))
-    )""")
+    for entity in ('deal', 'task'):
+        cur.execute(f"""CREATE TABLE IF NOT EXISTS saas_operator_{entity}_accounts (
+          tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+          source TEXT NOT NULL CHECK(source IN ('native','kommo')),
+          {entity}_id TEXT NOT NULL CHECK(length({entity}_id) BETWEEN 1 AND 36),
+          {entity}_scope TEXT NOT NULL,
+          binding_id UUID NOT NULL,
+          account TEXT CHECK(length(account) BETWEEN 2 AND 120),
+          generation TEXT,
+          instance_id UUID,
+          updated_by BIGINT NOT NULL CHECK(updated_by>0),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          PRIMARY KEY(tenant_id,source,{entity}_id,{entity}_scope),
+          CHECK((account IS NULL AND generation IS NULL AND instance_id IS NULL) OR
+                (account IS NOT NULL AND generation IS NOT NULL AND instance_id IS NOT NULL))
+        )""")
     from tenant_operator_company_import_jobs import migrate_jobs
     migrate_jobs(cur)
     cur.execute('''CREATE TABLE IF NOT EXISTS saas_operator_dialog_accounts (

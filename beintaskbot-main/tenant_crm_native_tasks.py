@@ -176,7 +176,7 @@ def _deal(cur,tenant_id,deal_id,*,lock=True):
     return row
 
 
-def _row(cur,tenant_id,task_id):
+def _row(cur,tenant_id,task_id,*,lock=False):
     cur.execute("""SELECT t.id,t.deal_id,d.title AS deal_title,t.contact_id,c.display_name AS contact_name,
         t.channel_id,t.conversation_id,t.text,t.due_at,t.responsible_id,m.display_name AS responsible_name,
         t.status,t.completed_at,t.created_by,t.created_at,t.updated_at,d.pipeline_id,d.stage_id,
@@ -185,7 +185,7 @@ def _row(cur,tenant_id,task_id):
         LEFT JOIN saas_crm_native_contacts c ON c.tenant_id=t.tenant_id AND c.id=t.contact_id
         LEFT JOIN saas_tenant_members m ON m.tenant_id=t.tenant_id AND m.telegram_id=t.responsible_id
         LEFT JOIN saas_tenant_members owner ON owner.tenant_id=t.tenant_id AND owner.telegram_id=t.access_responsible_id
-        WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.archived_at IS NULL""",(tenant_id,task_id))
+        WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.archived_at IS NULL"""+(' FOR SHARE OF t,d' if lock else ''),(tenant_id,task_id))
     return cur.fetchone()
 
 def create_task(tenant_id,deal_id,text,responsible_id,*,due_at=None,created_by=None,idempotency_key=None,actor_id=None):

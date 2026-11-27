@@ -3,7 +3,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import tenant_deal_operator_company as company
+import tenant_crm_operator_company as company
 from tenant_beinsystems_operator import OperatorError
 from tenant_crm_relation_contract import ProviderBinding
 from test_tenant_support_inbox import A, B, database, db
@@ -145,3 +145,82 @@ def test_disposable_postgres_binding_persists_and_unlinks_by_exact_deal(db, monk
         company.binding({'tenant_id': B, 'telegram_id': 22}, route)
     assert company.unlink(profile, route, saved['id'])['company_id'] is None
     assert company.binding(profile, route)['company_id'] is None
+
+def test_native_task_company_is_independent_of_its_deal(db, monkeypatch):
+    monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', A)
+    monkeypatch.setenv('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED', 'true')
+    monkeypatch.setattr(company.operator, '_connect', lambda: db)
+    db.execute("""INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name)
+        VALUES(%s::uuid,'task-pipeline','Sales')""", (A,))
+    db.execute("""INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name)
+        VALUES(%s::uuid,'task-pipeline','open','Open')""", (A,))
+    db.execute("""INSERT INTO saas_crm_native_deals(id,tenant_id,title,pipeline_id,stage_id)
+        VALUES(%s::uuid,%s::uuid,'Deal','task-pipeline','open')""", (DEAL, A))
+    db.execute("""INSERT INTO saas_crm_native_tasks(id,tenant_id,deal_id,text,responsible_id,created_by)
+        VALUES(%s::uuid,%s::uuid,%s::uuid,'Task',11,11)""", (DEAL, A, DEAL))
+    db.commit()
+    profile, route = {'tenant_id': A, 'telegram_id': 11}, ('native', DEAL)
+    assert company.binding(profile, route, entity='task')['can_manage']
+    with db.cursor() as cur:
+        saved = company._save(cur, A, 11, route, '', None, 'test-company', 'operator-1', INSTANCE, entity='task')
+    db.commit()
+    assert company.binding(profile, route)['company_id'] is None
+    assert company.binding(profile, route, entity='task')['company_name'] == 'test-company'
+    assert company.unlink(profile, route, saved['id'], entity='task')['company_id'] is None
+    db.execute("UPDATE saas_crm_native_tasks SET archived_at=now() WHERE tenant_id=%s::uuid", (A,))
+    db.commit()
+    with pytest.raises(OperatorError) as missing:
+        company.binding(profile, route, entity='task')
+    assert missing.value.status == 404
+
+
+def test_native_task_company_requires_row_update_to_link(access, monkeypatch):
+    flags = {'view': True, 'update': False}
+    monkeypatch.setattr(company, 'native_task_row', Mock(return_value={'id': DEAL}))
+    monkeypatch.setattr(company, 'task_access_allowed', lambda _, row, actor, op: flags[op])
+    cur = Mock()
+    route = ('native', DEAL)
+    assert company._task_access(cur, PROFILE, route)[4] is False
+    company.native_task_row.assert_called_once_with(cur, TENANT, DEAL, lock=True)
+    flags['view'] = False
+    with pytest.raises(OperatorError) as hidden:
+        company._task_access(cur, PROFILE, route)
+    assert hidden.value.status == 404
+
+
+def test_kommo_task_company_requires_current_task_provenance(db, monkeypatch):
+    import json
+    from tenant_kommo_board_provenance import digest
+
+    monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', A)
+    monkeypatch.setenv('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED', 'true')
+    monkeypatch.setattr(company.operator, '_connect', lambda: db)
+    ident = '503'
+    raw = {'id': int(ident), 'text': 'Task'}
+    db.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status,account_domain,connected_at)
+        VALUES(%s::uuid,'kommo','connected','test.kommo.com',now())""", (A,))
+    db.execute("""INSERT INTO saas_crm_tasks(tenant_id,kommo_task_id,text,raw)
+        VALUES(%s::uuid,%s,'Task',%s::jsonb)""", (A, int(ident), json.dumps(raw)))
+    db.commit()
+    route = company.target('kommo', ident, entity='task')
+    profile = {'tenant_id': A, 'telegram_id': 11}
+    with pytest.raises(OperatorError) as missing:
+        company.binding(profile, route, entity='task')
+    assert missing.value.status == 404
+    with db.cursor() as cur:
+        connection = company.current_binding(cur, A, lock=False)
+        cur.execute("""INSERT INTO saas_crm_board_provenance
+            (tenant_id,resource,external_id,account_id,connection_generation,raw_digest,source_revision)
+            VALUES(%s::uuid,'tasks',%s,%s,%s,%s,'verified')""",
+            (A, int(ident), connection.account_id, connection.connection_generation, digest(raw)))
+        _, _, _, scope, can_manage = company._task_access(cur, profile, route)
+        assert can_manage
+        company._save(cur, A, 11, route, scope, None, 'test-company', 'operator-1', INSTANCE, entity='task')
+    db.commit()
+    assert company.binding(profile, route, entity='task')['company_name'] == 'test-company'
+    db.execute("""UPDATE saas_tenant_integrations SET connected_at=connected_at + interval '1 day'
+        WHERE tenant_id=%s::uuid AND provider='kommo'""", (A,))
+    db.commit()
+    with pytest.raises(OperatorError) as stale:
+        company.binding(profile, route, entity='task')
+    assert stale.value.status == 404

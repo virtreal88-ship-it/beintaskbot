@@ -322,54 +322,55 @@ def dialog_company_handler(member: Callable, origin: str, logger):
                                      status=503, headers={"Cache-Control": "no-store"})
     return endpoint
 
-def deal_company_handler(member, origin, logger, *, public_link=False):
+def crm_company_handler(member, origin, logger, *, entity, public_link=False):
+    id_field = entity + "_id"
     async def endpoint(request):
         profile = _profile(member, request)
         headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
         try:
             if not profile:
                 raise operator.OperatorError("Интеграция недоступна.", 404)
-            from tenant_deal_operator_company import binding, read, select, target, unlink
-            fields = {"source", "deal_id"}
+            from tenant_crm_operator_company import binding, read, select, target, unlink
+            fields = {"source", id_field}
             if request.method == "GET":
                 query = request.query
                 _context(query, profile)
                 keys = fields | {"expected_tenant_id", "expected_user_id"}
                 if set(query) != keys or len(query) != len(keys):
-                    raise operator.OperatorError("Поля привязки сделки некорректны.")
-                route = target(query["source"], query["deal_id"])
-                return _json_response({"binding": await asyncio.to_thread(binding, profile, route)})
+                    raise operator.OperatorError("Поля привязки компании некорректны.")
+                route = target(query["source"], query[id_field], entity=entity)
+                return _json_response({"binding": await asyncio.to_thread(binding, profile, route, entity=entity)})
             data = await _body(request, profile, origin)
-            route = target(data.get("source"), data.get("deal_id"))
+            route = target(data.get("source"), data.get(id_field), entity=entity)
             keys = set(data) - fields
             if public_link:
                 if keys not in ({"expected_company_id"}, {"expected_company_id", "action"}) or (
                         "action" in data and data["action"] != "copy_customer_link"):
                     raise operator.OperatorError("Поля публичной ссылки некорректны.")
-                result = await asyncio.to_thread(read, profile, route, data["expected_company_id"], "public_link")
+                result = await asyncio.to_thread(read, profile, route, data["expected_company_id"], "public_link", entity=entity)
                 return _json_response({"public_link": result})
             if keys == {"action", "expected_company_id"} and data["action"] in (
                     "company_profile", "company_tasks", "company_modules", "company_history"):
                 action = data["action"]
-                result = await asyncio.to_thread(read, profile, route, data["expected_company_id"], action)
+                result = await asyncio.to_thread(read, profile, route, data["expected_company_id"], action, entity=entity)
                 return _json_response({"company_profile" if action == "company_profile" else "company_section": result})
             if keys == {"operator_search"}:
-                return _json_response(await asyncio.to_thread(select, profile, route, term=data["operator_search"]))
+                return _json_response(await asyncio.to_thread(select, profile, route, term=data["operator_search"], entity=entity))
             if keys in ({"operator_account", "expected_company_id"},
                         {"operator_account", "expected_company_id", "selection_search"}):
                 if "selection_search" in data and not isinstance(data["selection_search"], str):
                     raise operator.OperatorError("Некорректный поисковый запрос.")
                 return _json_response(await asyncio.to_thread(select, profile, route, term=data["operator_account"],
-                    choice=True, expected_company_id=data["expected_company_id"], selection_search=data.get("selection_search")))
+                    choice=True, expected_company_id=data["expected_company_id"], selection_search=data.get("selection_search"), entity=entity))
             if keys == {"company_id", "expected_company_id"} and data["company_id"] is None:
-                result = await asyncio.to_thread(unlink, profile, route, data["expected_company_id"])
+                result = await asyncio.to_thread(unlink, profile, route, data["expected_company_id"], entity=entity)
                 return _json_response({"binding": result})
-            raise operator.OperatorError("Поля привязки сделки некорректны.")
+            raise operator.OperatorError("Поля привязки компании некорректны.")
         except (operator.OperatorError, TenantLinearError) as error:
             return web.json_response({"success": False, "error": str(error)}, status=error.status, headers=headers)
         except Exception:
-            logger.error("Operator deal company request failed")
-            return web.json_response({"success": False, "error": "Данные компании сделки временно недоступны."},
+            logger.error("Operator CRM company request failed")
+            return web.json_response({"success": False, "error": "Данные компании временно недоступны."},
                                      status=503, headers=headers)
     return endpoint
 

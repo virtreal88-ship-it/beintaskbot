@@ -2,7 +2,7 @@
 (()=>{
   'use strict';
   const endpoint='/api/platform/operator/dialog-company';
-  const dealEndpoint='/api/platform/operator/deal-company';
+  const crmEndpoint=entity=>'/api/platform/operator/'+entity+'-company';
   const labels={
     ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',error:'Не удалось получить или изменить компанию.'},
     az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
@@ -102,7 +102,7 @@
     if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
     if(!company||!linkCurrent(s,company))return;
     s.linkCompany=company;s.linkBox.hidden=false;
-    if(s.deal)s.linkCopy.disabled=!s.linkUrl;
+    if(s.entity)s.linkCopy.disabled=!s.linkUrl;
     if(s.linkLoadedCompany!==company&&!s.linkLookupRequest)void loadExistingPublicLink(s,company);
   }
   async function loadExistingPublicLink(s,company){
@@ -122,7 +122,7 @@
         s.linkStatus.textContent=linkText('error');
       }
     }catch(error){if(active())s.linkStatus.textContent=[401,403,424].includes(error.status)?linkProblem(error.status===424?'rejected':'denied'):linkText('error');}
-    finally{if(s.linkLookupRequest===read){s.linkLookupRequest=null;s.linkLoadedCompany=company;if(s.deal)s.linkCopy.disabled=!s.linkUrl;}}
+    finally{if(s.linkLookupRequest===read){s.linkLookupRequest=null;s.linkLoadedCompany=company;if(s.entity)s.linkCopy.disabled=!s.linkUrl;}}
   }
   const sectionNames={
     ru:['Главная','Задачи','Модули','Платежи'],
@@ -656,7 +656,12 @@
     suggestions.id='operatorDialogueCompanySuggestions';suggestions.append(results);panel.append(suggestions);
     panel.addEventListener('focusout',event=>{
       if(panel.contains(event.relatedTarget)||!active()||s.writing||!s.editing)return;
-      const confirmText=s.deal?({ru:'Снять привязку компании с этой сделки?',az:'Sövdələşmənin şirkətlə əlaqəsini silmək istəyirsiniz?',en:'Remove the company link from this deal?'}[window.tenantI18n?.language]||'Sövdələşmənin şirkətlə əlaqəsini silmək istəyirsiniz?'):t('confirm');
+      const confirmations={
+        deal:{ru:'Снять привязку компании с этой сделки?',az:'Sövdələşmənin şirkətlə əlaqəsini silmək istəyirsiniz?',en:'Remove the company link from this deal?'},
+        task:{ru:'Снять привязку компании с этой задачи?',az:'Tapşırığın şirkətlə əlaqəsini silmək istəyirsiniz?',en:'Remove the company link from this task?'}
+      };
+      const copy=confirmations[s.entity];
+      const confirmText=copy?(copy[window.tenantI18n?.language]||copy.az):t('confirm');
       if(!input.value.trim()&&s.binding?.company_id&&s.binding.can_unlink!==false&&window.confirm(confirmText)){
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
@@ -740,13 +745,14 @@
     };
     s.sync();
   }
-  function mount({host,nameHost,partnerHost,reminderHost,route,member,isCurrent,onChanged,deal=false,onClear}){
-    const validRoute=deal?['native','kommo'].includes(route?.source)&&route.deal_id
+  function mount({host,nameHost,partnerHost,reminderHost,route,member,isCurrent,onChanged,entity=null,onClear}){
+    const idKey=entity+'_id';
+    const validRoute=entity?['native','kommo'].includes(route?.source)&&route[idKey]
       :route?.provider&&route.lead_id&&typeof route.conversation_id==='string'&&typeof route.channel_id==='string'
         &&(route.provider!=='connect'||route.channel_id&&route.conversation_id);
     if(!host?.isConnected||!validRoute
         ||!member?.tenant_id||member?.telegram_id==null||!isCurrent()){clear();return;}
-    const exact=deal?{source:route.source,deal_id:String(route.deal_id)}:{provider:String(route.provider),lead_id:String(route.lead_id),
+    const exact=entity?{source:route.source,[idKey]:String(route[idKey])}:{provider:String(route.provider),lead_id:String(route.lead_id),
       channel_id:route.channel_id,conversation_id:route.conversation_id};
     const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),exact]);
     const snapshot=route.company_binding;
@@ -770,20 +776,20 @@
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
-    const s={section,value,status,member,isCurrent,onChanged,onClear,deal,endpoint:deal?dealEndpoint:endpoint,
+    const s={section,value,status,member,isCurrent,onChanged,onClear,entity,endpoint:entity?crmEndpoint(entity):endpoint,
       route:exact,key,snapshot,lifecycle,initialCompanyName,read:null};
     host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);placeReminder(s,reminderHost);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
-  function attachDeal({host,source,id,member,isCurrent}){
+  function attachCrmCard({host,entity,source,id,member,isCurrent}){
     const card=host?.closest('.modal');
     if(!card||!host.isConnected||!member?.tenant_id||member.telegram_id==null)return;
     const lang=window.tenantI18n?.language;
     const title=({ru:'Компания Operator',en:'Operator company',az:'Operator şirkəti'}[lang]||'Operator şirkəti');
     const closeText=({ru:'Закрыть',en:'Close',az:'Bağla'}[lang]||'Bağla');
-    const route={source,deal_id:String(id)};
+    const route={source,[entity+'_id']:String(id)};
     const trigger=button(title,open);
-    trigger.className='outline';trigger.dataset.dealOperatorCompany='';
+    trigger.className='outline';trigger.dataset[entity+'OperatorCompany']='';
     trigger.setAttribute('aria-haspopup','dialog');
     host.append(trigger);
     let panel=null;
@@ -802,7 +808,7 @@
       if(panel?.contains(state?.section))clear();else closePanel();
     });
     watch.observe(card,{attributes:true,attributeFilter:['class','data-revision','data-type'],childList:true,subtree:true});
-    void request(dealEndpoint,member,route,false,read.signal).then(({binding})=>{
+    void request(crmEndpoint(entity),member,route,false,read.signal).then(({binding})=>{
       if(!read.signal.aborted&&isCurrent())showName(binding);
     }).catch(()=>{});
     function open(){
@@ -817,11 +823,13 @@
       const active=panel;
       active.addEventListener('close',()=>{if(active.contains(state?.section))clear();else if(panel===active)closePanel();});
       active.showModal();
-      mount({host:content,route,member,isCurrent:()=>active.open&&isCurrent(),deal:true,onClear:closePanel,onChanged:showName});
+      mount({host:content,route,member,isCurrent:()=>active.open&&isCurrent(),entity,onClear:closePanel,onChanged:showName});
     }
   }
   const style=node('style');
   style.textContent=`
+    #taskFlowCompany:not(:empty){padding-block-end:12px}
+    #taskFlowCompany>button{width:100%;min-height:44px;text-align:start;white-space:normal;overflow-wrap:anywhere}
     .operator-deal-company-panel{position:fixed;box-sizing:border-box;inset:0;width:min(540px,calc(100% - 24px));max-width:none;max-height:min(760px,calc(100dvh - 24px));padding:0;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);overflow:auto;overscroll-behavior:contain}
     .operator-deal-company-panel::backdrop{background:#0006}
     .operator-deal-company-panel>.operator-client-panel-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;background:var(--card);border-bottom:1px solid var(--line)}
@@ -940,17 +948,17 @@
     :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-copy-icon{grid-column:2;display:grid;place-items:center;width:36px;min-width:36px;height:36px;min-height:36px;padding:0}
   `;document.head.append(style);
   for(const event of ['tenant-auth-invalid','tenant-auth-pending'])document.addEventListener(event,clear);
-  for(const event of ['tenant-chat-open','tenant-chat-close'])document.addEventListener(event,()=>{if(!state?.deal)clear();});
+  for(const event of ['tenant-chat-open','tenant-chat-close'])document.addEventListener(event,()=>{if(!state?.entity)clear();});
   document.addEventListener('tenant-profile',event=>{
     if(!state)return;
     const next=event.detail?.member;
-    if(event.detail?.capabilities?.[state.deal?'deal_operator_company':'dialog_company_binding']!==true||!next?.active||
+    if(event.detail?.capabilities?.[state.entity?state.entity+'_operator_company':'dialog_company_binding']!==true||!next?.active||
         String(next.tenant_id)!==String(state.member.tenant_id)||String(next.telegram_id)!==String(state.member.telegram_id))clear();
   });
-  document.addEventListener('tenant-view',event=>{if(state?.deal||event.detail?.view!=='dialogs')clear();});
+  document.addEventListener('tenant-view',event=>{if(state?.entity||event.detail?.view!=='dialogs')clear();});
   document.addEventListener('tenant-language',()=>{if(state){state.labelTabs();state.labelProfile();labelPublicLink(state);}});
-  document.addEventListener('tenant-dialog-reauthorized',()=>{if(!state?.deal&&state?.snapshot===undefined)refresh();});
-  window.tenantDialogueCompany={mount,attachDeal,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
+  document.addEventListener('tenant-dialog-reauthorized',()=>{if(!state?.entity&&state?.snapshot===undefined)refresh();});
+  window.tenantDialogueCompany={mount,attachCrmCard,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
     refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},
     hidePublicLink(){
       if(!state)return;

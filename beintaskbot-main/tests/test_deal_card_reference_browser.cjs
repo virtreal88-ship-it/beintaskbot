@@ -107,6 +107,95 @@ async function open(page, native) {
   return modal;
 }
 
+
+async function verifyTaskCompany(browser){
+  for(const [source,width,capability,canManage] of [
+    ['native',1440,true,true],['kommo',360,true,true],['native',360,true,false],['kommo',360,false,false]
+  ]){
+    const page=await browser.newPage({...(width<900?devices['Pixel 7']:{}),viewport:{width,height:820}});
+    page.setDefaultTimeout(6500);
+    try{
+      await page.addInitScript(installFixture,{});
+      await page.addInitScript(({capability,canManage})=>{
+        const fixture=window.taskFlowFixture,original=window.fetch;
+        fixture.profile.capabilities.task_operator_company=capability;
+        const names=new Map(canManage?[]:[[fixture.task,'readonly-account']]);
+        window.companyRequests=[];
+        window.fetch=async(input,options={})=>{
+          const url=new URL(input,location.href);
+          if(!url.pathname.startsWith('/api/platform/operator/task-company'))return original(input,options);
+          const fields=options.method==='POST'?JSON.parse(options.body):Object.fromEntries(url.searchParams);
+          companyRequests.push({path:url.pathname,method:options.method,fields});
+          const json=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
+          if(fields.expected_tenant_id!==fixture.A||fields.expected_user_id!=='11'||!fixture[fields.source]?.some(task=>task.id===fields.task_id)||'deal_id' in fields)return json({},404);
+          const name=names.get(fields.task_id);
+          const binding=()=>({company_id:names.has(fields.task_id)?'test-binding':null,
+            company_name:names.get(fields.task_id)??null,can_manage:canManage,can_search_operator:canManage,can_unlink:canManage});
+          if(options.method==='GET')return json({binding:binding()});
+          if(fields.action==='company_profile'&&name)return json({company_profile:{state:'available',partner_name:'Task partner',balance:30}});
+          if(url.pathname.endsWith('/public-link')&&name)return json({public_link:{state:'available',url:'https://1000.az/task01'}});
+          if(!canManage)return json({},403);
+          if(fields.operator_search==='task')return json({accounts:[{account:'task-company'}]});
+          if(fields.expected_company_id!==binding().company_id)return json({},409);
+          if(fields.operator_account==='task-company')names.set(fields.task_id,fields.operator_account);
+          else if(fields.company_id===null)names.delete(fields.task_id);
+          else return json({},400);
+          return json({binding:binding()});
+        };
+      },{capability,canManage});
+      await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
+      await page.goto('https://fixture.test/app?view=tasks&lang=ru');
+      await page.waitForFunction(()=>window.tenantProfileSnapshot?.member?.active===true&&window.tenantTaskFlow?.ready());
+      const opened=()=>page.evaluate(source=>window.tenantTaskFlow.open(source,taskFlowFixture[source][0].id),source);
+      assert.equal(await opened(),true);
+      const task=page.locator('#taskFlowCard');
+      const trigger=task.locator('[data-task-operator-company]');
+      if(!capability){
+        assert.equal(await trigger.count(),0);
+        assert.equal(await page.evaluate(()=>companyRequests.length),0);
+        continue;
+      }
+      assert(await trigger.evaluate(button=>{
+        const rect=button.getBoundingClientRect();
+        const details=document.getElementById('taskFlowCardBody').getBoundingClientRect();
+        return rect.height>0&&rect.top>=0&&rect.bottom<=details.top+1&&rect.bottom<=window.innerHeight;
+      }));
+      await trigger.click();
+      const panel=task.getByRole('dialog',{name:'Компания Operator',exact:true});
+      const input=panel.locator('#operatorDialogueCompanySearch');
+      if(canManage){
+        await panel.getByPlaceholder('Найти компанию',{exact:true}).waitFor();
+        await input.focus();
+        await input.pressSequentially('task');
+        await panel.getByRole('button',{name:'@task-company',exact:true}).click();
+      }else{
+        await panel.getByPlaceholder('Нет доступа к выбору компании',{exact:true}).waitFor();
+        assert.equal(await input.getAttribute('readonly'),'');
+        assert.equal(await panel.getByRole('button',{name:'Снять связь',exact:true}).count(),0);
+      }
+      await panel.getByText('Task partner',{exact:true}).waitFor();
+      await panel.getByRole('link',{name:'https://1000.az/task01'}).waitFor();
+      await page.keyboard.press('Escape');
+      await panel.waitFor({state:'detached'});
+      assert(await task.isVisible(),'Escape only closes the company panel');
+      await task.locator('[data-task-card-close]').click();
+      await task.waitFor({state:'hidden'});
+      assert.equal(await opened(),true);
+      await trigger.filter({hasText:canManage?'task-company':'readonly-account'}).waitFor();
+      if(canManage){
+        await trigger.click();
+        await panel.getByText('Task partner',{exact:true}).waitFor();
+        await panel.getByRole('button',{name:'Снять связь',exact:true}).click();
+        await panel.getByRole('tab',{name:'Главная',exact:true}).focus();
+        await trigger.filter({hasText:/^Компания Operator$/}).waitFor();
+        assert(await page.evaluate(()=>companyRequests.some(r=>r.fields?.company_id===null)));
+      }
+      const identity=await page.evaluate(()=>companyRequests.every(({fields})=>fields.task_id===taskFlowFixture[fields.source][0].id));
+      assert(identity,'The task id is source-qualified and retained as a string');
+    } finally {await page.close();}
+  }
+}
+
 (async()=>{
   const browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
   const screenshots=process.env.DEAL_CARD_SCREENSHOTS;
@@ -160,6 +249,7 @@ async function open(page, native) {
         const panel=modal.getByRole('dialog',{name:'Компания Operator',exact:true});
         const search=panel.locator('#operatorDialogueCompanySearch');
         if(!limited){
+          await panel.getByPlaceholder('Найти компанию',{exact:true}).waitFor();
           await search.focus();
           await search.pressSequentially('deal');
           await panel.getByRole('button',{name:'@deal-company',exact:true}).click();
@@ -264,6 +354,8 @@ async function open(page, native) {
       assert.deepEqual(errors,[]);
       await page.close();
     }
+    await verifyTaskCompany(browser);
+    console.log('PASS task company: Chromium Beintaskbot + Kommo, selection, reopening, unlinking, Escape and access gates');
     console.log('PASS deal card: Chromium native + Kommo, responsive layout, stage/edit, lazy related data, authorised and missing routes');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

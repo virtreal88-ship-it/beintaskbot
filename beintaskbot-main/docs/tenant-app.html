@@ -762,8 +762,8 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     select.add(new Option(names.stage,String(x.stage_id)));select.disabled=true;
     const guard=nativeDealMoveScope();
     const view=card.layout({host:body,deal:x,sections,stage,isCurrent:current});
-    if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachDeal({
-      host:view.companyHost,source:'native',id:x.id,member:state.me,isCurrent:current});
+    if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachCrmCard({
+      host:view.companyHost,entity:'deal',source:'native',id:x.id,member:state.me,isCurrent:current});
     void loadNativeDealBoardCatalog().then(()=>{
       if(!current()||!guard.current())return;
       const stages=nativeDealBoardCatalog.workflows.filter(row=>String(row.pipeline_id)===String(x.pipeline_id));
@@ -1136,8 +1136,8 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       host.innerHTML=`<div class="chat-placeholder"><div id="chatRows"></div>${dealChatMarkup({ai:true})}</div><button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}"></button>`;
       const view=window.tenantKommoDealCard.mount({host,deal:x,api,isCurrent:active});
       mountDealChat({id:x.kommo_lead_id,box:host.querySelector('#chatRows'),controller,current,first});
-      if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachDeal({
-        host:view.companyHost,source:'kommo',id:x.kommo_lead_id,member:state.me,isCurrent:current});
+      if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachCrmCard({
+        host:view.companyHost,entity:'deal',source:'kommo',id:x.kommo_lead_id,member:state.me,isCurrent:current});
       void first.then(({data})=>current()&&data?findDealDialog(x,controller.signal):null)
         .then(route=>{if(current())connectDealDialogLink(view,route,current,closeDeal);}).catch(()=>{});
     }catch(e){if(current()){controller.abort();$('modalContent').textContent=e.message;}}
