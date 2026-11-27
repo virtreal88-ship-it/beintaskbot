@@ -692,6 +692,16 @@
       if(route.provider==='operator_widget'){
         showLifecycleTimelineEvent(result.operator_event,action==='dismiss'?'no_reply':action);
         if(action==='transfer'){closeDialog();void refresh();return;}
+        if(action==='close'&&result.lifecycle?.state==='closed'){
+          // Self-scoped operators can no longer load history after completion.
+          // Return to the queue rather than turning a successful close into a 403.
+          closeDialog(true,true);
+          const state={...history.state};for(const key of ['operatorDialog','operatorDialogOwner','operatorDialogHistoryEntry','operatorHelper'])delete state[key];history.replaceState(state,'');
+          listFlight=null;lastListAt=0;
+          await refresh(false,false,{suppressRead:true});
+          if(version===epoch&&!currentDialog&&$('view-dialogs')?.classList.contains('active'))notice(({ru:'Диалог завершён',az:'Dialoq tamamlandı',en:'Dialogue completed'})[i18n.language]||'Dialogue completed');
+          return;
+        }
         await openDialog(route,true,'',{suppressRead:true});void refresh();return;
       }
       if(action==='accept'||action==='close'){
@@ -3454,6 +3464,7 @@
       const canComment=()=>identity(member)===who&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true;
       window.tenantDialogSourceTabs?.({
         source:websiteChat?'widget':'whatsapp',key:contextKey('source',route),panel:host.querySelector('.operator-composer'),
+        lifecycleActions:websiteChat?$('operatorActiveLifecycleActions'):null,
         canComment:canComment(),save:async attempt=>{
           if(!canComment())throw new Error(t('readOnly'));
           const {comment}=await api('dialogs/internal-comments','POST',{provider:route.provider,lead_id:route.lead_id,
