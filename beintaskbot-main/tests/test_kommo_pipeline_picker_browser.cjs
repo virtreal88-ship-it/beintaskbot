@@ -33,19 +33,20 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   fs.writeFileSync(path.join(__dirname,`artifacts/kommo-stage-reference-${width}-${theme}.json`),JSON.stringify(diagnostics,null,2));
   const pipeline=page.locator('[data-deal-pipeline]');
   assert.equal(await pipeline.textContent(),'Продажи');
-  const trigger=page.locator('.modal-head .deal-stage-trigger');
-  const geometry=await trigger.evaluate(n=>{
-   const bounds=n.getBoundingClientRect(),head=n.closest('.modal-head').getBoundingClientRect();
-   const close=n.closest('.modal-head').querySelector('.close').getBoundingClientRect();
-   return {width:bounds.width,height:bounds.height,left:bounds.left,right:bounds.right,head:head.width,closeLeft:close.left};
-  });
+  const mobile=width<900;
+  const trigger=page.locator((mobile?'.modal-head':'.deal-info-panel')+' .deal-stage-trigger');
+  const geometry=await trigger.evaluate((n,mobile)=>{
+   const bounds=n.getBoundingClientRect(),surface=n.closest('.modal-head,.deal-info-panel').getBoundingClientRect();
+   const limit=mobile?n.closest('.modal-head').querySelector('.close').getBoundingClientRect().left:surface.right;
+   return {width:bounds.width,height:bounds.height,left:bounds.left,right:bounds.right,maxWidth:surface.width*(mobile ? 0.4 : 1),limit};
+  },mobile);
   assert.equal(diagnostics[0].width,width,'full-viewport card');
   assert(geometry.height>=44,'stage control has a touch target');
-  assert(geometry.width>0&&geometry.width<=geometry.head*.4+1,'stage stays compact in the header');
-  assert(geometry.left>=0&&geometry.right<=geometry.closeLeft,'stage stays inside the header without overlapping Close');
+  assert(geometry.width>0&&geometry.width<=geometry.maxWidth+1,'stage stays within its allotted width');
+  assert(geometry.left>=0&&geometry.right<=geometry.limit,'stage stays in its panel without overlapping Close');
   assert.equal(await trigger.getAttribute('title'),await trigger.textContent(),'full stage available when truncated');
   await trigger.click();
-  assert(await page.locator('.deal-stage-sheet').isVisible(),'header stage control opens the existing picker');
+  assert(await page.locator('.deal-stage-sheet').isVisible(),'stage control opens the existing picker');
 
   await page.locator('[data-deal-pipeline-picker]').selectOption('2');assert.deepEqual(await page.evaluate(()=>moves),[],'choosing a pipeline does not write');
   const box=await page.locator('.deal-stage-sheet').boundingBox();assert(box.x>=0&&box.x+box.width<=width+1);assert(box.y>=0&&box.y+box.height<=851);assert(await page.locator('.deal-stage-sheet').evaluate(n=>n.scrollWidth<=n.clientWidth+1));
@@ -55,7 +56,7 @@ const {chromium}=require('../.support-test-deps/node_modules/playwright');
   await trigger.click();await page.locator('[data-deal-pipeline-picker]').selectOption('2');await page.locator('[data-stage-id="20"]').click();
   await page.waitForFunction(()=>document.querySelector('[data-deal-pipeline]').textContent==='Другая доступная воронка');
   assert.equal(await trigger.getAttribute('title'),'Длинное название этапа '.repeat(8));
-  assert((await trigger.boundingBox()).width<=geometry.head*.4+1,'long stage does not expand the header');
+  assert((await trigger.boundingBox()).width<=geometry.maxWidth+1,'long stage stays within its allotted width');
   assert.deepEqual(await page.evaluate(()=>moves),[['2','20']]);assert.equal(await page.locator('.deal-stage-picker').isVisible(),false);await page.close();
  }
  console.log('PASS pipeline chooser reference layout, light/dark 320–1440, no implicit write, Escape and explicit mapped stage');
