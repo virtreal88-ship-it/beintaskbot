@@ -78,6 +78,9 @@
     .deal-linked-dialog-body .operator-chat-history{scrollbar-width:thin;touch-action:pan-y}
     .deal-linked-dialog-body .operator-chat-history::-webkit-scrollbar{width:6px}
     .deal-linked-dialog-body .operator-chat-history::-webkit-scrollbar-thumb{min-height:40px;border-radius:8px;background:var(--muted)}
+    @supports selector(::-webkit-scrollbar-thumb){
+      :is(.deal-info-panel,.deal-feed-panel,.deal-chat-history,.deal-linked-dialog-body .operator-chat-history){scrollbar-width:auto}
+    }
     .deal-card-layout .deal-chat-compose{flex:0 1 auto;min-height:0;max-height:60%;overflow:auto;overscroll-behavior:contain;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
     .deal-card-layout .deal-chat-compose .operator-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin:0}
     .deal-card-layout .deal-chat-compose .operator-composer-actions{display:flex;align-items:center;gap:6px}
