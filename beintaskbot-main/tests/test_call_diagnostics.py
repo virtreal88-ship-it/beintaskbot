@@ -88,3 +88,15 @@ def test_invalid_optional_telemetry_cannot_block_hangup(gateway):
     calls.action(PROFILE,{**cmd,'op':'end','call_id':started['id'],'diagnostics':{'raw':'untrusted'}})
     assert database.execute('SELECT state FROM saas_browser_calls')[0]['state']=='ending'
     assert database.execute("SELECT count(*) AS n FROM saas_browser_call_commands WHERE op='end'")[0]['n']==1
+
+
+def test_invalid_gateway_metrics_do_not_block_call_completion(gateway):
+    database,_,config=gateway
+    started=calls.action(PROFILE,command())
+    work=calls.sync(config,snapshot(2))['commands'][0]
+    ended=provider('ended',peer=started['conversation_id'],direction='outbound',id='safe-provider')
+    ended['diagnostics']={'version':1,'raw':'untrusted'}
+    calls.sync(config,snapshot(3,ended=[ended],results=[
+        {'id':work['id'],'ok':True,'provider_id':'safe-provider'}]))
+    row=database.execute('SELECT state,diagnostics FROM saas_browser_calls')[0]
+    assert row=={'state':'ended','diagnostics':{}}

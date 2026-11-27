@@ -72,20 +72,30 @@ def checked(data, source):
         raise TenantLinearError('call_diagnostics_invalid',400) from None
 
 
-def save_gateway(cur, config, boot, item):
+def save_gateway(cur, config, boot, items):
     from tenant_platform import _json
-    if 'diagnostics' not in item:
+    evidence=[]
+    for item in items:
+        if 'diagnostics' not in item:
+            continue
+        try:
+            data=checked(item['diagnostics'],'gateway')
+        except TenantLinearError:
+            continue
+        evidence.append({**{key:item[key] for key in ('provider_id','peer_jid','direction','state')},
+                         'diagnostics':data})
+    if not evidence:
         return
-    data=checked(item['diagnostics'],'gateway')
-    encoded=_json(data)
-    cur.execute("""UPDATE saas_browser_calls
-      SET diagnostics=jsonb_set(diagnostics,'{gateway}',%s::jsonb)
-      WHERE tenant_id=%s::uuid AND gateway_id=%s::uuid AND boot_id=%s::uuid
-        AND provider_id=%s AND peer_jid=%s AND direction=%s
-        AND (state NOT IN ('ended','failed') OR %s='ended')
-        AND diagnostics->'gateway' IS DISTINCT FROM %s::jsonb""",
-        (encoded,config['tenant_id'],config['gateway_id'],boot,item['provider_id'],
-         item['peer_jid'],item['direction'],item['state'],encoded))
+    # One bounded update for the snapshot, including unchanged historical calls.
+    cur.execute("""UPDATE saas_browser_calls b
+      SET diagnostics=jsonb_set(b.diagnostics,'{gateway}',d.diagnostics)
+      FROM jsonb_to_recordset(%s::jsonb) AS d(provider_id text,peer_jid text,
+        direction text,state text,diagnostics jsonb)
+      WHERE b.tenant_id=%s::uuid AND b.gateway_id=%s::uuid AND b.boot_id=%s::uuid
+        AND b.provider_id=d.provider_id AND b.peer_jid=d.peer_jid AND b.direction=d.direction
+        AND (b.state NOT IN ('ended','failed') OR d.state='ended')
+        AND b.diagnostics->'gateway' IS DISTINCT FROM d.diagnostics""",
+        (_json(evidence),config['tenant_id'],config['gateway_id'],boot))
 
 
 def save_browser(cur, tenant, actor, row, request, evidence):

@@ -396,9 +396,6 @@ def sync(c,data):
             if item['direction'] not in {'inbound','outbound'} or item['state'] not in {'ringing','connected','ended'}:raise ValueError()
             if 'remote_answered' in item and (item['remote_answered'] is not True or item['direction']!='outbound' or item['state']!='ringing'):
                 raise ValueError()
-            if 'diagnostics' in item:
-                from tenant_call_diagnostics import checked
-                checked(item['diagnostics'],'gateway')
             if 'caller' in item:
                 from tenant_call_identity import valid
                 if not c.get('managed') or item['direction']!='inbound' or not valid(item['peer_jid'],item['caller']):raise ValueError()
@@ -524,8 +521,7 @@ def sync(c,data):
                         from tenant_dialog_lifecycle import note_inbound_call
                         note_inbound_call(cur,c['tenant_id'],c['channel_id'],target['conversation_id'],incoming_id)
             from tenant_call_diagnostics import save_gateway
-            for item in active+ended:
-                save_gateway(cur,c,boot,item)
+            save_gateway(cur,c,boot,active+ended)
             cur.execute('''UPDATE saas_browser_call_commands q SET payload='{}'::jsonb,result=result-'sdp_answer'
               FROM saas_browser_calls c WHERE c.id=q.call_id AND c.tenant_id=%s::uuid AND c.state IN ('ended','failed')''',(c['tenant_id'],))
             cur.execute('''INSERT INTO saas_browser_call_gateways(tenant_id,gateway_id,boot_id,seq,connected,max_seconds)
