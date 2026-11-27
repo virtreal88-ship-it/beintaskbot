@@ -57,6 +57,9 @@ const read=file=>fs.readFileSync(path.join(__dirname,'..',file),'utf8');
   await page.locator('[data-support-id]').first().click();await page.locator('#supportTicketTitle').waitFor();
   assert(await page.locator('#supportTake').isVisible());assert.equal(await page.locator('#supportHistory .support-message').count(),2);await screenshot('history');assert(await page.locator('#supportResolve').isVisible());assert.equal(await page.locator('#supportTakeover').count(),0);
   await page.locator('#supportTab-details').click();assert(await page.locator('#supportEditStatus').isVisible());assert.equal(await page.locator('#supportSummaryText').count(),0);
+  const detailsBox=await page.locator('#supportPanel-details').boundingBox(),historyBox=await page.locator('#supportPanel-history').boundingBox();
+  if(width>600){assert(historyBox&&detailsBox.x+detailsBox.width<=historyBox.x,'data and conversation appear side by side');}
+  else{assert.equal(historyBox,null,'mobile shows one panel at a time');const modalBox=await page.locator('#supportDetailContent').boundingBox();assert(modalBox.height>=899,'mobile card fills viewport');}
   assert(await page.locator('#supportDetailContent').evaluate(n=>n.scrollWidth<=n.clientWidth+1),'card fits viewport');
   await page.locator('#supportDescription').fill('Несохранённое описание');await page.locator('#supportTab-history').click();await page.locator('#supportTab-details').click();assert.equal(await page.locator('#supportDescription').inputValue(),'Несохранённое описание');
   await screenshot('card');assert.equal(await page.locator('#supportCaseContext').count(),0);assert.equal(await page.locator('#supportCaseMaterials').count(),0);

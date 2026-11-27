@@ -27,6 +27,7 @@ function installAliasFixture(mode){
   await context.addInitScript(installNotificationCaseFixture);await context.addInitScript(installAliasFixture,mode);page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
   await page.goto(origin+'/app?view=support&lang=ru');await page.locator('[data-support-id]').first().click();
+  await page.locator('#supportTab-history').click();
   await page.locator('#supportHistory [data-message-id=case-message]').waitFor();
   return {context,page,errors};
  }
