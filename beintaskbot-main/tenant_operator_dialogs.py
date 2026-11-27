@@ -1111,13 +1111,16 @@ def _completion_inbound_snapshot(cur, tenant, rows, *, presence_only=False):
                    for r in rows if r.get('provider')=='connect'})
     if not routes:return {}
     ordering='' if presence_only else ' ORDER BY m.created_at DESC,m.id DESC'
+    # Confirmed missed calls enter the work queue like a new inbound message,
+    # but do not become text tokens for rhetorical/bulk completion actions.
+    inbound="(m.direction='incoming' OR (m.direction='system' AND m.message_type='call_missed'))" if presence_only else "m.direction='incoming'"
     cur.execute("""WITH routes(channel_id,conversation_id,lead_id) AS (
       SELECT * FROM unnest(%s::text[],%s::text[],%s::bigint[]))
       SELECT r.channel_id,r.conversation_id,r.lead_id,m.id::text AS message_id
       FROM routes r LEFT JOIN LATERAL (
         SELECT id FROM saas_crm_messages m WHERE m.tenant_id=%s::uuid
           AND m.channel='connect:'||r.channel_id AND m.kommo_lead_id=r.lead_id
-          AND m.direction='incoming'"""+ordering+""" LIMIT 1
+          AND """+inbound+ordering+""" LIMIT 1
       ) m ON TRUE""",([r[0] for r in routes],[r[1] for r in routes],[r[2] for r in routes],tenant))
     return {(r['channel_id'],r['conversation_id'],int(r['lead_id'])):r['message_id'] for r in cur.fetchall()}
 
