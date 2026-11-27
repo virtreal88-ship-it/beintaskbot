@@ -60,6 +60,43 @@ def test_same_crm_path_preserves_history_and_duplicate_is_idempotent(ready):
     db.commit()
 
 
+@pytest.mark.parametrize(('kind','metadata','expected'), [
+    ('contact', {'contacts': [
+        {'name':'Test Contact','phones':['+15550000003','invalid'], 'vcard':'PRIVATE'},
+        {'name':'Second','phones':[]} ]},
+     {'contacts':[{'name':'Test Contact','phones':['+15550000003']}, {'name':'Second','phones':[]}]}),
+    ('location', {'location': {'latitude':0, 'longitude':-48.3, 'name':'Test Location', 'address':'Test Street',
+                              'url':'https://invalid.example/'}},
+     {'location':{'latitude':0, 'longitude':-48.3, 'name':'Test Location', 'address':'Test Street'}}),
+])
+def test_shared_content_is_saved_once_and_visible_in_crm(ready, monkeypatch, kind, metadata, expected):
+    from tenant_operator_dialogs import _message
+    db, _ = ready
+    activate(db)
+    def should_not_enqueue(*args, **kwargs):
+        pytest.fail('A WhatsApp share should not enqueue an AI reply')
+    monkeypatch.setattr('tenant_ai_agent_connect.enqueue', should_not_enqueue)
+    publication = delivery()
+    publication['after'] = 2
+    publication['event'].update(id='b'*64, sequence=3, payload=message(
+        provider_id='SHARED_MESSAGE_1', message_type=kind, text='', **metadata))
+    receipt = store(publication)
+    consumer.project_stored(receipt)
+    consumer.project_stored(receipt)
+    rows = db.execute("""SELECT * FROM saas_crm_messages
+        WHERE tenant_id=%s AND channel=%s AND raw->>'externalMessageId'='SHARED_MESSAGE_1'""",
+        (A, 'connect:'+CA))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row['direction'] == 'incoming' and row['message_type'] == kind and not row['body']
+    assert 'proto' not in row['raw']
+    assert {key: row['raw'][key] for key in expected} == expected
+    visible = _message(row)
+    assert {key: visible[key] for key in expected} == expected
+    assert 'raw' not in visible and visible['media_url'] == ''
+    db.commit()
+
+
 def test_retained_status_does_not_block_next_customer_event(ready):
     db,reference=ready
     activate(db)

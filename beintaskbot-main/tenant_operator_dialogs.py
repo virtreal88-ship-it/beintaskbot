@@ -394,6 +394,9 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     if value.get('message_type') in {'call_missed', 'call_rejected', 'call_invalidated', 'call_observed'}:
         value['call_is_video'] = isinstance(raw, dict) and raw.get('isVideo') is True
     if value['source'] == 'connect' and not value.get('message_deleted'):
+        if value.get('message_type') in {'contact', 'location'} and isinstance(raw, dict):
+            from tenant_whatsapp_shared_content import facts as shared_facts
+            value.update(shared_facts(value['message_type'], raw))
         # Display only a persisted provider/receipt status; viewing a dialog or
         # an outgoing row alone never proves delivery or customer readership.
         if direction == 'outgoing':

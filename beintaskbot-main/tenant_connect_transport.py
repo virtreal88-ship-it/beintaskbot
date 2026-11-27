@@ -1499,6 +1499,11 @@ def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=N
                             str(source_message['id']),actor_id=employee)
                 conn.commit()
                 return True
+            if data.get('type') in ('contact', 'location'):
+                # Shares are visible to operators and trigger normal inbound
+                # lifecycle/notice handling. They are not text turns for AI.
+                conn.commit()
+                return accepted
             from tenant_connect_identity import conflicted
             if identity_conflict or conflicted(cur, tenant, channel_id, conversation):
                 # Preserve the signed event and CRM message, but do not feed a

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import _fernet
+from tenant_whatsapp_shared_content import KINDS as SHARE_KINDS, facts as shared_facts
 
 DIRECT = re.compile(r'^[1-9][0-9]{5,22}@(s\.whatsapp\.net|lid)$')
 DEVICE = re.compile(r'^([1-9][0-9]{5,22})(?:\.([0-9]{1,3}))?:([0-9]{1,5})@(s\.whatsapp\.net|lid)$')
@@ -20,7 +21,9 @@ GROUP = re.compile(r'^[0-9]{5,30}(?:-[0-9]{5,20})?@g\.us$')
 PROVIDER_ID = re.compile(r'^[A-Za-z0-9_-]{5,200}$')
 FIELDS = {'kind','chat','sender','sender_alt','recipient_alt','provider_id','from_me','timestamp',
           'text','status','proto','media_kind','media_mime','media_size','file_name','message_type',
-          'push_name','quote_id','quote_chat','quote_sender','variant','app_dispatch','edit','revoke'}
+          'push_name','quote_id','quote_chat','quote_sender','variant','app_dispatch','edit','revoke','contacts','location'}
+MEDIA_KINDS = frozenset({'image','audio','video','document','sticker'})
+MESSAGE_KINDS = MEDIA_KINDS | SHARE_KINDS | {'text'}
 
 
 def _error(code='native_projection_invalid'):
@@ -79,7 +82,8 @@ def message_event(scope, event_id, payload, message_id):
     All legacy table/provider names remain stable for the existing dialogs/AI.
     """
     if (not isinstance(payload, dict) or set(payload) - FIELDS or payload.get('kind') != 'message'
-            or payload.get('variant') or payload.get('message_type') not in {'text','image','audio','video','document','sticker'}):
+            or payload.get('variant') or not isinstance(payload.get('message_type'), str)
+            or payload['message_type'] not in MESSAGE_KINDS):
         raise _error('native_event_not_projectable')
     # Status publications and broadcast/newsletter feeds are retained provider
     # evidence, never CRM conversations or AI turns. A valid non-chat event must
@@ -134,7 +138,10 @@ def message_event(scope, event_id, payload, message_id):
                 or quote_chat and quote_chat != chat):
             raise _error('native_quote_scope_unconfirmed')
         data['quotedExternalMessageId'] = quote
-    if kind != 'text':
+    if kind in SHARE_KINDS:
+        data.update(shared_facts(kind, payload))
+        data['text'] = ''
+    if kind in MEDIA_KINDS:
         if payload.get('media_kind') != kind or type(payload.get('media_size', 0)) is not int or not 0 <= payload.get('media_size', 0) <= 2**63-1:
             raise _error()
         # No provider URL, media key, embedded proto, arbitrary fields or public
