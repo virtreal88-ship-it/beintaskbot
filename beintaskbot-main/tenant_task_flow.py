@@ -59,7 +59,7 @@ def query(request, profile, *, required=False):
     """Browser intent is a deny-only check; the cookie remains authority."""
     result = {}
     params = request.query if hasattr(request, 'query') else request.rel_url.query
-    for key in ('flow', 'source', 'task_id', 'request_id', 'offset', 'order', 'expected_tenant_id', 'expected_user_id'):
+    for key in ('flow', 'source', 'task_id', 'request_id', 'deal_filter', 'offset', 'order', 'expected_tenant_id', 'expected_user_id'):
         values = params.getall(key, []) if hasattr(params, 'getall') else (
             [params[key]] if key in params else [])
         if len(values) > 1 or (values and not str(values[0])):
@@ -81,6 +81,11 @@ def query(request, profile, *, required=False):
         raise TaskFlowError('task_invalid_query')
     if 'request_id' in result:
         result['request_id'] = _uuid(result['request_id'])
+    if 'deal_filter' in result:
+        source = result.get('source')
+        if result.get('flow') != '1' or source not in ('native', 'kommo') or result.keys() & {'task_id', 'request_id'}:
+            raise TaskFlowError('task_invalid_query')
+        result['deal_filter'] = (_uuid if source == 'native' else _positive)(result['deal_filter'])
     if ('offset' in result or 'order' in result) and (
             result.get('flow') != '1' or 'task_id' in result or 'request_id' in result):
         raise TaskFlowError('task_invalid_query')
@@ -189,11 +194,14 @@ def _native_where(profile):
     return read_where(profile)
 
 
-def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=(), offset=0, recent=False):
+def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, search=None, status=None, type_ids=(), offset=0, recent=False, deal_filter=None):
     if source == 'native':
         where, args = _native_where(profile)
         if task_id:
             where += ' AND t.id=%s::uuid'; args.append(_uuid(task_id))
+        if deal_filter:
+            where += ' AND t.deal_id=%s::uuid'
+            args.append(_uuid(deal_filter))
         if request_id:
             where += ' AND t.idempotency_key=%s AND t.created_by=%s'
             args.extend(['manual:'+request_id, profile['telegram_id']])
@@ -232,6 +240,9 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
         where, args = task_filters(tenant_id=profile['tenant_id'], scope=TenantPolicy(profile).kommo_task_scope())
         if task_id:
             where += ' AND kommo_task_id=%s'; args.append(_positive(task_id))
+        if deal_filter:
+            where += ' AND kommo_lead_id=%s'
+            args.append(_positive(deal_filter))
         if status:
             where += ' AND completed=%s'
             args.append(status == 'completed')
@@ -276,6 +287,8 @@ def _rows(cur, profile, source, *, task_id=None, request_id=None, limit=None, se
             row['kommo_task_id'] = str(row['kommo_task_id'])
             row['source_revision'] = proof.get(row['kommo_task_id'])
             from tenant_task_titles import task_title_fields
+            from tenant_crm_sync_data import timestamp
+            row['created_at'] = timestamp((row.get('raw') or {}).get('created_at'))
             task_title_fields(row)
             row.pop('raw',None)
             row['kommo_lead_id'] = str(row['kommo_lead_id']) if row.get('kommo_lead_id') else None
@@ -376,10 +389,12 @@ def _command(cur, profile, source, request_id):
     return result
 
 
-def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=(), offset=0, recent=False):
+def read(profile, *, source=None, task_id=None, request_id=None, search=None, status=None, type_ids=(), offset=0, recent=False, deal_filter=None):
     if status not in (None, "all", "open", "completed"):
         raise TaskFlowError("task_invalid_query")
     if source not in (None, 'native', 'kommo') or (task_id and request_id):
+        raise TaskFlowError('task_invalid_query')
+    if deal_filter is not None and (source is None or task_id or request_id):
         raise TaskFlowError('task_invalid_query')
     if request_id:
         request_id = _uuid(request_id)
@@ -403,7 +418,8 @@ def read(profile, *, source=None, task_id=None, request_id=None, search=None, st
         else:
             limit = result['limit']
             rows = _rows(cur, current, selected, limit=limit + 1, search=search,
-                         status=None if status == 'all' else status, type_ids=type_ids, offset=offset, recent=recent)
+                         status=None if status == 'all' else status, type_ids=type_ids, offset=offset,
+                         recent=recent, deal_filter=deal_filter)
             has_more = len(rows) > limit
             result.update(tasks=rows[:limit], shown=min(len(rows), limit), has_more=has_more,
                           next_offset=offset + limit if has_more else None, state='ready' if rows else 'empty')

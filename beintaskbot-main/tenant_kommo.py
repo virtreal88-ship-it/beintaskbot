@@ -109,7 +109,7 @@ class TenantKommo:
     def settings(self) -> tuple[str, str, str]:
         return oauth_settings(self.context.origin, error=self.context.platform_error)
 
-    async def request_bound(self, binding, method: str, path: str, *, json_body=None):
+    async def request_bound(self, binding, method: str, path: str, *, json_body=None, params=None):
         """Single-attempt transport for a caller holding integration/access locks.
 
         Never refresh or retry here: token persistence could deadlock those locks,
@@ -118,9 +118,17 @@ class TenantKommo:
         scalar = bool(re.fullmatch(r'(contacts|leads|tasks)/[1-9][0-9]*', path))
         notes = bool(re.fullmatch(r'leads/[1-9][0-9]*/notes', path))
         note = bool(re.fullmatch(r'leads/[1-9][0-9]*/notes/[1-9][0-9]*', path))
+        users = (path == 'users' and isinstance(params, dict) and set(params) == {'page', 'limit'}
+                 and type(params['page']) is int and 1 <= params['page'] <= 8 and params['limit'] == 250)
+        events = (path == 'events' and isinstance(params, dict)
+                  and set(params) == {'filter[entity]', 'filter[entity_id]', 'filter[type]', 'limit'}
+                  and params['filter[entity]'] == 'lead' and params['filter[type]'] == 'lead_status_changed'
+                  and re.fullmatch(r'[1-9][0-9]*', str(params['filter[entity_id]'])) and params['limit'] == 100)
         if binding.provider != 'kommo' or not ((method in ('GET', 'PATCH') and scalar)
-                or (method == 'GET' and (notes or note)) or (method == 'POST' and notes)):
+                or (method == 'GET' and (notes or note or users or events)) or (method == 'POST' and notes)):
             raise self.context.platform_error('Scalar CRM request is invalid.')
+        if params is not None and not (users or events):
+            raise self.context.platform_error('Scalar CRM query is invalid.')
         if method == 'POST':
             if (not isinstance(json_body, list) or len(json_body) != 1
                     or not isinstance(json_body[0], dict) or set(json_body[0]) != {'note_type', 'params'}
@@ -153,7 +161,8 @@ class TenantKommo:
             if expected_mode != 'manual' and token_is_expiring(credentials.get('token_expires_at') or ''):
                 raise self.context.platform_error('Scalar CRM token requires refresh before delivery.')
             wait_slot(binding.account_id)
-            response=requests.request(method, f"https://{binding.account_id}/api/v4/{path}",
+            query = {'params': params} if params is not None else {}
+            response=requests.request(method, f"https://{binding.account_id}/api/v4/{path}", **query,
                 json=json_body, headers={'Authorization':f"Bearer {credentials['access_token']}",
                                          'Accept':'application/json'}, timeout=20, allow_redirects=False)
             # A redirect is not the authorized exact record, and 307/308 would

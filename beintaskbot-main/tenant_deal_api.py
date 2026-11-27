@@ -17,6 +17,7 @@ class DealApiContext:
     get_deal: Callable[..., dict | None]
     platform_error: type[Exception]
     logger: object
+    deal_details: Callable[..., object] | None = None
 
 
 def _deal_access(context: DealApiContext, profile: dict | None) -> bool:
@@ -98,6 +99,9 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
         profile = context.member(request)
         if not _deal_access(context, profile):
             return web.json_response({"success": False, "error": "Sövdələşmə üçün icazəniz yoxdur."}, status=403)
+        denied = context_error(request, profile)
+        if denied is not None:
+            return denied
         try:
             lead_id = int(request.rel_url.query.get("lead_id") or 0)
         except ValueError:
@@ -108,6 +112,12 @@ def handlers(context: DealApiContext) -> dict[str, Callable]:
             context.get_deal, tenant_id=profile["tenant_id"], kommo_lead_id=lead_id)
         if not context.policy(profile).can_access_kommo_deal(row):
             return web.json_response({"success": False, "error": "Sövdələşmə seçilmiş siyahıda deyil."}, status=404)
-        return web.json_response({"success": True, "deal": row})
+        if context.deal_details:
+            if request.rel_url.query.get('details') == '1':
+                details = await context.deal_details(profile, row)
+                return web.json_response({'success': True, 'details': details}, headers={'Cache-Control': 'no-store'})
+            from tenant_kommo_deal_details import snapshot_fields
+            row = {**row, **snapshot_fields(row)}
+        return web.json_response({"success": True, "deal": row}, headers={'Cache-Control': 'no-store'})
 
     return {"sync_status": sync_status, "deals": deals, "deal": deal}

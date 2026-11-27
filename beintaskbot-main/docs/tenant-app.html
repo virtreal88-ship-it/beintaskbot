@@ -687,7 +687,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     general.innerHTML=card.overview({...x,pipeline_name:names.pipeline});
     const sections=[{key:'general',label:c.general,node:general}];
     const relationActions={
-      contacts:{label:c.contact,allowed:()=>nativeAction('deals','update'),read:()=>nativeAction('customers','view'),
+      contacts:{label:c.contact,allowed:()=>nativeAction('deals','update')&&x.actions?.update===true,read:()=>nativeAction('customers','view'),
         endpoint:'/api/platform/crm/native/contacts',items:'data',id:x.contact_id,name:x.contact_name},
       company:{label:c.company,allowed:()=>nativeDealCompanyRelationAllowed(false,x),read:()=>nativeCompanyAction('view'),
         endpoint:'/api/platform/crm/native/companies',items:'companies',id:x.company_id,name:x.company_name}
@@ -695,10 +695,10 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     let relationPending=false;
     for(const [key,relation] of Object.entries(relationActions)){
       const unlink=key==='company'?nativeDealCompanyRelationAllowed(true,x):relation.allowed();
-      if(!relation.allowed()&&!unlink&&!relation.name)continue;
+      if(!relation.allowed()&&(!unlink||!relation.id))continue;
       const node=document.createElement('section');
       const kind=key==='contacts'?'contact':'company';
-      node.innerHTML=`<div class="crm-relation-row"><span>${esc(relation.name||'—')}</span>${relation.id?`<button type="button" class="outline danger" data-deal-unlink-${kind} ${unlink?'':'hidden'}>${esc(labels.unlink)}</button>`:''}</div><div class="crm-relation-add"${relation.allowed()?'':' hidden'}><select data-deal-${kind}-select aria-label="${esc(relation.label)}"><option value="">${esc(relation.label)}</option></select><button type="button" class="outline" data-deal-link-${kind} ${relation.allowed()?'':'hidden'}>${esc(labels.link)}</button></div><p class="sub" role="status"></p>`;
+      node.innerHTML=`${relation.id&&unlink?`<button type="button" class="outline danger" data-deal-unlink-${kind}>${esc(labels.unlink)}</button>`:''}<div class="crm-relation-add"${relation.allowed()?'':' hidden'}><select data-deal-${kind}-select aria-label="${esc(relation.label)}"><option value="">${esc(relation.label)}</option></select><button type="button" class="outline" data-deal-link-${kind} ${relation.allowed()?'':'hidden'}>${esc(labels.link)}</button></div><p class="sub" role="status"></p>`;
       const select=node.querySelector('select'),status=node.querySelector('[role=status]');
       let loaded=false;
       const change=async(target,remove)=>{
@@ -718,7 +718,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       node.querySelector('[data-deal-link-'+kind+']').onclick=()=>void change(select.value,false);
       const remove=node.querySelector('[data-deal-unlink-'+kind+']');
       if(remove)remove.onclick=()=>void change(relation.id,true);
-      sections.push({key,label:relation.label,node,load:async()=>{
+      sections.push({key,label:relation.label,node,data:true,load:async()=>{
         if(loaded||!relation.allowed()&&!unlink)return;
         loaded=true;
         try{
@@ -736,9 +736,16 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
         if(loaded)return;
         loaded=true;node.textContent='…';
         try{
-          const result=await api('/api/platform/crm/native/tasks');
+          const flow=window.tenantTaskFlow;
+          const result=await flow.read('native',{deal_filter:String(x.id)});
           if(!current())return;
-          node.innerHTML=(result.tasks||[]).filter(t=>String(t.deal_id)===String(x.id)).map(t=>`<div class="crm-relation-row"><span>${esc(t.text)}</span><button class="outline" data-native-open="task:${esc(t.id)}">${esc(labels.open)}</button></div>`).join('')||`<p class="sub">${esc(labels.empty)}</p>`;
+          node.replaceChildren();
+          for(const task of (result.tasks||[]).filter(t=>String(t.deal_id)===String(x.id))){
+            const when=task.created_at||task.due_at;
+            const entry=card.activity(labels.tasks,task.text,when),button=document.createElement('button');
+            button.type='button';button.className='outline';button.dataset.nativeOpen='task:'+task.id;button.textContent=labels.open;
+            entry.append(document.createElement('br'),button);view.entry(entry,when);
+          }
         }catch(error){if(current())node.textContent=error.message;}
       }});
     }
@@ -1061,8 +1068,8 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       void window.tenantOperator.openDialog(route);
     };
   }
-  function mountDealChat({id,box,controller,current,first,route,refreshProvider=true,canSend=true}){
-    const options={api,id,member:state.me,signal:controller.signal,isCurrent:current,box,line:chatLine,first,refreshProvider};
+  function mountDealChat({id,box,controller,current,first,route,refreshProvider=true,canSend=true,onMessages}){
+    const options={api,id,member:state.me,signal:controller.signal,isCurrent:current,box,line:chatLine,first,refreshProvider,onMessages};
     document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:id,surface:refreshProvider?'deal':'native-deal',...(route?{channel_id:route.channel_id,conversation_id:route.conversation_id}:{})}}));
     const view=window.tenantDealChat.mount(options);
     if(canSend){
@@ -1095,7 +1102,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       const canSend=route.can_send===true&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.archive_read_only;
       if(canSend){view.composer.innerHTML=dealChatMarkup();view.composer.hidden=false;}
       connectDealDialogLink(view,route,valid,()=>modal.classList.remove('show'));
-      session.mounted=true;mountDealChat({id:lead,box,controller,current:valid,first,route,canSend,refreshProvider:false});
+      session.mounted=true;mountDealChat({id:lead,box,controller,current:valid,first,route,canSend,refreshProvider:false,onMessages:view.chatCalls});
     }catch{ /* The existing empty state remains when the source cannot be verified. */ }
     finally{status?.removeAttribute('aria-busy');}
   }
