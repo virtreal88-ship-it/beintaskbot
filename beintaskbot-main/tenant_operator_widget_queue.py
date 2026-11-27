@@ -54,7 +54,7 @@ def _unassigned(row):
     return row["state"] == "waiting" and row["operator_id"] is None
 
 
-def authorized(cur, profile, params, *, update=False, lock=False, replay=False, waiting=False):
+def authorized(cur, profile, params, *, update=False, lock=False, replay=False, waiting=False, require_provider_write=True):
     tenant, actor, policy = access(cur, profile, "dialogs", action="update" if update else "view")
     instance = source(cur, policy.profile, "update" if update else "view")
     if not instance or instance != str(params.get("channel_id")) or params.get("provider") != PROVIDER:
@@ -77,7 +77,7 @@ def authorized(cur, profile, params, *, update=False, lock=False, replay=False, 
         if not own and not (waiting and _unassigned(row) and widget_allowed(policy.profile, "update", assigned=True)):
             raise TenantLinearError("Диалог недоступен.", 403)
     _allow_provider_assignment(cur, tenant, instance, [row])
-    if update and not row["writable"]:
+    if update and require_provider_write and not row["writable"]:
         raise TenantLinearError("Operator ограничил действия в этом чате.", 403)
     return row, actor, policy
 
@@ -107,9 +107,11 @@ def attach_companies(cur, policy, instance, rows):
             row["crm_company_name"] = company["name"]
 
 
-def card(row, actor, writable, rollout, online):
+def card(row, actor, can_update, rollout, online):
     state = row["state"]
-    own = state == "accepted" and row["operator_id"] == actor and writable and rollout.enforced
+    local_own = state == "accepted" and row["operator_id"] == actor and can_update and rollout.enforced
+    writable = can_update and row["writable"]
+    own = local_own and writable
     inbound = str(row["latest_in"] or "")
     marked = bool(inbound and row["marked_in"] == row["latest_in"])
     lifecycle = {
@@ -122,7 +124,8 @@ def card(row, actor, writable, rollout, online):
             _unassigned(row) and writable and online and rollout.admission_enabled and inbound
         ),
         "can_transfer": own,
-        "can_close": own,
+        # Completion only changes the CRM queue, not the provider chat.
+        "can_close": local_own,
         "can_dismiss": bool(own and inbound and not marked and rollout.admission_enabled),
         "no_reply_needed": marked,
     }
@@ -194,8 +197,8 @@ def cards(cur, policy, mode, rollout):
     attach_companies(cur, policy, instance, rows)
     writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
-    return [card(row, actor, row["writable"] and (writable or
-                 can_work and (_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor)),
+    return [card(row, actor, writable or
+                 can_work and (_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor),
                  rollout, online) for row in rows], {
         "id": PROVIDER + ":" + instance,
         "name": SOURCE,
@@ -232,7 +235,7 @@ def history(profile, params, before=None):
         dialog = card(
             row,
             actor,
-            row["writable"] and widget_allowed(policy.profile, "update",
+            widget_allowed(policy.profile, "update",
                 assigned=_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor),
             rollout,
             is_online(cur, key[0], actor, source_channel=key[1]),
@@ -261,7 +264,7 @@ def history(profile, params, before=None):
         )
         events = [e["payload"]["event"] for e in reversed(cur.fetchall())]
         db.commit()
-    if dialog["lifecycle"]["can_close"]:
+    if dialog["lifecycle"]["can_close"] and row["writable"]:
         credentials = operator._credentials(key[0])
         if credentials["connection_instance_id"] == key[1]:
             from tenant_operator_widget_sender import widget_sender
@@ -364,7 +367,10 @@ def mutate(profile, params):
     digest = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
     with operator._connect() as db, db.cursor() as cur:
         rollout = guard(cur, str(profile["tenant_id"]))
-        row, actor, policy = authorized(cur, profile, params, update=True, lock=True, replay=True, waiting=action == "accept")
+        row, actor, policy = authorized(
+            cur, profile, params, update=True, lock=True, replay=True, waiting=action == "accept",
+            require_provider_write=action != "close",
+        )
         key = scope(row)
         cur.execute(
             "SELECT actor_id,input_hash,result FROM saas_dialog_lifecycle_receipts WHERE tenant_id=%s AND request_id=%s",
