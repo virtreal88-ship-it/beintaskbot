@@ -126,14 +126,32 @@ def attach_outbound_evidence(cur,scope,payload,event_id):
 
 def project_stored(receipt):
     scope = receipt['scope']
+    reference = (scope['tenant'], scope['source'], scope['generation'], receipt['event_id'])
     try:
-        return consume((scope['tenant'], scope['source'], scope['generation'], receipt['event_id']))
+        return consume(reference)
     except TenantLinearError as error:
-        if str(error) == 'native_event_not_projectable':
+        code = str(error)
+        if code == 'native_event_not_projectable':
             # Receipts/control/history events remain in the durable encrypted
             # inbox. They must not become fake customer turns or block capture.
             return False
-        raise
+        if code != 'native_projection_invalid':
+            raise
+        # Only deterministic payload validation failures are acknowledged
+        # after recording why projection was rejected. Evidence, scope and
+        # storage failures still use the normal delivery retry.
+        _record_invalid_payload(reference, receipt['sequence'], code)
+        return False
+
+
+def _record_invalid_payload(reference, sequence, code):
+    tenant, source, generation, event_id = reference
+    audit_id = uuid.uuid5(uuid.NAMESPACE_URL, 'beintaskbot:whatsapp-native-rejection:'+json.dumps(reference))
+    details = json.dumps({'channel_id':source,'generation':generation,'sequence':sequence,'reason':code})
+    with _connect() as conn, conn.cursor() as cur:
+        cur.execute("""INSERT INTO saas_tenant_audit_events(id,tenant_id,action,entity_type,entity_id,payload)
+          VALUES(%s,%s,'whatsapp_native_projection_rejected','whatsapp_native_event',%s,%s::jsonb)
+          ON CONFLICT (id) DO NOTHING""", (audit_id,tenant,event_id,details))
 
 
 def authorize(cur, reference, event):

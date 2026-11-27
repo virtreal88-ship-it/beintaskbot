@@ -4,6 +4,13 @@ from unittest.mock import Mock
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
+from test_browser_calls import gateway
+from test_call_recordings import pilot
+from test_call_sources import TOKEN, managed
+from test_tenant_support_inbox import A, CA, database, db
+from test_whatsapp_native_consumer import activate, ready
+from test_whatsapp_native_inbox import capture, delivery, store
+from test_whatsapp_native_projection import message
 import tenant_whatsapp_native_api as api
 import tenant_whatsapp_native_consumer as consumer
 from tenant_linear_policy import TenantLinearError
@@ -117,3 +124,91 @@ def test_cancelled_requests_keep_capacity_until_transactions_finish(monkeypatch)
         assert not slots.locked()
         assert await api._finish_thread(lambda: 'committed') == 'committed'
     asyncio.run(run())
+
+
+def deliver_over_http(monkeypatch, *events):
+    async def run():
+        monkeypatch.setattr(api, 'SLOTS', asyncio.Semaphore(2))
+        app = web.Application()
+        app.router.add_post('/messages', api.handler(Mock(), 'https://example.invalid', Mock()))
+        async with TestClient(TestServer(app)) as client:
+            results = []
+            for event in events:
+                response = await client.post('/messages', json=event, headers={'Authorization':'Bearer '+TOKEN})
+                results.append((response.status, await response.json()))
+            return results
+    return asyncio.run(run())
+
+
+def test_private_voice_reply_to_group_does_not_block_later_messages(ready,monkeypatch):
+    db, _ = ready
+    activate(db)
+    chat = '188888888@lid'
+    voice = delivery()
+    voice['after'] = 2
+    voice['event'].update(id='b'*64, sequence=3, payload=message(
+        chat=chat, sender=chat, sender_alt='', text='', provider_id='PRIVATE_VOICE',
+        message_type='audio', media_kind='audio', media_mime='audio/ogg', media_size=120,
+        quote_id='GROUP_MESSAGE', quote_chat='120363123456789@g.us'))
+    following = delivery()
+    following['after'] = 3
+    following['event'].update(id='c'*64, sequence=4, payload=message(
+        chat=chat, sender=chat, sender_alt='', provider_id='FOLLOWING_MESSAGE'))
+    receipts = deliver_over_http(monkeypatch,voice,voice,following)
+    assert [(status, result['sequence']) for status,result in receipts] == [(200,3),(200,3),(200,4)]
+    rows = db.execute("""SELECT m.direction,m.message_type,m.raw,c.conversation_id
+      FROM saas_crm_messages m JOIN saas_connect_conversations c
+        ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s AND m.channel=%s
+        AND m.raw->>'externalMessageId' IN ('PRIVATE_VOICE','FOLLOWING_MESSAGE')
+      ORDER BY m.message_type""", (A,'connect:'+CA))
+    assert [(r['direction'],r['message_type'],r['conversation_id']) for r in rows] == [
+        ('incoming','audio',chat),('incoming','text',chat)]
+    assert rows[0]['raw']['nativeEventId']=='b'*64
+    assert 'quotedExternalMessageId' not in rows[0]['raw']
+    assert 'GROUP_MESSAGE' not in str(rows[0]['raw'])
+    assert db.execute('SELECT stored_sequence FROM saas_whatsapp_capture_generations') == [
+        {'stored_sequence':4}]
+    db.commit()
+
+
+def test_invalid_payload_is_retained_and_audited_once_before_continuing(ready,monkeypatch):
+    db, _ = ready
+    activate(db)
+    invalid = delivery()
+    invalid['after'] = 2
+    invalid['event'].update(id='b'*64, sequence=3, payload=message(
+        sender='invalid sender', provider_id='INVALID_MESSAGE'))
+    following = delivery()
+    following['after'] = 3
+    following['event'].update(id='c'*64, sequence=4, payload=message(
+        provider_id='AFTER_INVALID_MESSAGE'))
+    receipts = deliver_over_http(monkeypatch,invalid,invalid,following)
+    assert [(status, result['sequence']) for status,result in receipts] == [(200,3),(200,3),(200,4)]
+
+    assert db.execute("""SELECT entity_id, payload FROM saas_tenant_audit_events
+      WHERE tenant_id=%s AND action='whatsapp_native_projection_rejected'""", (A,)) == [{
+        'entity_id':'b'*64, 'payload':{'channel_id':CA,'generation':invalid['scope']['generation'],
+                                      'sequence':3,'reason':'native_projection_invalid'}}]
+    assert db.execute("""SELECT sequence FROM saas_whatsapp_native_inbox
+      WHERE tenant_id=%s AND channel_id=%s AND event_id=%s""", (A,CA,'b'*64)) == [{'sequence':3}]
+    assert db.execute("""SELECT raw->>'externalMessageId' AS id FROM saas_crm_messages
+      WHERE raw->>'externalMessageId' IN ('INVALID_MESSAGE','AFTER_INVALID_MESSAGE')""") == [
+        {'id':'AFTER_INVALID_MESSAGE'}]
+    db.commit()
+
+
+def test_projection_does_not_acknowledge_tampered_evidence(ready,monkeypatch):
+    db, _ = ready
+    activate(db)
+    value = delivery()
+    value['after'] = 2
+    value['event'].update(id='b'*64, sequence=3, payload=message(provider_id='TAMPERED_MESSAGE'))
+    store(value)
+    db.execute('UPDATE saas_whatsapp_native_inbox SET encrypted_payload=%s WHERE event_id=%s', (b'not authentic','b'*64))
+    db.commit()
+
+    assert deliver_over_http(monkeypatch,value) == [(409,{'error':'native_inbox_evidence_invalid'})]
+    assert not db.execute("SELECT 1 FROM saas_tenant_audit_events WHERE action='whatsapp_native_projection_rejected'")
+    assert not db.execute("SELECT 1 FROM saas_crm_messages WHERE raw->>'externalMessageId'='TAMPERED_MESSAGE'")
+    db.commit()

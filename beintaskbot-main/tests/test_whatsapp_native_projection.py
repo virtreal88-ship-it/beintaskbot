@@ -72,8 +72,10 @@ def test_group_author_and_caption_quote_are_explicit_without_merging_by_name():
     assert out['quotedExternalMessageId']=='SYNTHETIC_QUOTE' and out['fileSize']==23
     other=event({**p,'chat':'120363999999999@g.us','quote_chat':'120363999999999@g.us'})['data']
     assert other['conversationId']!=out['conversationId']
-    with pytest.raises(TenantLinearError,match='native_quote_scope_unconfirmed'):
-        event({**p,'quote_chat':'120363999999999@g.us'})
+    without_quote={key:value for key,value in out.items() if key!='quotedExternalMessageId'}
+    for invalid in ({'quote_chat':'120363999999999@g.us'},{'quote_id':'../invalid'},
+                    {'quote_id':123},{'quote_chat':None}):
+        assert event({**p,**invalid})['data']==without_quote
 
 
 @pytest.mark.parametrize('changes',[
