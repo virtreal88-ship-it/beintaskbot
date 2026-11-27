@@ -15,10 +15,8 @@
     $('supportQueueLabel').textContent=$('supportStatus').selectedOptions[0]?.textContent||t('unresolved');
   }
   function organizeTicketWorkspace(){
-    const header=$('supportDetailContent').querySelector('.support-card-header');
     const primary=document.createElement('div');primary.className='support-primary-actions';primary.setAttribute('aria-label',workspaceText('work'));
-    primary.append($('supportTake'),$('supportOpenChat'),$('supportResolve'),$('supportCreateTask'));header.append(primary);
-    const chat=$('supportOpenChat');chat.textContent=({ru:'Переписка',az:'Yazışma',en:'Conversation'}[i18n.language]||'Conversation');
+    primary.append($('supportSave'),$('supportTake'),$('supportResolve'),$('supportCreateTask'));$('supportPanel-details').append(primary);
     const close=$('supportClose');close.textContent='×';close.title=t('close');close.setAttribute('aria-label',t('close'));
   }
   function installWorkspaceStyle(){
@@ -67,37 +65,66 @@
       #supportInbox #supportSlaSettings>summary::-webkit-details-marker{display:none}
       #supportInbox .support-sla-explanation{grid-column:1/-1;margin:0 0 6px;font-size:12px;color:var(--muted);line-height:1.5}
       #supportInbox #supportSlaSettings .support-sla-form{position:absolute;right:0;top:44px;z-index:8;width:min(360px,calc(100vw - 48px));box-sizing:border-box;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 12px 32px rgb(0 0 0 / 12%);grid-template-columns:1fr 1fr}
-      #supportDetail .support-modal-card{padding:20px;border-radius:14px}
-      #supportDetail .support-card-header{top:-20px;padding-top:4px}
+      #supportDetail{padding:0}
       #supportDetail .support-card-header h2{font-size:19px;font-weight:650}
-      #supportDetail #supportClose{width:44px;min-height:44px!important;padding:0;font-size:26px;font-weight:400;border-radius:50%;border:0;background:var(--paper);color:var(--muted)}
-      #supportDetail .support-case-tabs button{min-height:44px}
-      #supportDetail .support-primary-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid var(--line)}
+      #supportDetail #supportClose{width:44px;min-height:44px;padding:0;font-size:26px;font-weight:400;border-radius:8px;border:0;background:transparent;color:var(--muted)}
+      #supportDetail .support-primary-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 0 0}
       #supportDetail .support-primary-actions button{min-height:38px;padding:8px 12px;white-space:normal;font:inherit;font-size:13px}
-      #supportDetail #supportResolve{width:auto}
-      #supportDetail #supportMoreActions{position:relative;margin-left:auto}
-      #supportDetail #supportMoreActions>summary{display:grid;place-items:center;width:38px;height:38px;cursor:pointer;list-style:none;border:1px solid var(--line);border-radius:9px;font-weight:700}
-      #supportDetail #supportMoreActions>summary::-webkit-details-marker{display:none}
-      #supportDetail .support-extra-actions{position:absolute;right:0;top:42px;width:min(280px,calc(100vw - 48px));padding:10px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 32px rgb(0 0 0 / 12%);display:grid;gap:8px}
-      #supportDetail .support-work-fields{grid-template-columns:repeat(4,minmax(0,1fr));margin:0 0 6px}
       #supportDetail .support-edit label{font-size:13px;color:var(--muted)}
       #supportDetail .support-edit textarea{color:var(--ink);font:inherit;font-size:14px;line-height:1.5;resize:vertical}
-      #supportDetail .support-save-actions{position:sticky;bottom:-20px;z-index:3;background:var(--card);padding:12px 0;border-top:1px solid var(--line);justify-content:flex-end}
-      #supportHistory{display:flex;flex-direction:column;gap:8px;padding:12px 0}#supportHistory .support-message{max-width:85%;margin:0;align-self:flex-start;min-width:140px;box-sizing:border-box}#supportHistory .support-message[data-direction=outgoing]{align-self:flex-end;margin:0}#supportHistory .support-message small{font-size:11px;margin-top:5px}#supportDetail .support-history-actions{justify-content:flex-end}
-      #supportDetail .support-history-actions+.sub{display:none}
-      #supportDetail .support-modal-card{width:min(1440px,100%);height:min(92dvh,980px);max-height:92dvh;box-sizing:border-box;padding:0;display:flex;flex-direction:column;overflow:hidden}
-      #supportDetail .support-card-header{position:static;flex:none;padding:12px 18px 0;background:var(--card);border-bottom:1px solid var(--line)}
+      #supportDetail .support-modal-card{width:100%;height:100dvh;max-height:100dvh;box-sizing:border-box;padding:0;border-radius:0;box-shadow:none;display:flex;flex-direction:column;overflow:hidden}
+      #supportDetail .support-card-header{position:static;flex:none;padding:10px 18px;background:var(--card);border-bottom:1px solid var(--line)}
       #supportDetail .support-heading{flex-wrap:nowrap}
-      #supportDetail .support-case-tabs{display:flex;position:static;gap:4px;padding:0;border:0}
-      #supportDetail .support-case-tabs button{min-height:42px;padding:4px 12px;border:0;border-radius:0}
-      #supportDetail .support-case-tabs [aria-selected=true]{background:transparent;border:0;box-shadow:inset 0 -2px var(--brand);font-weight:600}
-      #supportDetail .support-primary-actions{padding:8px 0;border:0}
+      #supportDetail .support-case-tabs{display:flex;position:static;flex:none;min-width:0;gap:4px;padding:0 18px;border-bottom:1px solid var(--line)}
+      #supportDetail .support-case-tabs button{min-height:42px;padding:4px 12px;border:0;border-radius:0;font:inherit}
+      #supportDetail .support-case-tabs [aria-selected=true]{background:transparent;color:var(--brand);box-shadow:inset 0 -2px var(--brand);font-weight:600}
       #supportDetailContent>#supportDetailNotice{flex:none;margin:0 18px}
-      #supportDetail .support-card-columns{flex:1;min-height:0;display:grid;grid-template-columns:minmax(285px,36%) minmax(0,1fr);gap:10px;padding:12px;background:var(--app-surface,var(--paper))}
-      #supportDetail .support-card-columns>[data-support-panel]{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;margin:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--card)}
-      #supportDetail .support-card-columns>[data-support-panel="history"]{grid-column:2;grid-row:1}
-      #supportDetail .support-card-columns>[data-support-panel="details"],#supportDetail .support-card-columns>[data-support-panel="developer"]{grid-column:1;grid-row:1}
-      #supportDetail .support-save-actions{bottom:-16px}
+      #supportDetail .support-card-columns{flex:1;min-height:0;display:grid;grid-template-columns:minmax(280px,48%) minmax(0,1fr);gap:10px;padding:12px;background:var(--app-surface,var(--paper))}
+      #supportDetail :is(.support-case-data,.support-case-main){min-width:0;min-height:0;margin:0;border:1px solid var(--line);border-radius:12px;background:var(--card)}
+      #supportDetail .support-case-data{padding:16px;overflow:auto;overscroll-behavior:contain}
+      #supportDetail .support-case-data h3{margin:0 0 10px;font-size:16px}
+      #supportDetail .support-case-stage{margin:0 0 18px}
+      #supportDetail .support-case-stage select{min-height:48px;background-color:color-mix(in srgb,var(--brand) 38%,var(--card));color:var(--ink);font:inherit}
+      #supportDetail .support-case-stage option{background:var(--card);color:var(--ink)}
+      #supportDetail .support-data-block{margin:0 0 18px}
+      #supportDetail .support-data-block dl{margin:0;padding:4px 12px;border:1px solid var(--line);border-radius:10px;background:var(--app-raised,var(--paper))}
+      #supportDetail .support-data-block dl>div{display:grid;grid-template-columns:minmax(88px,.7fr) minmax(0,1fr);gap:10px;align-items:center;padding:9px 0;overflow-wrap:anywhere}
+      #supportDetail .support-data-block dl>div+div{border-top:1px solid var(--line)}
+      #supportDetail .support-data-block dt{color:var(--muted);font-size:13px}
+      #supportDetail .support-data-block dd{margin:0;min-width:0}
+      #supportDetail .support-data-block select{margin:0;max-width:100%;font:inherit}
+      #supportDetail #supportCaseEdit>summary{padding:8px 0;color:var(--brand);cursor:pointer}
+      #supportDetail #supportCaseEdit .support-edit{margin-top:8px}
+      #supportDetail .support-case-main,#supportDetail .support-case-main>[data-support-panel]{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0;overflow:hidden;padding:0}
+      #supportDetail #supportPanel-developer{overflow:auto;padding:12px 16px}
+      #supportDetail .support-case-scroll{flex:1;min-height:0;padding:10px 16px;overflow:auto;overscroll-behavior:contain;background:var(--app-raised,var(--paper))}
+      #supportDetail .support-case-scroll .support-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+      #supportDetail .support-case-compose{flex:none;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
+      #supportDetail .support-case-compose button{width:100%;min-height:44px;text-align:start;color:var(--muted);border:1px solid var(--line);border-radius:8px;background:var(--app-raised,var(--paper));font:inherit}
+      #supportDetail .support-linked-tools{display:flex;justify-content:flex-end;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
+      #supportDetail .support-linked-tools:not(:has(button:not([hidden]))),#supportDialogueNotice:empty,#supportLinkedNotice:empty{display:none}
+      #supportDetail .support-linked-dialog{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+      #supportDetail .support-linked-dialog #operatorConversationPane{display:flex;flex:1;min-height:0;min-width:0;border:0;border-radius:0}
+      #supportDetail .support-linked-dialog [data-operator-back]{display:none!important}
+      #supportHistory{display:flex;flex-direction:column;gap:8px;padding:12px 0}
+      #supportHistory .support-message{align-self:flex-start;max-width:min(90%,580px);min-width:0;box-sizing:border-box;margin:0;border:1px solid var(--line);border-radius:11px;background:var(--app-raised,var(--paper));overflow-wrap:anywhere;padding:9px 12px}
+      #supportHistory .support-message[data-direction=outgoing]{align-self:flex-end;margin:0;background:var(--app-raised,var(--paper))}
+      #supportHistory .support-message small{font-size:11px;margin-top:5px}
+      #supportHistory .support-message-meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;color:var(--muted);font-size:12px;margin-bottom:4px}
+      #supportHistory .support-message-meta strong{color:var(--ink)}
+      #supportHistory [data-message-body]{white-space:pre-wrap}
+      #supportDetail [data-support-panel][hidden],#supportDetail .support-case-main[hidden],#supportDetail .support-case-tabs [hidden]{display:none!important}
+      @media(max-width:899px){
+        #supportDetail{top:var(--support-visual-top,0px);bottom:auto;height:var(--support-visual-height,100dvh);padding:0}
+        #supportDetail .support-modal-card{height:100%;max-height:100%;border-radius:0}
+        #supportDetail .support-card-header{padding:6px 12px}
+        #supportDetail .support-card-columns{display:flex;flex-direction:column;gap:0;padding:0}
+        #supportDetail :is(.support-case-data,.support-case-main){flex:1;border:0;border-radius:0}
+        #supportDetail .support-case-data{padding:12px}
+        #supportDetail .support-case-tabs{display:flex;padding:0 8px;gap:0}
+        #supportDetail .support-case-tabs button{flex:1;min-width:0;min-height:42px;padding:4px;font-size:13px;white-space:nowrap}
+        #supportDetail .support-case-scroll{padding-inline:12px}
+      }
       @media(max-width:1000px){#supportInbox .support-table-head,#supportInbox .support-row{grid-template-columns:minmax(180px,2fr) minmax(105px,1fr) minmax(110px,1fr);gap:12px}#supportInbox .support-table-head>span:last-child{display:none}#supportInbox .support-date-cell{grid-column:1/-1;font-size:11px}#supportDetail .support-work-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:600px){
         #supportInbox .top{gap:8px}#supportInbox #supportRefresh{width:40px;min-height:40px;padding:0;font-size:0}#supportInbox #supportRefresh:before{content:'↻';font-size:22px}#supportInbox .support-count-line{font-size:12px;flex-wrap:wrap}
@@ -107,13 +134,7 @@
         #supportInbox .support-row{grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:16px}
         #supportInbox .support-case-cell{grid-column:1/-1}#supportInbox .support-state-cell{grid-row:2;grid-column:1}#supportInbox .support-owner-cell{grid-row:2;grid-column:2;text-align:right;max-width:145px}
         #supportInbox .support-date-cell{grid-column:1/-1}#supportInbox .support-date-cell .support-cell-label{display:inline;margin-right:5px}
-        #supportDetail .support-modal-card{height:100%;max-height:100%;padding:0;border-radius:0}#supportDetail .support-card-header{padding:8px 12px 0}
-        #supportDetail .support-card-columns{display:flex;flex-direction:column;padding:0;gap:0}
-        #supportDetail .support-card-columns>[data-support-panel]{flex:1;border:0;border-radius:0;padding:12px}
-        #supportDetail .support-case-tabs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) max-content;overflow:visible}
-        #supportDetail .support-case-tabs button{min-width:0;padding:8px 3px;font-size:12px}
         #supportDetail .support-primary-actions{gap:6px}#supportDetail .support-primary-actions button{min-height:44px;padding:8px;font-size:12px}
-        #supportDetail #supportResolve{width:auto;padding:8px}#supportDetail #supportMoreActions>summary{width:44px;height:44px}#supportDetail .support-save-actions{bottom:-16px}
       }`;document.head.append(style);
   }
   const caseTabs=new Map();
@@ -134,41 +155,113 @@
   function rememberMessages(items){if(!detailData)return;for(const item of items||[])if(item.id)detailData.messages.set(String(item.id),{...detailData.messages.get(String(item.id)),...item});}
   function appendMaterialMessages(){const host=$('supportHistory');if(!host||!detailData)return;const items=materialMessages(),known=new Map([...host.querySelectorAll('[data-message-id]')].map(node=>[node.dataset.messageId,node]));if(!known.size&&items.length)host.replaceChildren();for(let index=0;index<items.length;index++){const item=items[index],key=String(item.id);if(known.has(key)){const body=known.get(key).querySelector('[data-message-body]');if(body)body.textContent=item.body||mediaTitle(item.message_type);continue;}const template=document.createElement('template');template.innerHTML=messages([item],detailData.ticket);const node=template.content.firstElementChild;const next=items.slice(index+1).map(row=>known.get(String(row.id))).find(Boolean);host.insertBefore(node,next||null);known.set(key,node);}}
   function refreshMaterialControls(){if(detailData&&selected===detailData.ticket.id)renderConsultations(detailData.ticket);}
-  const tabText=key=>({ru:{history:'История диалога',details:'Данные обращения',developer:'Разработчики',tabs:'Обращение',materials:'Материалы обращения',historyHint:'История от принятия диалога до создания обращения. Для старых обращений показывается сохранённый фрагмент.'},az:{history:'Dialoq tarixçəsi',details:'Müraciət məlumatları',developer:'Tərtibatçılar',tabs:'Müraciət',materials:'Müraciət materialları',historyHint:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə. Köhnə müraciətlərdə saxlanmış fraqment göstərilir.'},en:{history:'Dialogue history',details:'Case details',developer:'Developers',tabs:'Case',materials:'Case materials',historyHint:'History from accepting the dialogue to creating the case. Older cases show the saved fragment.'}}[i18n.language]||{})[key]||key;
+  const tabText=key=>({
+    ru:{history:'Чат',details:'Данные',developer:'Лента',dialog:'Диалог',tabs:'Обращение',contact:'Контакт',name:'Имя',phone:'Телефон',compose:'Сообщение клиенту',noDialog:'Связанный диалог недоступен.'},
+    az:{history:'Söhbət',details:'Məlumat',developer:'Lent',dialog:'Dialoq',tabs:'Müraciət',contact:'Əlaqə',name:'Ad',phone:'Telefon',compose:'Mesaj yazın',noDialog:'Əlaqəli dialoq əlçatan deyil.'},
+    en:{history:'Chat',details:'Data',developer:'Activity',dialog:'Dialogue',tabs:'Case',contact:'Contact',name:'Name',phone:'Phone',compose:'Message the customer',noDialog:'The linked conversation is unavailable.'}
+  }[i18n.language]||{})[key]||key;
+  const casePanes=['history','details','developer','dialog'];
+  const desktopCase=()=>window.matchMedia?.('(min-width: 900px)').matches??window.innerWidth>=900;
+  const scrollPanel=name=>name==='history'?$('supportHistoryScroll'):$('supportPanel-'+name);
+  const caseRoute=ticket=>({provider:'connect',lead_id:ticket.lead_id,channel_id:ticket.channel_id,conversation_id:ticket.conversation_id});
+  const canOpenCaseDialog=ticket=>Boolean(ticket.lead_id&&ticket.channel_id&&ticket.conversation_id&&window.tenantOperator?.hasRight('dialogs'));
+
+  function releaseCaseDialog(state=detailData){
+    if(!state?.dialogSession)return;
+    const session=state.dialogSession;
+    state.dialogSession=null;
+    session.release();
+  }
+  async function showCaseDialog(focusCompose){
+    const state=detailData,host=$('supportLinkedDialog'),notice=$('supportLinkedNotice');
+    if(!state||!host||!notice||!canOpenCaseDialog(state.ticket))return;
+    const current=()=>state===detailData&&modalOpen&&state.activeTab==='dialog'&&host.isConnected;
+    const tab=$('supportTab-dialog'),restoreTabFocus=document.activeElement===tab;
+    const session=window.tenantOperator?.mountConversation?.(host,caseRoute(state.ticket),{
+      onAccessLost:()=>{
+        if(!current())return;
+        releaseCaseDialog(state);notice.textContent=tabText('noDialog');
+      }
+    });
+    if(!session){notice.textContent=tabText('noDialog');return;}
+    state.dialogSession=session;notice.textContent='';
+    try{
+      if(await session.open()&&current()&&state.dialogSession===session){
+        const composer=host.querySelector('#chatText:not(:disabled)');
+        if(focusCompose)composer?.focus();
+        else if(restoreTabFocus&&composer===document.activeElement)tab.focus({preventScroll:true});
+      }else if(current()&&state.dialogSession===session){
+        releaseCaseDialog(state);notice.textContent=tabText('noDialog');
+      }
+    }catch{
+      if(current()&&state.dialogSession===session){releaseCaseDialog(state);notice.textContent=tabText('noDialog');}
+    }
+  }
   function syncCasePanels(){
     if(!detailData||!modalOpen)return;
-    const mobile=window.matchMedia?.('(max-width: 600px)').matches??window.innerWidth<=600;
-    const active=detailData.activeTab;
-    for(const panel of $('supportDetailContent').querySelectorAll('[data-support-panel]')){
-      const name=panel.dataset.supportPanel;
-      panel.hidden=mobile?name!==active:name==='history'?false:name==='developer'?active!=='developer':active==='developer';
+    const desktop=desktopCase(),active=detailData.activeTab==='details'&&desktop?'history':detailData.activeTab;
+    const host=$('supportDetailContent'),tabs=host.querySelector('.support-case-tabs');
+    if(!tabs)return;
+    const tabHost=desktop?host.querySelector('.support-case-main'):host;
+    if(tabs.parentNode!==tabHost){if(desktop)tabHost.prepend(tabs);else host.querySelector('.support-card-header').after(tabs);}
+    host.querySelector('.support-case-main').hidden=active==='details';
+    for(const name of casePanes){
+      const panel=$('supportPanel-'+name),tab=$('supportTab-'+name),dataRegion=desktop&&name==='details';
+      panel.hidden=!dataRegion&&name!==active;
+      panel.setAttribute('role',dataRegion?'region':'tabpanel');
+      panel.setAttribute('aria-labelledby',dataRegion?'supportDataHeading':tab.id);
+      tab.hidden=dataRegion;tab.setAttribute('aria-selected',String(name===active));tab.tabIndex=name===active?0:-1;
       if(panel.hidden)panel.querySelectorAll('audio,video').forEach(media=>media.pause?.());
     }
   }
-  function selectCaseTab(name,{focus=false,persist=true,clearReply=false}={}){
-    if(!detailData||!['history','details','developer'].includes(name))return;
-    $('supportMoreActions')?.removeAttribute('open');
-    const host=$('supportDetailContent'),previous=detailData.activeTab;
-    if(previous)detailData.tabScroll[previous]=$('supportPanel-'+previous)?.scrollTop||0;
+  function selectCaseTab(name,{focus=false,persist=true,clearReply=false,compose=false}={}){
+    if(!detailData||!casePanes.includes(name))return;
+    const previous=detailData.activeTab;
+    if(previous)detailData.tabScroll[previous]=scrollPanel(previous)?.scrollTop||0;
+    if(previous==='dialog'&&name!==previous)releaseCaseDialog(detailData);
     detailData.activeTab=name;
-    for(const tab of host.querySelectorAll('[data-support-tab]')){const active=tab.dataset.supportTab===name;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;if(active&&focus)tab.focus({preventScroll:true});}
     syncCasePanels();
-    const activePanel=$('supportPanel-'+name);
+    if(focus)$('supportTab-'+name)?.focus({preventScroll:true});
+    const activePanel=scrollPanel(name);
     if(activePanel)activePanel.scrollTop=detailData.tabScroll[name]||0;
     caseTabs.set(identity(member)+':'+selected,name);
     if(persist&&new URLSearchParams(location.search).get('support_ticket_id')===selected){const url=new URL(location.href);url.searchParams.set('support_ticket_tab',name);if(clearReply)url.searchParams.delete('consultation_reply_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}
-    if(name==='history')void loadDialogueHistory();
+    if(name==='dialog'&&!detailData.dialogSession)void showCaseDialog(compose);
   }
   function installCaseTabs(ticket){
-    const host=$('supportDetailContent'),notice=$('supportDetailNotice'),tabs=document.createElement('div');tabs.className='support-case-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',tabText('tabs'));
-    const panels={};for(const name of ['details','history','developer']){const tab=document.createElement('button');tab.type='button';tab.id='supportTab-'+name;tab.dataset.supportTab=name;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','supportPanel-'+name);tab.textContent=tabText(name);tab.onclick=()=>selectCaseTab(name,{clearReply:true});tabs.append(tab);const panel=document.createElement('section');panel.id='supportPanel-'+name;panel.dataset.supportPanel=name;panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',tab.id);panel.tabIndex=0;panels[name]=panel;}
-    while(notice.nextSibling)panels.details.append(notice.nextSibling);
-    const header=document.createElement('header');header.className='support-card-header';host.prepend(header);header.append(host.querySelector('.support-heading'),tabs);
-    const columns=document.createElement('div');columns.className='support-card-columns';columns.append(panels.details,panels.history,panels.developer);host.append(columns);
-    const earlier=$('supportEarlier'),history=$('supportHistory');
-    panels.history.innerHTML=`<p class="sub">${esc(detailData.historyContext?.boundary_status==='accepted_interval'?({ru:'История от принятия диалога до создания обращения.',az:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə.',en:'History from accepting the dialogue to creating the case.'}[i18n.language]||tabText('historyHint')):({ru:'Время принятия не сохранено. Показаны сохранённые сообщения обращения.',az:'Qəbul vaxtı saxlanmayıb. Müraciətin saxlanmış mesajları göstərilir.',en:'Acceptance time was not saved. Showing saved case messages.'}[i18n.language]||tabText('historyHint')))}</p><p id="supportDialogueNotice" role="status" aria-live="polite"></p>`;
-    panels.history.append(earlier,history);
-    tabs.onkeydown=event=>{const names=['details','history','developer'],index=names.indexOf(event.target.dataset.supportTab);if(index<0)return;const next=event.key==='Home'?0:event.key==='End'?2:event.key==='ArrowRight'?(index+1)%3:event.key==='ArrowLeft'?(index+2)%3:-1;if(next>=0){event.preventDefault();selectCaseTab(names[next],{focus:true,clearReply:true});}};
+    const host=$('supportDetailContent'),tabs=document.createElement('div');tabs.className='support-case-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',tabText('tabs'));
+    const panels={};
+    for(const name of casePanes){
+      const tab=document.createElement('button'),panel=document.createElement('section');
+      tab.type='button';tab.id='supportTab-'+name;tab.dataset.supportTab=name;tab.setAttribute('role','tab');tab.setAttribute('aria-controls','supportPanel-'+name);
+      tab.textContent=tabText(name);tab.onclick=()=>selectCaseTab(name,{clearReply:true});tabs.append(tab);
+      panel.id='supportPanel-'+name;panel.dataset.supportPanel=name;panel.tabIndex=0;panels[name]=panel;
+    }
+    const earlier=$('supportEarlier'),history=$('supportHistory'),fullDialog=$('supportOpenChat');
+    panels.details.className='support-case-data';
+    panels.details.append($('supportCaseData'));
+    const heading=document.createElement('header');heading.className='support-card-header';host.prepend(heading);heading.append(host.querySelector('.support-heading'));
+    const columns=document.createElement('div'),main=document.createElement('div');
+    columns.className='support-card-columns';main.className='support-case-main';columns.append(panels.details,main);host.append(columns);
+    main.append(tabs,panels.history,panels.developer,panels.dialog);
+    const boundary=detailData.historyContext?.boundary_status==='accepted_interval';
+    const hint=boundary?({ru:'История от принятия диалога до создания обращения.',az:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə.',en:'History from accepting the dialogue to creating the case.'})[i18n.language]:({ru:'Время принятия не сохранено. Показаны сохранённые сообщения обращения.',az:'Qəbul vaxtı saxlanmayıb. Müraciətin saxlanmış mesajları göstərilir.',en:'Acceptance time was not saved. Showing saved case messages.'})[i18n.language];
+    panels.history.innerHTML=`<div id="supportHistoryScroll" class="support-case-scroll"><p class="support-visually-hidden">${esc(hint)}</p><p id="supportDialogueNotice" role="status" aria-live="polite"></p></div>`;
+    $('supportHistoryScroll').append(earlier,history);
+    if(canOpenCaseDialog(ticket)){
+      const footer=document.createElement('div'),reply=document.createElement('button');
+      footer.className='support-case-compose';reply.type='button';reply.textContent=tabText('compose');
+      reply.addEventListener('click',()=>selectCaseTab('dialog',{focus:true,compose:true,clearReply:true}));
+      footer.append(reply);panels.history.append(footer);
+    }
+    panels.dialog.innerHTML=`<div class="support-linked-tools"></div><p id="supportLinkedNotice" role="status">${canOpenCaseDialog(ticket)?'':esc(tabText('noDialog'))}</p><div id="supportLinkedDialog" class="support-linked-dialog"></div>`;
+    panels.dialog.firstElementChild.append(fullDialog);
+    tabs.onkeydown=event=>{
+      const names=desktopCase()?casePanes.filter(name=>name!=='details'):casePanes;
+      const index=names.indexOf(event.target.dataset.supportTab);if(index<0)return;
+      const next={Home:0,End:names.length-1,ArrowRight:(index+1)%names.length,ArrowLeft:(index+names.length-1)%names.length}[event.key];
+      if(next!==undefined){event.preventDefault();selectCaseTab(names[next],{focus:true,clearReply:true});}
+    };
   }
   async function loadDialogueHistory(earlier=false,refresh=false){
     const state=detailData;if(!state||!modalOpen||state.historyLoading)return;
@@ -252,16 +345,47 @@
       $('supportMore').hidden=nextOffset===null;$('supportRows').querySelectorAll('[data-support-id]').forEach(button=>button.onclick=()=>open(button.dataset.supportId,'',false,true));$('supportRows').querySelectorAll('.support-row').forEach(row=>row.onclick=event=>{if(event.target.closest('button,a,input,select')||window.getSelection?.()?.toString())return;row.querySelector('[data-support-id]')?.click();});if(focusedTicket&&!modalOpen)[...$('supportRows').querySelectorAll('[data-support-id]')].find(button=>button.dataset.supportId===focusedTicket)?.focus({preventScroll:true});if(!modalOpen)notice('');
     }catch(error){if(version===epoch&&revision===listRevision)notice(error.message);}
   }
-  function messages(items,ticket){return items.map(m=>{const kind=String(m.message_type||'text').toLowerCase(),isMedia=['image','video','audio','voice','document'].includes(kind),meta=[m.media_filename||m.file_name||'',m.media_size_bytes?`${m.media_size_bytes} B`: ''].filter(Boolean).join(' · ');return `<article class="support-message" data-message-id="${esc(m.id)}" data-direction="${esc(m.direction)}"><small>${esc(safeIdentityName(m.author_name||m.sender_name)||(m.direction==='incoming'?t('customer'):t('employeeAI')))} · ${esc(i18n.date(m.happened_at||m.created_at))}</small><div data-message-body data-user-content>${esc(m.body||mediaTitle(kind))}</div><small>${esc(mediaTitle(kind))}${meta?' · '+esc(meta):''}</small>${isMedia&&ticket?.lead_id&&m.external_id?`<button type="button" class="outline" data-ticket-media-open="${esc(m.id)}" data-external-id="${esc(m.external_id)}" data-media-kind="${esc(kind)}" data-lead-id="${esc(ticket.lead_id)}" data-channel-id="${esc(ticket.channel_id)}" data-conversation-id="${esc(ticket.conversation_id)}">${t('caseMediaOpen')}</button><small data-media-status role="status">${esc(t('caseMediaLazy'))}</small>`:''}</article>`;}).join('');}
+  function messages(items,ticket){return items.map(m=>{const kind=String(m.message_type||'text').toLowerCase(),isMedia=['image','video','audio','voice','document'].includes(kind),meta=[m.media_filename||m.file_name||'',m.media_size_bytes?`${m.media_size_bytes} B`: ''].filter(Boolean).join(' · ');return `<article class="support-message" data-message-id="${esc(m.id)}" data-direction="${esc(m.direction)}"><div class="support-message-meta"><strong>${esc(safeIdentityName(m.author_name||m.sender_name)||(m.direction==='incoming'?t('customer'):t('employeeAI')))}</strong><span>${esc(i18n.date(m.happened_at||m.created_at))}</span></div><div data-message-body data-user-content>${esc(m.body||mediaTitle(kind))}</div>${isMedia&&meta?`<small>${esc(meta)}</small>`:''}${isMedia&&ticket?.lead_id&&m.external_id?`<button type="button" class="outline" data-ticket-media-open="${esc(m.id)}" data-external-id="${esc(m.external_id)}" data-media-kind="${esc(kind)}" data-lead-id="${esc(ticket.lead_id)}" data-channel-id="${esc(ticket.channel_id)}" data-conversation-id="${esc(ticket.conversation_id)}">${t('caseMediaOpen')}</button><small data-media-status role="status">${esc(t('caseMediaLazy'))}</small>`:''}</article>`;}).join('');}
   function clearTicketMedia(){for(const entry of ticketMedia.values()){entry.media?.pause?.();if(entry.media)entry.media.removeAttribute('src');URL.revokeObjectURL(entry.url);}ticketMedia.clear();}
   async function openTicketMedia(button){const id=button.dataset.ticketMediaOpen,kind=button.dataset.mediaKind,article=button.closest('.support-message'),status=article?.querySelector('[data-media-status]');if(!id||!status)return;const existing=ticketMedia.get(id);if(existing){existing.node.hidden=!existing.node.hidden;return;}button.disabled=true;status.textContent=t('loading');try{const query=new URLSearchParams({lead_id:button.dataset.leadId,message_id:button.dataset.externalId,channel_id:button.dataset.channelId,conversation_id:button.dataset.conversationId,expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')});const response=await fetch('/api/platform/crm/chat/attachment?'+query,{credentials:'same-origin',cache:'no-store'});if(!response.ok)throw new Error(t('error'));const blob=await response.blob();if(!button.isConnected||!modalOpen||!selected) return;const url=URL.createObjectURL(blob),wrap=document.createElement('div');wrap.className='support-media-preview';let media;if(kind==='image'){media=document.createElement('img');media.alt=t('photo');media.className='support-photo';const zoom=document.createElement('button');zoom.type='button';zoom.className='outline';zoom.textContent=t('openOriginal');zoom.onclick=()=>media.classList.toggle('is-zoomed');wrap.append(media,zoom);media.src=url;}else if(kind==='video'){media=document.createElement('video');media.controls=true;media.preload='metadata';media.src=url;wrap.append(media);}else if(['audio','voice'].includes(kind)){media=document.createElement('audio');media.controls=true;media.preload='none';media.src=url;wrap.append(media);}else{const open=document.createElement('a'),download=document.createElement('a');open.href=url;open.target='_blank';open.rel='noopener noreferrer';open.textContent=t('caseMediaOpen');download.href=url;download.download='attachment';download.textContent=t('downloadAttachment');wrap.append(open,download);}article.append(wrap);ticketMedia.set(id,{url,node:wrap,media});status.textContent='';}catch(error){status.textContent=error.message||t('error');}finally{button.disabled=false;}}
 
   function renderDetail(result){
     const ticket=result.ticket;ticket.support_update_allowed=result.capabilities?.update!==false;
-    detailData?.consultationUI?.dispose();clearTicketMedia();selected=ticket.id;nextBefore=result.next_before;
+    releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();selected=ticket.id;nextBefore=result.next_before;
     detailData={ticket,messages:new Map(),attachedMedia:[...(result.attached_media||[])],scope:result.scope,historyContext:result.history_context,tabScroll:{},activeTab:null};rememberMessages(result.messages);
-    const host=$('supportDetailContent'),canOpen=window.tenantOperator?.hasRight('dialogs');
-    host.innerHTML=`<div class="support-heading"><div><small title="${esc(ticket.id)}">#${esc(ticket.id.slice(0,8).toUpperCase())}</small><h2 id="supportTicketTitle" data-user-content>${esc(displayName(ticket))}</h2>${verifiedCasePhone(ticket)?`<small id="supportVerifiedPhone" data-user-content>${esc(verifiedCasePhone(ticket))}</small>`:''}</div><button type="button" class="outline" id="supportClose">${t('close')}</button></div><p id="supportDetailNotice" role="alert" aria-live="polite"></p><div class="support-edit"><label>${t('description')}<textarea id="supportDescription" maxlength="4000" rows="3">${esc(ticket.description)}</textarea></label><label>${t('nextSteps')}<textarea id="supportNextSteps" maxlength="4000" rows="3">${esc(ticket.next_steps)}</textarea></label><div class="support-meta"><label>${t('status')}<select id="supportEditStatus">${statuses.map(key=>`<option value="${key}" ${key===ticket.status?'selected':''}>${t(key)}</option>`).join('')}</select></label><label>${t('assignee')}<select id="supportEditAssignee">${assigneeOptions(ticket.assigned_to)}</select></label></div><button type="button" class="primary" id="supportSave">${t('save')}</button></div><div class="support-actions"><button type="button" class="primary" id="supportTake">${t('take')}</button><button type="button" class="outline" id="supportOpenChat" ${canOpen?'':'disabled'}>${t('openChat')}</button><button type="button" class="outline" id="supportResolve">${t('resolve')}</button><button type="button" class="outline" id="supportCreateTask">${t('caseCreateTask')}</button></div><button type="button" class="outline" id="supportEarlier" ${nextBefore?'':'hidden'}>${t('earlier')}</button><div id="supportHistory">${messages(result.messages,ticket)||t('emptyHistory')}</div>`;
+    const host=$('supportDetailContent'),canOpen=canOpenCaseDialog(ticket),phone=verifiedCasePhone(ticket);
+    host.innerHTML=`<div class="support-heading">
+      <div><h2 id="supportTicketTitle" title="${esc(ticket.id)}">${workspaceText('case')} #${esc(ticket.id.slice(0,8).toUpperCase())}</h2></div>
+      <button type="button" class="outline" id="supportClose">${t('close')}</button>
+    </div>
+    <p id="supportDetailNotice" role="alert" aria-live="polite"></p>
+    <div id="supportCaseData">
+      <h3 id="supportDataHeading">${tabText('details')}</h3>
+      <div class="support-case-stage"><select id="supportEditStatus" aria-label="${esc(t('status'))}">
+        ${statuses.map(key=>`<option value="${key}" ${key===ticket.status?'selected':''}>${t(key)}</option>`).join('')}
+      </select></div>
+      <section class="support-data-block"><h3>${tabText('contact')}</h3><dl>
+        <div><dt>${tabText('name')}</dt><dd data-user-content>${esc(displayName(ticket))}</dd></div>
+        ${phone?`<div><dt>${tabText('phone')}</dt><dd id="supportVerifiedPhone" data-user-content>${esc(phone)}</dd></div>`:''}
+      </dl></section>
+      <section class="support-data-block"><h3>${workspaceText('case')}</h3><dl>
+        ${ticket.channel_name?`<div><dt>${t('channel')}</dt><dd data-user-content>${esc(ticket.channel_name)}</dd></div>`:''}
+        <div><dt>${t('assignee')}</dt><dd><select id="supportEditAssignee" aria-label="${esc(t('assignee'))}">${assigneeOptions(ticket.assigned_to)}</select></dd></div>
+      </dl></section>
+      <details id="supportCaseEdit"><summary>${t('description')} · ${t('nextSteps')}</summary>
+        <div class="support-edit">
+          <label>${t('description')}<textarea id="supportDescription" maxlength="4000" rows="3">${esc(ticket.description)}</textarea></label>
+          <label>${t('nextSteps')}<textarea id="supportNextSteps" maxlength="4000" rows="3">${esc(ticket.next_steps)}</textarea></label>
+        </div>
+      </details>
+    </div>
+    <button type="button" class="outline" id="supportSave">${t('save')}</button>
+    <button type="button" class="primary" id="supportTake">${t('take')}</button>
+    <button type="button" class="outline" id="supportOpenChat" ${canOpen?'':'hidden disabled'}>${t('openChat')}</button>
+    <button type="button" class="outline" id="supportResolve">${t('resolve')}</button>
+    <button type="button" class="outline" id="supportCreateTask">${t('caseCreateTask')}</button>
+    <button type="button" class="outline" id="supportEarlier" ${nextBefore?'':'hidden'}>${t('earlier')}</button>
+    <div id="supportHistory">${messages(result.messages,ticket)||t('emptyHistory')}</div>`;
     installCaseTabs(ticket);
     if(operatorWorkspaceAvailable){const createTask=$('supportCreateTask');createTask.disabled=true;createTask.title='Тикет не отправлен. Создание через Operator отключено до подтверждения ответа, идемпотентности и публичной ссылки.';const hint=document.createElement('p');hint.className='sub';hint.textContent='Создание тикета через Operator ожидает подтверждения API-контракта';$('supportPanel-details').append(hint);}
     $('supportClose').onclick=()=>closeTicketModal();
@@ -273,7 +397,7 @@
     $('supportEarlier').onclick=()=>void loadDialogueHistory(true);
     renderConsultations(ticket);organizeTicketWorkspace(ticket);
     if(result.capabilities?.update===false){for(const id of ['supportSave','supportTake','supportResolve','supportDescription','supportNextSteps','supportEditStatus','supportEditAssignee']){const control=$(id);if(control)control.disabled=true;}}
-    const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'details';selectCaseTab(['history','details','developer'].includes(tab)?tab:'details');
+    const tab=new URLSearchParams(location.search).get('support_ticket_tab')||caseTabs.get(identity(member)+':'+ticket.id)||'history';selectCaseTab(casePanes.includes(tab)?tab:'history');
   }
 
   function renderConsultations(ticket){
@@ -284,7 +408,7 @@
     detailData.consultationUI=window.tenantCaseConsultations.mount({host:$('supportPanel-developer'),ticket,member,getMessages:materialMessages,isCurrent:()=>modalOpen&&selected===ticket.id&&revision===detailRevision,notice});
   }
   function openCustomerChat(ticket,composeDraft=''){
-    const route={provider:'connect',lead_id:ticket.lead_id,channel_id:ticket.channel_id,conversation_id:ticket.conversation_id,...(composeDraft?{compose_draft:composeDraft}:{})};
+    const route={...caseRoute(ticket),...(composeDraft?{compose_draft:composeDraft}:{})};
     closeTicketModal(true);if(new URLSearchParams(location.search).has('support_ticket_id'))writeTicketRoute('','',true);window.tenantAppNavigate?.('dialogs',false);document.dispatchEvent(new CustomEvent('tenant-support-open',{detail:route}));
   }
   function renderFocusedAttachment(result){
@@ -321,9 +445,9 @@
   function ticketUrl(id='',focus='',notificationId=''){const url=new URL(location.href);if(id){if(url.searchParams.get('support_ticket_id')!==id){url.searchParams.delete('support_ticket_tab');url.searchParams.delete('consultation_reply_id');}url.searchParams.set('view','support');url.searchParams.set('support_ticket_id',id);if(focus)url.searchParams.set('support_ticket_message_id',focus);else url.searchParams.delete('support_ticket_message_id');if(notificationId){url.searchParams.set('notification_id',notificationId);url.searchParams.delete('consultation_reply_id')}else url.searchParams.delete('notification_id');}else{url.searchParams.delete('support_ticket_id');url.searchParams.delete('support_ticket_tab');url.searchParams.delete('consultation_reply_id');url.searchParams.delete('support_ticket_message_id');url.searchParams.delete('notification_id');}return url;}
   function writeTicketRoute(id,focus='',replace=false,notificationId=''){const url=ticketUrl(id,focus,notificationId),state={...history.state,...(id?{view:'support'}:{}),supportTicketModal:!!id,supportTicketId:id||null,supportNotificationId:notificationId||null};history[replace?'replaceState':'pushState'](state,'',url.pathname+url.search+url.hash);}
   function showTicketModal(){const modal=$('supportDetail');if(!modal)return;if(!modalOpen){returnFocus=document.activeElement;bodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';$('supportInbox')?.setAttribute('inert','');modalOpen=true;}modal.hidden=false;}
-  function saveDraft(id){const content=$('supportDetailContent');if(!id||!content)return;const values={};content.querySelectorAll('input,textarea,select').forEach((node,index)=>{const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index);const serverField=({supportDescription:'description',supportNextSteps:'next_steps',supportEditStatus:'status',supportEditAssignee:'assigned_to'})[key];if(serverField&&detailData?.ticket?.id===id&&String(node.value)===String(detailData.ticket[serverField]??''))return;values[key]={value:node.value,checked:!!node.checked};});if(Object.keys(values).length)drafts.set(id,values);}
-  function restoreDraft(id){const values=drafts.get(id),content=$('supportDetailContent');if(!values||!content)return;content.querySelectorAll('input,textarea,select').forEach((node,index)=>{const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index),value=values[key];if(value){node.value=value.value;if('checked'in node)node.checked=value.checked;}});}
-  function closeTicketModal(fromHistory=false){if(!modalOpen)return;const closedId=selected,returnBell=returnFocus?.id==='dialogConsultationBell'?returnFocus:null;saveDraft(closedId);detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;detailRevision++;selected=null;modalOpen=false;$('supportDialogueHistory')?.replaceChildren();document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));const modal=$('supportDetail');if(modal)modal.hidden=true;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');if(!fromHistory){if(history.state?.supportTicketModal){
+  function saveDraft(id){const content=$('supportDetailContent');if(!id||!content)return;const values={};content.querySelectorAll('input,textarea,select').forEach((node,index)=>{if(node.closest('.support-linked-dialog'))return;const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index);const serverField=({supportDescription:'description',supportNextSteps:'next_steps',supportEditStatus:'status',supportEditAssignee:'assigned_to'})[key];if(serverField&&detailData?.ticket?.id===id&&String(node.value)===String(detailData.ticket[serverField]??''))return;values[key]={value:node.value,checked:!!node.checked};});if(Object.keys(values).length)drafts.set(id,values);}
+  function restoreDraft(id){const values=drafts.get(id),content=$('supportDetailContent');if(!values||!content)return;if((values.supportDescription||values.supportNextSteps)&&$('supportCaseEdit'))$('supportCaseEdit').open=true;content.querySelectorAll('input,textarea,select').forEach((node,index)=>{if(node.closest('.support-linked-dialog'))return;const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index),value=values[key];if(value){node.value=value.value;if('checked'in node)node.checked=value.checked;}});}
+  function closeTicketModal(fromHistory=false){if(!modalOpen)return;const closedId=selected,returnBell=returnFocus?.id==='dialogConsultationBell'?returnFocus:null;saveDraft(closedId);releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;detailRevision++;selected=null;modalOpen=false;$('supportDialogueHistory')?.replaceChildren();document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));const modal=$('supportDetail');if(modal)modal.hidden=true;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');if(!fromHistory){if(history.state?.supportTicketModal){
       if(returnBell){
         const version=epoch,revision=detailRevision,frame=window.requestAnimationFrame||function(callback){setTimeout(callback,0)};
         window.addEventListener('popstate',()=>frame(()=>frame(()=>{
@@ -352,14 +476,14 @@
     else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===container)){event.preventDefault();first.focus();}
   }
   async function open(id,focus='',fromHistory=false,pushRoute=false,options={}){
-    if(selected)saveDraft(selected);if(selected!==id)clearTicketMedia();const revision=++detailRevision,version=epoch;selected=id;showTicketModal();
+    if(selected)saveDraft(selected);releaseCaseDialog();if(selected!==id)clearTicketMedia();const revision=++detailRevision,version=epoch;selected=id;showTicketModal();
     if(pushRoute){writeTicketRoute(id,focus);directTicketKey=epoch+':'+id+':'+focus;}
     const title=$('supportDetailContent');title.innerHTML=`<div class="support-heading"><h2>${esc(t('loading'))}</h2><button type="button" class="outline" id="supportClose">${t('close')}</button></div>`;$('supportClose').onclick=()=>closeTicketModal();
     const query=new URLSearchParams(focus?{message_id:focus}:{});if(options.notificationId){query.set('notification_id',options.notificationId);query.set('expected_tenant_id',String(member?.tenant_id||''));query.set('expected_user_id',String(member?.telegram_id||''));}
     try{const result=await api('/'+encodeURIComponent(id)+(query.size?'?'+query:''));if(revision!==detailRevision||selected!==id)return false;
       if(String(result.ticket?.id).toLowerCase()!==String(id).toLowerCase())throw new Error(t('error'));
       if(options.notificationId&&!validNotificationContext(result.notification_context,id,options.notificationId))throw new Error('notification_context_invalid');
-      renderDetail(result);renderFocusedAttachment(result);restoreDraft(id);if(options.notificationId){selectCaseTab('details');detailData.notificationContext=result.notification_context;renderNotificationContext(result.notification_context);$('supportNotificationContext').focus({preventScroll:true});}else ($('supportClose')||$('supportDetailContent')).focus();return true;
+      renderDetail(result);renderFocusedAttachment(result);restoreDraft(id);if(result.focus_message)selectCaseTab('details');if(options.notificationId){selectCaseTab('details');detailData.notificationContext=result.notification_context;renderNotificationContext(result.notification_context);$('supportNotificationContext').focus({preventScroll:true});}else ($('supportClose')||$('supportDetailContent')).focus();return true;
     }catch(error){if(version===epoch&&revision===detailRevision){if(options.keepError){const message=document.createElement('p');message.id='supportDetailNotice';message.setAttribute('role','alert');message.setAttribute('aria-live','polite');message.textContent=options.notificationId?caseNotificationError(error):error.message;title.append(message);if(options.notificationId){message.tabIndex=-1;message.focus({preventScroll:true});const details=document.createElement('details'),label=document.createElement('summary'),code=document.createElement('p');label.textContent=caseNotificationText('technical');code.textContent=error.message;details.append(label,code);title.append(details);}}else{notice(error.message);closeTicketModal();}}return false;}
   }
   async function openNotification({ticketId,replyId}={}){
@@ -410,7 +534,7 @@
     button.onclick=async()=>{if(button.disabled)return;button.disabled=true;try{const operator=await ensureManualCaseUI();if(version!==epoch||!button.isConnected)return;if(!operator.hasRight('support')||!operator.hasRight('dialogs'))throw Error(t('noAccess'));button.disabled=false;await operator.openManualCaseCreate({provider:'connect',lead_id:lead,...(event.detail.channel_id?{channel_id:event.detail.channel_id}:{}),...(event.detail.conversation_id?{conversation_id:event.detail.conversation_id}:{})},button,()=>version===epoch&&button.isConnected);}catch(error){if(version===epoch&&button.isConnected){button.disabled=false;notice(error.message);}}};
 
   });
-  function profileChanged(data){const rightsChanged=JSON.stringify(accessCapabilities)!==JSON.stringify(data.capabilities||{});accessCapabilities=data.capabilities||{};operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');const person=data.member;if(rightsChanged||!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportCount'))$('supportCount').textContent='';if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
+  function profileChanged(data){const rightsChanged=JSON.stringify(accessCapabilities)!==JSON.stringify(data.capabilities||{});accessCapabilities=data.capabilities||{};operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');const person=data.member;if(rightsChanged||!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportCount'))$('supportCount').textContent='';if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
   const syncSupportViewport=()=>{const host=$('supportDetail');if(!host)return;host.style.setProperty('--support-visual-top',(window.visualViewport?.offsetTop||0)+'px');host.style.setProperty('--support-visual-height',(window.visualViewport?.height||window.innerHeight)+'px');syncCasePanels();};window.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('scroll',syncSupportViewport);
   document.addEventListener('keydown',trapTicketFocus);
   window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search),id=query.get('support_ticket_id');if(id===selected&&modalOpen&&document.querySelector('.operator-photo-viewer'))return;if(id&&query.get('view')==='support'){directTicketKey='';openDirectTicket();}else if(modalOpen)closeTicketModal(true);});
@@ -419,6 +543,6 @@
   document.addEventListener('tenant-support-changed',()=>load());
   document.addEventListener('tenant-dialog-state',()=>{load();if(selected)open(selected);});
   document.addEventListener('tenant-operator-error',event=>notice(event.detail.message));
-  document.addEventListener('tenant-language',()=>{if(!$('supportInbox'))return;const status=$('supportStatus').value,assignee=$('supportAssignee').value,channel=$('supportChannel').value,search=$('supportSearch').value,id=selected,opener=returnFocus;saveDraft(id);modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');$('supportDetail')?.remove();$('supportInbox').remove();install();$('supportStatus').value=status;$('supportAssignee').value=assignee;$('supportChannel').value=channel;$('supportSearch').value=search;load();if(id){const notificationId=new URLSearchParams(location.search).get('notification_id')?.toLowerCase();open(id,'',true,false,notificationId?{keepError:true,notificationId}:{});}if(opener?.isConnected)returnFocus=opener;});
+  document.addEventListener('tenant-language',()=>{if(!$('supportInbox'))return;const status=$('supportStatus').value,assignee=$('supportAssignee').value,channel=$('supportChannel').value,search=$('supportSearch').value,id=selected,opener=returnFocus;saveDraft(id);releaseCaseDialog();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');$('supportDetail')?.remove();$('supportInbox').remove();install();$('supportStatus').value=status;$('supportAssignee').value=assignee;$('supportChannel').value=channel;$('supportSearch').value=search;load();if(id){const notificationId=new URLSearchParams(location.search).get('notification_id')?.toLowerCase();open(id,'',true,false,notificationId?{keepError:true,notificationId}:{});}if(opener?.isConnected)returnFocus=opener;});
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();
