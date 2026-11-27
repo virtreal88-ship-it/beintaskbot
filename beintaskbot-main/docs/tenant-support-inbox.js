@@ -100,19 +100,25 @@
       #supportDetail .support-case-scroll{flex:1;min-height:0;padding:10px 16px;overflow:auto;overscroll-behavior:contain;background:var(--app-raised,var(--paper))}
       #supportDetail .support-case-scroll .support-visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
       #supportDetail .support-case-compose{flex:none;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
-      #supportDetail .support-case-compose button{width:100%;min-height:44px;text-align:start;color:var(--muted);border:1px solid var(--line);border-radius:8px;background:var(--app-raised,var(--paper));font:inherit}
+      #supportDetail .support-case-compose .operator-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin:0;padding:0}
+      #supportDetail .support-case-compose .operator-composer[hidden]{display:none}
+      #supportDetail .support-case-compose textarea{margin:0;min-height:44px;max-height:min(160px,20dvh);font:inherit;resize:vertical}
+      #supportDetail .support-case-compose button{min-height:44px}
+      #supportDetail .support-case-compose [role=status]{margin:0 0 6px}
+      #supportDetail .support-case-compose [role=status]:empty{display:none}
       #supportDetail .support-linked-tools{display:flex;justify-content:flex-end;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line)}
       #supportDetail .support-linked-tools:not(:has(button:not([hidden]))),#supportDialogueNotice:empty,#supportLinkedNotice:empty{display:none}
       #supportDetail .support-linked-dialog{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
       #supportDetail .support-linked-dialog #operatorConversationPane{display:flex;flex:1;min-height:0;min-width:0;border:0;border-radius:0}
       #supportDetail .support-linked-dialog [data-operator-back]{display:none!important}
-      #supportHistory{display:flex;flex-direction:column;gap:8px;padding:12px 0}
-      #supportHistory .support-message{align-self:flex-start;max-width:min(90%,580px);min-width:0;box-sizing:border-box;margin:0;border:1px solid var(--line);border-radius:11px;background:var(--app-raised,var(--paper));overflow-wrap:anywhere;padding:9px 12px}
-      #supportHistory .support-message[data-direction=outgoing]{align-self:flex-end;margin:0;background:var(--app-raised,var(--paper))}
-      #supportHistory .support-message small{font-size:11px;margin-top:5px}
-      #supportHistory .support-message-meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;color:var(--muted);font-size:12px;margin-bottom:4px}
-      #supportHistory .support-message-meta strong{color:var(--ink)}
-      #supportHistory [data-message-body]{white-space:pre-wrap}
+      #supportHistory,#supportCaseReplies{display:flex;flex-direction:column;gap:8px;padding:12px 0}
+      #supportCaseReplies{padding-top:0}
+      #supportDetail .support-case-scroll .support-message{align-self:flex-start;max-width:min(90%,580px);min-width:0;box-sizing:border-box;margin:0;border:1px solid var(--line);border-radius:11px;background:var(--app-raised,var(--paper));overflow-wrap:anywhere;padding:9px 12px}
+      #supportDetail .support-case-scroll .support-message[data-direction=outgoing]{align-self:flex-end;margin:0;background:var(--app-raised,var(--paper))}
+      #supportDetail .support-case-scroll .support-message small{font-size:11px;margin-top:5px}
+      #supportDetail .support-case-scroll .support-message-meta{display:flex;align-items:baseline;flex-wrap:wrap;gap:3px 10px;color:var(--muted);font-size:12px;margin-bottom:4px}
+      #supportDetail .support-case-scroll .support-message-meta strong{color:var(--ink)}
+      #supportDetail .support-case-scroll [data-message-body]{white-space:pre-wrap}
       #supportDetail [data-support-panel][hidden],#supportDetail .support-case-main[hidden],#supportDetail .support-case-tabs [hidden]{display:none!important}
       @media(max-width:899px){
         #supportDetail{top:var(--support-visual-top,0px);bottom:auto;height:var(--support-visual-height,100dvh);padding:0}
@@ -124,6 +130,7 @@
         #supportDetail .support-case-tabs{display:flex;padding:0 8px;gap:0}
         #supportDetail .support-case-tabs button{flex:1;min-width:0;min-height:42px;padding:4px;font-size:13px;white-space:nowrap}
         #supportDetail .support-case-scroll{padding-inline:12px}
+        #supportDetail .support-case-compose textarea{font-size:16px}
       }
       @media(max-width:1000px){#supportInbox .support-table-head,#supportInbox .support-row{grid-template-columns:minmax(180px,2fr) minmax(105px,1fr) minmax(110px,1fr);gap:12px}#supportInbox .support-table-head>span:last-child{display:none}#supportInbox .support-date-cell{grid-column:1/-1;font-size:11px}#supportDetail .support-work-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:600px){
@@ -165,6 +172,90 @@
   const scrollPanel=name=>name==='history'?$('supportHistoryScroll'):$('supportPanel-'+name);
   const caseRoute=ticket=>({provider:'connect',lead_id:ticket.lead_id,channel_id:ticket.channel_id,conversation_id:ticket.conversation_id});
   const canOpenCaseDialog=ticket=>Boolean(ticket.lead_id&&ticket.channel_id&&ticket.conversation_id&&window.tenantOperator?.hasRight('dialogs'));
+  const caseChatActive=state=>state.activeTab==='history'||(state.activeTab==='details'&&desktopCase());
+  const replyCopy=(key)=>({
+    ru:{checking:'Проверяем доступ к отправке…',denied:'Отправка из этого обращения недоступна.',error:'Не удалось проверить связанный диалог. Откройте вкладку «Чат» снова.',unknown:'Результат отправки неизвестен. Проверьте статус запроса.'},
+    az:{checking:'Göndərmə icazəsi yoxlanılır…',denied:'Bu müraciətdən mesaj göndərmək mümkün deyil.',error:'Əlaqəli dialoqu yoxlamaq olmadı. Söhbət bölməsini yenidən açın.',unknown:'Göndərmə nəticəsi məlum deyil. Sorğunun vəziyyətini yoxlayın.'},
+    en:{checking:'Checking sending access…',denied:'Sending from this case is unavailable.',error:'Could not check the linked conversation. Reopen the Chat tab.',unknown:'The send outcome is unknown. Check the request status.'}
+  }[i18n.language]||{})[key]||'';
+
+  function renderCaseReplies(state){
+    const host=$('supportCaseReplies');
+    if(!host)return;
+    const known=new Set([...state.messages.values()].map(message=>message.external_id));
+    host.innerHTML=messages((state.replyMessages||[]).filter(message=>!known.has(message.external_id)),state.ticket);
+  }
+
+  function resetCaseReply(state){
+    if(!state?.reply)return;
+    state.reply.controller.abort();
+    state.reply=null;
+    state.replyMessages=[];
+    renderCaseReplies(state);
+    $('supportCaseComposer')?.replaceChildren();
+  }
+
+  async function mountCaseReply(state){
+    const host=$('supportCaseComposer'),sender=window.tenantChatSend;
+    if(!host||!sender||state.reply||!canOpenCaseDialog(state.ticket))return;
+    const me=member,ticket=state.ticket,owner=identity(me),controller=new AbortController();
+    const session={controller};state.reply=session;
+    const current=()=>state===detailData&&state.reply===session&&caseChatActive(state)&&modalOpen&&host.isConnected&&owner===identity(member)&&canOpenCaseDialog(ticket);
+    const status=document.createElement('p');
+    status.setAttribute('role','status');status.textContent=replyCopy('checking');host.replaceChildren(status);
+    const query=new URLSearchParams({reply_context:'1',expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id});
+    const path='/'+encodeURIComponent(ticket.id)+'?'+query;
+    const draftKey='tenant-support-reply:'+JSON.stringify([owner,ticket.id,ticket.lead_id,ticket.channel_id,ticket.conversation_id]);
+    const refresh=async()=>{
+      const response=await fetch(endpoint+path,{credentials:'same-origin',cache:'no-store',signal:controller.signal});
+      const payload=await response.json();
+      if(!current())return;
+      if(!response.ok||!payload.success)throw Error(replyCopy(response.status===403?'denied':'error'));
+      const {route,can_send,messages:replies}=payload.result;
+      if(!route||String(route.lead_id)!==String(ticket.lead_id)||route.channel_id!==ticket.channel_id||route.conversation_id!==ticket.conversation_id)throw Error(replyCopy('denied'));
+      state.replyMessages=Array.isArray(replies)?replies:[];renderCaseReplies(state);
+      return can_send===true;
+    };
+    try{
+      const canSend=await refresh();
+      if(!current())return;
+      if(!canSend){status.textContent=replyCopy('denied');return;}
+      const input=document.createElement('textarea'),button=document.createElement('button'),row=document.createElement('div');
+      row.className='operator-composer';input.rows=1;input.maxLength=8000;input.placeholder=tabText('compose');input.setAttribute('aria-label',tabText('compose'));
+      input.id='supportReplyText';button.type='button';button.className='primary';button.id='supportReplySend';button.textContent=t('send');
+      try{input.value=sessionStorage.getItem(draftKey)||'';}catch{}
+      input.addEventListener('input',()=>{try{if(input.value)sessionStorage.setItem(draftKey,input.value);else sessionStorage.removeItem(draftKey);}catch{}});
+      input.addEventListener('keydown',event=>{
+        if(event.key!=='Enter'||event.shiftKey||event.isComposing)return;
+        event.preventDefault();button.click();
+      });
+      status.textContent='';row.append(input,button);host.append(row);
+      const sendApi=async(url,options)=>{
+        const response=await fetch(url,{...options,credentials:'same-origin',cache:'no-store',headers:options.body?{'Content-Type':'application/json'}:{}});
+        const payload=await response.json();
+        if(response.ok&&payload.success)return payload;
+        const error=new Error(response.status===403?replyCopy('denied'):payload.error||replyCopy('unknown'));
+        error.keepRequest=payload.keep_request!==false;error.errorCode=payload.error_code;error.deliveryPhase=payload.delivery_phase;error.status=response.status;
+        throw error;
+      };
+      sender.bind({api:sendApi,identity:owner,leadId:ticket.lead_id,me,provider:'connect',channelId:ticket.channel_id,draftKey,
+        controls:{input,button,status},commandContext:{support_ticket_id:ticket.id},isCurrent:current,
+        isQuoteCurrent:pending=>pending.quote_channel_id===ticket.channel_id&&pending.quote_conversation_id===ticket.conversation_id,
+        onError:error=>{
+          status.textContent=error.keepRequest!==false?replyCopy('unknown'):error.message;
+          if([403,404].includes(error.status))row.hidden=true;
+        },
+        reload:async()=>{
+          try{
+            const allowed=await refresh();
+            if(!current())return;
+            if(!allowed){input.disabled=true;row.hidden=true;status.textContent=replyCopy('denied');}
+            const scroll=$('supportHistoryScroll');if(scroll)scroll.scrollTop=scroll.scrollHeight;
+          }catch(error){if(current())status.textContent+=` ${error.message}`;}
+        }
+      });
+    }catch(error){if(current())status.textContent=error.message||replyCopy('error');}
+  }
 
   function releaseCaseDialog(state=detailData){
     if(!state?.dialogSession)return;
@@ -172,7 +263,7 @@
     state.dialogSession=null;
     session.release();
   }
-  async function showCaseDialog(focusCompose){
+  async function showCaseDialog(){
     const state=detailData,host=$('supportLinkedDialog'),notice=$('supportLinkedNotice');
     if(!state||!host||!notice||!canOpenCaseDialog(state.ticket))return;
     const current=()=>state===detailData&&modalOpen&&state.activeTab==='dialog'&&host.isConnected;
@@ -188,8 +279,7 @@
     try{
       if(await session.open()&&current()&&state.dialogSession===session){
         const composer=host.querySelector('#chatText:not(:disabled)');
-        if(focusCompose)composer?.focus();
-        else if(restoreTabFocus&&composer===document.activeElement)tab.focus({preventScroll:true});
+        if(restoreTabFocus&&composer===document.activeElement)tab.focus({preventScroll:true});
       }else if(current()&&state.dialogSession===session){
         releaseCaseDialog(state);notice.textContent=tabText('noDialog');
       }
@@ -213,8 +303,10 @@
       tab.hidden=dataRegion;tab.setAttribute('aria-selected',String(name===active));tab.tabIndex=name===active?0:-1;
       if(panel.hidden)panel.querySelectorAll('audio,video').forEach(media=>media.pause?.());
     }
+    if(caseChatActive(detailData))void mountCaseReply(detailData);
+    else if(detailData.reply)resetCaseReply(detailData);
   }
-  function selectCaseTab(name,{focus=false,persist=true,clearReply=false,compose=false}={}){
+  function selectCaseTab(name,{focus=false,persist=true,clearReply=false}={}){
     if(!detailData||!casePanes.includes(name))return;
     const previous=detailData.activeTab;
     if(previous)detailData.tabScroll[previous]=scrollPanel(previous)?.scrollTop||0;
@@ -226,7 +318,7 @@
     if(activePanel)activePanel.scrollTop=detailData.tabScroll[name]||0;
     caseTabs.set(identity(member)+':'+selected,name);
     if(persist&&new URLSearchParams(location.search).get('support_ticket_id')===selected){const url=new URL(location.href);url.searchParams.set('support_ticket_tab',name);if(clearReply)url.searchParams.delete('consultation_reply_id');history.replaceState(history.state,'',url.pathname+url.search+url.hash);}
-    if(name==='dialog'&&!detailData.dialogSession)void showCaseDialog(compose);
+    if(name==='dialog'&&!detailData.dialogSession)void showCaseDialog();
   }
   function installCaseTabs(ticket){
     const host=$('supportDetailContent'),tabs=document.createElement('div');tabs.className='support-case-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',tabText('tabs'));
@@ -247,12 +339,11 @@
     const boundary=detailData.historyContext?.boundary_status==='accepted_interval';
     const hint=boundary?({ru:'История от принятия диалога до создания обращения.',az:'Dialoqun qəbulundan müraciətin yaradılmasına qədər tarixçə.',en:'History from accepting the dialogue to creating the case.'})[i18n.language]:({ru:'Время принятия не сохранено. Показаны сохранённые сообщения обращения.',az:'Qəbul vaxtı saxlanmayıb. Müraciətin saxlanmış mesajları göstərilir.',en:'Acceptance time was not saved. Showing saved case messages.'})[i18n.language];
     panels.history.innerHTML=`<div id="supportHistoryScroll" class="support-case-scroll"><p class="support-visually-hidden">${esc(hint)}</p><p id="supportDialogueNotice" role="status" aria-live="polite"></p></div>`;
-    $('supportHistoryScroll').append(earlier,history);
+    const replies=document.createElement('div');replies.id='supportCaseReplies';
+    $('supportHistoryScroll').append(earlier,history,replies);
     if(canOpenCaseDialog(ticket)){
-      const footer=document.createElement('div'),reply=document.createElement('button');
-      footer.className='support-case-compose';reply.type='button';reply.textContent=tabText('compose');
-      reply.addEventListener('click',()=>selectCaseTab('dialog',{focus:true,compose:true,clearReply:true}));
-      footer.append(reply);panels.history.append(footer);
+      const footer=document.createElement('div');footer.id='supportCaseComposer';footer.className='support-case-compose';
+      panels.history.append(footer);
     }
     panels.dialog.innerHTML=`<div class="support-linked-tools"></div><p id="supportLinkedNotice" role="status">${canOpenCaseDialog(ticket)?'':esc(tabText('noDialog'))}</p><div id="supportLinkedDialog" class="support-linked-dialog"></div>`;
     panels.dialog.firstElementChild.append(fullDialog);
@@ -274,7 +365,7 @@
       const page=await api('/'+encodeURIComponent(ticket.id)+(earlier?'?before='+encodeURIComponent(nextBefore):''));
       if(!current())return;
       if(!earlier){clearTicketMedia();state.messages.clear();$('supportHistory').replaceChildren();}
-      rememberMessages(page.messages);appendMaterialMessages();nextBefore=page.next_before;state.scope=page.scope;button.hidden=!nextBefore;status.textContent='';refreshMaterialControls();
+      rememberMessages(page.messages);appendMaterialMessages();renderCaseReplies(state);nextBefore=page.next_before;state.scope=page.scope;button.hidden=!nextBefore;status.textContent='';refreshMaterialControls();
     }catch(error){if(current())status.textContent=error.message||t('error');}
     finally{state.historyLoading=false;if(current())button.disabled=false;}
   }
@@ -447,7 +538,7 @@
   function showTicketModal(){const modal=$('supportDetail');if(!modal)return;if(!modalOpen){returnFocus=document.activeElement;bodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';$('supportInbox')?.setAttribute('inert','');modalOpen=true;}modal.hidden=false;}
   function saveDraft(id){const content=$('supportDetailContent');if(!id||!content)return;const values={};content.querySelectorAll('input,textarea,select').forEach((node,index)=>{if(node.closest('.support-linked-dialog'))return;const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index);const serverField=({supportDescription:'description',supportNextSteps:'next_steps',supportEditStatus:'status',supportEditAssignee:'assigned_to'})[key];if(serverField&&detailData?.ticket?.id===id&&String(node.value)===String(detailData.ticket[serverField]??''))return;values[key]={value:node.value,checked:!!node.checked};});if(Object.keys(values).length)drafts.set(id,values);}
   function restoreDraft(id){const values=drafts.get(id),content=$('supportDetailContent');if(!values||!content)return;if((values.supportDescription||values.supportNextSteps)&&$('supportCaseEdit'))$('supportCaseEdit').open=true;content.querySelectorAll('input,textarea,select').forEach((node,index)=>{if(node.closest('.support-linked-dialog'))return;const key=node.id||node.dataset.consultAnswer||node.dataset.groupDraft||node.dataset.caseMediaCheck||(node.dataset.shareMessage?'share:'+node.value:null)||('field-'+index),value=values[key];if(value){node.value=value.value;if('checked'in node)node.checked=value.checked;}});}
-  function closeTicketModal(fromHistory=false){if(!modalOpen)return;const closedId=selected,returnBell=returnFocus?.id==='dialogConsultationBell'?returnFocus:null;saveDraft(closedId);releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;detailRevision++;selected=null;modalOpen=false;$('supportDialogueHistory')?.replaceChildren();document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));const modal=$('supportDetail');if(modal)modal.hidden=true;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');if(!fromHistory){if(history.state?.supportTicketModal){
+  function closeTicketModal(fromHistory=false){if(!modalOpen)return;const closedId=selected,returnBell=returnFocus?.id==='dialogConsultationBell'?returnFocus:null;saveDraft(closedId);resetCaseReply(detailData);releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;detailRevision++;selected=null;modalOpen=false;$('supportDialogueHistory')?.replaceChildren();document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));const modal=$('supportDetail');if(modal)modal.hidden=true;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');if(!fromHistory){if(history.state?.supportTicketModal){
       if(returnBell){
         const version=epoch,revision=detailRevision,frame=window.requestAnimationFrame||function(callback){setTimeout(callback,0)};
         window.addEventListener('popstate',()=>frame(()=>frame(()=>{
@@ -476,7 +567,7 @@
     else if(!event.shiftKey&&(document.activeElement===last||document.activeElement===container)){event.preventDefault();first.focus();}
   }
   async function open(id,focus='',fromHistory=false,pushRoute=false,options={}){
-    if(selected)saveDraft(selected);releaseCaseDialog();if(selected!==id)clearTicketMedia();const revision=++detailRevision,version=epoch;selected=id;showTicketModal();
+    if(selected)saveDraft(selected);resetCaseReply(detailData);releaseCaseDialog();if(selected!==id)clearTicketMedia();const revision=++detailRevision,version=epoch;selected=id;showTicketModal();
     if(pushRoute){writeTicketRoute(id,focus);directTicketKey=epoch+':'+id+':'+focus;}
     const title=$('supportDetailContent');title.innerHTML=`<div class="support-heading"><h2>${esc(t('loading'))}</h2><button type="button" class="outline" id="supportClose">${t('close')}</button></div>`;$('supportClose').onclick=()=>closeTicketModal();
     const query=new URLSearchParams(focus?{message_id:focus}:{});if(options.notificationId){query.set('notification_id',options.notificationId);query.set('expected_tenant_id',String(member?.tenant_id||''));query.set('expected_user_id',String(member?.telegram_id||''));}
@@ -534,7 +625,7 @@
     button.onclick=async()=>{if(button.disabled)return;button.disabled=true;try{const operator=await ensureManualCaseUI();if(version!==epoch||!button.isConnected)return;if(!operator.hasRight('support')||!operator.hasRight('dialogs'))throw Error(t('noAccess'));button.disabled=false;await operator.openManualCaseCreate({provider:'connect',lead_id:lead,...(event.detail.channel_id?{channel_id:event.detail.channel_id}:{}),...(event.detail.conversation_id?{conversation_id:event.detail.conversation_id}:{})},button,()=>version===epoch&&button.isConnected);}catch(error){if(version===epoch&&button.isConnected){button.disabled=false;notice(error.message);}}};
 
   });
-  function profileChanged(data){const rightsChanged=JSON.stringify(accessCapabilities)!==JSON.stringify(data.capabilities||{});accessCapabilities=data.capabilities||{};operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');const person=data.member;if(rightsChanged||!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportCount'))$('supportCount').textContent='';if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
+  function profileChanged(data){const rightsChanged=JSON.stringify(accessCapabilities)!==JSON.stringify(data.capabilities||{});accessCapabilities=data.capabilities||{};operatorWorkspaceAvailable=Array.isArray(data.integrations)&&data.integrations.some(row=>row.provider==='beinsystems_operator');const person=data.member;if(rightsChanged||!allowed()||identity(person)!==identity(member)||JSON.stringify(person?.permissions)!==JSON.stringify(member?.permissions)||person?.active!==member?.active){epoch++;listRevision++;detailRevision++;directTicketKey='';selected=null;resetCaseReply(detailData);releaseCaseDialog();detailData?.consultationUI?.dispose();clearTicketMedia();detailData=null;drafts.clear();rows=[];members=[];channels=[];nextOffset=null;nextBefore=null;if($('supportRows'))$('supportRows').replaceChildren();if($('supportCount'))$('supportCount').textContent='';if($('supportDetail')){$('supportDetail').hidden=true;$('supportDetailContent')?.replaceChildren();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');returnFocus=null;}badge(0);notice('');}member=person;if(allowed()){load();openDirectTicket();}}
   const syncSupportViewport=()=>{const host=$('supportDetail');if(!host)return;host.style.setProperty('--support-visual-top',(window.visualViewport?.offsetTop||0)+'px');host.style.setProperty('--support-visual-height',(window.visualViewport?.height||window.innerHeight)+'px');syncCasePanels();};window.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('resize',syncSupportViewport);window.visualViewport?.addEventListener('scroll',syncSupportViewport);
   document.addEventListener('keydown',trapTicketFocus);
   window.addEventListener('popstate',()=>{const query=new URLSearchParams(location.search),id=query.get('support_ticket_id');if(id===selected&&modalOpen&&document.querySelector('.operator-photo-viewer'))return;if(id&&query.get('view')==='support'){directTicketKey='';openDirectTicket();}else if(modalOpen)closeTicketModal(true);});
@@ -543,6 +634,6 @@
   document.addEventListener('tenant-support-changed',()=>load());
   document.addEventListener('tenant-dialog-state',()=>{load();if(selected)open(selected);});
   document.addEventListener('tenant-operator-error',event=>notice(event.detail.message));
-  document.addEventListener('tenant-language',()=>{if(!$('supportInbox'))return;const status=$('supportStatus').value,assignee=$('supportAssignee').value,channel=$('supportChannel').value,search=$('supportSearch').value,id=selected,opener=returnFocus;saveDraft(id);releaseCaseDialog();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');$('supportDetail')?.remove();$('supportInbox').remove();install();$('supportStatus').value=status;$('supportAssignee').value=assignee;$('supportChannel').value=channel;$('supportSearch').value=search;load();if(id){const notificationId=new URLSearchParams(location.search).get('notification_id')?.toLowerCase();open(id,'',true,false,notificationId?{keepError:true,notificationId}:{});}if(opener?.isConnected)returnFocus=opener;});
+  document.addEventListener('tenant-language',()=>{if(!$('supportInbox'))return;const status=$('supportStatus').value,assignee=$('supportAssignee').value,channel=$('supportChannel').value,search=$('supportSearch').value,id=selected,opener=returnFocus;saveDraft(id);resetCaseReply(detailData);releaseCaseDialog();modalOpen=false;document.body.style.overflow=bodyOverflow;$('supportInbox')?.removeAttribute('inert');$('supportDetail')?.remove();$('supportInbox').remove();install();$('supportStatus').value=status;$('supportAssignee').value=assignee;$('supportChannel').value=channel;$('supportSearch').value=search;load();if(id){const notificationId=new URLSearchParams(location.search).get('notification_id')?.toLowerCase();open(id,'',true,false,notificationId?{keepError:true,notificationId}:{});}if(opener?.isConnected)returnFocus=opener;});
   if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
 })();

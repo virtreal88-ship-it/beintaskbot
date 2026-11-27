@@ -14,6 +14,17 @@ def _group_connection(connection):
     return bool(connection[0] == 'connect' and GROUP.fullmatch(connection[2]))
 
 
+def _guard_support_reply(cur, session, command, connection):
+    if ticket_id := command.get('support_ticket_id'):
+        from tenant_operator_access import access
+        from tenant_support_reply import require_dialog_view, require_route
+        route = require_route(cur, session, ticket_id, lock=True)
+        if command['lead_id'] != route['lead_id'] or connection != ['connect', route['channel_id'], route['conversation_id']]:
+            raise TenantLinearError('Источник обращения изменился.', 409)
+        require_dialog_view(cur, session, route)
+        access(cur, session, 'dialogs', 'update')
+
+
 def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status=None):
     tenant, actor = str(uuid.UUID(str(session['tenant_id']))), int(session['telegram_id'])
     from tenant_dialog_rollout import guard
@@ -136,6 +147,7 @@ def reserve(session, command, *, validate_route=None):
             from tenant_consultation_chat_media import authorize as case_authorize, reserve as case_reserve
             case_binding=case_authorize(cur,session,command)
             profile, connection, integration = authority(cur, session, command['lead_id'])
+            _guard_support_reply(cur, session, command, connection)
             quote=quote_target(cur,profile['tenant_id'],command,connection)
             key = (profile['tenant_id'], int(profile['telegram_id']), command['request_id'])
             cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"chat-send:{key[0]}:{command['lead_id']}",))
@@ -198,6 +210,7 @@ def mark_sending(item, route):
             from tenant_consultation_chat_media import authorize as case_authorize, guard as case_guard, state as case_state
             case_authorize(cur,{'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command'])
             profile, connection, integration = authority(cur, {'tenant_id': item['key'][0], 'telegram_id': item['key'][1]}, item['command']['lead_id'])
+            _guard_support_reply(cur, profile, item['command'], connection)
             from tenant_dialog_rollout import guard
             rollout = guard(cur, profile['tenant_id'])
             generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0
@@ -207,6 +220,8 @@ def mark_sending(item, route):
                 raise TenantLinearError('Режим диалога изменился. Подготовьте новую отправку.',409)
             case_guard(cur,item,prepared.get('route') or {})
             route = {**route, 'lifecycle_generation':generation,**({'consultation_id':item['command']['consultation_id']} if item['command'].get('consultation_id') else {})}
+            if ticket_id := item['command'].get('support_ticket_id'):
+                route['support_ticket_id'] = ticket_id
             if connection != item['connection']:
                 raise TenantLinearError('Kommo bağlantısı dəyişib.', 409)
             if quote_target(cur,profile['tenant_id'],item['command'],connection)!=item.get('quote'):
@@ -438,13 +453,14 @@ def dispatch_guarded(item, expected_credentials, callback, *args, group_voice=Fa
             rollout=guard(cur,item['key'][0])
             # Preserve the original unscoped legacy final-dispatch behavior,
             # but never outside the shared activation barrier.
-            if not group_voice and not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
+            if not group_voice and not item.get('command',{}).get('support_ticket_id') and not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
                 from tenant_whatsapp_native_transport import guard_dispatch
                 guard_dispatch(cur,item['key'][0],expected_credentials)
                 dispatch_credentials={**expected_credentials,'_native_cursor':cur,'native_actor_id':item['key'][1]} if expected_credentials.get('native') else expected_credentials
                 return callback(dispatch_credentials,*args,**kwargs)
             profile,connection,integration=authority(cur,
               {'tenant_id':item['key'][0],'telegram_id':item['key'][1]},item['command']['lead_id'])
+            _guard_support_reply(cur, profile, item['command'], connection)
             from tenant_dialog_rollout import guard
             rollout = guard(cur, profile['tenant_id'])
             generation = rollout.generation if rollout.enforced and connection[0]=='connect' else 0

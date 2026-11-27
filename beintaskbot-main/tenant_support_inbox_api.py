@@ -36,6 +36,10 @@ def handler(member_from_request, origin, logger, resource):
                 elif resource=='sla_policy':
                     from tenant_support_copilot import read_sla_policy
                     result=await asyncio.to_thread(read_sla_policy,profile)
+                elif resource=='ticket' and request.query.get('reply_context')=='1':
+                    from tenant_support_reply import context
+                    _expected(request.query,profile)
+                    result=await asyncio.to_thread(context,profile,request.match_info['ticket_id'])
                 else:
                     options={}
                     if 'notification_id' in request.query:
