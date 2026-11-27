@@ -87,6 +87,17 @@ def test_malformed_or_unsupported_event_is_not_a_new_ai_turn(changes):
     with pytest.raises(TenantLinearError):event(message(**changes))
 
 
+@pytest.mark.parametrize('point', [
+    {'latitude':None,'longitude':0},
+    {'latitude':True,'longitude':0},
+    {'latitude':90.1,'longitude':0},
+    {'latitude':0,'longitude':181},
+])
+def test_invalid_coordinates_preserve_the_message_without_a_map_link(point):
+    data=event(message(message_type='location', location=point))['data']
+    assert data['type']=='location' and 'location' not in data and not data['text']
+
+
 def test_authenticated_device_participant_keeps_group_and_author_without_mutating_evidence():
     payload=message(chat='120363123456789@g.us',sender='188888888:34@lid',sender_alt='15550000002:34@s.whatsapp.net')
     before=copy.deepcopy(payload)

@@ -1,10 +1,12 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
 const source=fs.readFileSync('docs/tenant-operator-dialogs.js','utf8');
 const begin=source.indexOf('  function missedCallLabel('),end=source.indexOf('\n  // The case history',begin);
+const sharedBegin=source.indexOf('  const sharedMessageCopy='),sharedEnd=source.indexOf('  const dialogPreview=',sharedBegin);
+const cardBegin=source.indexOf('  function sharedMessageMarkup('),cardEnd=source.indexOf('\n  }',cardBegin)+'\n  }'.length;
 const context={i18n:{language:'ru',date:x=>x},esc:x=>String(x),t:x=>x,
   mediaSize:()=>'',messageAuthor:()=> 'WhatsApp',deliveryMarkup:()=>'',copyControlMarkup:()=>'',
-  currentDialog:{provider:'connect',channel_id:'channel',conversation_id:'direct'},currentPage:null};
-vm.createContext(context);vm.runInContext(source.slice(begin,end),context);
+ currentDialog:{provider:'connect',channel_id:'channel',conversation_id:'direct',wecall:true},currentPage:null};
+vm.createContext(context);vm.runInContext([source.slice(sharedBegin,sharedEnd),source.slice(cardBegin,cardEnd),source.slice(begin,end)].join('\n'),context);
 for(const [language,audio,video] of [['ru','Пропущенный звонок','Пропущенный видеозвонок'],['az','Buraxılmış zəng','Buraxılmış videozəng'],['en','Missed call','Missed video call']]){
  context.i18n.language=language;
  for(const [isVideo,label] of [[false,audio],[true,video]]){
@@ -79,6 +81,33 @@ const expired=context.messageMarkup([recorded]);assert(expired.includes('Сро�
 console.log('compact RU/AZ/EN recording directions, private playback, incomplete status and expiry passed');
 
 const {JSDOM}=require('../.support-test-deps/node_modules/jsdom');
+for(const [language,contact,location,map] of [
+ ['ru','Контакт','Геолокация','Открыть на карте'],['az','Kontakt','Məkan','Xəritədə aç'],['en','Contact','Location','Open in Maps']
+]){
+ context.i18n.language=language;
+ const base={source:'connect',direction:'incoming',happened_at:'2026-11-15T09:00:00Z'};
+ const rows=[
+  {...base,id:'shared-contact',external_id:'connect:contacts',message_type:'contact',contacts:[
+   {name:'Synthetic',phones:['+15550000003','javascript:alert(1)']},{name:'Second',phones:[]}]},
+  {...base,id:'shared-location',external_id:'connect:location',message_type:'location',location:{latitude:0,longitude:-48.3,name:'Point'}},
+  {...base,id:'invalid-location',external_id:'connect:invalid',message_type:'location',location:{latitude:true,longitude:0}},
+ ];
+ const dom=new JSDOM(context.messageMarkup(rows),{url:'https://test.invalid'});
+ const doc=dom.window.document;
+ const contactCard=doc.querySelector('[data-message-id="shared-contact"] [data-shared-message]');
+ assert.equal(contactCard.querySelector('strong').textContent,contact);
+ assert(contactCard.textContent.includes('Second'));
+ assert.deepEqual([...contactCard.querySelectorAll('a')].map(a=>a.getAttribute('href')),['tel:+15550000003']);
+ const locationCard=doc.querySelector('[data-message-id="shared-location"] [data-shared-message]');
+ assert.equal(locationCard.querySelector('strong').textContent,location);
+ assert.equal(locationCard.querySelector('a').textContent,map);
+ assert.equal(new URL(locationCard.querySelector('a').href).searchParams.get('query'),'0, -48.3');
+ assert.equal(locationCard.querySelector('a').rel,'noopener noreferrer');
+ assert(!doc.querySelector('[data-message-id="invalid-location"] a'));
+ assert(!doc.querySelector('[data-media-open],[data-chat-attachment]'));
+ dom.window.close();
+}
+console.log('shared WhatsApp contacts and locations render in RU/AZ/EN without fetching media');
 const readFile=p=>fs.readFileSync(p,'utf8');
 const settle=async()=>{for(let i=0;i<30;i++)await new Promise(resolve=>setImmediate(resolve));};
 (async()=>{
