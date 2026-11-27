@@ -123,8 +123,7 @@ def _voice_supported(connection, integration):
         return False
     route = integration.get('route', {})
     return bool(DIRECT.fullmatch(connection[2]) or (
-        GROUP.fullmatch(connection[2]) and route.get('native')
-        and route.get('group_participant_id') and route.get('verify_group_membership') is True))
+        GROUP.fullmatch(connection[2]) and _native_account(route)))
 
 
 def _require_voice_route(connection, integration, command):
@@ -269,12 +268,14 @@ def record_acceptance(session, item, receipt):
                 facts.update(participantJid=account, _crm_native_send_receipt=True)
                 # The other source can observe only a LID. Reuse the verified
                 # account pair of this dispatch's participant for this event.
-                cur.execute("""SELECT account_lid FROM saas_dialog_group_participants
+                lid = ''
+                if route.get('group_participant_id'):
+                    cur.execute("""SELECT account_lid FROM saas_dialog_group_participants
                   WHERE tenant_id=%s::uuid AND id=%s::uuid AND episode_id=%s::uuid AND actor_id=%s
                     AND channel_id=%s::uuid AND conversation_id=%s AND account_jid=%s""",
-                  (tenant, route.get('group_participant_id'), route.get('lifecycle_episode_id'),
-                   actor, connection[1], connection[2], account))
-                lid = (cur.fetchone() or {}).get('account_lid') or ''
+                      (tenant, route['group_participant_id'], route.get('lifecycle_episode_id'),
+                       actor, connection[1], connection[2], account))
+                    lid = (cur.fetchone() or {}).get('account_lid') or ''
                 if re.fullmatch(r'[0-9]{5,22}@lid', lid):
                     pair = {'lid': lid, 'jid': account}
                     if raw.get('participantIdentity') in (None, pair):
@@ -332,7 +333,8 @@ async def run(session, command, content, logger):
                                                                'channel_id':channel,'conversation_id':conversation})
         route = {**route, 'author_id':item['key'][1], 'crm_conversation_id':command['lead_id']}
         mime, audio = await asyncio.to_thread(_delivery_audio, route, command['file']['mime'], content)
-        receipt = await asyncio.to_thread(dispatch_guarded, item, route, submit, command['request_id'], mime, audio)
+        receipt = await asyncio.to_thread(dispatch_guarded, item, route, submit, command['request_id'], mime, audio,
+                                         group_voice=bool(GROUP.fullmatch(conversation)))
         if receipt['provider_accepted']:
             await asyncio.to_thread(record_acceptance, session, {**item, 'lead_id': command['lead_id']}, receipt)
         else:

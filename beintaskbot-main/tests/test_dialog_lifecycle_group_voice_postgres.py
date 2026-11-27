@@ -19,7 +19,7 @@ import tenant_whatsapp_native_consumer as consumer
 import tenant_whatsapp_native_transport as native
 from tenant_connect_group_history import page as group_history
 from test_dialog_lifecycle_group_work_postgres import (
-    A, CB, GROUP, LIDS, SOURCES, GatewayResponse, collaboration, database,
+    A, CB, GROUP, LIDS, SOURCES, GatewayResponse, action, collaboration, database,
     db, episodes, history, join, profile,
 )
 
@@ -29,9 +29,17 @@ RECORDING = (Path(__file__).parent / 'fixtures' / 'connect-voice-tone.ogg').read
 
 
 @pytest.fixture
-def voice_group(collaboration, monkeypatch):
+def voice_group(collaboration, monkeypatch, request):
     connection, membership, _ = collaboration
-    join(connection)
+    if getattr(request, 'param', 'shared') == 'ordinary':
+        # Exercise an already-accepted ordinary group, not a collaboration participant.
+        import tenant_dialog_group_work as group_work
+        monkeypatch.setattr(group_work, 'configured', lambda *_: False)
+        action(33, 'accept')
+        assert connection.execute('SELECT count(*) AS n FROM saas_dialog_group_participants')[0]['n'] == 0
+        connection.commit()
+    else:
+        join(connection)
     for module in (voice, consumer):
         monkeypatch.setattr(module, '_connect', lambda: psycopg.connect(connection.dsn, row_factory=dict_row))
     monkeypatch.setenv('CUSTOMER_VOICE_ENABLED', 'true')
@@ -208,3 +216,33 @@ async def test_group_voice_lost_ack_is_only_recovered_by_lookup(voice_group):
         WHERE direction='outgoing' AND message_type='audio'""")
     assert len(row) == 1 and row[0]['author_name'] == 'Operator B' and row[0]['channel'] == 'connect:' + CB
     assert row[0]['raw']['participantJid'] == SOURCES[44][2]
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('voice_group', ['ordinary'], indirect=True)
+async def test_ordinary_group_voice_uses_accepted_route_and_requires_fresh_membership(voice_group):
+    database, membership, gateway = voice_group
+    data = command(33)
+    async with app_client(33) as client:
+        capability = await client.get('/capability', params={key: str(data[key]) for key in
+            ('lead_id', 'expected_tenant_id', 'expected_user_id')})
+        assert (await capability.json())['enabled'] is True
+        membership[SOURCES[33][2]] = False
+        status, result = await upload(client, data)
+        assert status == 409 and result['delivery_phase'] == 'not_sent' and result['keep_request'] is False
+        assert not gateway['delivered']
+        membership[SOURCES[33][2]] = True
+        data = command(33)
+        status, result = await upload(client, data)
+        assert status == 200 and result['participant_jid'] == SOURCES[33][2]
+        assert result['provider_accepted'] is True
+        status, replay = await upload(client, data)
+        assert status == 200 and replay['message_id'] == result['message_id']
+    async with app_client(44) as client:
+        status, denied = await upload(client, command(44))
+        assert status in (403, 409)
+        assert denied['keep_request'] is False
+    assert gateway['checks'] == [SOURCES[33][2]] * 2
+    assert len(gateway['attempts']) == 2 and len(gateway['delivered']) == 1
+    messages = database.execute("SELECT channel, raw FROM saas_crm_messages WHERE message_type='audio'")
+    assert len(messages) == 1 and messages[0]['channel'] == 'connect:' + SOURCES[33][0]
+    assert messages[0]['raw']['participantJid'] == SOURCES[33][2]

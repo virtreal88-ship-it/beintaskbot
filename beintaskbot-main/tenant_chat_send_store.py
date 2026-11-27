@@ -7,6 +7,11 @@ from tenant_chat_send_policy import fingerprint
 from tenant_policy import TenantPolicy
 from tenant_linear_policy import TenantLinearError
 from tenant_connect_transport import connect_route
+from tenant_whatsapp_native_projection import GROUP
+
+
+def _group_connection(connection):
+    return bool(connection[0] == 'connect' and GROUP.fullmatch(connection[2]))
 
 
 def authority(cur, session, lead_id, *, lifecycle_receipt=None, lifecycle_status=None):
@@ -167,6 +172,12 @@ def reserve(session, command, *, validate_route=None):
             prepared = {'lifecycle_generation':generation}
             if case_binding:
                 prepared['consultation_id']=case_binding['consultation_id']
+            if validate_route is not None and _group_connection(connection):
+                prepared['group_voice_binding'] = integration['route']['native']
+                if rollout.enforced:
+                    from tenant_dialog_lifecycle import _row as lifecycle_row
+                    episode = lifecycle_row(cur, profile['tenant_id'], connection[1], connection[2])
+                    prepared['group_voice_episode'] = str((episode or {}).get('id') or '')
             if integration.get('route',{}).get('group_participant_id'):
                 prepared['group_participant_id']=integration['route']['group_participant_id']
             cur.execute("INSERT INTO saas_chat_send_receipts(tenant_id,actor_id,request_id,lead_id,input_hash,state,route) VALUES(%s::uuid,%s,%s::uuid,%s,%s,'preparing',%s::jsonb)", (*key, command['lead_id'], fingerprint(command),json.dumps(prepared)))
@@ -207,8 +218,12 @@ def mark_sending(item, route):
                     raise TenantLinearError('Участие в группе изменилось. Подготовьте новую отправку.',409)
                 if group_participant:
                     route.update(group_participant_id=group_participant,group_channel_id=connection[1])
-                    if route.get('voice_protocol'):
-                        route['group_account_jid'] = credentials['native']['scope']['account']
+                if route.get('voice_protocol') and _group_connection(connection):
+                    binding = credentials.get('native')
+                    account = ((binding or {}).get('scope') or {}).get('account')
+                    if not account or (prepared.get('route') or {}).get('group_voice_binding') != binding:
+                        raise TenantLinearError('Источник голосового сообщения изменился. Запишите его заново.', 409)
+                    route['group_account_jid'] = account
                 from tenant_dialog_lifecycle import ai_blocked, enabled as lifecycle_enabled
                 managed=lifecycle_enabled(cur, profile['tenant_id']) and ai_blocked(cur,profile['tenant_id'],'connect',credentials['channel_id'],credentials['conversation_id'])
                 if is_group and not managed:
@@ -223,7 +238,11 @@ def mark_sending(item, route):
             from tenant_dialog_lifecycle import enabled as lifecycle_enabled, _row as lifecycle_row
             if connection[0]=='connect' and lifecycle_enabled(cur, profile['tenant_id']):
                 episode=lifecycle_row(cur,profile['tenant_id'],connection[1],connection[2])
-                route={**route,'lifecycle_episode_id':str(episode['id'])}
+                episode_id = str(episode['id'])
+                if ('group_voice_episode' in (prepared.get('route') or {})
+                        and prepared['route']['group_voice_episode'] != episode_id):
+                    raise TenantLinearError('Обращение изменилось. Подготовьте новую отправку.', 409)
+                route={**route,'lifecycle_episode_id':episode_id}
             cur.execute("UPDATE saas_chat_send_receipts SET state='sending',route=%s::jsonb,updated_at=now() WHERE tenant_id=%s::uuid AND actor_id=%s AND request_id=%s::uuid AND state='preparing' RETURNING request_id", (json.dumps(route), *item['key']))
             if not cur.fetchone():
                 raise TenantLinearError('Göndərmə artıq işlənir.', 409)
@@ -399,7 +418,7 @@ def read_quoted_receipt(session,lead_id,request_id=None):
                 'quote':quote,'message_id':row['message_id'],'receipt_state':row['state'],'credentials':{**integration['route'],'tenant_id':profile['tenant_id'],**({'native_actor_id':profile['telegram_id']} if integration['route'].get('native') else {})}}
 
 
-def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
+def dispatch_guarded(item, expected_credentials, callback, *args, group_voice=False, **kwargs):
     """Final authority and source locks span the single provider operation.
 
     Scope revocation, employee deactivation, department reassignment and source
@@ -419,7 +438,7 @@ def dispatch_guarded(item, expected_credentials, callback, *args, **kwargs):
             rollout=guard(cur,item['key'][0])
             # Preserve the original unscoped legacy final-dispatch behavior,
             # but never outside the shared activation barrier.
-            if not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
+            if not group_voice and not rollout.enforced and not scoped_access_enabled() and item.get('connection',[None])[0]=='connect':
                 from tenant_whatsapp_native_transport import guard_dispatch
                 guard_dispatch(cur,item['key'][0],expected_credentials)
                 dispatch_credentials={**expected_credentials,'_native_cursor':cur,'native_actor_id':item['key'][1]} if expected_credentials.get('native') else expected_credentials
