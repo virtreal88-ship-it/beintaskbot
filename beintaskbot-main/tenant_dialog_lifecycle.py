@@ -308,7 +308,7 @@ def ai_blocked(cur, tenant, provider, channel, conversation):
 
 
 def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, message_id, event_at):
-    from tenant_dialog_presence import _work_ready, is_online, work_status_routing_requested
+    from tenant_dialog_presence import _work_ready, can_retain_assignment, work_status_routing_requested
     if not work_status_routing_requested(tenant,channel) or not _work_ready(cur):
         return False
     row = _row(cur,tenant,channel,conversation)
@@ -317,10 +317,9 @@ def _return_unavailable_dialog_to_queue(cur, tenant, channel, conversation, mess
     from tenant_dialog_group_work import keeps_assignment
     if keeps_assignment(cur,tenant,conversation,row):
         return False
-    if is_online(cur,tenant,row['operator_id'],source_channel=channel):
+    if can_retain_assignment(cur,tenant,row['operator_id'],source_channel=channel):
         return False
-    # Operator routing eligibility excludes owners. An active owner's
-    # availability is informational and must not release an accepted dialog.
+    # Preserve the active owner's assignment even if source setup changes.
     cur.execute("""UPDATE saas_dialog_workflows w SET state='waiting',operator_id=NULL,
         id=%s::uuid,revision=w.revision+1,last_inbound_id=%s,updated_at=clock_timestamp()
         FROM saas_dialog_episodes e
@@ -408,7 +407,7 @@ def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True, onlin
     from tenant_scoped_access_store import read_access_profile
     from tenant_policy import TenantPolicy
     from tenant_dialog_access import require_source
-    from tenant_dialog_presence import is_online, is_sidebar_transfer_online, routing_enabled
+    from tenant_dialog_presence import is_transfer_online, routing_enabled
     routing = filter_presence and not online_only and routing_enabled(cur,tenant,channel)
     cur.execute('SELECT telegram_id,display_name FROM saas_tenant_members WHERE tenant_id=%s::uuid AND active=TRUE ORDER BY telegram_id', (tenant,))
     members=cur.fetchall(); result=[]
@@ -423,8 +422,9 @@ def _targets(cur, tenant, policy, channel, actor, *, filter_presence=True, onlin
             require_source(cur,tenant,p,'connect',channel,'view')
             require_source(cur,tenant,p,'connect',channel,'update')
         except TenantLinearError: continue
-        if online_only and not is_sidebar_transfer_online(cur,tenant,target,lock=lock,source_channel=channel): continue
-        if routing and not is_online(cur,tenant,target,lock=lock,_routing=routing,source_channel=channel): continue
+        if (online_only or routing) and not is_transfer_online(
+                cur,tenant,target,lock=lock,online_only=online_only,_routing=routing,source_channel=channel):
+            continue
         result.append({'employee_id':target,'name':member.get('display_name') or str(target)})
     return result
 
@@ -469,7 +469,7 @@ def transfer_details(profile, params):
 
 
 def transfer_candidates(profile, params):
-    """List the currently online eligible operators for one exact owned dialogue."""
+    """List the currently online eligible staff for one exact owned dialogue."""
     from tenant_operator_access import access, assert_route
     from tenant_dialog_access import require_source
     from tenant_platform import _connect
@@ -732,7 +732,7 @@ def _mutate_once(profile, payload):
                 raise TenantLinearError('Выберите источник Connect.',400)
             route=_resolve_connect_route(cur,tenant,str(payload.get('conversation_id') or ''),str(payload.get('channel_id') or ''),int(payload['lead_id']),allow_merged=not online_only and action != "takeover")
             channel,conversation=str(route['connect_channel_id']),route['conversation_id']
-            from tenant_dialog_presence import is_online, is_sidebar_transfer_online
+            from tenant_dialog_presence import is_online, is_transfer_online
             target = None
             eligible = True
             transfer_source_active = False
@@ -765,8 +765,7 @@ def _mutate_once(profile, payload):
                 # acquire them BEFORE the route lock to avoid lock inversion.
                 if type(target) is not int or target not in {m['employee_id'] for m in _targets(cur,tenant,policy,channel,actor,filter_presence=False)}:
                     raise TenantLinearError('Сотрудник не имеет доступа к этому источнику.',403)
-                eligible = (is_sidebar_transfer_online(cur,tenant,target,lock=True,source_channel=channel)
-                    if online_only else is_online(cur,tenant,target,lock=True,source_channel=channel))
+                eligible = is_transfer_online(cur,tenant,target,lock=True,online_only=online_only,source_channel=channel)
                 cur.execute('''SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid
                     AND connect_channel_id=%s::uuid AND active FOR SHARE''',(tenant,channel))
                 transfer_source_active = bool(cur.fetchone())

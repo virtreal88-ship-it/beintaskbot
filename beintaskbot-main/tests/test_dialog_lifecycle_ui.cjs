@@ -332,7 +332,7 @@ async function verifySidebarTransfer(){
  d.querySelector('#operatorCompanyPanelOpen').click();
  const menu=d.querySelector('#operatorSidebarTransfer details');menu.open=true;
  await tick();await tick();
- assert.match(menu.textContent,/No eligible operators online/);
+ assert.match(menu.textContent,/No eligible employees online/);
  const refresh=()=>{menu.open=false;return tick().then(()=>{menu.open=true;return tick();}).then(tick);};
  mode='online';await refresh();
  assert.deepEqual([...menu.querySelectorAll('[data-transfer-targets] button')].map(b=>b.textContent),['Online operator']);

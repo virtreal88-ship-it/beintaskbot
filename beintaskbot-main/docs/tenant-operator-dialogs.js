@@ -785,9 +785,9 @@
     document.body.append(modal);select.focus();
   }
   const transferSidebarText=key=>({
-    ru:{empty:'Нет доступных операторов в сети.',loading:'Проверяем, кто в сети…',failed:'Не удалось передать диалог. Проверьте список и попробуйте снова.',stale:'Диалог или статус оператора изменился. Обновите список.',sending:'Передаём диалог…',retry:'Обновить список'},
-    az:{empty:'Əlçatan onlayn operator yoxdur.',loading:'Onlayn operatorlar yoxlanılır…',failed:'Dialoqu ötürmək olmadı. Siyahını yoxlayıb yenidən cəhd edin.',stale:'Dialoq və ya operatorun statusu dəyişib. Siyahını yeniləyin.',sending:'Dialoq ötürülür…',retry:'Siyahını yenilə'},
-    en:{empty:'No eligible operators online.',loading:'Checking who is online…',failed:'Could not transfer the conversation. Check the list and try again.',stale:'The conversation or operator status changed. Refresh the list.',sending:'Transferring conversation…',retry:'Refresh list'}
+    ru:{empty:'Нет доступных сотрудников в сети.',loading:'Проверяем, кто в сети…',failed:'Не удалось передать диалог. Проверьте список и попробуйте снова.',stale:'Диалог или статус сотрудника изменился. Обновите список.',sending:'Передаём диалог…',retry:'Обновить список'},
+    az:{empty:'Əlçatan onlayn əməkdaş yoxdur.',loading:'Onlayn əməkdaşlar yoxlanılır…',failed:'Dialoqu ötürmək olmadı. Siyahını yoxlayıb yenidən cəhd edin.',stale:'Dialoq və ya əməkdaşın statusu dəyişib. Siyahını yeniləyin.',sending:'Dialoq ötürülür…',retry:'Siyahını yenilə'},
+    en:{empty:'No eligible employees online.',loading:'Checking who is online…',failed:'Could not transfer the conversation. Check the list and try again.',stale:'The conversation or employee status changed. Refresh the list.',sending:'Transferring conversation…',retry:'Refresh list'}
   }[i18n.language]||{})[key];
   const canSidebarTransfer=route=>['connect','operator_widget'].includes(route?.provider)&&!route.archive_read_only&&!route.owner_overview_read_only&&route.lifecycle?.can_transfer===true;
   const sidebarTransferFlights=new Set();

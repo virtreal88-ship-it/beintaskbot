@@ -818,7 +818,7 @@ def test_offline_operator_cannot_claim_but_owner_can_manually_accept(episodes):
     episodes.commit()
 
 
-def test_sidebar_transfer_only_current_online_operator_same_source(episodes, monkeypatch):
+def test_sidebar_transfer_only_current_online_employee_same_source(episodes, monkeypatch):
     import tenant_dialog_presence as presence
     # Manual picker checks real current status even when automatic routing is off.
     monkeypatch.delenv('TENANT_DIALOG_PRESENCE_ROUTING_ENABLED', raising=False)
@@ -848,7 +848,70 @@ def test_sidebar_transfer_only_current_online_operator_same_source(episodes, mon
     events=episodes.execute("SELECT entity_id FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_transfer'",(A,))
     assert events[-1]['entity_id']==accepted_id
     assert episodes.execute('SELECT accepted_by FROM saas_dialog_episodes WHERE tenant_id=%s::uuid AND id=%s::uuid',(A,accepted_id))[0]['accepted_by']==11
-    assert lifecycle.transfer_candidates(employee,{**route,'expected_revision':'2'})=={'targets':[]}
+    assert lifecycle.transfer_candidates(employee,{**route,'expected_revision':'2'})=={
+        'targets':[{'employee_id':11,'name':'Owner'}]}
+
+
+@pytest.mark.parametrize('online_only', [True, False])
+def test_transfer_to_online_manager_keeps_assignment_on_routed_source(episodes, monkeypatch, online_only):
+    import json
+    import tenant_dialog_presence as presence
+
+    monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED', 'true')
+    monkeypatch.setenv(presence.STATUS_ENABLED_ENV, 'true')
+    monkeypatch.setenv(presence.ROUTING_SOURCES_ENV, CA)
+    query=episodes.query
+    monkeypatch.setattr(episodes,'query',
+        lambda sql,params=():query(sql.as_string() if hasattr(sql,'as_string') else sql,params))
+    with episodes.cursor() as cur:
+        presence.provision_status_schema(cur)
+    episodes.execute("""INSERT INTO saas_tenant_members(tenant_id,telegram_id,role,display_name,permissions)
+        VALUES(%s::uuid,34,'manager','Manager','["dialogs"]'::jsonb),
+              (%s::uuid,35,'worker','Read only','["dialogs"]'::jsonb),
+              (%s::uuid,36,'manager','No source','["dialogs"]'::jsonb)""", (A,A,A))
+    grants={str(actor):{'access_scopes':{'dialogs':{'view':'self','update':update}}}
+            for actor,update in [(33,'self'),(34,'self'),(35,'none'),(36,'self')]}
+    episodes.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key,value)
+        VALUES(%s::uuid,'members',%s::jsonb)
+        ON CONFLICT(tenant_id,policy_key) DO UPDATE SET value=EXCLUDED.value""",(A,json.dumps(grants)))
+    episodes.execute("""INSERT INTO saas_dialog_source_members(tenant_id,provider,source_id,employee_id,updated_by)
+        SELECT %s::uuid,'connect',%s::uuid,id,11 FROM (VALUES(33),(34),(35)) AS staff(id)""",(A,CA))
+    episodes.commit()
+
+    operator={'tenant_id':A,'telegram_id':33}
+    manager={'tenant_id':A,'telegram_id':34}
+    route={key:value for key,value in payload().items() if key in ('provider','channel_id','conversation_id','lead_id')}
+    route['expected_revision']='1'
+    with episodes.cursor() as cur:
+        assert not presence.is_online(cur,A,34,source_channel=CA)
+    episodes.commit()
+    with pytest.raises(TenantLinearError) as cannot_claim:
+        command(actor=34)
+    assert cannot_claim.value.status==403
+    accepted=command(actor=33)['lifecycle']
+    assert lifecycle.transfer_candidates(operator,route)['targets']==[
+        {'employee_id':11,'name':'Owner'},{'employee_id':34,'name':'Manager'}]
+    for recipient in (35,36):
+        with pytest.raises(TenantLinearError) as forbidden:
+            command('transfer',1,actor=33,target_employee_id=recipient,online_only=online_only)
+        assert forbidden.value.status==403
+    presence.set_status(manager,{'status':'offline'})
+    assert lifecycle.transfer_candidates(operator,route)['targets']==[{'employee_id':11,'name':'Owner'}]
+    with pytest.raises(TenantLinearError) as offline:
+        command('transfer',1,actor=33,target_employee_id=34,online_only=online_only)
+    assert offline.value.status==403
+    assert state(episodes)['operator_id']==33
+
+    presence.set_status(manager,{'status':'online'})
+    transferred=command('transfer',1,actor=33,target_employee_id=34,online_only=online_only)
+    assert transferred['lifecycle']['id']==accepted['id']
+    assert transferred['lifecycle']['operator_id']==34
+    presence.set_status(manager,{'status':'away'})
+    with episodes.cursor() as cur:
+        lifecycle.note_inbound(cur,A,CA,'client',str(uuid.uuid4()),'2099-01-01T00:00:00Z')
+        lifecycle.require_access(cur,A,34,'connect',CA,'client','update')
+    episodes.commit()
+    assert state(episodes)['operator_id']==34
 
 
 def test_sidebar_transfer_rechecks_source_active_under_lock(episodes, monkeypatch):
