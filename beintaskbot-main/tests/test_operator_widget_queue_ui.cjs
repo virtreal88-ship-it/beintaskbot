@@ -24,7 +24,7 @@ const wait = async predicate => {
     widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
   assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
-  const calls=[];let outcome='unknown',denyClosedHistory=false;
+  const calls=[];let outcome='unknown',denyClosedHistory=false,removed=false;
   w.fetch=async(url,opt={})=>{
     url=String(url);const data=opt.body&&JSON.parse(opt.body);
     calls.push({url,data});let result;
@@ -42,7 +42,11 @@ const wait = async predicate => {
       if(denyClosedHistory&&site.lifecycle.state==='closed')return {ok:false,status:403,json:async()=>({error:'Only assigned active dialogues are visible'})};
       result={dialog:{...site},messages:[{id:'2',body:'test',direction:'incoming'}]};
     }
-    else if(url.includes('dialogs?'))result={dialogs:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:1};
+    else if(url.includes('dialogs?'))result={dialogs:removed?[]:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:removed?0:1};
+    else if(url.endsWith('dialogs/remove')){
+      removed=true;
+      result={removed, provider:data.provider,channel_id:data.channel_id,conversation_id:data.conversation_id,lead_id:String(data.lead_id)};
+    }
     else if(url.includes('dialogs/read'))result={updated:true};
     else if(url.includes('dialogs/internal-comments'))result={comment:{id:'n',note:data.note,at:new Date().toISOString(),employee_name:'Tester'}};
     else if(url.includes('dialogs/reply-templates'))result={available:true,templates:[
@@ -148,6 +152,22 @@ const wait = async predicate => {
   assert(!modalSend.disabled);modalSend.click();
   await wait(()=>!d.getElementById('operatorInternalComment'));
   assert.equal(calls.filter(c=>c.url.includes('internal-comments')).at(-1).data.note,'modal staff only');
+  const removeButton=()=>d.querySelector('[data-operator-remove-dialog]');
+  assert.equal(removeButton(),null);
+  site.can_remove_dialog=true;
+  await w.tenantOperator.openDialog(site);
+  d.getElementById('operatorMoreActions').open=true;
+  assert.equal(removeButton().textContent,'Удалить диалог');
+  w.confirm=()=>false;
+  removeButton().click();await tick();
+  assert(!calls.some(c=>c.url.endsWith('dialogs/remove')));
+  w.confirm=()=>true;
+  removeButton().click();removeButton().click();
+  await wait(()=>d.getElementById('operatorNotice').textContent==='Диалог удалён из списка.');
+  assert(!w.tenantOperator.currentDialog);
+  const removals=calls.filter(c=>c.url.endsWith('dialogs/remove')).map(c=>c.data);
+  assert.equal(removals.length,1);
+  assert.deepEqual([removals[0].provider,removals[0].channel_id,removals[0].lead_id,removals[0].expected_tenant_id],['connect','wa',29,'demo']);
   assert.equal(calls.filter(c=>c.url.endsWith('/operator/widget')).length,2);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
   dom.window.close();

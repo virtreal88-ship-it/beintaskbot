@@ -603,6 +603,37 @@
     closeLifecycleModal();
     if($('operatorRows'))renderRows();
   }
+  const removalCopy=()=>({
+    ru:{label:'Удалить диалог',confirm:'Убрать этот диалог из списка на выбранном канале? Переписка сохранится. Новое сообщение клиента вернёт диалог в список.',done:'Диалог удалён из списка.',failed:'Не удалось подтвердить удаление диалога.'},
+    az:{label:'Dialoqu sil',confirm:'Bu dialoq seçilmiş kanalın siyahısından silinsin? Yazışma saxlanılacaq. Müştərinin yeni mesajı dialoqu siyahıya qaytaracaq.',done:'Dialoq siyahıdan silindi.',failed:'Dialoqun silinməsi təsdiqlənmədi.'},
+    en:{label:'Delete conversation',confirm:'Remove this conversation from the selected channel’s list? The history will be kept. A new customer message will bring it back.',done:'Conversation removed from the list.',failed:'Conversation removal could not be confirmed.'}
+  }[i18n.language]);
+  function removalButton(route, menu, same){
+    const button=document.createElement('button');
+    button.type='button';button.className='danger';button.dataset.operatorRemoveDialog='true';
+    button.textContent=removalCopy().label;
+    const owner=identity(member);
+    let requestId;
+    button.onclick=async()=>{
+      if(button.disabled||!same()||!window.confirm(removalCopy().confirm))return;
+      requestId ||= crypto.randomUUID();
+      button.disabled=true;
+      const proof={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id};
+      try{
+        const result=await api('dialogs/remove','POST',{...proof,request_id:requestId,confirmed:true});
+        if(!result?.removed||Object.keys(proof).some(key=>String(result[key])!==String(proof[key])))throw Error('invalid_receipt');
+        if(owner!==identity(member))return;
+        menu.open=false;
+        listRevision++;listFlight=null;lastListAt=0;
+        removeLifecycleDialog(route);
+        await refresh(false,false,{suppressRead:true});
+        if(owner===identity(member))notice(removalCopy().done);
+      }catch(error){
+        if(same())$('operatorChatError').textContent=error.status===403?t('noAccess'):removalCopy().failed;
+      }finally{if(button.isConnected)button.disabled=false;}
+    };
+    return button;
+  }
   function showLifecycleTransferReceipt(route,event){
     // Drop the old route and its messages before showing the confirmed handoff.
     removeLifecycleDialog(route);
@@ -3674,6 +3705,8 @@
     if(route.lifecycle_enabled)renderLifecycleActions(route,primaryHost);
     if(route.provider==='connect'&&canCreateSupport()&&canCreateManualCase(route)){const create=document.createElement('button');create.type='button';create.className='outline operator-create-ticket-compact';create.setAttribute('aria-label',t('createTicket'));create.title=t('createTicket');const plus=document.createElement('span');plus.textContent='+';plus.setAttribute('aria-hidden','true');const caption=document.createElement('span');caption.textContent=({ru:'Обращение',az:'sorğu',en:'Ticket'}[i18n.language]||t('createTicketCompact'));create.append(plus,caption);create.onclick=()=>openManualCaseCreate(route,create,same);create.dataset.operatorCreateTicket='true';$('operatorCreateTicketHost')?.append(create);if(!route.lifecycle_enabled){const complete=document.createElement('button');complete.type='button';complete.className='outline';complete.textContent=completionText('complete');complete.dataset.operatorComplete='true';complete.onclick=()=>openCompletion(route);primaryHost.append(complete);}}
     if(!route.archive_read_only){const diagnostics=document.createElement('button');diagnostics.type='button';diagnostics.textContent=t('diagnostics');diagnostics.dataset.operatorDiagnostics='true';diagnostics.onclick=()=>{menu.open=false;openDialogDiagnostics(route);};appendMenu(diagnostics);}
+    if(route.can_remove_dialog===true&&!embeddedConversation&&!route.case_attachment&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.colleague_read_only)
+      appendMenu(removalButton(route,menu,same));
     const trainingButton=$('operatorTraining'),caseAllowed=hasRight('dialogs')&&hasRight('support');trainingButton.hidden=!!route.lifecycle_enabled;trainingButton.disabled=!!route.lifecycle_enabled||route.provider!=='connect'||!route.agent_id||!caseAllowed;trainingButton.title=route.agent_status==='restricted'?assignmentLabel({...route,assignment_display:null}):!route.agent_id?trainingText('noAgent'):trainingButton.disabled?trainingText('noAccess'):trainingText('button');trainingButton.onclick=()=>openTraining(route,same);
     if(!route.lifecycle_enabled&&route.provider==='connect'){
       const menuTraining=document.createElement('button');menuTraining.type='button';menuTraining.id='operatorTrainingMenuAction';menuTraining.className='outline';menuTraining.textContent=trainingText('button');menuTraining.title=trainingButton.title;menuTraining.disabled=trainingButton.disabled;menuTraining.onclick=()=>{if(!same())return;menu.open=false;openTraining(route,same);};appendMenu(menuTraining);

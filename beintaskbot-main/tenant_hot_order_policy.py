@@ -71,6 +71,9 @@ class HotOrderPolicy:
         tenant = self.policy.profile.get('tenant_id')
         return bool(tenant and str(tenant) == str(order.get('tenant_id')) and self.policy.allows('hot_orders'))
 
+    def can_delete(self, order: dict) -> bool:
+        return self.owns_tenant(order) and self.policy.profile.get('role') == 'owner' and self.policy.profile.get('active') is not False
+
     def can_claim(self, order: dict) -> bool:
         return (self.owns_tenant(order) and self.allowed('claim') and order.get('status') == 'open'
                 and self.matches_service(str(order.get('service_id') or '')))
@@ -80,7 +83,7 @@ class HotOrderPolicy:
                 (self.policy.privileged or str(order.get('created_by')) == str(self.policy.profile.get('telegram_id'))))
 
     def can_view(self, order: dict) -> bool:
-        if not self.owns_tenant(order):
+        if order.get('archived_at') is not None or not self.owns_tenant(order):
             return False
         user = str(self.policy.profile.get('telegram_id'))
         return (self.policy.privileged or str(order.get('claimed_by')) == user or

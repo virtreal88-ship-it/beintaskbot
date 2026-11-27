@@ -50,7 +50,7 @@ def handler(context: HotOrderApiContext) -> Callable:
             action = data.get("action")
             if action == "create":
                 order = await asyncio.to_thread(context.create_order, profile, data)
-            elif action in {"claim", "release", "cancel"}:
+            elif action in {"claim", "release", "cancel", "delete"}:
                 order = await asyncio.to_thread(
                     context.change_order, profile, order_id=data.get("order_id"), action=action)
             elif action in {"complete", "approve", "reject"}:

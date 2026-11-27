@@ -475,7 +475,9 @@ def _message(item, *, group=False, participant_names=None, employee_participants
     return public(value)
 
 
-def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False, search_overview=False, duplicate_metadata_only=False):
+def projection(cur, policy, *, include_read_cursors=False, include_contact_names=True, allow_closed_archive=False, owner_overview=False, search_overview=False, duplicate_metadata_only=False, hide_removed=False):
+    from tenant_operator_dialog_removal import CONNECT_VISIBLE_SQL
+    removal_filter = ' AND ' + CONNECT_VISIBLE_SQL if hide_removed else ''
     scope,params=[],[]
     if policy.profile.get('role')!='owner':
         for item in (policy.pipeline_scope() if policy.can_read_legacy_crm() else []):
@@ -617,6 +619,7 @@ def projection(cur, policy, *, include_read_cursors=False, include_contact_names
       ) meaningful_name ON TRUE
       WHERE c.tenant_id=%s::uuid AND NOT EXISTS(SELECT 1 FROM saas_connect_dialog_links dl
         WHERE dl.tenant_id=c.tenant_id AND dl.channel_id=c.connect_channel_id AND dl.source_id=c.conversation_id AND dl.active)
+      '''+removal_filter+'''
       UNION ALL
       SELECT 'kommo',COALESCE(j.channel_id,lm.channel,''),COALESCE(j.conversation_id,''),d.kommo_lead_id,
         COALESCE(NULLIF(d.contact_name,''),NULLIF(d.name,''),d.kommo_lead_id::text),''::text AS manual_display_name,COALESCE(d.phone,''),''::text AS conversation_kind,''::text AS manual_display_phone,''::text AS avatar_status,
@@ -1162,7 +1165,7 @@ def _colleague_listing(cur,tenant,policy,target,search,channel,lifecycle,offset)
     target_policy=authorize_observer(cur,tenant,policy,target)
     if not enabled(cur,tenant):
         raise TenantLinearError('Диалог недоступен.',404)
-    sql,params=projection(cur,policy,allow_closed_archive=True,search_overview=True)
+    sql,params=projection(cur,policy,allow_closed_archive=True,search_overview=True,hide_removed=True)
     target_scope=sql_filter(target_policy,"'connect'","v.channel_id")
     states={'all':['accepted','closed','dismissed'],'active':['accepted'],'completed':['closed','dismissed']}[lifecycle]
     query=str(search or '')[:200].strip().casefold()
@@ -1201,6 +1204,8 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
     with _connect() as conn:
+        from tenant_platform import _ensure_schema
+        _ensure_schema(conn)
         ensure_schema(conn)
         from tenant_connect_transport import _schema as ensure_connect_schema
         ensure_connect_schema(conn)
@@ -1224,7 +1229,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             allow_closed_archive=interactive and (lifecycle=='completed' or employee_all or owner_overview or search_overview)
             sql,scopes=projection(cur, policy,include_read_cursors=include_read_cursors,
                 allow_closed_archive=allow_closed_archive,owner_overview=owner_overview,
-                search_overview=search_overview);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
+                search_overview=search_overview,hide_removed=True);params=(tenant,tenant,*scopes,runtime_flag('AI_AGENTS_ENABLED'))
             # All metadata and logical routes share one materialized, authorized projection.
             sql=sql.replace('visible AS (','visible AS MATERIALIZED (')
             from tenant_dialog_rollout import guard as rollout_guard
@@ -1931,6 +1936,9 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
             if provider=='connect' and not shared_archive and not colleague and dialog.get('wecall'):
                 from tenant_whatsapp_message_edit import attach_capabilities as attach_message_actions
                 attach_message_actions(messages[:50],dialog,actor)
+            if not (support_case_only or colleague):
+                from tenant_operator_dialog_removal import can_remove
+                dialog['can_remove_dialog'] = can_remove(policy, dialog)
             if colleague:
                 dialog={key:dialog[key] for key in (
                     'provider','lead_id','channel_id','channel_name','conversation_id','customer_kind',
