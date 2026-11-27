@@ -54,7 +54,7 @@
     .deal-feed-panel :is([data-related-tasks],[data-related-notes]):empty,.deal-feed-actions>section:empty{display:none}
     .deal-feed-panel:has([aria-busy=true]) [data-deal-timeline]>.deal-card-empty{display:none}
     .deal-feed-actions{display:flex;flex-wrap:wrap;gap:8px}
-    .deal-feed-actions>section{flex:1 1 200px}.deal-feed-actions header:empty{display:none}
+    .deal-feed-actions>section{flex:1 1 200px;min-width:0}.deal-feed-actions header:empty{display:none}
     .deal-feed-entry{display:block;margin:8px 0}
     .deal-chat-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 16px;min-width:0;border-bottom:1px solid var(--line);flex:none}
     .deal-chat-header h3,.deal-data-block h3,.kommo-deal-section h3{margin:0;font-size:15px;font-weight:600;color:var(--ink)}
@@ -82,7 +82,7 @@
     #nativeEntityCard.deal-conversation[data-type=deal] .crm-modal-actions:not(:has(button:not([hidden],[data-native-card-close]))){display:none}
     #nativeEntityCard.deal-conversation[data-type=deal] [data-native-card-status][hidden]{display:none!important}
     .kommo-deal-section{min-width:0}.kommo-deal-section header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-    .kommo-related-card{display:block;width:100%;text-align:left;padding:12px;margin-top:9px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;overflow-wrap:anywhere;white-space:pre-wrap}
+    .kommo-related-card{display:block;box-sizing:border-box;width:100%;text-align:left;padding:12px;margin-top:9px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;overflow-wrap:anywhere;white-space:pre-wrap}
     .kommo-related-card small{display:block;color:var(--muted);margin-bottom:5px;font-size:12px}
     .deal-card-layout .deal-message{display:flex;margin:9px 0}.deal-card-layout .deal-message[data-direction=outgoing]{justify-content:flex-end}
     .deal-card-layout .deal-message>div{box-sizing:border-box;min-width:0;max-width:min(90%,580px);background:var(--app-raised,var(--paper));border:1px solid var(--line);border-radius:11px;padding:9px 12px;overflow-wrap:anywhere}

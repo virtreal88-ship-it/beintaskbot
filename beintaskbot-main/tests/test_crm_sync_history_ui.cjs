@@ -17,7 +17,7 @@ async function native(config={}){
   await b.w.tenantContactsBridge.openEntity(type,id);await settle();
   if(type==='deal'){
    assert.equal(b.h.calls.length,before,'opening the deal defers history until the tab is selected');
-   b.q('[data-deal-tab=history]')?.click();
+   b.q('[data-deal-tab=feed]')?.click();
    await settle();
   }
  };
