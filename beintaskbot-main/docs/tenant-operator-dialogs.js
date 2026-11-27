@@ -2709,7 +2709,7 @@
     :is(#operatorClientCard,#operatorCompanyPanel) h2{margin:0;font-size:1.05rem;line-height:1.3}
     #operatorCompanyPanel h2{font-size:.94rem}
     #operatorCompanyPanel #operatorCompanyPanelClose{display:none}
-    #operatorCompanyPanel .operator-client-panel-content:has(#operatorCompanyView-main[hidden]) #operatorSidebarTransfer,
+    #operatorCompanyPanel .operator-client-panel-content:has(#operatorCompanyView-main[hidden]) :is(#operatorSidebarTransfer,#operatorSidebarDealCreate),
     #operatorClientCompanyHost:empty,#operatorSidebarTransfer [data-transfer-retry][hidden],#operatorSidebarTransfer [role=status]:empty{display:none!important}
     #operatorSidebarTransfer{display:grid;gap:6px;border-block-start:1px solid var(--line);padding-block-start:8px;font-size:.8rem}
     #operatorSidebarTransfer summary{min-height:36px;cursor:pointer;padding:8px;color:var(--brand);border:1px solid var(--line);border-radius:8px}
@@ -2897,8 +2897,11 @@
     if(!head||!layout)return;
     const hasCompany=()=>route.provider!=='operator_widget'&&capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
     const hasReminder=dialog=>(capabilities.shared_dialog_reminder_creation===true||capabilities.shared_dialog_reminders===true)&&dialog?.shared_reminder?.can_schedule===true;
+    const dealCreate=window.tenantDealCreate;
+    const canCreateDeal=()=>!embeddedConversation&&!route.archive_read_only&&!route.owner_overview_read_only
+      &&!route.search_overview_read_only&&!route.case_attachment&&dealCreate?.canCreate()===true;
     const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route);
-    const panelTitle=hasCompany()||(!hasTransfer&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
+    const panelTitle=hasCompany()||(!hasTransfer&&!canCreateDeal()&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';
     const name=visualDialogTitle(route),phone=visualDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
     const menuWasOpen=oldCard?.dataset.scope===scope&&$('operatorMoreActions')?.open===true;
@@ -2941,13 +2944,14 @@
     card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}" autofocus>×</button></header><div class="operator-client-panel-content"><div class="operator-client-panel-block">${display}${nameForm}${phoneRow}${widgetCompanyRow}</div>${conversation}<div data-client-support-case hidden></div>${roster}</div>`;
     layout.append(card);
     const historyToolbar=$('operatorConversationContent')?.querySelector('.operator-history-tools');
-    if(hasCompany()||hasTransfer||canScheduleReminder)historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);
+    if(hasCompany()||hasTransfer||canScheduleReminder||canCreateDeal())historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);
     const companyTrigger=$('operatorCompanyPanelOpen');
     const companyPanel=companyTrigger?document.createElement('dialog'):null;
     const companyPanelResize=companyPanel?document.createElement('button'):null;
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
-      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
+      const createDealRow=dealCreate?`<div id="operatorSidebarDealCreate" class="operator-client-panel-row"${canCreateDeal()?'':' hidden'}><button type="button" class="outline" id="operatorCreateDeal">${esc(dealCreate.label())}</button></div>`:'';
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${createDealRow}${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
       companyPanelResize.id='operatorCompanyPanelResize';companyPanelResize.type='button';companyPanelResize.setAttribute('role','separator');companyPanelResize.setAttribute('aria-orientation','vertical');companyPanelResize.setAttribute('aria-label',clientCardText('resize'));companyPanelResize.setAttribute('aria-controls',companyPanel.id);companyPanelResize.setAttribute('tabindex','0');
       layout.append(companyPanelResize,companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
@@ -2970,6 +2974,10 @@
     const dialogueBlock=card.querySelector('#operatorClientDeveloperHost').closest('details');
     let authorized=true,opener=trigger;
     const current=()=>authorized&&inDialogsView()&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
+    const createDealButton=companyPanel?.querySelector('#operatorCreateDeal');
+    if(createDealButton)createDealButton.onclick=()=>{
+      if(current()&&companyPanel.open&&canCreateDeal())void dealCreate.open({title:visualDialogTitle(currentDialog)});
+    };
     const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
     groupBlock?.addEventListener('toggle',loadRoster);
     const caseSlot=card.querySelector('[data-client-support-case]');
@@ -3106,12 +3114,12 @@
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
     card.addEventListener('cancel',event=>{event.preventDefault();close();});
-    const companyAllowed=()=>current()&&(hasCompany()||canSidebarTransfer(currentDialog)||hasReminder(currentDialog));
+    const companyAllowed=()=>current()&&(hasCompany()||canSidebarTransfer(currentDialog)||hasReminder(currentDialog)||canCreateDeal());
     const openCompany=(restore=false)=>{
       if(!companyAllowed()||!companyPanel||companyPanel.open)return;
       companyPanel.setAttribute('open','');companyTrigger?.setAttribute('aria-expanded','true');resizePanel();
       window.tenantDialogueCompany?.refreshPublicLink?.();
-      if(!restore)(mobileCompany()?$('operatorCompanyPanelClose'):($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary')||$('operatorSharedReminderCreate')))?.focus({preventScroll:true});
+      if(!restore)(mobileCompany()?$('operatorCompanyPanelClose'):($('operatorCompanyTab-main')||$('operatorSidebarTransfer')?.querySelector('summary')||$('operatorSharedReminderCreate')||(canCreateDeal()?createDealButton:null)))?.focus({preventScroll:true});
     };
     if(companyPanelViewport?.addEventListener){
       const onCompanyPanelViewportChange=event=>{
@@ -3143,7 +3151,7 @@
     const listen=(type,fn,capture=false)=>{document.addEventListener(type,fn,capture);listeners.push(()=>document.removeEventListener(type,fn,capture));};
     listen('keydown',event=>{
       if(event.key!=='Escape'||(!card.open&&!companyPanel?.open)||event.defaultPrevented||
-         document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
+         document.querySelector('#operatorLifecycleModal,#operatorCreateCaseModal,#nativeDealModal.show,dialog[open]:not(#operatorClientCard,#operatorCompanyPanel)'))return;
       event.preventDefault();event.stopImmediatePropagation();
       if(card.open)close();else dismissCompany();
     },true);
@@ -3158,6 +3166,7 @@
       if(!current()){closeAll();return;}
       if(card.open)void refreshCase(true);
       if(!companyPanel)return;
+      if(createDealButton)createDealButton.parentElement.hidden=!canCreateDeal();
       companyTrigger.hidden=!companyAllowed();
       if(!companyAllowed())closeCompany(false);
       else if(companyPanel.open)window.tenantDialogueCompany?.refreshPublicLink?.(true);

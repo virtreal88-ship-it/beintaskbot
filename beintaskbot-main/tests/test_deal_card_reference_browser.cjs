@@ -81,6 +81,8 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
       return json({},400);
     }
     if(p==='/api/platform/crm/deal-view-preferences')return json({source:native?'native':'kommo'});
+    if(p==='/api/platform/crm/native/deals'&&method==='POST')
+      return limited?json({},403):json({deal:{...local,title:JSON.parse(options.body).title}});
     if(p==='/api/platform/crm/native/deals')
       return json(url.searchParams.has('options')?{workflows:stages,contacts:[],members:[]}:{deals:[local]});
     if(p==='/api/platform/crm/native/deals/'+f.deal){
@@ -177,6 +179,53 @@ async function open(page, native) {
   const modal=page.locator(native?'#nativeEntityCard':'#dealModal');
   await modal.getByRole('tab',{name:'Чат',exact:true}).waitFor();
   return modal;
+}
+
+async function checkCreateDealFromDialog(browser,{width,limited=false}){
+  const page=await browser.newPage({...(width<900?devices['Pixel 7']:{}),viewport:{width,height:900}});
+  page.setDefaultTimeout(7000);
+  const errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.addInitScript(installFixture,{});
+  await page.addInitScript(installDealResponses,{native:true,linking:'linked',limited});
+  await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
+  await page.goto('https://fixture.test/app?view=dialogs&lang=ru');
+  await page.waitForFunction(()=>window.tenantOperator?.member?.active===true);
+  await page.evaluate(()=>window.tenantOperator.openDialog(dealProof.route));
+  await page.getByText('Запись операторского диалога',{exact:true}).waitFor();
+  const toggle=page.locator('#operatorCompanyPanelOpen');
+  const create=page.locator('#operatorCompanyPanel').getByRole('button',{name:'Создать сделку',exact:true});
+  const modal=page.locator('#nativeDealModal');
+  if(limited){
+    assert.equal(await create.count(),0);
+    assert.equal(await toggle.count(),0);
+  }else{
+    if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+    await create.waitFor();
+    await page.evaluate(()=>{
+      document.getElementById('nativeDealChannel').value=dealProof.route.channel_id;
+      document.getElementById('nativeDealConversation').value='previous-conversation';
+    });
+    await create.click();
+    await modal.waitFor();
+    assert.equal(await modal.locator('h2').textContent(),'Создать сделку');
+    assert.equal(await modal.locator('#nativeDealTitle').inputValue(),'Тестовый клиент');
+    await page.keyboard.press('Escape');
+    await modal.waitFor({state:'hidden'});
+    assert(await create.isVisible());
+    await create.click();
+    await modal.locator('#nativeDealStage option').first().waitFor({state:'attached'});
+    await modal.locator('button[type=submit]').click();
+    await modal.waitFor({state:'hidden'});
+    const saves=await page.evaluate(()=>dealProof.requests.filter(r=>
+      r.p==='/api/platform/crm/native/deals'&&r.method==='POST'));
+    assert.equal(saves.length,1);
+    assert.equal(saves[0].body.title,'Тестовый клиент');
+    assert.equal(saves[0].body.channel_id,null);
+    assert.equal(saves[0].body.conversation_id,'');
+  }
+  assert.deepEqual(errors,[]);
+  await page.close();
 }
 
 async function checkMultichannelPilot(browser,width) {
@@ -439,6 +488,8 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
     for(const width of [1440,390])await checkMultichannelPilot(browser,width);
     await checkNumberInTikTokMessage(browser);
     for(const width of [1300,390])await checkNumberInTikTokMessage(browser,{width,autoLink:true});
+    for(const width of [1440,390])await checkCreateDealFromDialog(browser,{width});
+    await checkCreateDealFromDialog(browser,{width:1440,limited:true});
     console.log('PASS deal card: Chromium native + Kommo, scoped WhatsApp linkage, responsive layout, stage/edit, lazy related data, authorised and missing routes');
   }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
