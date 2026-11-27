@@ -1,5 +1,6 @@
 """Disposable PGlite support C/R/U matrix. No provider or external DB calls."""
 import json
+import asyncio
 import uuid
 import pytest
 from test_tenant_support_inbox import db, database, A, B, CA, PROFILE
@@ -40,6 +41,66 @@ def configure(db,**scopes):
       (A,json.dumps({'31':{'ai_agents_manage':True,'access_scopes':{'support':scopes}}})))
     db.commit()
     return {'tenant_id':A,'telegram_id':31,'role':'owner'} # stale/forged role ignored
+
+
+def test_inline_reply_uses_ticket_route_and_existing_send_receipt(db, seeded, monkeypatch):
+    from cryptography.fernet import Fernet
+    from unittest.mock import Mock
+    import tenant_chat_send_service as service
+    import tenant_chat_send_store as sender
+    import tenant_connect_transport as transport
+    import tenant_platform
+    from tenant_support_reply import context
+
+    for module in (sender, transport, tenant_platform):
+        monkeypatch.setattr(module, '_connect', lambda: db)
+    cipher = Fernet(Fernet.generate_key())
+    monkeypatch.setattr(transport, '_fernet', lambda: cipher)
+    db.execute("""INSERT INTO saas_tenant_integrations(tenant_id,provider,status,secrets)
+        VALUES(%s,'connect','connected',%s)""", (A, cipher.encrypt(b'{"api_key":"synthetic"}')))
+    db.commit()
+    send = Mock(return_value='synthetic-reply')
+    monkeypatch.setattr(service, 'send_connect', send)
+    tickets, _, _ = seeded
+    case = tickets[0]
+    payload = {'lead_id': 100, 'text': 'Synthetic support reply',
+               'support_ticket_id': case, 'request_id': str(uuid.uuid4())}
+
+    def run(data, profile=PROFILE):
+        return asyncio.run(service.run(profile, data, None, None, Mock()))
+
+    assert context(PROFILE, case)['can_send'] is True
+    with pytest.raises(TenantLinearError) as error:
+        run({**payload, 'lead_id': 101})
+    assert error.value.status == 409
+    with pytest.raises(TenantLinearError) as error:
+        context({'tenant_id': B, 'telegram_id': 22}, case)
+    assert error.value.status == 404
+    send.assert_not_called()
+
+    assert run(payload)['state'] == 'accepted'
+    assert run(payload)['message_id'] == 'synthetic-reply'
+    send.assert_called_once()
+    assert send.call_args.args[0]['channel_id'] == CA
+    assert send.call_args.args[0]['conversation_id'] == 'case-0'
+    projected = context(PROFILE, case)['messages']
+    assert [(m['body'], m['direction'], m['author_name']) for m in projected] == [
+        ('Synthetic support reply', 'outgoing', 'Owner')]
+    assert context(PROFILE, tickets[1])['messages'] == []
+    assert all(m['external_id'] != 'connect:synthetic-reply' for m in store.detail(PROFILE, case)['messages'])
+
+    reader = configure(db, view='self')
+    db.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,dialogs}',%s::jsonb) WHERE tenant_id=%s AND policy_key='members'",
+               (json.dumps({'view': 'all', 'update': 'none'}), A))
+    db.commit()
+    assert context(reader, case)['can_send'] is False
+    assert len(context(reader, case)['messages']) == 1
+    with pytest.raises(TenantLinearError):
+        run({**payload, 'request_id': str(uuid.uuid4())}, reader)
+    db.execute("UPDATE saas_tenant_workflow_policies SET value=jsonb_set(value,'{31,access_scopes,dialogs,view}','\"none\"'::jsonb) WHERE tenant_id=%s AND policy_key='members'", (A,))
+    db.commit()
+    assert context(reader, case)['messages'] == []
+    send.assert_called_once()
 
 
 @pytest.mark.parametrize('scope,expected',[('self',1),('department',2),('all',4),('none',0)])

@@ -30,10 +30,10 @@
     return quoteCopy(sent.delivery_state||'unknown');
   };
   let activeReceiptDiagnostics=()=>{},activePrimaryObserver=null,activeSend=null;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',draftKey='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true}){
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',draftKey='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true,controls,commandContext,onError=error=>alert(error.message)}){
     activeReceiptDiagnostics=()=>{};
     activePrimaryObserver?.disconnect();activePrimaryObserver=null;
-    const button=document.getElementById('sendChat'),input=document.getElementById('chatText'),primary=document.getElementById('tcComposerPrimary');
+    const {button,input,primary}=controls||{button:document.getElementById('sendChat'),input:document.getElementById('chatText'),primary:document.getElementById('tcComposerPrimary')};
     if(primary){
       button.dataset.composerDelegate='true';button.setAttribute('aria-hidden','true');button.tabIndex=-1;
       const refreshPrimary=()=>{const pending=button.textContent.trim()===(window.tenantI18n?.t?.('checkSend')||'Vəziyyəti yoxla'),hasText=!!input.value.trim(),label=pending?copy('checkSend','Vəziyyəti yoxla'):copy('send','Göndər');primary.textContent='↑';primary.title=label;primary.setAttribute('aria-label',label);primary.disabled=button.disabled||input.disabled||(!hasText&&!pending);primary.classList.toggle('loading',button.classList.contains('loading'));return !primary.disabled;};
@@ -43,7 +43,7 @@
     }
     const showAccepted=text=>{
       if(!isCurrent()||!input.isConnected)return;
-      let status=document.getElementById('tenantChatSendStatus');
+      let status=controls?.status||document.getElementById('tenantChatSendStatus');
       if(!status){status=document.createElement('p');status.id='tenantChatSendStatus';status.className='sub';status.setAttribute('role','status');status.setAttribute('aria-live','polite');input.before(status);}
       status.textContent=text;
     };
@@ -138,7 +138,7 @@
       const text=input.value.trim();if(!pending&&!text)return;
       const quote=getQuote();
       if(pending?.quote_message_id&&!isQuoteCurrent(pending)){alert('Əvvəlki mesaj başqa dialoqa aiddir.');return;}
-      if(!pending){pending={lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
+      if(!pending){pending={...commandContext,lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
       if(!checking&&pending.quote_message_id)presentPending(pending,true);
       try{
@@ -172,7 +172,7 @@
           button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');
           const groupMessage=groupSendCopy(e.deliveryPhase,e.errorCode);
           if(groupMessage)showAccepted(groupMessage);
-          else alert(e.message);
+          else onError(e);
         }
       }
       finally{button.disabled=false;button.classList.remove('loading');}
