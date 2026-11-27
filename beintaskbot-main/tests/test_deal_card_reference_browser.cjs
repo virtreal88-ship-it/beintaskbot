@@ -350,6 +350,7 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
         const search=panel.locator('#operatorDialogueCompanySearch');
         if(!limited){
           await search.focus();
+          await panel.locator('#operatorDialogueCompanySearch:not([readonly]):not([disabled])').waitFor();
           await search.pressSequentially('deal');
           await panel.getByRole('button',{name:'@deal-company',exact:true}).click();
         }else{
