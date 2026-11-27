@@ -372,6 +372,9 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 capabilities["operator_widget"] = True
             if dialog_company_feature_for(profile):
                 capabilities["dialog_company_binding"] = True
+            from tenant_deal_operator_company import feature_for as deal_company_feature_for
+            if deal_company_feature_for(profile):
+                capabilities["deal_operator_company"] = True
             from tenant_dialog_history_merge_jobs import available as history_merge_available, enabled as history_merge_enabled
             if history_merge_enabled() and await asyncio.to_thread(history_merge_available, profile):
                 from tenant_dialog_history_merge_scope import source_for
