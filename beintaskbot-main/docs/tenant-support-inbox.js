@@ -377,7 +377,7 @@
     const host=$('modalContent');if(!host||$('supportCreateFromChat')||event.detail.surface==='operator'||event.detail.surface==='native-deal')return;
     const button=document.createElement('button');button.type='button';button.className='outline';button.id='supportCreateFromChat';
     button.textContent=t('createTicket');button.title=t('createTicket');button.setAttribute('aria-label',t('createTicket'));
-    (host.querySelector('.deal-card-data-actions')||host).prepend(button);
+    (host.querySelector('.deal-chat-header')||host.querySelector('.deal-card-data-actions')||host).append(button);
     button.onclick=async()=>{if(button.disabled)return;button.disabled=true;try{const operator=await ensureManualCaseUI();if(version!==epoch||!button.isConnected)return;if(!operator.hasRight('support')||!operator.hasRight('dialogs'))throw Error(t('noAccess'));button.disabled=false;await operator.openManualCaseCreate({provider:'connect',lead_id:lead,...(event.detail.channel_id?{channel_id:event.detail.channel_id}:{}),...(event.detail.conversation_id?{conversation_id:event.detail.conversation_id}:{})},button,()=>version===epoch&&button.isConnected);}catch(error){if(version===epoch&&button.isConnected){button.disabled=false;notice(error.message);}}};
 
   });

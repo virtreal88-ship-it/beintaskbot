@@ -762,6 +762,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     select.add(new Option(names.stage,String(x.stage_id)));select.disabled=true;
     const guard=nativeDealMoveScope();
     const view=card.layout({host:body,deal:x,sections,stage,isCurrent:current});
+    bindDealDialogue(view,'native',x.id,current,modal);
     if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachDeal({
       host:view.companyHost,source:'native',id:x.id,member:state.me,isCurrent:current});
     void loadNativeDealBoardCatalog().then(()=>{
@@ -1044,40 +1045,28 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     const c=dealChatCopy();
     return `<div class="operator-composer tc-legacy-composer"><textarea id="chatText" rows="1" placeholder="${esc(c.compose)}" aria-label="${esc(c.compose)}"></textarea><div class="operator-composer-actions">${ai?'<button type="button" class="outline operator-composer-ai" id="tcAiMenuToggle" aria-label="AI" aria-controls="tcAiActions" aria-expanded="false">AI</button>':''}<button type="button" class="primary" id="sendChat" ${ai?'data-composer-delegate="true" aria-hidden="true" tabindex="-1"':''}>${esc(c.send)}</button>${ai?`<button type="button" class="primary tc-legacy-composer-primary" id="tcComposerPrimary" aria-label="${esc(c.send)}" title="${esc(c.send)}" disabled>↑</button>`:''}</div></div>`;
   }
-  async function findDealDialog(deal,signal,native=false){
+  async function findNativeDealChat(deal,signal){
     if(!state.me||state.capabilities.modules?.dialogs!==true)return null;
-    const query=new URLSearchParams({lifecycle:'all',expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id});
-    if(native){
-      if(!deal.channel_id||!deal.conversation_id)return null;
-      query.set('channel','connect:'+deal.channel_id);query.set('search',deal.conversation_id);
-    }else{
-      const search=deal.contact_name||deal.phone||deal.name;
-      if(!search)return null;
-      query.set('search',search);
-    }
+    const query=new URLSearchParams({lifecycle:'all',channel:'connect:'+deal.channel_id,search:deal.conversation_id,
+      expected_tenant_id:state.me.tenant_id,expected_user_id:state.me.telegram_id});
     const result=await api('/api/platform/ai/dialogs?'+query,{signal});
     const rows=result.result?.dialogs||[];
-    const exact=rows.filter(row=>native?row.provider==='connect'&&String(row.channel_id)===String(deal.channel_id)&&row.conversation_id===deal.conversation_id:
-      String(row.lead_id)===String(deal.kommo_lead_id)&&(['connect','kommo'].includes(row.provider))&&Boolean(row.last_message_at||row.conversation_id));
+    const exact=rows.filter(row=>row.provider==='connect'&&String(row.channel_id)===String(deal.channel_id)&&row.conversation_id===deal.conversation_id);
     return exact.length===1?exact[0]:null;
-  }
-  function connectDealDialogLink(view,route,current,close){
-    if(!route||typeof window.tenantOperator?.openDialog!=='function')return;
-    view.link.hidden=false;
-    view.link.onclick=()=>{
-      if(!current()||!window.tenantOperator.hasRight('dialogs')||!window.tenantAppNavigate?.('dialogs',true))return;
-      close();
-      void window.tenantOperator.openDialog(route);
-    };
   }
   function mountDealChat({id,box,controller,current,first,route,refreshProvider=true,canSend=true,onMessages}){
     const options={api,id,member:state.me,signal:controller.signal,isCurrent:current,box,line:chatLine,first,refreshProvider,onMessages};
-    document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:id,surface:refreshProvider?'deal':'native-deal',...(route?{channel_id:route.channel_id,conversation_id:route.conversation_id}:{})}}));
+    const chat=box.closest('.chat-placeholder');
+    const announce=()=>document.dispatchEvent(new CustomEvent('tenant-chat-open',{detail:{lead_id:id,surface:refreshProvider?'deal':'native-deal',...(route?{channel_id:route.channel_id,conversation_id:route.conversation_id}:{})}}));
+    if(box.isConnected)announce();
     const view=window.tenantDealChat.mount(options);
-    if(canSend){
-      if(window.tenantChatSend)window.tenantChatSend.bind({api,identity:chatIdentity(),leadId:id,me:state.me,isCurrent:current,reload:view.reload});
+    const bind=()=>{
+      if(!canSend||!box.isConnected)return;
+      if(window.tenantChatSend)window.tenantChatSend.bind({api,identity:chatIdentity(),leadId:id,me:state.me,isCurrent:()=>current()&&box.isConnected,reload:view.reload});
       else if($('sendChat'))$('sendChat').disabled=true;
-    }
+    };
+    bind();
+    chat?.addEventListener('deal-chat-resume',()=>{if(current()){announce();bind();void view.resume();}});
   }
   let nativeDealChatSession=null;
   function stopNativeDealChat(){
@@ -1095,7 +1084,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     observer.observe(modal,{attributes:true,attributeFilter:['class','data-revision','data-type']});
     const valid=()=>current()&&nativeDealChatSession===session&&!controller.signal.aborted;
     try{
-      const route=await findDealDialog(deal,controller.signal,true);
+      const route=await findNativeDealChat(deal,controller.signal);
       if(!valid()||!route)return;
       const lead=Number(route.lead_id);
       if(!Number.isSafeInteger(lead)||lead<1)return;
@@ -1103,12 +1092,21 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       const box=document.createElement('div');box.id='chatRows';view.history.replaceChildren(box);session.box=box;
       const canSend=route.can_send===true&&!route.owner_overview_read_only&&!route.search_overview_read_only&&!route.archive_read_only;
       if(canSend){view.composer.innerHTML=dealChatMarkup();view.composer.hidden=false;}
-      connectDealDialogLink(view,route,valid,()=>modal.classList.remove('show'));
       session.mounted=true;mountDealChat({id:lead,box,controller,current:valid,first,route,canSend,refreshProvider:false,onMessages:view.chatCalls});
     }catch{ /* The existing empty state remains when the source cannot be verified. */ }
     finally{status?.removeAttribute('aria-busy');}
   }
-  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;$('dealModal').classList.remove('show');if(owned)document.dispatchEvent(new CustomEvent('tenant-chat-close'));$('modalContent').replaceChildren();}
+  let dealDialogue=null;
+  function stopDealDialogue(){dealDialogue?.dispose();dealDialogue=null;}
+  function bindDealDialogue(view,source,id,current,modal){
+    stopDealDialogue();
+    window.tenantOperator?.parkConversation?.();
+    dealDialogue=window.tenantDealDialogue?.mount({
+      panel:view.dialog,chat:view.chat,modal,source,id,member:state.me,api,current,
+      resumeChat:()=>view.chat.dispatchEvent(new Event('deal-chat-resume'))
+    });
+  }
+  function closeDeal(){const owned=!!chatController&&!chatController.signal.aborted;chatRevision++;chatController?.abort();chatController=null;$('dealModal').classList.remove('show');if(owned){stopDealDialogue();document.dispatchEvent(new CustomEvent('tenant-chat-close'));}$('modalContent').replaceChildren();}
   for(const event of ['tenant-auth-pending','tenant-auth-invalid'])document.addEventListener(event,()=>{closeDeal();stopNativeDealChat();if($('nativeEntityCard')?.dataset.type==='deal'){$('nativeEntityCard').classList.remove('show');$('nativeEntityBody').replaceChildren();}});
   document.addEventListener('tenant-profile',()=>{
     if(chatController&&chatProfileKey!==dealProfileKey)closeDeal();
@@ -1118,6 +1116,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
     }
   });
   async function openDeal(id){
+    stopDealDialogue();
     stopNativeDealChat();if($('nativeEntityCard')?.dataset.type==='deal')$('nativeEntityCard').classList.remove('show');
     chatController?.abort();
     const revision=++chatRevision,identity=chatIdentity(),profileKey=dealProfileKey,controller=new AbortController();chatController=controller;chatProfileKey=profileKey;
@@ -1135,11 +1134,10 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       const host=$('modalContent');
       host.innerHTML=`<div class="chat-placeholder"><div id="chatRows"></div>${dealChatMarkup({ai:true})}</div><button type="button" class="outline" data-duplicate-search="${Number(x.kommo_lead_id)}" data-duplicate-tenant="true" data-duplicate-phone="${esc(x.phone||'')}"></button>`;
       const view=window.tenantKommoDealCard.mount({host,deal:x,api,isCurrent:active});
+      bindDealDialogue(view,'kommo',x.kommo_lead_id,current,$('dealModal'));
       mountDealChat({id:x.kommo_lead_id,box:host.querySelector('#chatRows'),controller,current,first});
       if(state.capabilities?.deal_operator_company===true)window.tenantDialogueCompany?.attachDeal({
         host:view.companyHost,source:'kommo',id:x.kommo_lead_id,member:state.me,isCurrent:current});
-      void first.then(({data})=>current()&&data?findDealDialog(x,controller.signal):null)
-        .then(route=>{if(current())connectDealDialogLink(view,route,current,closeDeal);}).catch(()=>{});
     }catch(e){if(current()){controller.abort();$('modalContent').textContent=e.message;}}
   }
   const profileCopy={az:{eyebrow:'ŞƏXSİ HESAB',title:'Profil',intro:'Girişiniz və şirkətdəki rolunuz.',company:'Şirkət',role:'Rol',telegram:'Telegram hesabı',connected:'Qoşulub',status:'Giriş vəziyyəti',active:'Aktiv',logoutTitle:'Sistemdən çıxış',logoutDescription:'Bu cihazda CRM Smart Assistant kabinetindən çıxacaqsınız. Yenidən daxil olmaq üçün Telegram təsdiqi lazımdır.',logout:'Çıxış et',user:'İstifadəçi',roles:{owner:'Administrator',admin:'Administrator',manager:'Menecer',worker:'İcraçı'}},ru:{eyebrow:'ЛИЧНЫЙ КАБИНЕТ',title:'Профиль',intro:'Ваш вход и роль в компании.',company:'Компания',role:'Роль',telegram:'Учётная запись Telegram',connected:'Подключена',status:'Состояние входа',active:'Активен',logoutTitle:'Выход из системы',logoutDescription:'Вы выйдете из CRM Smart Assistant на этом устройстве. Для повторного входа потребуется подтверждение Telegram.',logout:'Выйти',user:'Пользователь',roles:{owner:'Владелец',admin:'Администратор',manager:'Менеджер',worker:'Сотрудник'}},en:{eyebrow:'PERSONAL ACCOUNT',title:'Profile',intro:'Your sign-in and role in the company.',company:'Company',role:'Role',telegram:'Telegram account',connected:'Connected',status:'Sign-in status',active:'Active',logoutTitle:'Sign out',logoutDescription:'You will sign out of CRM Smart Assistant on this device. Telegram confirmation is required to sign in again.',logout:'Sign out',user:'User',roles:{owner:'Owner',admin:'Administrator',manager:'Manager',worker:'Employee'}}};const profileLanguage=()=>profileCopy[window.tenantI18n?.language]||profileCopy.az;function translateProfile(){const c=profileLanguage();$('profileEyebrow').textContent=c.eyebrow;$('profilePageTitle').textContent=c.title;$('profilePageIntro').textContent=c.intro;const labels=$('view-profile').querySelectorAll('.meta b');[c.company,c.role,c.telegram,c.status].forEach((label,index)=>{if(labels[index])labels[index].textContent=label});$('profileTelegramLabel').textContent=c.connected;$('profileStatusLabel').textContent=c.active;$('profileLogoutTitle').textContent=c.logoutTitle;$('profileLogoutDescription').textContent=c.logoutDescription;$('profileLogoutLabel').textContent=c.logout}document.addEventListener('tenant-language',translateProfile);function renderProfile(member){if(!member)return;const c=profileLanguage();$('profileName').textContent=member.display_name||c.user;$('profileCompany').textContent=member.tenant_name||'—';$('profileRole').textContent=c.roles[member.role]||member.role||'—';$('company').textContent=member.tenant_name||'Şirkət';translateProfile()}
@@ -1286,6 +1284,7 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
 <script src="/assets/tenant-chat-ai.js"></script>
 <script src="/assets/tenant-chat-history.js"></script>
 <script src="/assets/tenant-deal-chat.js"></script>
+<script src="/assets/tenant-deal-dialogue.js"></script>
 <script src="/assets/deal-phone-duplicates.js"></script>
 <script src="/assets/tenant-chat-attachments.js"></script>
 <script src="/assets/tenant-chat-send.js"></script>

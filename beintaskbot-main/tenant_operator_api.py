@@ -94,6 +94,10 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                 elif resource=='transfer_details':
                     from tenant_dialog_lifecycle import transfer_details
                     result=await asyncio.to_thread(transfer_details,profile,dict(query))
+                elif resource=='deal_dialogs':
+                    _expected(query,profile)
+                    from tenant_deal_dialogs import linked_dialogs
+                    result=await asyncio.to_thread(linked_dialogs,profile,query.get('source'),query.get('deal_id'))
                 elif resource=='contact_phone':
                     from tenant_contact_phone import get_phone
                     result=await get_phone(profile,dict(query))

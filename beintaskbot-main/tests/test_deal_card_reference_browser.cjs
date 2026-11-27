@@ -7,7 +7,7 @@ const {installFixture} = require('./task_read_save_flow_fixture.cjs');
 const docs = path.resolve(__dirname, '../docs');
 const assets = new Set(['tenant-operator-i18n.js', 'tenant-request-coordinator.js', 'tenant-view-demand.js',
   'tenant-task-flow.js', 'tenant-kommo-deal-card.js', 'tenant-deal-chat.js', 'tenant-chat-history.js', 'tenant-chat-ai.js',
-  'tenant-dialog-company.js']);
+  'tenant-dialog-company.js', 'tenant-deal-dialogue.js', 'tenant-operator-dialogs.js', 'tenant-chat-send.js']);
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(
   /<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,
   (_, url) => assets.has(path.basename(url)) ? '<script>' +
@@ -45,9 +45,7 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
   f.profile.capabilities.deal_operator_company=operatorCompany;
   f.profile.integrations=[{provider:'kommo',status:'connected'}];
   f.kommo=[{source:'kommo',id:'8',kommo_lead_id:7,description:'Согласовать время установки'}];
-  window.dealProof={route,requests:[],opened:null,rejectMove:false};
-  window.tenantOperator={hasRight:()=>true,openDialog:r=>{dealProof.opened=r;}};
-  window.tenantChatSend={bind:options=>{dealProof.sendBound=options.leadId;}};
+  window.dealProof={route,requests:[],rejectMove:false};
   const json=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
   let companyBinding=limited?'test-binding':null;
   const binding=()=>({company_id:companyBinding,company_name:companyBinding?'deal-company':null,
@@ -84,6 +82,22 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/deal/notes')return json({notes:[{id:'note-1',text:'Клиент подтвердил время установки.',created_at:'2026-11-25T16:00:00Z'}],
       calls:[{type:'call_in',created_at:'2026-11-25T16:01:00Z'}],stages:[{stage_id:'2',pipeline_id:'1',created_at:'2026-11-25T15:00:00Z'}]});
     if(p==='/api/platform/crm/deal-board-preferences')return json({catalog:[]});
+    if(p==='/api/platform/ai/dialogs/for-deal'){
+      if(linking==='denied')return json({error:'Forbidden'},403);
+      const selected={...route,lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник'};
+      return json({result:{dialogs:['linked','empty'].includes(linking)?[selected]:[]}});
+    }
+    if(p==='/api/platform/ai/dialogs/history'){
+      const dialog={...route,lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник',
+        customer_kind:'contact',channel_active:true,state:'human',can_send:!limited,available_actions:[]};
+      return json({result:{dialog,messages:[{id:'quoted-incoming',direction:'incoming',
+        body:'Запись операторского диалога',provider_message_id:'quote-provider-1',message_type:'text',
+        created_at:'2026-11-25T16:12:00Z'}],next_before:null}});
+    }
+    if(p==='/api/platform/crm/chat/send'){
+      if(dealProof.holdSend)await new Promise(resolve=>{dealProof.confirmSend=resolve;});
+      return json({state:'accepted',provider_accepted:true,quote_protocol:true});
+    }
     if(p==='/api/platform/ai/dialogs'){
       if(linking==='denied')return json({error:'Forbidden'},403);
       const available=linking==='wrong'?[{...route,channel_id:'other'}]:[native?route:{...route,provider:'kommo',lead_id:7}];
@@ -98,6 +112,11 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
 async function open(page, native) {
   await page.waitForFunction(()=>window.tenantProfileSnapshot?.member?.active===true);
   await page.evaluate(native=>{
+    if(!dealProof.bindWrapped){
+      const original=window.tenantChatSend.bind;
+      window.tenantChatSend.bind=options=>{dealProof.sendBound=options.leadId;original(options);};
+      dealProof.bindWrapped=true;
+    }
     if(native){const trigger=document.createElement('button');trigger.dataset.nativeOpen='deal:'+taskFlowFixture.deal;
       document.body.append(trigger);trigger.click();trigger.remove();}
     else document.dispatchEvent(new CustomEvent('tenant-duplicate-open',{detail:{lead_id:7}}));
@@ -198,14 +217,47 @@ async function open(page, native) {
       if(width<900)await modal.locator('[data-deal-pane=chat]').click();
       assert.equal(await modal.locator('.modal-card').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
       const savedCount=()=>page.evaluate(()=>dealProof.requests.filter(r=>r.p==='/api/platform/crm/chat/history').length);
+      const dialogue=modal.getByRole('tab',{name:'Диалог',exact:true});
+      assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.p.endsWith('/dialogs/for-deal')).length),0);
       if(linking==='linked'){
         await modal.getByText('Завтра после 10:00 удобно. Спасибо!',{exact:true}).waitFor();
-        assert(await modal.getByRole('button',{name:'Открыть диалог'}).isVisible());
+        assert(await dialogue.isVisible());
         assert.equal(await modal.locator('#chatRows').count(),1);
         assert.equal(await savedCount(),1);
         assert(await page.evaluate(()=>dealProof.requests.some(r=>r.p==='/api/platform/crm/chat/history'&&r.query.includes('limit=40'))));
         assert.equal(await modal.locator('[data-chat-attachment]').count(),1);
         assert.equal(await page.evaluate(()=>dealProof.sendBound),native?77:7);
+        assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.p.endsWith('/deal/notes')).length),0);
+        if(theme==='light'){
+          await modal.locator('#chatText').fill('Черновик сделки');
+          await dialogue.click();
+          await modal.getByText('Запись операторского диалога',{exact:true}).waitFor();
+          const operatorInput=modal.locator('.deal-linked-dialog #chatText');
+          await modal.locator('[data-message-id="quoted-incoming"]').click({button:'right'});
+          await page.locator('[data-reply-context-action=reply]').click();
+          await operatorInput.fill('Черновик диалога');
+          await modal.locator('#operatorReplyQuote').waitFor();
+          assert.equal(await page.locator('#chatText').count(),1);
+          await modal.getByRole('tab',{name:'Лента'}).click();
+          await dialogue.click();
+          assert.equal(await operatorInput.inputValue(),'Черновик диалога');
+          await modal.locator('#operatorReplyQuote').waitFor();
+          await page.evaluate(()=>{dealProof.holdSend=true;});
+          await modal.locator('.deal-linked-dialog #sendChat').click();
+          await page.waitForFunction(()=>!!dealProof.confirmSend);
+          await modal.getByRole('tab',{name:'Чат',exact:true}).click();
+          assert.equal(await modal.locator('#chatText').inputValue(),'Черновик сделки');
+          await page.evaluate(()=>dealProof.confirmSend());
+          await dialogue.click();
+          await page.waitForFunction(()=>document.querySelector('.deal-linked-dialog #chatText')?.value==='');
+          const sends=await page.evaluate(()=>dealProof.requests.filter(r=>r.p==='/api/platform/crm/chat/send'));
+          assert.equal(sends.length,1);
+          assert.equal(sends[0].body.quote_message_id,'quoted-incoming');
+          assert.equal(sends[0].body.quote_channel_id,'10000000-0000-4000-8000-000000000301');
+          await modal.getByRole('tab',{name:'Чат',exact:true}).click();
+          assert.equal(await page.locator('#chatText').count(),1);
+          assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.p.endsWith('/dialogs/for-deal')).length),1);
+        }
         if(screenshots)await page.screenshot({path:path.join(screenshots,`${native?'beintaskbot':'kommo'}-${width}-${theme}.png`)});
         if(width<900){
           await modal.locator('#chatText').focus();
@@ -235,7 +287,6 @@ async function open(page, native) {
           await page.locator('#nativeDealModal.show').waitFor();
           assert.equal(await page.locator('#nativeDealTitle').inputValue(),'Подключение кассового модуля');
         }else{
-          assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.p.endsWith('/deal/notes')).length),0);
           await modal.locator('#chatText').fill('Черновик');
           await modal.getByRole('tab',{name:'Лента'}).click();
           const task=modal.locator('[data-related-task]');
@@ -256,10 +307,10 @@ async function open(page, native) {
         assert.equal(await savedCount(),0);
       }else{
         await modal.getByText('Сообщений пока нет.',{exact:true}).waitFor();
-        await page.waitForFunction(()=>dealProof.requests.some(r=>r.p==='/api/platform/ai/dialogs'));
-        const link=modal.getByRole('button',{name:'Открыть диалог'});
-        if(linking==='empty')await link.waitFor();
-        else assert.equal(await link.count(),0);
+        await dialogue.click();
+        if(linking==='empty'){
+          await modal.getByText('Запись операторского диалога',{exact:true}).waitFor();
+        }else await modal.getByText('К сделке не привязан доступный диалог.',{exact:true}).filter({visible:true}).waitFor();
       }
       assert.deepEqual(errors,[]);
       await page.close();
