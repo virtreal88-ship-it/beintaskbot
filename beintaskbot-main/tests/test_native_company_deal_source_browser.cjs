@@ -9,9 +9,10 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
  const setup=async(width,config)=>{const context=await browser.newContext({viewport:{width,height:900}}),page=await context.newPage(),errors=[];await context.addInitScript(installNativeTaskFixture,{});await context.addInitScript(installNativeCompanyDealFixture,config);await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());page.on('pageerror',e=>errors.push(e.message));await page.goto(origin+'/app?view=deals');await page.waitForFunction(()=>window.tenantProfileSnapshot?.member?.tenant_id);const ids=await page.evaluate(()=>nativeTaskFixture.ids);return{context,page,errors,ids}};
  const posts=page=>page.evaluate(()=>nativeTaskFixture.calls.filter(c=>c.method==='POST'));
  const openDealCompany=async page=>{
+  const summary=page.locator('[data-deal-tab=company]');
+  await summary.waitFor({state:'attached'});
   const tab=page.locator('[data-deal-pane=data]');
   if(await tab.isVisible()&&await tab.getAttribute('aria-selected')==='false')await tab.click();
-  const summary=page.locator('[data-deal-tab=company]');
   if(!await summary.evaluate(node=>node.parentElement.open))await summary.click();
  };
  for(const width of [1280,390]){
