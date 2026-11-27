@@ -150,6 +150,51 @@ def test_private_voice_reply_to_group_does_not_block_later_messages(ready):
     db.commit()
 
 
+def test_invalid_payload_is_retained_and_audited_once_before_continuing(ready):
+    db, _ = ready
+    activate(db)
+    invalid = delivery()
+    invalid['after'] = 2
+    invalid['event'].update(id='b'*64, sequence=3, payload=message(
+        sender='invalid sender', provider_id='INVALID_MESSAGE'))
+    assert consumer.project_stored(store(invalid)) is False
+    assert consumer.project_stored(store(invalid)) is False
+
+    following = delivery()
+    following['after'] = 3
+    following['event'].update(id='c'*64, sequence=4, payload=message(
+        provider_id='AFTER_INVALID_MESSAGE'))
+    consumer.project_stored(store(following))
+
+    assert db.execute("""SELECT entity_id, payload FROM saas_tenant_audit_events
+      WHERE tenant_id=%s AND action='whatsapp_native_projection_rejected'""", (A,)) == [{
+        'entity_id':'b'*64, 'payload':{'channel_id':CA,'generation':invalid['scope']['generation'],
+                                      'sequence':3,'reason':'native_projection_invalid'}}]
+    assert db.execute("""SELECT sequence FROM saas_whatsapp_native_inbox
+      WHERE tenant_id=%s AND channel_id=%s AND event_id=%s""", (A,CA,'b'*64)) == [{'sequence':3}]
+    assert db.execute("""SELECT raw->>'externalMessageId' AS id FROM saas_crm_messages
+      WHERE raw->>'externalMessageId' IN ('INVALID_MESSAGE','AFTER_INVALID_MESSAGE')""") == [
+        {'id':'AFTER_INVALID_MESSAGE'}]
+    db.commit()
+
+
+def test_projection_does_not_acknowledge_tampered_evidence(ready):
+    db, _ = ready
+    activate(db)
+    value = delivery()
+    value['after'] = 2
+    value['event'].update(id='b'*64, sequence=3, payload=message(provider_id='TAMPERED_MESSAGE'))
+    receipt = store(value)
+    db.execute('UPDATE saas_whatsapp_native_inbox SET encrypted_payload=%s WHERE event_id=%s', (b'not authentic','b'*64))
+    db.commit()
+
+    with pytest.raises(TenantLinearError, match='native_inbox_evidence_invalid'):
+        consumer.project_stored(receipt)
+    assert not db.execute("SELECT 1 FROM saas_tenant_audit_events WHERE action='whatsapp_native_projection_rejected'")
+    assert not db.execute("SELECT 1 FROM saas_crm_messages WHERE raw->>'externalMessageId'='TAMPERED_MESSAGE'")
+    db.commit()
+
+
 def test_rechecks_generation_and_encrypted_event_in_commit_transaction(ready):
     db, reference = ready
     activate(db)
