@@ -90,7 +90,7 @@ def create_for_pilot_handoff(cur, *, tenant_id, ticket_id, group_channel_id,
     cur.execute('''SELECT t.channel_id::text AS channel_id,t.conversation_id,c.lead_id
       FROM saas_support_tickets t JOIN saas_connect_conversations c
         ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
-      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s
+      WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.channel_id=%s::uuid AND t.conversation_id=%s AND t.deleted_at IS NULL
       FOR SHARE OF t,c''',(tenant_id,ticket_id,source_channel_id,source_conversation_id))
     route=cur.fetchone()
     if not route:raise TenantLinearError('CASE source no longer matches its ticket.',409)
@@ -288,7 +288,7 @@ def create(profile,ticket_id,payload,origin):
             cur.execute('''SELECT t.channel_id::text AS channel_id,t.conversation_id,c.lead_id
               FROM saas_support_tickets t JOIN saas_connect_conversations c
                 ON c.tenant_id=t.tenant_id AND c.connect_channel_id=t.channel_id AND c.conversation_id=t.conversation_id
-              WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid FOR SHARE OF t,c''',(tenant,ticket_id))
+              WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.deleted_at IS NULL FOR SHARE OF t,c''',(tenant,ticket_id))
             route=cur.fetchone()
             if not route:raise TenantLinearError('Обращение недоступно.',404)
             # This is an explicit public snapshot, not a case-boundary edit.

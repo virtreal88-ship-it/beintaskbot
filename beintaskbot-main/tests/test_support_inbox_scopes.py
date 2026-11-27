@@ -43,6 +43,55 @@ def configure(db,**scopes):
     return {'tenant_id':A,'telegram_id':31,'role':'owner'} # stale/forged role ignored
 
 
+def test_owner_can_remove_ticket_without_removing_chat_or_other_tenants(db, seeded):
+    from tenant_public_case import _schema
+
+    tickets, _, _ = seeded
+    case = tickets[0]
+    assert store.detail(PROFILE, case)['capabilities']['delete'] is True
+    reader = configure(db, view='all', update='all')
+    assert not store.detail(reader, case)['capabilities'].get('delete')
+    with pytest.raises(TenantLinearError) as error:
+        store.delete(reader, case)
+    assert error.value.status == 403
+    with pytest.raises(TenantLinearError) as error:
+        store.delete({'tenant_id':B, 'telegram_id':22}, case)
+    assert error.value.status == 404
+
+    _schema(db)
+    db.execute("""INSERT INTO saas_connect_conversations
+        (tenant_id,connect_channel_id,conversation_id,lead_id,contact_name)
+        VALUES(%s,%s,'synthetic@g.us',199,'Test group')""",(A,CA))
+    message_id = str(uuid.uuid4())
+    db.execute("""INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+        VALUES(%s,%s,100,'delete-test-inbound',%s,'incoming','Original conversation')""",
+        (message_id,A,'connect:'+CA))
+    db.execute("""INSERT INTO saas_public_case_shares
+        (id,tenant_id,ticket_id,channel_id,conversation_id,group_channel_id,group_conversation_id,
+         token_hash,selected_message_ids,selected_media_ids,public_messages,expires_at)
+        VALUES(%s,%s,%s,%s,'case-0',%s,'synthetic@g.us','synthetic-token','[]','[]','[]',now()+interval '1 day')""",
+        (str(uuid.uuid4()),A,case,CA,CA))
+    db.commit()
+
+    assert store.delete(PROFILE, case) == {'id':case,'deleted':True}
+    assert store.delete(PROFILE, case) == {'id':case,'deleted':True}
+    assert case not in {item['id'] for item in store.listing(PROFILE, status='all')['tickets']}
+    with pytest.raises(TenantLinearError) as error:
+        store.detail(PROFILE, case)
+    assert error.value.status == 404
+    with pytest.raises(TenantLinearError):
+        store.update(PROFILE, case, {'status':'new'})
+    assert db.execute('SELECT body FROM saas_crm_messages WHERE id=%s', (message_id,)) == [
+        {'body':'Original conversation'}]
+    assert db.execute('SELECT revoked_at IS NOT NULL AS revoked FROM saas_public_case_shares WHERE ticket_id=%s',
+                      (case,)) == [{'revoked':True}]
+    assert len(db.execute("SELECT id FROM saas_tenant_audit_events WHERE action='support_delete' AND entity_id=%s",
+                          (case,))) == 1
+    with db.cursor() as cur:
+        new = store.create_in_transaction(cur,A,CA,'case-0','New issue','after-removal',actor=11,source='manual')
+    assert new['id'] != case
+
+
 def test_inline_reply_uses_ticket_route_and_existing_send_receipt(db, seeded, monkeypatch):
     from cryptography.fernet import Fernet
     from unittest.mock import Mock

@@ -19,6 +19,7 @@ def public(row):
     row=dict(row)
     # Internal responsibility is not an editable/displayed employee field yet.
     row.pop('access_responsible_id', None)
+    row.pop('deleted_at', None)
     if 'ai_state' in row:
         effective=_decorate_conversation_state({**row,'provider':'connect','state':row.get('ai_state') or 'active'})
         row['ai_state']=effective['display_state'] if row.get('agent_id') or row.get('ai_state') in {'human','paused'} else 'unmanaged'
@@ -498,7 +499,7 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
         ensure_schema(conn)
         with conn.cursor() as cur:
             tenant, actor, policy = require(cur, profile, ticket_id)
-            cur.execute(_SELECT + ' WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid', (tenant,ticket_id))
+            cur.execute(_SELECT + ' WHERE t.tenant_id=%s::uuid AND t.id=%s::uuid AND t.deleted_at IS NULL', (tenant,ticket_id))
             ticket = cur.fetchone()
             if not ticket:
                 raise TenantLinearError('Обращение не найдено.', 404)
@@ -616,6 +617,7 @@ def detail(profile, ticket_id, before=None, message_id=None, *, notification_id=
             'focus_message':public(focus_message) if focus_message else None,
             'next_before':str(rows[49]['id']) if len(rows)>50 else None}
     if policy.has_scoped_access('support'):result['capabilities']={'update':can_update}
+    if policy.profile.get('role')=='owner':result.setdefault('capabilities',{})['delete']=True
     if notification_id is not None:result['notification_context']=notification_context
     return result
 
@@ -768,6 +770,33 @@ def create(profile, data):
     if result.get('readable') is False:
         result['create_receipt']={'tenant_id':tenant,'actor_id':actor,'request_id':request_id}
     return result
+
+
+def delete(profile, ticket_id):
+    ticket_id = identifier(ticket_id)
+    with _connect() as conn:
+        ensure_schema(conn)
+        with conn.cursor() as cur:
+            tenant, actor, policy = policy_access(cur, profile)
+            if policy.profile.get('role') != 'owner':
+                raise TenantLinearError('Только владелец может удалить обращение.', 403)
+            cur.execute('''SELECT status,deleted_at FROM saas_support_tickets
+              WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''', (tenant,ticket_id))
+            row = cur.fetchone()
+            if not row:
+                raise TenantLinearError('Обращение недоступно.', 404)
+            if row['deleted_at'] is None:
+                # Keep the row and original conversation for audit/history.
+                # Release the existing unique open-case slot without changing its index.
+                cur.execute("""UPDATE saas_support_tickets SET deleted_at=now(),status='resolved'
+                  WHERE tenant_id=%s::uuid AND id=%s::uuid""", (tenant,ticket_id))
+                cur.execute("SELECT to_regclass('saas_public_case_shares') IS NOT NULL AS shares_ready")
+                if cur.fetchone()['shares_ready']:
+                    cur.execute('''UPDATE saas_public_case_shares SET revoked_at=now()
+                      WHERE tenant_id=%s::uuid AND ticket_id=%s::uuid AND revoked_at IS NULL''', (tenant,ticket_id))
+                _audit(cur,tenant,actor,'support_delete','support_ticket',ticket_id,{'previous_status':row['status']})
+        conn.commit()
+    return {'id': ticket_id, 'deleted': True}
 
 
 def update(profile, ticket_id, data):

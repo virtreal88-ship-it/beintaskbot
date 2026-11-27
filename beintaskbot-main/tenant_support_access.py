@@ -11,21 +11,21 @@ def policy_access(cur, profile, action='view'):
 def predicate(policy, action='view', alias='t'):
     # Sparse cells preserve the old support permission (not generic CRUD rules).
     if policy.action_scope('support', action) is None:
-        return ('TRUE', []) if policy.legacy_allows('support') else ('FALSE', [])
-    return resource_scope_sql(policy.profile, 'support', action, alias)
+        return (f'{alias}.deleted_at IS NULL', []) if policy.legacy_allows('support') else ('FALSE', [])
+    scope, values = resource_scope_sql(policy.profile, 'support', action, alias)
+    return (scope, values) if scope == 'FALSE' else (f'{alias}.deleted_at IS NULL AND ({scope})', values)
 
 
 def require(cur, profile, ticket_id, action='view', *, lock=False):
     tenant, actor, policy = policy_access(cur, profile, action)
-    # Only scoped requests need another resource query. Legacy callers retain
-    # their original missing-row and role/source checks exactly.
-    if policy.action_scope('support', action) is not None:
-        cur.execute('SELECT * FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid'
-                    + (' FOR UPDATE' if lock else ''), (tenant, identifier(ticket_id)))
-        row = cur.fetchone()
-        if not row or not policy.allows_resource('support', action,
-                owned_resource_metadata(cur, tenant, row, lock=True)):
-            raise TenantLinearError('Обращение недоступно.', 404)
+    scoped = policy.action_scope('support', action) is not None
+    columns = '*' if scoped else 'id'
+    cur.execute(f'SELECT {columns} FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND deleted_at IS NULL'
+                + (' FOR UPDATE' if lock else ''), (tenant, identifier(ticket_id)))
+    row = cur.fetchone()
+    if not row or (scoped and not policy.allows_resource('support', action,
+            owned_resource_metadata(cur, tenant, row, lock=True))):
+        raise TenantLinearError('Обращение недоступно.', 404)
     return tenant, actor, policy
 
 
@@ -68,11 +68,11 @@ def sql_filter(policy, alias):
     if not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', alias):
         raise ValueError('invalid_scope_sql_identifier')
     scope = policy.action_scope('support','view')
-    if scope is None: return 'TRUE'
+    if scope is None: return f'{alias}.deleted_at IS NULL'
     if scope == 'none': return 'FALSE'
     tenant = str(uuid.UUID(str(policy.profile['tenant_id'])))
     actor = int(policy.profile['telegram_id'])
-    boundary = f"{alias}.tenant_id='{tenant}'::uuid"
+    boundary = f"{alias}.tenant_id='{tenant}'::uuid AND {alias}.deleted_at IS NULL"
     if scope == 'all': return boundary
     if scope == 'self': return f'({boundary} AND {alias}.access_responsible_id={actor})'
     return f'''({boundary} AND EXISTS(SELECT 1 FROM saas_tenant_members sr

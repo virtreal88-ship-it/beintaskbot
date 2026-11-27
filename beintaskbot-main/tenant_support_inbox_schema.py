@@ -30,6 +30,7 @@ def create_schema(conn):
         from tenant_scoped_access_schema import migrate_resource_ownership
         migrate_resource_ownership(cur, ('saas_support_tickets',))
         cur.execute('CREATE INDEX IF NOT EXISTS saas_support_queue_idx ON saas_support_tickets(tenant_id,status,assigned_to,created_at)')
+        cur.execute('ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL')
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_outcome TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS completion_note TEXT NOT NULL DEFAULT ''")
         cur.execute("ALTER TABLE saas_support_tickets ADD COLUMN IF NOT EXISTS knowledge_candidate_requested BOOLEAN NOT NULL DEFAULT FALSE")

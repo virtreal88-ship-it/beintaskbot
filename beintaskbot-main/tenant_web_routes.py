@@ -230,7 +230,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('night-report/tickets/{ticket_id}', night_report_handler(member, logger, 'ticket'), ('GET',)),
         ('support-tickets', support_handler(member, origin, logger, 'tickets'), ('GET', 'POST')),
         ('support-tickets/complete', support_handler(member, origin, logger, 'complete'), ('POST',)),
-        ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH')),
+        ('support-tickets/{ticket_id}', support_handler(member, origin, logger, 'ticket'), ('GET', 'PATCH', 'DELETE')),
         ('support-tickets/{ticket_id}/attachments', support_handler(member, origin, logger, 'ticket_attachments'), ('GET', 'POST')),
         ('support-tickets/{ticket_id}/messages', support_handler(member, origin, logger, 'ticket_messages'), ('GET', 'POST')),
         ('support-tickets/{ticket_id}/recommendations', support_handler(member, origin, logger, 'ticket_recommendations'), ('GET',)),

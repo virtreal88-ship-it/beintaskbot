@@ -68,9 +68,11 @@ def source_filter(company, source='c.connect_channel_id::text'):
 
 
 def ticket_filter(company, alias='t'):
-    if read_scope(company) is None:return 'TRUE',[]
+    live=f'{alias}.deleted_at IS NULL'
+    if read_scope(company) is None:return live,[]
     from tenant_scoped_access_store import resource_scope_sql
-    return resource_scope_sql(company['_report_policy'].profile,'night_report','view',alias)
+    scope,args=resource_scope_sql(company['_report_policy'].profile,'night_report','view',alias)
+    return (scope,args) if scope=='FALSE' else (f'{live} AND ({scope})',args)
 
 
 
