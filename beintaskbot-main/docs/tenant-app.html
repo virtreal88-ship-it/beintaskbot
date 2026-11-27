@@ -703,7 +703,6 @@ body[data-app-ui=kwid] .app-avatar-button{position:relative;border-radius:50%}
       az:{edit:'Redaktə et',link:'Əlavə et',unlink:'Ayır',tasks:'Tapşırıqlar',open:'Aç',empty:'Bu sövdələşməyə bağlı tapşırıq yoxdur.'}}[window.tenantI18n?.language]||
       {edit:'Redaktə et',link:'Əlavə et',unlink:'Ayır',tasks:'Tapşırıqlar',open:'Aç',empty:'Bu sövdələşməyə bağlı tapşırıq yoxdur.'});
     modal.querySelector('[data-native-card-edit]').textContent=labels.edit;
-    modal.querySelector('[data-native-card-archive]').textContent=crmRecordDeletionCopy().delete;
     const names=nativeDealLabels(x.pipeline_id,x.stage_id);
     const general=document.createElement('section');
     general.innerHTML=card.overview({...x,pipeline_name:names.pipeline});
