@@ -33,9 +33,9 @@ def voice_group(collaboration, monkeypatch, request):
     connection, membership, _ = collaboration
     if getattr(request, 'param', 'shared') == 'ordinary':
         # Exercise an already-accepted ordinary group, not a collaboration participant.
-        import tenant_dialog_group_work as group_work
-        monkeypatch.setattr(group_work, 'configured', lambda *_: False)
-        action(33, 'accept')
+        with monkeypatch.context() as before_rollout:
+            before_rollout.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND', '0')
+            action(33, 'accept')
         assert connection.execute('SELECT count(*) AS n FROM saas_dialog_group_participants')[0]['n'] == 0
         connection.commit()
     else:
