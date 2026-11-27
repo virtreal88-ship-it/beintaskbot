@@ -133,11 +133,13 @@ def message_event(scope, event_id, payload, message_id):
             data['directIdentity'] = {'jid':pn[0], 'lid':lid[0]}
     quote = payload.get('quote_id', '')
     if quote:
-        quote_chat = payload.get('quote_chat', '')
-        if (not isinstance(quote, str) or not PROVIDER_ID.fullmatch(quote)
-                or quote_chat and quote_chat != chat):
+        if not isinstance(quote, str) or not PROVIDER_ID.fullmatch(quote):
             raise _error('native_quote_scope_unconfirmed')
-        data['quotedExternalMessageId'] = quote
+        # WhatsApp can reply privately to a group message. Keep the reply in
+        # its own chat, without linking the quoted message from the group.
+        quote_chat = payload.get('quote_chat', '')
+        if not quote_chat or quote_chat == chat:
+            data['quotedExternalMessageId'] = quote
     if kind in SHARE_KINDS:
         data.update(shared_facts(kind, payload))
         data['text'] = ''

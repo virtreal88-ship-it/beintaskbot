@@ -116,6 +116,40 @@ def test_retained_status_does_not_block_next_customer_event(ready):
     assert len(db.execute('SELECT event_id FROM saas_whatsapp_native_inbox'))==3;db.commit()
 
 
+def test_private_voice_reply_to_group_does_not_block_later_messages(ready):
+    db, _ = ready
+    activate(db)
+    chat = '188888888@lid'
+    voice = delivery()
+    voice['after'] = 2
+    voice['event'].update(id='b'*64, sequence=3, payload=message(
+        chat=chat, sender=chat, sender_alt='', text='', provider_id='PRIVATE_VOICE',
+        message_type='audio', media_kind='audio', media_mime='audio/ogg', media_size=120,
+        quote_id='GROUP_MESSAGE', quote_chat='120363123456789@g.us'))
+    consumer.project_stored(store(voice))
+    consumer.project_stored(store(voice))
+
+    following = delivery()
+    following['after'] = 3
+    following['event'].update(id='c'*64, sequence=4, payload=message(
+        chat=chat, sender=chat, sender_alt='', provider_id='FOLLOWING_MESSAGE'))
+    consumer.project_stored(store(following))
+    rows = db.execute("""SELECT m.direction,m.message_type,m.raw,c.conversation_id
+      FROM saas_crm_messages m JOIN saas_connect_conversations c
+        ON c.tenant_id=m.tenant_id AND c.lead_id=m.kommo_lead_id
+      WHERE m.tenant_id=%s AND m.channel=%s
+        AND m.raw->>'externalMessageId' IN ('PRIVATE_VOICE','FOLLOWING_MESSAGE')
+      ORDER BY m.message_type""", (A,'connect:'+CA))
+    assert [(r['direction'],r['message_type'],r['conversation_id']) for r in rows] == [
+        ('incoming','audio',chat),('incoming','text',chat)]
+    assert rows[0]['raw']['nativeEventId']=='b'*64
+    assert 'quotedExternalMessageId' not in rows[0]['raw']
+    assert 'GROUP_MESSAGE' not in str(rows[0]['raw'])
+    assert db.execute('SELECT stored_sequence FROM saas_whatsapp_capture_generations') == [
+        {'stored_sequence':4}]
+    db.commit()
+
+
 def test_rechecks_generation_and_encrypted_event_in_commit_transaction(ready):
     db, reference = ready
     activate(db)
