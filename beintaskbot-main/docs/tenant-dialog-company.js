@@ -2,7 +2,7 @@
 (()=>{
   'use strict';
   const endpoint='/api/platform/operator/dialog-company';
-  const publicLinkEndpoint=endpoint+'/public-link';
+  const dealEndpoint='/api/platform/operator/deal-company';
   const labels={
     ru:{label:'Компания',unknown:'Компания не выбрана',unavailable:'Недоступна',loading:'Загрузка…',search:'Найти компанию',restricted:'Нет доступа к выбору компании',remove:'Снять связь',confirm:'Снять привязку компании с этого диалога?',error:'Не удалось получить или изменить компанию.'},
     az:{label:'Şirkət',unknown:'Şirkət seçilməyib',unavailable:'Əlçatan deyil',loading:'Yüklənir…',search:'Şirkət axtar',restricted:'Şirkət seçmək üçün icazə yoxdur',remove:'Əlaqəni sil',confirm:'Bu dialoqun şirkətlə əlaqəsini silmək istəyirsiniz?',error:'Şirkət məlumatını almaq və ya dəyişmək mümkün olmadı.'},
@@ -73,7 +73,7 @@
   function clear(){
     const old=state;state=null;
     if(!old)return;
-    releaseReminder(old);paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();
+    releaseReminder(old);paintHeader(old);old.tabs.remove();clearPublicLink(old);clearProfile(old);old.read?.abort();old.cancelSearch?.();old.section.remove();old.onClear?.();
   }
   async function request(path,member,fields,post=false,signal){
     const data={...fields,expected_tenant_id:String(member.tenant_id),expected_user_id:String(member.telegram_id)};
@@ -102,13 +102,14 @@
     if(force||s.linkCompany!==company||!company||!linkCurrent(s,company))clearPublicLink(s);
     if(!company||!linkCurrent(s,company))return;
     s.linkCompany=company;s.linkBox.hidden=false;
+    if(s.deal)s.linkCopy.disabled=!s.linkUrl;
     if(s.linkLoadedCompany!==company&&!s.linkLookupRequest)void loadExistingPublicLink(s,company);
   }
   async function loadExistingPublicLink(s,company){
     const read=new AbortController();s.linkLookupRequest=read;
     const active=()=>s.linkLookupRequest===read&&linkCurrent(s,company);
     try{
-      const {public_link:link}=await request(publicLinkEndpoint,s.member,
+      const {public_link:link}=await request(s.endpoint+'/public-link',s.member,
         {...s.route,expected_company_id:company},true,read.signal);
       if(!active())return;
       if(link?.state==='available'&&typeof link.url==='string'&&/^https:\/\/1000\.az\/[A-Za-z0-9_-]{6}$/.test(link.url)){
@@ -121,7 +122,7 @@
         s.linkStatus.textContent=linkText('error');
       }
     }catch(error){if(active())s.linkStatus.textContent=[401,403,424].includes(error.status)?linkProblem(error.status===424?'rejected':'denied'):linkText('error');}
-    finally{if(s.linkLookupRequest===read){s.linkLookupRequest=null;s.linkLoadedCompany=company;}}
+    finally{if(s.linkLookupRequest===read){s.linkLookupRequest=null;s.linkLoadedCompany=company;if(s.deal)s.linkCopy.disabled=!s.linkUrl;}}
   }
   const sectionNames={
     ru:['Главная','Задачи','Модули','Платежи'],
@@ -307,7 +308,7 @@
     const active=()=>item.read===read&&s.activeTab===item.id&&linkCurrent(s,company);
     body.textContent=t('loading');body.setAttribute('aria-busy','true');
     try{
-      const {company_section:section}=await request(endpoint,s.member,
+      const {company_section:section}=await request(s.endpoint,s.member,
         {...s.route,action:item.action,expected_company_id:company},true,read.signal);
       if(!active())return;
       if(section?.state!=='available'){
@@ -345,7 +346,7 @@
     s.profileCompany=company;s.profileBox.hidden=false;
     const read=new AbortController();s.profileRequest=read;
     const active=()=>s.profileRequest===read&&profileCurrent(s,company);
-    void request(endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
+    void request(s.endpoint,s.member,{...s.route,action:'company_profile',expected_company_id:company},true,read.signal)
       .then(({company_profile:profile})=>{
         if(!active())return;
         paintPartner(s,profile?.state==='available'&&typeof profile.partner_name==='string'?profile.partner_name.trim():'');
@@ -464,7 +465,7 @@
       unsettledActions.set(actionKey,'pending');disable(true);status.textContent=t('loading');
       let result;
       try{
-        result=(await request(endpoint+'/action',s.member,{...s.route,expected_company_id:company,
+        result=(await request(s.endpoint+'/action',s.member,{...s.route,expected_company_id:company,
           expected_binding:binding,kind,fields,request_id:requestId},true)).state;
       }catch(error){result=error.status===409?'stale':[400,403,404].includes(error.status)?'denied':'unconfirmed';}
       if(['done','denied','stale'].includes(result))unsettledActions.delete(actionKey);
@@ -482,7 +483,7 @@
       if(result==='done'){
         for(const el of Object.values(controls))if(el.tagName!=='SELECT')el.value='';
         void loadTab(s,item);
-        if(!task)void request(endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
+        if(!task)void request(s.endpoint,s.member,{...s.route,expected_company_id:company,action:'company_profile'},true)
           .then(({company_profile:p})=>{if(linkCurrent(s,company)&&Number.isFinite(p.balance))
             s.balance.textContent=new Intl.NumberFormat(lang,{style:'currency',currency:'AZN'}).format(p.balance);}).catch(()=>{});
       }
@@ -522,7 +523,7 @@
     const read=new AbortController();s.linkRequest=read;s.linkCopy.disabled=true;s.linkStatus.textContent='';
     const active=()=>s.linkRequest===read&&linkCurrent(s,company);
     let received=false;
-    const pending=request(publicLinkEndpoint,s.member,
+    const pending=request(s.endpoint+'/public-link',s.member,
       {...s.route,action:'copy_customer_link',expected_company_id:company},true,read.signal).then(({public_link:link})=>{
         if(!active())throw Error('stale');
         if(['unconfirmed','not_found','not_connected','not_linked'].includes(link?.state))
@@ -586,7 +587,7 @@
   function refresh(s=state){
     if(!s||!current(s)||s.read||s.writing)return;
     const read=new AbortController();s.read=read;
-    void request(endpoint,s.member,s.route,false,read.signal)
+    void request(s.endpoint,s.member,s.route,false,read.signal)
       .then(payload=>{if(s.read===read)paint(s,payload.binding);},error=>{
         if(s.read===read&&(!s.binding||[401,403,404,409].includes(error.status)))paint(s,null);
       }).finally(()=>{if(s.read===read)s.read=null;});
@@ -600,7 +601,7 @@
     s.status.textContent=t('loading');
     try{
       const selection={...s.route,...fields,expected_company_id};
-      const {binding}=await request(endpoint,s.member,selection,true);
+      const {binding}=await request(s.endpoint,s.member,selection,true);
       if(!current(s))return;
       if(!binding||(fields.company_id===null?binding.company_id:!binding.company_id))throw Error(t('error'));
       s.reset();s.status.textContent='';paint(s,binding);
@@ -655,7 +656,8 @@
     suggestions.id='operatorDialogueCompanySuggestions';suggestions.append(results);panel.append(suggestions);
     panel.addEventListener('focusout',event=>{
       if(panel.contains(event.relatedTarget)||!active()||s.writing||!s.editing)return;
-      if(!input.value.trim()&&s.binding?.company_id&&s.binding.can_unlink!==false&&window.confirm(t('confirm'))){
+      const confirmText=s.deal?({ru:'Снять привязку компании с этой сделки?',az:'Sövdələşmənin şirkətlə əlaqəsini silmək istəyirsiniz?',en:'Remove the company link from this deal?'}[window.tenantI18n?.language]||'Sövdələşmənin şirkətlə əlaqəsini silmək istəyirsiniz?'):t('confirm');
+      if(!input.value.trim()&&s.binding?.company_id&&s.binding.can_unlink!==false&&window.confirm(confirmText)){
         void changeBinding(s,{company_id:null});
       }else{s.reset();s.sync();}
     });
@@ -697,7 +699,7 @@
       if(s.binding?.can_search_operator!==true){operatorStatus.textContent=t('restricted');return;}
       operatorStatus.textContent=t('loading');
       try{
-        const payload=await request(endpoint,s.member,{...s.route,operator_search:query},true,signal);
+        const payload=await request(s.endpoint,s.member,{...s.route,operator_search:query},true,signal);
         if(!active()||seq!==serial)return;
         if(!Array.isArray(payload.accounts))throw Error('invalid account list');
         const accounts=[...new Set(payload.accounts
@@ -738,12 +740,13 @@
     };
     s.sync();
   }
-  function mount({host,nameHost,partnerHost,reminderHost,route,member,isCurrent,onChanged}){
-    if(!host?.isConnected||!route?.provider||!route?.lead_id
-        ||typeof route.conversation_id!=='string'||typeof route.channel_id!=='string'
-        ||(route.provider==='connect'&&(!route.channel_id||!route.conversation_id))
+  function mount({host,nameHost,partnerHost,reminderHost,route,member,isCurrent,onChanged,deal=false,onClear}){
+    const validRoute=deal?['native','kommo'].includes(route?.source)&&route.deal_id
+      :route?.provider&&route.lead_id&&typeof route.conversation_id==='string'&&typeof route.channel_id==='string'
+        &&(route.provider!=='connect'||route.channel_id&&route.conversation_id);
+    if(!host?.isConnected||!validRoute
         ||!member?.tenant_id||member?.telegram_id==null||!isCurrent()){clear();return;}
-    const exact={provider:String(route.provider),lead_id:String(route.lead_id),
+    const exact=deal?{source:route.source,deal_id:String(route.deal_id)}:{provider:String(route.provider),lead_id:String(route.lead_id),
       channel_id:route.channel_id,conversation_id:route.conversation_id};
     const key=JSON.stringify([String(member.tenant_id),String(member.telegram_id),exact]);
     const snapshot=route.company_binding;
@@ -767,37 +770,88 @@
     value.dataset.companyValue='';value.setAttribute('role','status');value.setAttribute('aria-live','polite');
     status.className='operator-company-link-status';status.setAttribute('role','status');
     const initialCompanyName=String(route.dialog_company_name||'').trim();
-    const s={section,value,status,member,isCurrent,onChanged,route:exact,key,snapshot,lifecycle,initialCompanyName,read:null};
+    const s={section,value,status,member,isCurrent,onChanged,onClear,deal,endpoint:deal?dealEndpoint:endpoint,
+      route:exact,key,snapshot,lifecycle,initialCompanyName,read:null};
     host.append(section);state=s;mountOperatorTabs(s);s.main.append(value,status);mountEditor(s);mountProfile(s);mountPublicLink(s);placeReminder(s,reminderHost);paintHeader(s);
     if(snapshot!==undefined)paint(s,snapshot);else refresh(s);
   }
+  function attachDeal({host,source,id,member,isCurrent}){
+    const card=host?.closest('.modal');
+    if(!card||!host.isConnected||!member?.tenant_id||member.telegram_id==null)return;
+    const lang=window.tenantI18n?.language;
+    const title=({ru:'Компания Operator',en:'Operator company',az:'Operator şirkəti'}[lang]||'Operator şirkəti');
+    const closeText=({ru:'Закрыть',en:'Close',az:'Bağla'}[lang]||'Bağla');
+    const route={source,deal_id:String(id)};
+    const trigger=button(title,open);
+    trigger.className='outline';trigger.dataset.dealOperatorCompany='';
+    trigger.setAttribute('aria-haspopup','dialog');
+    host.append(trigger);
+    let panel=null;
+    const showName=binding=>{const name=companyName(binding);trigger.textContent=name?title+' · '+name:title;};
+    const read=new AbortController();
+    const closePanel=()=>{
+      if(!panel)return;
+      const closing=panel;panel=null;
+      if(closing.open)closing.close();
+      closing.remove();
+      if(isCurrent())trigger.focus();
+    };
+    const watch=new MutationObserver(()=>{
+      if(host.isConnected&&isCurrent())return;
+      watch.disconnect();read.abort();
+      if(panel?.contains(state?.section))clear();else closePanel();
+    });
+    watch.observe(card,{attributes:true,attributeFilter:['class','data-revision','data-type'],childList:true,subtree:true});
+    void request(dealEndpoint,member,route,false,read.signal).then(({binding})=>{
+      if(!read.signal.aborted&&isCurrent())showName(binding);
+    }).catch(()=>{});
+    function open(){
+      if(panel||!isCurrent())return;
+      read.abort();
+      panel=node('dialog');panel.className='operator-deal-company-panel';
+      panel.setAttribute('aria-label',title);
+      const header=node('header');header.className='operator-client-panel-header';
+      const close=button('×',()=>panel.close());close.setAttribute('aria-label',closeText);close.autofocus=true;
+      const content=node('div');content.className='operator-deal-company-body';
+      header.append(close);panel.append(header,content);card.querySelector('.modal-card').append(panel);
+      const active=panel;
+      active.addEventListener('close',()=>{if(active.contains(state?.section))clear();else if(panel===active)closePanel();});
+      active.showModal();
+      mount({host:content,route,member,isCurrent:()=>active.open&&isCurrent(),deal:true,onClear:closePanel,onChanged:showName});
+    }
+  }
   const style=node('style');
   style.textContent=`
+    .operator-deal-company-panel{position:fixed;box-sizing:border-box;inset:0;width:min(540px,calc(100% - 24px));max-width:none;max-height:min(760px,calc(100dvh - 24px));padding:0;border:1px solid var(--line);border-radius:12px;background:var(--card);color:var(--ink);overflow:auto;overscroll-behavior:contain}
+    .operator-deal-company-panel::backdrop{background:#0006}
+    .operator-deal-company-panel>.operator-client-panel-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;background:var(--card);border-bottom:1px solid var(--line)}
+    .operator-deal-company-panel>.operator-client-panel-header>button{order:1;min-width:40px;min-height:40px;padding:0;background:none;color:var(--ink);border:0;font-size:20px}
+    .operator-deal-company-body{padding:12px 14px;min-width:0;overflow-wrap:anywhere}
     [data-operator-dialog-company]{min-width:0;color:var(--ink)}
     #operatorCompanyView-main:not([hidden]){display:grid;gap:7px;min-width:0}
-    #operatorCompanyPanel [data-company-reminder-fallback]:empty{display:none}
-    #operatorCompanyPanel [role=tabpanel][hidden]{display:none!important}
-    dialog#operatorCompanyPanel > .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
-    #operatorCompanyPanel .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
-    #operatorCompanyPanel .operator-company-tabs::-webkit-scrollbar{display:none}
-    #operatorCompanyPanel .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:13px;white-space:nowrap;overflow-wrap:normal}
-    #operatorCompanyPanel .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
-    dialog#operatorCompanyPanel>.operator-client-panel-header{box-sizing:border-box;height:60px;min-height:60px;padding:0 8px}
-    #operatorCompanyPanel .operator-company-tabs{height:100%;align-items:stretch}
-    #operatorCompanyPanel .operator-company-tabs button{height:100%;min-height:0}
-    @media(max-width:900px){dialog#operatorCompanyPanel>.operator-client-panel-header{height:56px;min-height:56px;padding:0 4px}}
-    #operatorCompanyPanel .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
-    #operatorCompanyPanel .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:14px;line-height:1.35;overflow-wrap:anywhere}
-    #operatorCompanyPanel .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
-    #operatorCompanyPanel .operator-company-section-list small{color:var(--muted);font-size:12px;line-height:1.35}
-    #operatorCompanyPanel .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:12px;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
-    #operatorCompanyPanel .operator-company-badge[data-tone=success]{color:#114d30;background:#dcf5e6;border-color:#a5d7ba}
-    #operatorCompanyPanel .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
-    #operatorCompanyPanel .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
-    #operatorCompanyPanel .operator-company-badge[data-tone=pending]{color:#644713;background:#fff0d0;border-color:#e8cca0}
-    #operatorCompanyPanel [data-company-actions]{display:flex;justify-content:flex-start;margin-block-end:8px}
-    #operatorCompanyPanel .operator-company-pagination{display:flex;align-items:center;justify-content:center;gap:8px;padding-block-start:10px}
-    #operatorCompanyPanel .operator-company-pagination button{min-width:40px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) [data-company-reminder-fallback]:empty{display:none}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) [role=tabpanel][hidden]{display:none!important}
+    dialog:is(#operatorCompanyPanel,.operator-deal-company-panel) > .operator-client-panel-header{min-width:0;gap:6px;padding-block:4px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs{display:flex;align-items:center;flex:1 1 0;gap:2px;min-width:0;overflow-x:auto;scrollbar-width:none;overscroll-behavior-inline:contain}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs::-webkit-scrollbar{display:none}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs button{flex:none;border:0;border-radius:0;min-height:32px;padding:0 5px;background:transparent;font-size:13px;white-space:nowrap;overflow-wrap:normal}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs button[aria-selected=true]{color:var(--brand);box-shadow:inset 0 -2px var(--brand)}
+    dialog:is(#operatorCompanyPanel,.operator-deal-company-panel)>.operator-client-panel-header{box-sizing:border-box;height:60px;min-height:60px;padding:0 8px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs{height:100%;align-items:stretch}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-tabs button{height:100%;min-height:0}
+    @media(max-width:900px){dialog:is(#operatorCompanyPanel,.operator-deal-company-panel)>.operator-client-panel-header{height:56px;min-height:56px;padding:0 4px}}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-list{display:grid;gap:6px;list-style:none;padding:0;margin:0}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-list li{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,auto);align-items:start;gap:8px;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--card);font-size:14px;line-height:1.35;overflow-wrap:anywhere}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-list li>div{min-width:0;display:grid;gap:3px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-list small{color:var(--muted);font-size:12px;line-height:1.35}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-badge{justify-self:start;border-radius:6px;padding:3px 6px;font-size:12px;line-height:1.35;background:var(--paper);color:var(--ink);border:1px solid var(--line)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-badge[data-tone=success]{color:#114d30;background:#dcf5e6;border-color:#a5d7ba}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-badge[data-tone=progress]{color:#234680;background:#e5edff;border-color:#b6c9f0}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-badge[data-tone=danger]{color:#7b282e;background:#fce5e5;border-color:#e5b4b8}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-badge[data-tone=pending]{color:#644713;background:#fff0d0;border-color:#e8cca0}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) [data-company-actions]{display:flex;justify-content:flex-start;margin-block-end:8px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-pagination{display:flex;align-items:center;justify-content:center;gap:8px;padding-block-start:10px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-pagination button{min-width:40px}
     .operator-company-action-modal{position:fixed;inset:0;margin:auto;height:fit-content;box-sizing:border-box;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);width:min(700px,100%);padding:0;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 18px 56px #0005;overflow:auto;overscroll-behavior:contain}
     .operator-company-action-modal[data-company-action-modal=credit]{width:min(400px,100%)}
     .operator-company-action-modal::backdrop{background:#071d1688}
@@ -834,46 +888,46 @@
       .operator-company-action-modal[data-company-action-modal=task] footer button{width:100%}
     }
     @media(max-width:600px){.operator-company-action-modal .operator-company-action-grid{grid-template-columns:minmax(0,1fr)}.operator-company-action-modal input,.operator-company-action-modal select,.operator-company-action-modal textarea{font-size:16px}}
-    #operatorCompanyPanel .operator-company-payment-history{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--card);font-size:13px;--payment-credit:#14543b;--payment-credit-bg:#e3f6ec;--payment-expense:#7c2932;--payment-expense-bg:#fcebed}
-    html[data-app-theme=dark] #operatorCompanyPanel .operator-company-payment-history{--payment-credit:#87d9af;--payment-credit-bg:#203d31;--payment-expense:#ffadb5;--payment-expense-bg:#4b282f}
-    #operatorCompanyPanel .operator-company-payment-intro{padding:9px 10px}
-    #operatorCompanyPanel .operator-company-payment-intro h3{margin:0;font-size:14px;line-height:1.3}
-    #operatorCompanyPanel .operator-company-payment-intro p{margin:3px 0 0;color:var(--muted);font-size:12px}
-    #operatorCompanyPanel .operator-company-payment-history table{box-sizing:border-box;width:100%;table-layout:fixed;border-collapse:collapse;margin:0}
-    #operatorCompanyPanel .operator-company-payment-history :is(th,td){padding:7px 8px;text-align:start;border-block-start:1px solid var(--line);background:transparent;overflow-wrap:anywhere;vertical-align:middle;line-height:1.35}
-    #operatorCompanyPanel .operator-company-payment-history th{color:var(--muted);font-weight:600;background:var(--paper)}
-    #operatorCompanyPanel .operator-company-payment-history :is(th,td):last-child{text-align:end;width:43%}
-    #operatorCompanyPanel .operator-company-payment-kind{box-sizing:border-box;display:inline-flex;align-items:center;gap:3px;max-width:100%;padding:2px 5px;border-radius:999px;background:var(--paper);color:var(--ink);font-size:12px;font-weight:600}
-    #operatorCompanyPanel .operator-company-payment-kind>span{min-width:0;overflow-wrap:anywhere}
-    #operatorCompanyPanel .operator-company-payment-kind svg{width:12px;height:12px;flex:none}
-    #operatorCompanyPanel .operator-company-payment-kind[data-kind=credit]{color:var(--payment-credit);background:var(--payment-credit-bg)}
-    #operatorCompanyPanel .operator-company-payment-kind[data-kind=expense]{color:var(--payment-expense);background:var(--payment-expense-bg)}
-    #operatorCompanyPanel .operator-company-payment-history :is(time,small){display:block;margin-block-start:3px;color:var(--muted);font-size:12px}
-    #operatorCompanyPanel .operator-company-section-amount{text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
-    #operatorCompanyPanel .operator-company-section-amount[data-positive-credit]{color:var(--payment-credit)}
-    #operatorCompanyPanel .operator-company-payment-history .operator-company-pagination{padding:8px;border-block-start:1px solid var(--line)}
-    #operatorCompanyPanel [role=tabpanel]>p{overflow-wrap:anywhere}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history{min-width:0;overflow:hidden;border:1px solid var(--line);border-radius:9px;background:var(--card);font-size:13px;--payment-credit:#14543b;--payment-credit-bg:#e3f6ec;--payment-expense:#7c2932;--payment-expense-bg:#fcebed}
+    html[data-app-theme=dark] :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history{--payment-credit:#87d9af;--payment-credit-bg:#203d31;--payment-expense:#ffadb5;--payment-expense-bg:#4b282f}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-intro{padding:9px 10px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-intro h3{margin:0;font-size:14px;line-height:1.3}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-intro p{margin:3px 0 0;color:var(--muted);font-size:12px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history table{box-sizing:border-box;width:100%;table-layout:fixed;border-collapse:collapse;margin:0}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history :is(th,td){padding:7px 8px;text-align:start;border-block-start:1px solid var(--line);background:transparent;overflow-wrap:anywhere;vertical-align:middle;line-height:1.35}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history th{color:var(--muted);font-weight:600;background:var(--paper)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history :is(th,td):last-child{text-align:end;width:43%}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-kind{box-sizing:border-box;display:inline-flex;align-items:center;gap:3px;max-width:100%;padding:2px 5px;border-radius:999px;background:var(--paper);color:var(--ink);font-size:12px;font-weight:600}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-kind>span{min-width:0;overflow-wrap:anywhere}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-kind svg{width:12px;height:12px;flex:none}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-kind[data-kind=credit]{color:var(--payment-credit);background:var(--payment-credit-bg)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-kind[data-kind=expense]{color:var(--payment-expense);background:var(--payment-expense-bg)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history :is(time,small){display:block;margin-block-start:3px;color:var(--muted);font-size:12px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-amount{text-align:end;font-weight:600;font-variant-numeric:tabular-nums}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-section-amount[data-positive-credit]{color:var(--payment-credit)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-payment-history .operator-company-pagination{padding:8px;border-block-start:1px solid var(--line)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) [role=tabpanel]>p{overflow-wrap:anywhere}
     #operatorDialogueCompanyPicker [hidden]{display:none!important}
     #operatorDialogueCompanyPicker{display:grid;gap:5px;min-width:0}
     #operatorDialogueCompanyPicker .operator-company-suggestions{display:grid;gap:6px;min-width:0;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
     #operatorDialogueCompanyPicker [role=status]{margin:0;color:var(--muted);font-size:.75rem}
     #operatorDialogueCompanyPicker [role=status]:empty,#operatorDialogueCompanyPicker .operator-dialog-company-results>div:empty{display:none}
     #operatorDialogueCompanyPicker .operator-dialog-company-results{display:grid;gap:4px;max-height:clamp(112px,35dvh,205px);overflow:auto;overscroll-behavior:auto}
-    #operatorCompanyPanel #operatorDialogueCompanyPicker .operator-dialog-company-results button{display:block;width:100%;min-height:36px;text-align:start;border:0;color:inherit;background:var(--card)}
-    #operatorCompanyPanel #operatorDialogueCompanyPicker .operator-dialog-company-results button:hover{background:var(--paper)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) #operatorDialogueCompanyPicker .operator-dialog-company-results button{display:block;width:100%;min-height:36px;text-align:start;border:0;color:inherit;background:var(--card)}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) #operatorDialogueCompanyPicker .operator-dialog-company-results button:hover{background:var(--paper)}
     .operator-company-link-row{position:relative;display:block;min-width:0}
     [data-operator-dialog-company] [data-company-value]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-    #operatorCompanyPanel #operatorDialogueCompanySearch{padding-inline-end:32px}
-    #operatorCompanyPanel #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) #operatorDialogueCompanySearch{padding-inline-end:32px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) #operatorDialogueCompanySearch::-webkit-search-cancel-button{display:none}
     @keyframes operatorCompanyAutofill{from{opacity:1}to{opacity:1}}
     #operatorDialogueCompanySearch:autofill{animation:operatorCompanyAutofill .01s}
     #operatorDialogueCompanySearch:-webkit-autofill{animation:operatorCompanyAutofill .01s}
-    #operatorCompanyPanel .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
-    #operatorCompanyPanel .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-unlink{display:inline-grid;position:absolute;inset-inline-end:3px;top:50%;transform:translateY(-50%);place-items:center;width:26px;min-height:26px;padding:0;border:0;background:transparent;color:var(--muted);font-size:18px}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-unlink[hidden],.operator-company-link-status:empty{display:none}
     .operator-company-link-status{margin:0;color:var(--muted);font-size:.75rem}
     [data-company-profile]>div{display:grid;gap:3px;padding:7px 0;border-block-start:1px solid var(--line)}
     [data-company-profile]>[data-company-partner][hidden]{display:none}
-    @media(min-width:901px){[data-company-profile]>[data-company-partner]{display:none}}
+    @media(min-width:901px){[data-company-profile]>[data-company-partner]:not(.operator-deal-company-panel [data-company-partner]){display:none}}
     [data-company-profile] small,[data-company-profile]>p{color:var(--muted);font-size:12px;line-height:1.35}
     [data-company-profile]>p{margin:0}
     [data-company-profile][hidden],[data-company-profile]>p:empty,[data-company-actions]:empty{display:none!important}
@@ -881,22 +935,22 @@
     [data-company-public-link][hidden],[data-company-public-link] button[hidden],
     [data-company-public-link] p:empty{display:none!important}
     [data-company-public-link] p{grid-column:1/-1;margin:0;color:var(--muted);font-size:12px;line-height:1.35}
-    #operatorCompanyPanel .operator-company-public-url{grid-column:1;min-width:0;overflow:hidden;color:var(--brand);font-size:13px;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
-    #operatorCompanyPanel .operator-company-public-url[hidden]{display:none!important}
-    #operatorCompanyPanel .operator-company-copy-icon{grid-column:2;display:grid;place-items:center;width:36px;min-width:36px;height:36px;min-height:36px;padding:0}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-public-url{grid-column:1;min-width:0;overflow:hidden;color:var(--brand);font-size:13px;line-height:1.35;text-overflow:ellipsis;white-space:nowrap}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-public-url[hidden]{display:none!important}
+    :is(#operatorCompanyPanel,.operator-deal-company-panel) .operator-company-copy-icon{grid-column:2;display:grid;place-items:center;width:36px;min-width:36px;height:36px;min-height:36px;padding:0}
   `;document.head.append(style);
-  for(const event of ['tenant-auth-invalid','tenant-auth-pending','tenant-chat-open','tenant-chat-close'])
-    document.addEventListener(event,clear);
+  for(const event of ['tenant-auth-invalid','tenant-auth-pending'])document.addEventListener(event,clear);
+  for(const event of ['tenant-chat-open','tenant-chat-close'])document.addEventListener(event,()=>{if(!state?.deal)clear();});
   document.addEventListener('tenant-profile',event=>{
     if(!state)return;
     const next=event.detail?.member;
-    if(event.detail?.capabilities?.dialog_company_binding!==true||!next?.active||
+    if(event.detail?.capabilities?.[state.deal?'deal_operator_company':'dialog_company_binding']!==true||!next?.active||
         String(next.tenant_id)!==String(state.member.tenant_id)||String(next.telegram_id)!==String(state.member.telegram_id))clear();
   });
-  document.addEventListener('tenant-view',event=>{if(event.detail?.view!=='dialogs')clear();});
+  document.addEventListener('tenant-view',event=>{if(state?.deal||event.detail?.view!=='dialogs')clear();});
   document.addEventListener('tenant-language',()=>{if(state){state.labelTabs();state.labelProfile();labelPublicLink(state);}});
-  document.addEventListener('tenant-dialog-reauthorized',()=>{if(state?.snapshot===undefined)refresh();});
-  window.tenantDialogueCompany={mount,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
+  document.addEventListener('tenant-dialog-reauthorized',()=>{if(!state?.deal&&state?.snapshot===undefined)refresh();});
+  window.tenantDialogueCompany={mount,attachDeal,clear,refresh,closePicker(){state?.reset?.();state?.sync?.();},
     refreshPublicLink(force=false){if(state){syncPublicLink(state,force);syncProfile(state);}},
     hidePublicLink(){
       if(!state)return;

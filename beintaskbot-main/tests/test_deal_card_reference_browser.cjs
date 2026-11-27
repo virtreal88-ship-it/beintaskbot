@@ -6,13 +6,14 @@ const {chromium,devices} = require('../.support-test-deps/node_modules/playwrigh
 const {installFixture} = require('./task_read_save_flow_fixture.cjs');
 const docs = path.resolve(__dirname, '../docs');
 const assets = new Set(['tenant-operator-i18n.js', 'tenant-request-coordinator.js', 'tenant-view-demand.js',
-  'tenant-task-flow.js', 'tenant-kommo-deal-card.js', 'tenant-deal-chat.js', 'tenant-chat-history.js', 'tenant-chat-ai.js']);
+  'tenant-task-flow.js', 'tenant-kommo-deal-card.js', 'tenant-deal-chat.js', 'tenant-chat-history.js', 'tenant-chat-ai.js',
+  'tenant-dialog-company.js']);
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(
   /<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,
   (_, url) => assets.has(path.basename(url)) ? '<script>' +
     fs.readFileSync(path.join(docs, path.basename(url)), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '');
 
-function installDealResponses({native, linking, limited}) {
+function installDealResponses({native, linking, limited, operatorCompany}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
   const channel = '10000000-0000-4000-8000-000000000301';
   const route = {provider:'connect', channel_id:channel, conversation_id:'15550101010@s.whatsapp.net',
@@ -39,15 +40,34 @@ function installDealResponses({native, linking, limited}) {
   Object.assign(f.profile.capabilities.modules,{deals:true,dialogs:true});
   f.profile.capabilities.actions={deals:access,tasks:access};
   f.profile.capabilities.pages={deals:true,dialogs:true,tasks:true,profile:true};
+  f.profile.capabilities.deal_operator_company=operatorCompany;
   f.profile.integrations=[{provider:'kommo',status:'connected'}];
   f.kommo=[{source:'kommo',id:'8',kommo_lead_id:7,description:'Согласовать время установки'}];
   window.dealProof={route,requests:[],opened:null,rejectMove:false};
   window.tenantOperator={hasRight:()=>true,openDialog:r=>{dealProof.opened=r;}};
   window.tenantChatSend={bind:options=>{dealProof.sendBound=options.leadId;}};
   const json=(data,status=200)=>new Response(JSON.stringify({success:status===200,...data}),{status,headers:{'Content-Type':'application/json'}});
+  let companyBinding=limited?'test-binding':null;
+  const binding=()=>({company_id:companyBinding,company_name:companyBinding?'deal-company':null,
+    can_manage:!limited,can_search_operator:!limited,can_unlink:!limited});
   window.fetch=async (input,options={})=>{
     const url=new URL(input,location.href),p=url.pathname,method=options.method||'GET';
     dealProof.requests.push({p,method,query:url.search,body:options.body?JSON.parse(options.body):null});
+    if(p.startsWith('/api/platform/operator/deal-company')){
+      const fields=method==='GET'?Object.fromEntries(url.searchParams):JSON.parse(options.body);
+      if(fields.source!==(native?'native':'kommo')||fields.deal_id!==(native?f.deal:'7'))return json({},404);
+      if(method==='GET')return json({binding:binding()});
+      if('operator_search' in fields)return limited?json({},403):json({accounts:[{account:'deal-company'}]});
+      if(fields.expected_company_id!==companyBinding)return json({},409);
+      if(fields.operator_account==='deal-company'&&!limited){companyBinding='test-binding';return json({binding:binding()});}
+      if(fields.company_id===null&&!limited){companyBinding=null;return json({binding:binding()});}
+      if(fields.action==='company_profile')return json({company_profile:{state:'available',registration_phone:'+994 12 123 45 67',balance:25,partner_name:'Test partner'}});
+      if(p.endsWith('/public-link'))return json({public_link:{state:'available',url:'https://1000.az/test01'}});
+      const rows={company_tasks:[['TEST-22','Operator task','Open']],company_modules:[['Point of sale']],
+        company_history:[['2026-11-25','25','credit','AZN']]};
+      if(rows[fields.action])return json({company_section:{state:'available',rows:rows[fields.action]}});
+      return json({},400);
+    }
     if(p==='/api/platform/crm/deal-view-preferences')return json({source:native?'native':'kommo'});
     if(p==='/api/platform/crm/native/deals')
       return json(url.searchParams.has('options')?{workflows:stages,contacts:[],members:[]}:{deals:[local]});
@@ -93,11 +113,12 @@ async function open(page, native) {
     const variants=[[false,1440,'empty'],[false,1440,'none'],[true,390,'none'],[true,390,'wrong'],[true,390,'denied',true],[false,390,'none',true]];
     for(const native of [false,true])for(const width of [1440,390])for(const theme of ['light','dark'])variants.push([native,width,'linked',false,theme]);
     for(const [native,width,linking,limited=false,theme='light'] of variants){
+      const operatorCompany=theme==='dark'||limited;
       const page=await browser.newPage({...(width<900?devices['Pixel 7']:{}),viewport:{width,height:900},colorScheme:theme}),errors=[];
       page.setDefaultTimeout(7000);
       page.on('pageerror',error=>errors.push(error.message));
       await page.addInitScript(installFixture,{});
-      await page.addInitScript(installDealResponses,{native,linking,limited});
+      await page.addInitScript(installDealResponses,{native,linking,limited,operatorCompany});
       await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
       await page.goto('https://fixture.test/app?view=deals&lang=ru');
       await page.addStyleTag({content:fs.readFileSync(path.join(docs,'../ui/src/app-theme.css'),'utf8')});
@@ -120,6 +141,44 @@ async function open(page, native) {
       assert(await info.getByText('+994 50 123 45 67',{exact:true}).isVisible());
       if(!native)await info.getByText(limited?'Имя недоступно':'Айдан Алиева',{exact:true}).waitFor();
       if(limited)assert(await modal.locator('.deal-stage-trigger').isDisabled());
+      if(operatorCompany){
+        const trigger=info.locator('[data-deal-operator-company]');
+        await trigger.click();
+        const panel=modal.getByRole('dialog',{name:'Компания Operator',exact:true});
+        const search=panel.locator('#operatorDialogueCompanySearch');
+        if(!limited){
+          await search.focus();
+          await search.pressSequentially('deal');
+          await panel.getByRole('button',{name:'@deal-company',exact:true}).click();
+        }else{
+          assert.equal(await search.getAttribute('readonly'),'');
+        }
+        await panel.getByText('+994 12 123 45 67',{exact:true}).waitFor();
+        await panel.getByText('Test partner',{exact:true}).waitFor();
+        await panel.getByRole('link',{name:'https://1000.az/test01'}).waitFor();
+        await panel.getByRole('tab',{name:'Задачи'}).click();
+        await panel.getByText('Operator task',{exact:true}).waitFor();
+        await panel.getByRole('tab',{name:'Модули'}).click();
+        await panel.getByText('Point of sale',{exact:true}).waitFor();
+        await panel.getByRole('tab',{name:'Платежи'}).click();
+        await panel.locator('table').waitFor();
+        await panel.getByRole('button',{name:'Закрыть',exact:true}).click();
+        await panel.waitFor({state:'detached'});
+        assert.match(await trigger.textContent(),/deal-company/);
+        await trigger.click();
+        await panel.getByText('+994 12 123 45 67',{exact:true}).waitFor();
+        if(!limited&&width<900){
+          page.once('dialog',dialog=>dialog.accept());
+          await panel.getByRole('button',{name:'Снять связь',exact:true}).click();
+          await panel.getByRole('tab',{name:'Главная',exact:true}).focus();
+          await page.waitForFunction(()=>dealProof.requests.some(r=>r.body?.company_id===null));
+          await panel.locator('[data-company-profile]').waitFor({state:'hidden'});
+          await trigger.filter({hasText:/^Компания Operator$/}).waitFor();
+        }
+        await panel.getByRole('button',{name:'Закрыть',exact:true}).click();
+        await panel.waitFor({state:'detached'});
+        assert.equal(await page.evaluate(()=>dealProof.requests.some(r=>r.p.includes('/operator/dialog-company'))),false);
+      }
       if(width<900)await modal.locator('[data-deal-pane=chat]').click();
       assert.equal(await modal.locator('.modal-card').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
       const savedCount=()=>page.evaluate(()=>dealProof.requests.filter(r=>r.p==='/api/platform/crm/chat/history').length);

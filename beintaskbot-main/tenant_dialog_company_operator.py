@@ -55,11 +55,11 @@ def _authorized(cur,profile,route):
     return tenant,actor,policy
 
 
-def _read_live(profile, route, term, *, choice, selection_search=None):
+def _read_live(profile, route, term, *, choice, selection_search=None, authorize=None):
     # Do not disclose provider data or spend upstream calls for a forged route.
     with dialogue._connect() as conn:
         with conn.cursor() as cur:
-            expected_tenant, expected_actor, policy = _authorized(cur,profile,route)
+            expected_tenant, expected_actor, policy = (authorize or _authorized)(cur,profile,route)
     owner = policy.profile.get('role') == 'owner'
     if owner:
         tenant,actor,source,credentials=imports._selected_source_credentials(profile)
@@ -91,7 +91,7 @@ def _read_live(profile, route, term, *, choice, selection_search=None):
     return tenant,actor,source,credentials,accounts
 
 
-def _fenced_local(cur,profile,route,tenant,actor,source,credentials):
+def _fenced_local(cur,profile,route,tenant,actor,source,credentials, *, authorize=None):
     # Same source/row ordering as the authorized single-account import. The
     # dialogue, credential, and identity are not trusted from the earlier read.
     operator._lock_accounts_capability_scope(cur,tenant)
@@ -102,7 +102,7 @@ def _fenced_local(cur,profile,route,tenant,actor,source,credentials):
         row=operator._operator_row(cur,tenant,lock=True)
         if not row or row.get('status')!='connected':
             raise operator.OperatorError('Доступ к аккаунтам Operator изменился. Повторите поиск.',409)
-    checked_tenant,checked_actor,policy=_authorized(cur,profile,route)
+    checked_tenant,checked_actor,policy=(authorize or _authorized)(cur,profile,route)
     if (checked_tenant,checked_actor)!=(tenant,actor):
         raise operator.OperatorError('Контекст сотрудника изменился. Обновите страницу.',409)
     return policy

@@ -189,11 +189,12 @@ def _read_bound_route(profile, *, provider, lead_id, channel_id, conversation_id
         raise operator.OperatorError(str(error), error.status) from error
 
 
-def lookup_link(profile, **query):
-    def link_fields(account, **transport):
-        url = _lookup_public_link(account, **transport)
-        return {'url': url} if url else None
+def link_fields(account, **transport):
+    url = _lookup_public_link(account, **transport)
+    return {'url': url} if url else None
 
+
+def lookup_link(profile, **query):
     return _read_bound_route(profile, endpoint=_ENDPOINT, lookup=link_fields, **query)
 
 
@@ -334,7 +335,7 @@ def _section_rows(response, section, account):
     return {'rows':rows}
 
 
-def lookup_section(profile, *, section, **query):
+def section_reader(section):
     path,_=_SECTIONS[section]
     def read(account, *, token, base_url):
         if base_url!=operator.OPERATOR_API_BASE_URL or base_url!=operator.api_base_url():
@@ -348,15 +349,20 @@ def lookup_section(profile, *, section, **query):
             raise
         except (ValueError,UnicodeError):
             raise operator.OperatorError('Operator вернул неизвестный формат.',502) from None
-    return _read_bound_route(profile,endpoint=section,lookup=read,**query)
+    return read
+
+
+def lookup_section(profile, *, section, **query):
+    return _read_bound_route(profile,endpoint=section,lookup=section_reader(section),**query)
+
+
+def profile_fields(account, **transport):
+    response = operator._request_operator('account_info', {'account':account},
+                                          requests_account_info=True, **transport)
+    return _company_profile_fields(response, account)
 
 
 def lookup_profile(profile, **query):
-    def profile_fields(account, **transport):
-        response = operator._request_operator('account_info', {'account':account},
-                                              requests_account_info=True, **transport)
-        return _company_profile_fields(response, account)
-
     def with_actions(cur, route, company, scope, fields):
         from tenant_dialog_company_actions import PRIORITIES, PROJECTS, capabilities
         tenant, account, _, _ = scope
