@@ -98,6 +98,15 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     _expected(query,profile)
                     from tenant_deal_dialogs import linked_dialogs
                     result=await asyncio.to_thread(linked_dialogs,profile,query.get('source'),query.get('deal_id'))
+                elif resource=='deal_dialog_history':
+                    _expected(query,profile)
+                    from tenant_deal_dialog_links import history as deal_history
+                    result=await asyncio.to_thread(deal_history,profile,query.get('source'),
+                        query.get('deal_id'),query.get('link_id'),query.get('before'))
+                elif resource=='deal_dialog_phone_candidates':
+                    _expected(query,profile)
+                    from tenant_deal_dialog_links import phone_candidates
+                    result=await asyncio.to_thread(phone_candidates,profile,query.get('deal_id'),query.get('message_id'))
                 elif resource=='contact_phone':
                     from tenant_contact_phone import get_phone
                     result=await get_phone(profile,dict(query))
@@ -202,7 +211,7 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     raise TenantLinearError('Метод не поддерживается.',405)
             else:
                 _origin(request,origin)
-                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','dialog_history_merges','quick_replies','internal_comments'} or request.content_type!='application/json':
+                if request.method!='POST' or resource not in {'presence','view_preferences','company_panel_preferences','dialogs_lifecycle','sources','display_name','agent_assignment','agent_assignment_bulk','group_coordination','group_staff','legacy_recovery','legacy_continuation','copilot','dialogs_read','dialogs_read_all','dialog_duplicates','dialog_duplicate_preview','contact_display_phone','dialog_history_merges','quick_replies','internal_comments','deal_dialog_link'} or request.content_type!='application/json':
                     raise TenantLinearError('Метод не поддерживается.',405)
                 if request.content_length is not None and request.content_length>20_000:
                     raise TenantLinearError('Слишком большой запрос.',413)
@@ -214,6 +223,10 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                 payload={key:value for key,value in data.items() if key not in {'expected_tenant_id','expected_user_id'}}
                 if 'observed_operator_id' in payload:
                     raise TenantLinearError('Режим просмотра не допускает изменений.',403)
+                if resource=='deal_dialog_link':
+                    from tenant_deal_dialog_links import attach
+                    result=await asyncio.to_thread(attach,profile,payload)
+                    return web.json_response({'success':True,'result':result},headers=headers)
                 if resource=='dialog_history_merges':
                     from tenant_dialog_history_merge_jobs import action as history_merge_action
                     return web.json_response({'success':True,'result':{'job':await asyncio.to_thread(history_merge_action,profile,payload)}},headers=headers)

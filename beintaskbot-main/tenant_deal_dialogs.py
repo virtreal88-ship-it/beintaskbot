@@ -8,7 +8,9 @@ from tenant_platform import _connect
 
 
 def linked_dialogs(profile, source, deal_id):
+    from tenant_deal_dialog_links import enabled as deal_links_enabled, routes
     tenant = identifier(profile.get('tenant_id'))
+    binding = None
     if source == 'native':
         from tenant_crm_native_deals import get_deal
 
@@ -21,7 +23,7 @@ def linked_dialogs(profile, source, deal_id):
         if not deal:
             raise TenantLinearError('Сделка не найдена.', 404)
         channel, conversation = deal.get('channel_id'), deal.get('conversation_id')
-        if not channel or not conversation:
+        if not (channel and conversation) and not deal_links_enabled(tenant):
             return {'dialogs': []}
         predicate = "provider='connect' AND channel_id=%s AND conversation_id=%s"
         params = (str(channel), conversation)
@@ -75,4 +77,15 @@ def linked_dialogs(profile, source, deal_id):
                         raise
                     continue
                 dialogs.append(dict(row))
-            return {'dialogs': dialogs}
+            attached = routes(cur, tenant, policy, source, deal_id, binding)
+            attached_keys = {(row['provider'],row['channel_id'],row['conversation_id']) for row in attached}
+            result = {'dialogs': [row for row in dialogs
+                                  if (row['provider'],row['channel_id'],row['conversation_id']) not in attached_keys]+attached}
+            if (source == 'kommo' and deal_links_enabled(tenant)
+                    and any(row['provider']=='kommo' and row['channel_name'].lower() in ('tiktok','tiktok_kommo')
+                            for row in dialogs)):
+                from tenant_deal_dialog_candidates import allowed_kommo
+                if (deal['status_id'] > 0 and deal['status_id'] not in (142,143) and allowed_kommo(policy, deal, update=True)
+                        and policy.allows_action('dialogs', 'update')):
+                    result['can_find_whatsapp'] = True
+            return result

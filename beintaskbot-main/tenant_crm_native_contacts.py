@@ -209,7 +209,8 @@ def set_contact_company_link(tenant_id, contact_id, company_id, *, unlink=False,
 
 
 def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_id: str,
-                            phone: str, display_name: str = '', message_id: str = ''):
+                            phone: str, display_name: str = '', message_id: str = '', *,
+                            adopt_by_phone: bool = True):
     """Resolve a direct WhatsApp conversation to a tenant-owned native contact.
 
     Caller must pass a provider-verified personal JID number, never a name or
@@ -257,12 +258,17 @@ def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_i
         # Adopt a pre-existing contact only when the number identifies exactly
         # one active row. A shared number is evidence for candidate discovery,
         # not proof that the first matching contact owns this conversation.
+        labels = [number]
+        if not adopt_by_phone:
+            labels.append('00' + number)
+            if len(number) == 12 and number.startswith('994'):
+                labels.extend([number[3:], '0' + number[3:]])
         cur.execute("""SELECT id,display_name,phone,email FROM saas_crm_native_contacts
             WHERE tenant_id=%s::uuid AND archived_at IS NULL
-              AND regexp_replace(phone,'[^0-9]','','g')=%s
-            ORDER BY created_at,id LIMIT 2 FOR UPDATE""", (tenant_id, number))
+              AND regexp_replace(phone,'[^0-9]','','g')=ANY(%s::text[])
+            ORDER BY created_at,id LIMIT 2 FOR UPDATE""", (tenant_id, labels))
         matches = cur.fetchall()
-        if len(matches) > 1:
+        if len(matches) > 1 or (matches and not adopt_by_phone):
             return None
         row = matches[0] if matches else None
     if row is None:

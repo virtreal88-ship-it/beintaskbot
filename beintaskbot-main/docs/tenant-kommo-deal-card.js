@@ -73,6 +73,7 @@
     .deal-linked-dialog-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 12px}
     .deal-linked-dialog-tools:empty{display:none}
     .deal-linked-dialog-body{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+    .deal-linked-dialog-body .deal-linked-transcript{flex:1;padding:12px;overflow:auto}
     .deal-linked-dialog-body #operatorConversationPane{display:flex;flex:1;min-height:0;min-width:0;border:0;border-radius:0}
     .deal-linked-dialog-body [data-operator-back]{display:none!important}
     .deal-linked-dialog-body .operator-chat-history{scrollbar-width:thin;touch-action:pan-y}

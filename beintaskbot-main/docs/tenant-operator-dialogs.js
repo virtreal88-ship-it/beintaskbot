@@ -4,6 +4,10 @@
   const searchValue=input=>window.tenantSearchInputs?.read(input)??input?.value??'';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const helperStyle=document.createElement('style');helperStyle.textContent=`
+    #operatorDealProposal{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 8px}
+    #operatorDealProposal select{flex:1 1 180px;width:auto;min-width:0}
+    #operatorDealProposal button{max-width:100%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #operatorDealProposal span:empty{display:none}
     #operatorCopilot{box-sizing:border-box;display:flex;flex-direction:column;min-width:0;padding:0;overflow:hidden;background:var(--card,#fff);color:var(--ink,#18332c)}#operatorCopilot[hidden]{display:none!important}
     #dialogHelperControls{flex:none;position:relative;padding:12px;border-bottom:1px solid var(--line,#d9e3de);background:var(--card,#fff)}#dialogHelperControls .operator-copilot-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;position:static;margin:0 0 8px;padding:0;border:0;min-height:44px}#operatorCopilot .operator-copilot-header>div{display:grid;gap:3px;min-width:0}#operatorCopilot .operator-copilot-header strong{font-size:18px}#operatorCopilot .operator-copilot-header small{font-size:12px;color:var(--muted,#64776f);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #operatorCopilot button,#operatorCopilot select,#operatorCopilot summary{box-sizing:border-box;min-height:44px;font:inherit}#operatorCopilot button{border:1px solid var(--line,#ccdcd3);border-radius:9px;padding:10px 12px;background:var(--card,#fff);color:var(--ink,#18332c);cursor:pointer;white-space:normal;overflow-wrap:normal;line-height:1.25}#operatorCopilot button.primary,#operatorCopilot button[aria-pressed=true]{background:var(--brand-deep,#14523c);border-color:var(--brand-deep,#14523c);color:#fff}#operatorCopilot button:disabled{opacity:.55;cursor:default}#operatorCopilot button:focus-visible,#operatorCopilot select:focus-visible,#operatorCopilot textarea:focus-visible,#operatorCopilot summary:focus-visible{outline:2px solid var(--brand,#22a575);outline-offset:2px}#operatorCopilotClose{width:44px;min-width:44px;padding:0!important;font-size:26px!important}
@@ -1566,7 +1570,7 @@
       const article=[...chat.querySelectorAll('[data-message-id]')].find(node=>node.dataset.messageId===String(old.id||old.external_id));
       for(const key of audioEvidenceFields){if(Object.prototype.hasOwnProperty.call(fresh,key))old[key]=fresh[key];else delete old[key];}
       if(!article)continue;
-      const template=document.createElement('template');template.innerHTML=messageMarkup([old],route);
+      const template=document.createElement('template');template.innerHTML=dialogMessageMarkup([old],route);
       const label=article.querySelector('.operator-media-analysis'),nextLabel=template.content.querySelector('.operator-media-analysis');if(label&&nextLabel)label.textContent=nextLabel.textContent;
       // Keep the native player, quote controls and employee editor in place.
       for(const selector of ['[data-audio-transcript]','[data-audio-diagnostic]']){
@@ -1615,7 +1619,7 @@
       if(!canonical||String(canonical.id)===String(message.id))return [message];
       const article=articles.get(String(message.id));
       if(ids.has(String(canonical.id))){article?.remove();return [];}
-      article?.insertAdjacentHTML('beforebegin',messageMarkup([canonical],route));
+      article?.insertAdjacentHTML('beforebegin',dialogMessageMarkup([canonical],route));
       article?.remove();
       ids.add(String(canonical.id));
       return [canonical];
@@ -1667,7 +1671,7 @@
       if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
-      chat.insertAdjacentHTML('beforeend',messageMarkup(added,route));
+      chat.insertAdjacentHTML('beforeend',dialogMessageMarkup(added,route));
       currentPage.messages=(currentPage.messages||[]).concat(added);const timelinePlaced=placeOperatorEvents(chat,currentPage);currentPage.dialog=latest.dialog||currentPage.dialog;if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;rememberDialogPage(route,currentPage);
       document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
       const newArticles=[...chat.querySelectorAll('[data-message-id]')].filter(node=>added.some(message=>String(message.id)===node.dataset.messageId));
@@ -2427,7 +2431,10 @@
     if(row){row.insertAdjacentHTML('beforebegin',markup);row.remove();}
     else if(markup)article.querySelector('footer')?.insertAdjacentHTML('beforebegin',markup);
   }
-  function messageMarkup(items,route=currentDialog,{readOnly=false}={}){readOnly=readOnly||route?.owner_overview_read_only===true||route?.search_overview_read_only===true;return items.map((m,index)=>{
+  function dialogMessageMarkup(items,route=currentDialog){
+    return messageMarkup(items,route,{offerPhoneLookup:Boolean(embeddedConversation?.onPhoneLookup)});
+  }
+  function messageMarkup(items,route=currentDialog,{readOnly=false,offerPhoneLookup=false}={}){readOnly=readOnly||route?.owner_overview_read_only===true||route?.search_overview_read_only===true;return items.map((m,index)=>{
     if(m.message_type==='call_recording'&&m.call_recording){
       const recording=m.call_recording,query=new URLSearchParams({expected_tenant_id:String(member?.tenant_id||''),expected_user_id:String(member?.telegram_id||'')}),expired=Date.parse(recording.expires_at)<=Date.now();
       const copy=callRecordingCopy(),title=['inbound','outbound'].includes(recording.direction)?copy[recording.direction]:copy.unknown;
@@ -2457,7 +2464,14 @@
     const content=deleted?`<div class="operator-message-deleted" data-message-deleted>${esc(deletedLabel)}</div>`:missed?`<div ${observed?'data-observed-call':invalidated?'data-invalidated-call':rejected?'data-rejected-call':'data-missed-call'}>${esc(observed?observedCallLabel(m.call_is_video===true):invalidated?invalidatedCallLabel(m.call_is_video===true):rejected?rejectedCallLabel(m.call_is_video===true):missedCallLabel(m.call_is_video===true))}</div>`:shared?sharedMessageMarkup(m):media?`${caption&&!m.has_transcription?`<div class="operator-message-caption" data-user-content>${esc(caption)}</div>`:''}<div class="operator-media-card" ${directAudio?'data-native-audio="true" data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"':'data-chat-attachment="'+esc(m.external_id)+'" data-connect-media="true" data-attachment-lead-id="'+esc(m.source_lead_id||'')+'" data-channel-id="'+esc(m.source_channel_id||route.channel_id)+'" data-conversation-id="'+esc(m.source_conversation_id||route.conversation_id)+'" data-media-kind="'+esc(m.message_type)+'"'} data-message-row-id="${esc(m.id||'')}" data-media-filename="${esc(m.media_filename||m.file_name||'')}" data-media-version="${esc(m.media_version||'')}" data-media-duration="${esc(m.duration_seconds||'')}">${directAudio?`<div class="operator-audio-heading"><span data-media-title>${esc(label)}${Number.isFinite(Number(m.duration_seconds))&&Number(m.duration_seconds)>0?` <span class="operator-audio-duration">· ${esc(duration(m.duration_seconds))}</span>`:``}</span><span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span></div><div class="operator-audio-controls" aria-disabled="true" inert><audio class="operator-native-audio" controls preload="none" tabindex="-1" aria-label="${esc(label)}"></audio></div><button type="button" data-media-open hidden>${esc(t('loadAttachment'))}</button>${audioActions}`:`<span data-media-title>${esc(label)}</span><button type="button" class="outline" data-media-open ${video?'hidden':m.message_type==='image'?`data-photo-preview aria-label="${esc(photoLoadLabel())}"`:``}>${m.message_type==='image'?photoPreviewMarkup(m):esc(mediaAction(m))}</button>${mediaActions}`}<span data-media-load-status role="status" aria-live="polite"></span>${directAudio||m.message_type==='image'?`<details class="${directAudio?'operator-audio-analysis':'operator-photo-analysis'}"><summary>${esc(({ru:'AI-анализ',az:'AI təhlili',en:'AI analysis'})[i18n.language]||'AI analysis')}</summary><span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span></details>`:`<span class="operator-media-analysis sub">${esc(mediaAnalysisLabel(m))}</span>`}${directAudio?'':`<span class="operator-media-file-meta" data-media-meta>${esc(mediaMeta)}</span>`}</div>`:`<div data-user-content>${esc(m.body||t('attachment'))}</div>`;
     const actionLabels=globalThis.window?.tenantWhatsAppMessageActions;
     const actionStatus=deleted?`<span class="operator-message-deleted-status">${esc(actionLabels?.t('messageDeleted')||deletedLabel)}</span>`:m.wa_edited?`<span class="operator-message-edited-status">${esc(actionLabels?.t('edited')||'Edited')}</span>`:'';
-    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${transcript}${reactionMarkup(m)}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${actionStatus}${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
+    const number=String(m.body||'').trim();
+    const phoneLookup=offerPhoneLookup&&!readOnly&&route?.provider==='kommo'
+      &&['tiktok','tiktok_kommo'].includes(String(m.channel||'').toLowerCase())
+      &&m.direction==='incoming'&&m.message_type==='text'&&!deleted&&m.id
+      &&number.length<=80&&/^\+?[0-9 ()-]+$/.test(number)&&number.replace(/\D/g,'').length>=9;
+    const lookupLabel=({ru:'Найти WhatsApp',az:'WhatsApp söhbətini tap',en:'Find WhatsApp chat'})[i18n.language];
+    const phoneAction=phoneLookup?`<button type="button" class="outline" data-deal-phone-message="${esc(m.id)}">${esc(lookupLabel)}</button>`:'';
+    return `<article class="operator-message" ${readOnly?'':'tabindex="0" aria-haspopup="menu"'} data-direction="${esc(m.direction)}" data-message-index="${index}" data-message-id="${esc(m.id||m.external_id||'')}" data-provider-message-id="${esc(m.provider_message_id||'')}" ${m.customer_voice_status===true?`data-customer-voice-status="true" data-customer-voice-lead="${esc(m.source_lead_id||route?.lead_id||'')}"`:''}>${quote}${content}${phoneAction}${transcript}${reactionMarkup(m)}<footer class="operator-message-meta"><span class="operator-message-origin">${author}<span>·</span><time>${esc(i18n.date(m.happened_at||m.created_at))}</time>${m.sources?.length?`<span data-user-content>${esc([...new Set(m.sources.map(s=>s.channel_name+' · '+t(s.direction==='outgoing'?'sentVia':'receivedVia')))].join(' · '))}</span>`:''}</span><span class="operator-message-actions" data-message-footer-actions>${actionStatus}${deliveryMarkup(m)}${copyControlMarkup(m)}</span></footer>${reply}</article>`;
   }).join('');}
 
   // The case history uses the same presentation without activating a composer or dialogue side effects.
@@ -2559,14 +2573,14 @@
   function parkConversation(){
     if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(false,true);
   }
-  function mountConversation(host,route,{snapshot=null,onAccessLost=()=>{}}={}){
+  function mountConversation(host,route,{snapshot=null,onAccessLost=()=>{},onPhoneLookup=null}={}){
     if(embeddedConversation||!hasRight('dialogs'))return null;
     install();
     const pane=$('operatorConversationPane'),origin=pane?.parentElement;
     if(!origin)return null;
     const previousSelection=selectedDialog,previousOwner=selectedDialogOwner;
     parkConversation();
-    const session={host,controller:new AbortController(),snapshot,onAccessLost,refreshing:null};
+    const session={host,controller:new AbortController(),snapshot,onAccessLost,onPhoneLookup,refreshing:null};
     embeddedConversation=session;
     host.append(pane);
     return {
@@ -3450,6 +3464,72 @@
       setTimelineScroll(chat,chat.scrollTop+offset-(chat.clientHeight-node.offsetHeight)/2,true);
     };
   }
+  function renderDealProposal(route){
+    const anchor=$('operatorAIReplyStatus'),previous=$('operatorDealProposal');
+    const proposal=route?.deal_proposal;
+    if(!anchor||embeddedConversation||!proposal){previous?.remove();return;}
+    const key=JSON.stringify([i18n.language,proposal]);
+    if(previous?.dataset.proposal===key)return;
+    const c=({
+      ru:{pick:'Выберите сделку',link:'Привязать к сделке',linked:'Переписка привязана к сделке',error:'Не удалось привязать переписку. Обновите диалог.'},
+      az:{pick:'Sövdələşməni seçin',link:'Sövdələşməyə bağla',linked:'Yazışma sövdələşməyə bağlandı',error:'Yazışmanı bağlamaq mümkün olmadı. Dialoqu yeniləyin.'},
+      en:{pick:'Choose a deal',link:'Link to deal',linked:'Conversation linked to the deal',error:'Could not link the conversation. Refresh the conversation.'}
+    })[i18n.language]||{};
+    const area=document.createElement('div');
+    area.id='operatorDealProposal';
+    area.className='operator-history-tools';
+    area.dataset.proposal=key;
+    const status=document.createElement('span');
+    status.setAttribute('role','status');
+    if(proposal.linked)status.textContent=c.linked;
+    else{
+      const deals=proposal.deals||[],single=proposal.suggested===true&&deals.length===1;
+      if(!deals.length){previous?.remove();return;}
+      const label=deal=>[deal.title||('#'+deal.id),deal.pipeline_name,deal.stage_name].filter(Boolean).join(' · ');
+      let selector;
+      if(!single){
+        selector=document.createElement('select');
+        selector.setAttribute('aria-label',c.pick);
+        selector.add(new Option(c.pick,''));
+        deals.forEach((deal,index)=>selector.add(new Option(label(deal),String(index))));
+        area.append(selector);
+      }
+      const submit=document.createElement('button');
+      submit.type='button';
+      submit.className='outline';
+      submit.textContent=single?c.link+' · '+label(deals[0]):c.link;
+      if(single)submit.title=submit.textContent;
+      submit.disabled=!single;
+      if(selector)selector.onchange=()=>{submit.disabled=selector.value==='';};
+      const revision=openRevision,who=identity(member);
+      const current=()=>area.isConnected&&revision===openRevision&&who===identity(member)&&sameDialog(route,currentDialog);
+      submit.onclick=async()=>{
+        const deal=single?deals[0]:selector.value===''?null:deals[Number(selector.value)];
+        if(!current()||!deal)return;
+        submit.disabled=true;
+        if(selector)selector.disabled=true;
+        status.textContent='';
+        try{
+          await api('dialogs/deal-link','POST',{channel_id:route.channel_id,conversation_id:route.conversation_id,
+            lead_id:Number(route.lead_id),context_id:proposal.context_id,deal_source:deal.source,
+            deal_id:deal.id,suggested:single});
+          if(current()){
+            currentDialog.deal_proposal={linked:true};
+            renderDealProposal(currentDialog);
+          }
+        }catch(error){
+          if(!current())return;
+          status.textContent=c.error;
+          if(selector)selector.disabled=false;
+          submit.disabled=false;
+        }
+      };
+      area.append(submit);
+    }
+    area.append(status);
+    if(previous)previous.replaceWith(area);
+    else anchor.before(area);
+  }
   function patchDialogPage(latest,{suppressRead=false}={}){
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
@@ -3468,8 +3548,8 @@
     updateDeliveryEvidence(latest,latest.dialog);updateAudioEvidence(latest,latest.dialog);updateVisualEvidence(latest,latest.dialog);
     for(const message of latest.messages||[]){
       const prior=byId.get(String(message.id));
-      if(!prior){if(!(old.messages||[]).length&&chat.textContent.trim()===t('emptyHistory'))chat.replaceChildren();chat.insertAdjacentHTML('beforeend',messageMarkup([message],latest.dialog));old.messages.push(message);byId.set(String(message.id),message);}
-      else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=messageMarkup([message],latest.dialog);node.replaceWith(template.content);}}
+      if(!prior){if(!(old.messages||[]).length&&chat.textContent.trim()===t('emptyHistory'))chat.replaceChildren();chat.insertAdjacentHTML('beforeend',dialogMessageMarkup([message],latest.dialog));old.messages.push(message);byId.set(String(message.id),message);}
+      else {if(prior.media_version!==message.media_version||prior.message_type!==message.message_type||(prior.body!==message.body&&(!message.message_type||message.message_type==='text'))){const node=[...chat.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===String(message.id));if(node){const template=document.createElement('template');template.innerHTML=dialogMessageMarkup([message],latest.dialog);node.replaceWith(template.content);}}
         const ownChanged=prior.wa_reaction_event!==message.wa_reaction_event||
           prior.wa_reaction_available!==message.wa_reaction_available;
         if(!ownChanged)message.wa_reaction=prior.wa_reaction;
@@ -3483,6 +3563,7 @@
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission','internal_comments','internal_comments_omitted_at','internalCommentTimeline'].includes(key))old[key]=value;
     updateLatestIncomingShortcut(chat,old);
     currentDialog=old.dialog;displayedPage=old;renderHistoryMergeReadPicker();if(historyMergeId(old)||$('operatorComposerSource')?.dataset.mergeActionScope)renderComposerSourcePicker();updateDialogueAcceptor(currentDialog);mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
+    renderDealProposal(currentDialog);
     setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
@@ -3514,7 +3595,8 @@
     const revision=openRevision,version=epoch,who=identity(member),renderSerial=++dialogRenderSerial;
     const same=()=>renderSerial===dialogRenderSerial&&version===epoch&&revision===openRevision&&currentDialog?.lead_id===route.lead_id&&currentDialog?.channel_id===route.channel_id&&currentDialog?.conversation_id===route.conversation_id&&host.querySelector('[data-operator-dialog]');
     const reasonText=dialogReason(route);
-    host.innerHTML=`<section data-operator-dialog data-dialog-key="${esc(dialogKey(route))}" ${route.owner_overview_read_only?'data-owner-overview-read-only':''} class="operator-dialog-shell"><p id="operatorChatError" class="operator-error" role="status"></p><div class="operator-dialog-body" id="operatorDialogBody"><section class="operator-chat-main"><div id="operatorMergedReadRoutes" hidden></div><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" class="outline" id="operatorEarlier" ${page.next_before?'':'hidden'}>${t('earlier')}</button><button type="button" id="operatorLatestIncoming" hidden>${esc(({ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'})[i18n.language]||'Latest incoming')}</button></div><div id="chatRows" class="operator-chat-history">${messageMarkup(page.messages)||t('emptyHistory')}</div><button type="button" class="outline" id="operatorNewMessages" hidden>${esc(({ru:'Новые сообщения ↓',az:'Yeni mesajlar ↓',en:'New messages ↓'})[i18n.language]||'New messages ↓')}</button></div><p id="operatorAIReplyStatus" class="operator-error" role="status" aria-live="polite"></p><div id="operatorAIContextUsage" class="operator-ai-context" hidden></div><p id="operatorSendReason" class="sub"></p><div id="operatorAcceptAction" class="operator-accept-action"></div><div class="operator-composer"><div id="operatorComposerSource" hidden></div><div id="operatorReplyQuote" hidden></div><textarea id="chatText" data-operator-composer rows="1" aria-label="${esc(t('message'))}" placeholder="${esc(t('message'))}"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-icon-action" id="operatorCopilotToggle" aria-label="${esc(copilotText('title'))}" title="${esc(copilotText('title'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.5 6.5L20 11l-6.5 1.5L12 19l-1.5-6.5L4 11l6.5-1.5L12 3Zm7 11 .8 3.2L23 18l-3.2.8L19 22l-.8-3.2L15 18l3.2-.8L19 14Z"/></svg></button><div id="operatorActiveLifecycleActions" class="operator-active-lifecycle-actions"></div><button type="button" class="outline operator-icon-action" id="operatorAIReply" aria-label="${esc(t('aiReply'))}" title="${esc(t('aiReply'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7-5.7-1.8L10.2 9 12 3.5Zm7.2 11.8.9 2.6 2.4.8-2.4.8-.9 2.5-.8-2.5-2.5-.8 2.5-.8.8-2.6ZM5 15l.8 2.2 2.2.8-2.2.8L5 21l-.8-2.2-2.2-.8 2.2-.8L5 15Z"/></svg></button><button type="button" class="outline operator-icon-action operator-voice-launcher" id="operatorCopilotVoiceToggle" aria-label="${esc(copilotText('voice'))}" title="${esc(copilotText('voice'))}" data-voice-state="idle"><span class="operator-voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button><button type="button" class="outline" id="operatorTraining">${esc(trainingText('button'))}</button><button type="button" class="primary" id="sendChat" aria-label="${esc(t('send'))}" title="${esc(t('send'))}">↑</button></div></div></section><div class="operator-copilot-backdrop" id="operatorCopilotBackdrop" hidden aria-hidden="true"></div><section class="operator-copilot" id="operatorCopilot" role="dialog" aria-label="${esc(copilotText('title'))}" hidden><header class="operator-copilot-header"><div><strong>${copilotText('title')}</strong><small>${esc(dialogTitle(route))}</small></div><button type="button" class="operator-icon-button" id="operatorCopilotClose" aria-label="${esc(completionText('close'))}" title="${esc(completionText('close'))}">×</button></header><div class="operator-copilot-actions operator-copilot-modes" aria-label="${esc(copilotText('title'))}"><button type="button" class="outline" data-copilot-mode="chat">${copilotText('question')}</button><button type="button" class="outline" data-copilot-mode="solution">${copilotText('solution')}</button><button type="button" class="outline" data-copilot-mode="instruction">${copilotText('instruction')}</button></div><label class="operator-copilot-prompt-label" for="operatorCopilotPrompt">${copilotText('prompt')}</label><textarea id="operatorCopilotPrompt" maxlength="1600" aria-label="${copilotText('prompt')}" placeholder="${copilotText('prompt')}"></textarea><div class="operator-copilot-actions"><button type="button" class="primary" id="operatorCopilotAsk">${copilotText('ask')}</button><button type="button" class="outline" id="operatorCopilotClear">${copilotText('clear')}</button></div><p id="operatorCopilotStatus" class="operator-error" role="status"></p><div id="operatorCopilotResult" class="operator-copilot-result" hidden></div><button type="button" class="outline" id="operatorCopilotInsert" hidden>${copilotTemplateText('insertResult')}</button><details id="operatorCopilotTemplates" class="operator-copilot-templates" hidden aria-label="${copilotTemplateText('title')}"><summary>${copilotTemplateText('title')}</summary><div id="operatorCopilotTemplateList" class="operator-copilot-template-list"></div><button type="button" class="outline" id="operatorCopilotTemplateCreate">${copilotTemplateText('create')}</button><form id="operatorCopilotTemplateForm" hidden><label>${copilotTemplateText('name')}<input id="operatorCopilotTemplateName" maxlength="80" required></label><label>${copilotTemplateText('question')}<textarea id="operatorCopilotTemplateQuestion" maxlength="1600" required></textarea></label><div class="operator-copilot-actions"><button type="submit" class="primary">${copilotTemplateText('save')}</button><button type="button" class="outline" id="operatorCopilotTemplateCancel">${copilotTemplateText('cancel')}</button></div></form><p id="operatorCopilotTemplateStatus" class="operator-error" role="status" aria-live="polite"></p></details></section></div></section>`;
+    host.innerHTML=`<section data-operator-dialog data-dialog-key="${esc(dialogKey(route))}" ${route.owner_overview_read_only?'data-owner-overview-read-only':''} class="operator-dialog-shell"><p id="operatorChatError" class="operator-error" role="status"></p><div class="operator-dialog-body" id="operatorDialogBody"><section class="operator-chat-main"><div id="operatorMergedReadRoutes" hidden></div><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" class="outline" id="operatorEarlier" ${page.next_before?'':'hidden'}>${t('earlier')}</button><button type="button" id="operatorLatestIncoming" hidden>${esc(({ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'})[i18n.language]||'Latest incoming')}</button></div><div id="chatRows" class="operator-chat-history">${dialogMessageMarkup(page.messages)||t('emptyHistory')}</div><button type="button" class="outline" id="operatorNewMessages" hidden>${esc(({ru:'Новые сообщения ↓',az:'Yeni mesajlar ↓',en:'New messages ↓'})[i18n.language]||'New messages ↓')}</button></div><p id="operatorAIReplyStatus" class="operator-error" role="status" aria-live="polite"></p><div id="operatorAIContextUsage" class="operator-ai-context" hidden></div><p id="operatorSendReason" class="sub"></p><div id="operatorAcceptAction" class="operator-accept-action"></div><div class="operator-composer"><div id="operatorComposerSource" hidden></div><div id="operatorReplyQuote" hidden></div><textarea id="chatText" data-operator-composer rows="1" aria-label="${esc(t('message'))}" placeholder="${esc(t('message'))}"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-icon-action" id="operatorCopilotToggle" aria-label="${esc(copilotText('title'))}" title="${esc(copilotText('title'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.5 6.5L20 11l-6.5 1.5L12 19l-1.5-6.5L4 11l6.5-1.5L12 3Zm7 11 .8 3.2L23 18l-3.2.8L19 22l-.8-3.2L15 18l3.2-.8L19 14Z"/></svg></button><div id="operatorActiveLifecycleActions" class="operator-active-lifecycle-actions"></div><button type="button" class="outline operator-icon-action" id="operatorAIReply" aria-label="${esc(t('aiReply'))}" title="${esc(t('aiReply'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7-5.7-1.8L10.2 9 12 3.5Zm7.2 11.8.9 2.6 2.4.8-2.4.8-.9 2.5-.8-2.5-2.5-.8 2.5-.8.8-2.6ZM5 15l.8 2.2 2.2.8-2.2.8L5 21l-.8-2.2-2.2-.8 2.2-.8L5 15Z"/></svg></button><button type="button" class="outline operator-icon-action operator-voice-launcher" id="operatorCopilotVoiceToggle" aria-label="${esc(copilotText('voice'))}" title="${esc(copilotText('voice'))}" data-voice-state="idle"><span class="operator-voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button><button type="button" class="outline" id="operatorTraining">${esc(trainingText('button'))}</button><button type="button" class="primary" id="sendChat" aria-label="${esc(t('send'))}" title="${esc(t('send'))}">↑</button></div></div></section><div class="operator-copilot-backdrop" id="operatorCopilotBackdrop" hidden aria-hidden="true"></div><section class="operator-copilot" id="operatorCopilot" role="dialog" aria-label="${esc(copilotText('title'))}" hidden><header class="operator-copilot-header"><div><strong>${copilotText('title')}</strong><small>${esc(dialogTitle(route))}</small></div><button type="button" class="operator-icon-button" id="operatorCopilotClose" aria-label="${esc(completionText('close'))}" title="${esc(completionText('close'))}">×</button></header><div class="operator-copilot-actions operator-copilot-modes" aria-label="${esc(copilotText('title'))}"><button type="button" class="outline" data-copilot-mode="chat">${copilotText('question')}</button><button type="button" class="outline" data-copilot-mode="solution">${copilotText('solution')}</button><button type="button" class="outline" data-copilot-mode="instruction">${copilotText('instruction')}</button></div><label class="operator-copilot-prompt-label" for="operatorCopilotPrompt">${copilotText('prompt')}</label><textarea id="operatorCopilotPrompt" maxlength="1600" aria-label="${copilotText('prompt')}" placeholder="${copilotText('prompt')}"></textarea><div class="operator-copilot-actions"><button type="button" class="primary" id="operatorCopilotAsk">${copilotText('ask')}</button><button type="button" class="outline" id="operatorCopilotClear">${copilotText('clear')}</button></div><p id="operatorCopilotStatus" class="operator-error" role="status"></p><div id="operatorCopilotResult" class="operator-copilot-result" hidden></div><button type="button" class="outline" id="operatorCopilotInsert" hidden>${copilotTemplateText('insertResult')}</button><details id="operatorCopilotTemplates" class="operator-copilot-templates" hidden aria-label="${copilotTemplateText('title')}"><summary>${copilotTemplateText('title')}</summary><div id="operatorCopilotTemplateList" class="operator-copilot-template-list"></div><button type="button" class="outline" id="operatorCopilotTemplateCreate">${copilotTemplateText('create')}</button><form id="operatorCopilotTemplateForm" hidden><label>${copilotTemplateText('name')}<input id="operatorCopilotTemplateName" maxlength="80" required></label><label>${copilotTemplateText('question')}<textarea id="operatorCopilotTemplateQuestion" maxlength="1600" required></textarea></label><div class="operator-copilot-actions"><button type="submit" class="primary">${copilotTemplateText('save')}</button><button type="button" class="outline" id="operatorCopilotTemplateCancel">${copilotTemplateText('cancel')}</button></div></form><p id="operatorCopilotTemplateStatus" class="operator-error" role="status" aria-live="polite"></p></details></section></div></section>`;
+    renderDealProposal(route);
     const saveDisplayName=async(kind,displayName,participantJid='',source=route)=>{await api('dialogs/display-name','POST',{provider:'connect',lead_id:source.source_lead_id||route.lead_id,channel_id:source.source_channel_id||route.channel_id,conversation_id:route.conversation_id,kind,display_name:displayName,...(participantJid?{participant_jid:participantJid}:{})});const sourceViewCurrent=()=>who===identity(member)&&hasRight('dialogs')&&sameDialog(route,currentDialog)&&$('view-dialogs')?.classList.contains('active');if(!sourceViewCurrent())return false;const saved=t(kind==='participant'?'participantNameSaved':'nameSaved');if(kind==='participant')notice(saved);await refresh();if(!sourceViewCurrent())return false;if(!await openDialog({...currentDialog},true))throw Error(saved+' '+t('error'));return true;};
     configureDialogHead(route,saveDisplayName);
     if(companyToggleFocused)$('operatorCompanyPanelOpen')?.focus({preventScroll:true});
@@ -3729,6 +3811,11 @@
       finally{delete menu.dataset.posting;if(!audioScopeCurrent())menu._audioReconcile?.();}
     }
     chatRowsHost.addEventListener('toggle',event=>{const menu=event.target;if(!menu.matches?.('[data-audio-transcription-menu]'))return;if(menu.open)void loadAudioTranscriptionMenu(menu);else menu.dataset.loaded='false';},true);
+    chatRowsHost.addEventListener('click',event=>{
+      const button=event.target.closest('[data-deal-phone-message]');
+      if(!button||!same()||!chatRowsHost.contains(button))return;
+      embeddedConversation?.onPhoneLookup?.(button.dataset.dealPhoneMessage);
+    });
     chatRowsHost.addEventListener('click',event=>{const action=event.target.closest('[data-audio-transcription-action]');if(action){event.preventDefault();const menu=action.closest('[data-audio-transcription-menu]'),message=page.messages.find(item=>String(item.id)===menu?.dataset.messageRowId&&String(item.external_id)===menu?.dataset.messageId);if(menu&&message)void runAudioTranscription(menu,message,action.dataset.audioTranscriptionAction);}});
     const reactionInFlight=new Set();
     const reactionStorageKey=message=>contextKey('reaction:'+message.id,route);
@@ -3986,7 +4073,7 @@
           noteOperatorEventOmission(page,boundary?.happened_at||boundary?.created_at);
         }
         page.messages=earlier.messages.concat(page.messages);
-        chat.insertAdjacentHTML('afterbegin',messageMarkup(earlier.messages,route));
+        chat.insertAdjacentHTML('afterbegin',dialogMessageMarkup(earlier.messages,route));
         retainOperatorEvents(page,earlier,{older:true});const timelinePlaced=placeOperatorEvents(chat,page);
         page.next_before=earlier.next_before;button.hidden=!page.next_before;
         updateLatestIncomingShortcut(chat,page);
