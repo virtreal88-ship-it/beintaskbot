@@ -73,9 +73,15 @@ const wait = async predicate => {
   assert(d.getElementById('operatorSendReason').textContent.includes('Нет соединения'));
   assert.equal(d.getElementById('chatText').disabled,false);
   d.querySelector('.dialog-source-tabs button:last-child').click();
-  assert.equal(closeControl().getAttribute('aria-label'),'Завершить диалог');
-  assert(closeControl().closest('#operatorConversationHeader'),'close must remain available when the note tab hides the composer');
-  assert(!closeControl().closest('.dialog-channel-muted,[hidden]'));
+  const noteClose=closeControl();
+  assert(noteClose.closest('.dialog-note-lifecycle-actions'),'close stays at the bottom on the Comment tab');
+  assert(!noteClose.closest('#operatorConversationHeader,.dialog-channel-muted,[hidden]'));
+  assert(d.querySelector('[data-operator-lifecycle=dismiss]').closest('.dialog-note-lifecycle-actions'));
+  assert(d.getElementById('sendChat').closest('.dialog-channel-muted'),'customer reply is not exposed in the note editor');
+  d.querySelector('.dialog-source-tabs button:first-child').click();
+  assert.equal(closeControl(),noteClose,'switching tabs preserves the same lifecycle button');
+  assert(noteClose.closest('.operator-composer-actions'));
+  d.querySelector('.dialog-source-tabs button:last-child').click();
   const assertNoteEditor = root => {
     const field=root.querySelector('.dialog-note-composer textarea');
     const send=root.querySelector('.dialog-note-composer button[type=submit]');
@@ -111,6 +117,7 @@ const wait = async predicate => {
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
   denyClosedHistory=true;
   const cutoff=calls.length;
+  d.querySelector('.dialog-source-tabs button:last-child').click();
   closeControl().click();
   await wait(()=>d.getElementById('operatorNotice').textContent==='Диалог завершён');
   assert(!w.tenantOperator.currentDialog);

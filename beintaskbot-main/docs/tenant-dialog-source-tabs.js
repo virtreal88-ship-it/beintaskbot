@@ -13,6 +13,8 @@
     .dialog-source-tabs button:disabled{opacity:.52;cursor:default}
     .dialog-channel-muted,.dialog-note-form[hidden]{display:none!important}
     .dialog-note-form{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 10px max(6px,env(safe-area-inset-bottom));background:var(--card,#fff)}
+    .dialog-note-lifecycle-actions{display:flex;align-items:center;justify-content:flex-end;flex:1 1 100%}
+    .dialog-note-lifecycle-actions:not(:has(button)){display:none}
     .dialog-note-composer{box-sizing:border-box;display:flex;align-items:flex-end;gap:4px;width:100%;min-width:0;padding:4px 6px;border:1px solid var(--line,#888);border-radius:13px;background:var(--card,#fff)}
     .dialog-note-composer:focus-within{border-color:var(--brand,#2676bb)}
     .dialog-note-composer textarea.dialog-note-input,.dialog-note-composer textarea.dialog-note-input:focus,.dialog-note-composer textarea.dialog-note-input:focus-visible{box-sizing:border-box;min-width:0;width:100%;flex:1;min-height:44px;max-height:120px;margin:0;padding:8px 7px;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;color:var(--ink);font:inherit;resize:none}
@@ -43,7 +45,7 @@
     if (next !== session) { reset(); session = next; }
   });
 
-  window.tenantDialogSourceTabs = function({source,key,panel,canComment,save}) {
+  window.tenantDialogSourceTabs = function({source,key,panel,lifecycleActions,canComment,save}) {
     const labels = copy[window.tenantI18n?.language] || copy.ru;
     if (!last || last.key !== key || last.source !== source) last = {key,source,active:source,text:''};
     const state = last;
@@ -58,6 +60,9 @@
     window.tenantStyleInternalCommentComposer(editor,field,submit,labels[6]);
     editor.append(field,submit); form.append(editor,hint,status);
     panel.before(bar); panel.after(form);
+    const actionsHome=lifecycleActions?.parentNode, actionsNext=lifecycleActions?.nextSibling;
+    const noteActions=actionsHome?document.createElement('div'):null;
+    if(noteActions){noteActions.className='dialog-note-lifecycle-actions';form.append(noteActions);}
     let allowed = canComment;
     const kinds = ['widget','whatsapp','comment'];
     const buttons = kinds.map((kind,i) => {
@@ -74,6 +79,10 @@
     function paint() {
       const comment = state.active === 'comment';
       panel.classList.toggle('dialog-channel-muted',comment); form.hidden = !comment;
+      if(noteActions){
+        const destination=comment?noteActions:actionsHome;
+        if(lifecycleActions.parentNode!==destination)destination.insertBefore(lifecycleActions,comment?null:actionsNext);
+      }
       buttons[2].disabled = !allowed;
       buttons.forEach((btn,i) => btn.setAttribute('aria-pressed',String(kinds[i] === state.active)));
       field.readOnly = !allowed || !!state.busy; submit.disabled = field.readOnly || !field.value.trim();
