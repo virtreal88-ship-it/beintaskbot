@@ -1942,6 +1942,12 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                     attach_reactions(cur,tenant,exact_messages)
             if (dialog.get('lifecycle') or {}).get('can_transfer'):
                 dialog['lifecycle']['transfer_targets']=transfer_targets
+            if not (before or anchor or shared_archive or group_dialog) and provider == 'connect':
+                from tenant_deal_dialog_links import enabled as deal_links_enabled, proposal
+                if deal_links_enabled(tenant) and requested_route == history_scope['canonical_route']:
+                    deal_proposal = proposal(cur, tenant, actor, policy, dialog, workflow)
+                    if deal_proposal:
+                        dialog['deal_proposal'] = deal_proposal
             if before is None and not shared_archive:
                 from tenant_dialog_company_binding import read_dialogue_binding
                 dialog['company_binding'] = read_dialogue_binding(cur,tenant,actor,policy,dialog)

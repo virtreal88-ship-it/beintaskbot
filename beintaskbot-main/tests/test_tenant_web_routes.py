@@ -62,6 +62,8 @@ EXPECTED_ASSETS += ['/assets/tenant-dialog-company.js']
 
 AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/for-deal', ('GET',)),
+    ('dialogs/deal-link', ('POST',)),
+    ('dialogs/deal-history', ('GET',)),
     ('dialog-consultations/developer-marker', ('POST',)),
     ('dialog-consultations/destinations', ('GET',)),
     ('dialog-consultations/preview', ('POST',)),

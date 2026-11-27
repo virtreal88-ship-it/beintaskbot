@@ -209,7 +209,8 @@ def set_contact_company_link(tenant_id, contact_id, company_id, *, unlink=False,
 
 
 def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_id: str,
-                            phone: str, display_name: str = '', message_id: str = ''):
+                            phone: str, display_name: str = '', message_id: str = '', *,
+                            adopt_by_phone: bool = True):
     """Resolve a direct WhatsApp conversation to a tenant-owned native contact.
 
     Caller must pass a provider-verified personal JID number, never a name or
@@ -262,7 +263,7 @@ def upsert_whatsapp_contact(cur, tenant_id: str, channel_id: str, conversation_i
               AND regexp_replace(phone,'[^0-9]','','g')=%s
             ORDER BY created_at,id LIMIT 2 FOR UPDATE""", (tenant_id, number))
         matches = cur.fetchall()
-        if len(matches) > 1:
+        if len(matches) > 1 or (matches and not adopt_by_phone):
             return None
         row = matches[0] if matches else None
     if row is None:

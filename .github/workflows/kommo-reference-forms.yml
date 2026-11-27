@@ -23,7 +23,9 @@ on:
       - 'beintaskbot-main/tenant_deal_completion_provider.py'
       - 'beintaskbot-main/tests/test_deal_chat*'
       - 'beintaskbot-main/tenant_deal_dialogs.py'
+      - 'beintaskbot-main/tenant_deal_dialog_*.py'
       - 'beintaskbot-main/tests/test_deal_dialogs_pglite.py'
+      - 'beintaskbot-main/tests/test_deal_dialog_links_pglite.py'
       - 'beintaskbot-main/tenant_kommo*.py'
       - 'beintaskbot-main/tests/test_kommo_reference_forms*'
       - 'beintaskbot-main/tests/test_kommo_pipeline_picker_browser.cjs'
@@ -67,7 +69,7 @@ jobs:
           git diff --exit-code -- docs/tenant-chakra-ui.js docs/tenant-chakra-ui.css
       - name: Authorized recent history and browser races
         run: |
-          python -m pytest -q tests/test_deal_chat_recent.py tests/test_deal_chat_pagination_pglite.py tests/test_deal_dialogs_pglite.py tests/test_tenant_chat_import.py tests/test_tenant_chat_import_api.py tests/test_tenant_deal_completion.py tests/test_chat_send_manual_pglite.py tests/test_tenant_chat_send_store.py tests/test_tenant_chat_send.py tests/test_tenant_chat_send_api.py tests/test_tenant_chat_upload.py tests/test_tenant_chat_upload_api.py tests/test_tenant_chat_reader.py tests/test_tenant_chat_api.py tests/test_tenant_chat_history.py tests/test_chat_history_loading.py tests/test_tenant_web_routes.py
+          python -m pytest -q tests/test_deal_chat_recent.py tests/test_deal_chat_pagination_pglite.py tests/test_deal_dialogs_pglite.py tests/test_deal_dialog_links_pglite.py tests/test_tenant_chat_import.py tests/test_tenant_chat_import_api.py tests/test_tenant_deal_completion.py tests/test_chat_send_manual_pglite.py tests/test_tenant_chat_send_store.py tests/test_tenant_chat_send.py tests/test_tenant_chat_send_api.py tests/test_tenant_chat_upload.py tests/test_tenant_chat_upload_api.py tests/test_tenant_chat_reader.py tests/test_tenant_chat_api.py tests/test_tenant_chat_history.py tests/test_chat_history_loading.py tests/test_tenant_web_routes.py
           node tests/test_tenant_chat_history_ui.cjs
           node tests/test_tenant_chat_send_ui.cjs
           node tests/test_deal_chat_first_page_browser.cjs

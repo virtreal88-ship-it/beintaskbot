@@ -4,6 +4,10 @@
   const searchValue=input=>window.tenantSearchInputs?.read(input)??input?.value??'';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const helperStyle=document.createElement('style');helperStyle.textContent=`
+    #operatorDealProposal{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 8px}
+    #operatorDealProposal select{flex:1 1 180px;width:auto;min-width:0}
+    #operatorDealProposal button{max-width:100%;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #operatorDealProposal span:empty{display:none}
     #operatorCopilot{box-sizing:border-box;display:flex;flex-direction:column;min-width:0;padding:0;overflow:hidden;background:var(--card,#fff);color:var(--ink,#18332c)}#operatorCopilot[hidden]{display:none!important}
     #dialogHelperControls{flex:none;position:relative;padding:12px;border-bottom:1px solid var(--line,#d9e3de);background:var(--card,#fff)}#dialogHelperControls .operator-copilot-header{display:flex;align-items:center;justify-content:space-between;gap:8px;flex:none;position:static;margin:0 0 8px;padding:0;border:0;min-height:44px}#operatorCopilot .operator-copilot-header>div{display:grid;gap:3px;min-width:0}#operatorCopilot .operator-copilot-header strong{font-size:18px}#operatorCopilot .operator-copilot-header small{font-size:12px;color:var(--muted,#64776f);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     #operatorCopilot button,#operatorCopilot select,#operatorCopilot summary{box-sizing:border-box;min-height:44px;font:inherit}#operatorCopilot button{border:1px solid var(--line,#ccdcd3);border-radius:9px;padding:10px 12px;background:var(--card,#fff);color:var(--ink,#18332c);cursor:pointer;white-space:normal;overflow-wrap:normal;line-height:1.25}#operatorCopilot button.primary,#operatorCopilot button[aria-pressed=true]{background:var(--brand-deep,#14523c);border-color:var(--brand-deep,#14523c);color:#fff}#operatorCopilot button:disabled{opacity:.55;cursor:default}#operatorCopilot button:focus-visible,#operatorCopilot select:focus-visible,#operatorCopilot textarea:focus-visible,#operatorCopilot summary:focus-visible{outline:2px solid var(--brand,#22a575);outline-offset:2px}#operatorCopilotClose{width:44px;min-width:44px;padding:0!important;font-size:26px!important}
@@ -3450,6 +3454,72 @@
       setTimelineScroll(chat,chat.scrollTop+offset-(chat.clientHeight-node.offsetHeight)/2,true);
     };
   }
+  function renderDealProposal(route){
+    const anchor=$('operatorAIReplyStatus'),previous=$('operatorDealProposal');
+    const proposal=route?.deal_proposal;
+    if(!anchor||embeddedConversation||!proposal){previous?.remove();return;}
+    const key=JSON.stringify([i18n.language,proposal]);
+    if(previous?.dataset.proposal===key)return;
+    const c=({
+      ru:{pick:'Выберите сделку',link:'Привязать к сделке',linked:'Переписка привязана к сделке',error:'Не удалось привязать переписку. Обновите диалог.'},
+      az:{pick:'Sövdələşməni seçin',link:'Sövdələşməyə bağla',linked:'Yazışma sövdələşməyə bağlandı',error:'Yazışmanı bağlamaq mümkün olmadı. Dialoqu yeniləyin.'},
+      en:{pick:'Choose a deal',link:'Link to deal',linked:'Conversation linked to the deal',error:'Could not link the conversation. Refresh the conversation.'}
+    })[i18n.language]||{};
+    const area=document.createElement('div');
+    area.id='operatorDealProposal';
+    area.className='operator-history-tools';
+    area.dataset.proposal=key;
+    const status=document.createElement('span');
+    status.setAttribute('role','status');
+    if(proposal.linked)status.textContent=c.linked;
+    else{
+      const deals=proposal.deals||[],single=proposal.suggested===true&&deals.length===1;
+      if(!deals.length){previous?.remove();return;}
+      const label=deal=>[deal.title||('#'+deal.id),deal.pipeline_name,deal.stage_name].filter(Boolean).join(' · ');
+      let selector;
+      if(!single){
+        selector=document.createElement('select');
+        selector.setAttribute('aria-label',c.pick);
+        selector.add(new Option(c.pick,''));
+        deals.forEach((deal,index)=>selector.add(new Option(label(deal),String(index))));
+        area.append(selector);
+      }
+      const submit=document.createElement('button');
+      submit.type='button';
+      submit.className='outline';
+      submit.textContent=single?c.link+' · '+label(deals[0]):c.link;
+      if(single)submit.title=submit.textContent;
+      submit.disabled=!single;
+      if(selector)selector.onchange=()=>{submit.disabled=selector.value==='';};
+      const revision=openRevision,who=identity(member);
+      const current=()=>area.isConnected&&revision===openRevision&&who===identity(member)&&sameDialog(route,currentDialog);
+      submit.onclick=async()=>{
+        const deal=single?deals[0]:selector.value===''?null:deals[Number(selector.value)];
+        if(!current()||!deal)return;
+        submit.disabled=true;
+        if(selector)selector.disabled=true;
+        status.textContent='';
+        try{
+          await api('dialogs/deal-link','POST',{channel_id:route.channel_id,conversation_id:route.conversation_id,
+            lead_id:Number(route.lead_id),context_id:proposal.context_id,deal_source:deal.source,
+            deal_id:deal.id,suggested:single});
+          if(current()){
+            currentDialog.deal_proposal={linked:true};
+            renderDealProposal(currentDialog);
+          }
+        }catch(error){
+          if(!current())return;
+          status.textContent=c.error;
+          if(selector)selector.disabled=false;
+          submit.disabled=false;
+        }
+      };
+      area.append(submit);
+    }
+    area.append(status);
+    if(previous)previous.replaceWith(area);
+    else anchor.before(area);
+  }
   function patchDialogPage(latest,{suppressRead=false}={}){
     const old=displayedPage,chat=$('chatRows');
     if(!old||!chat||displayedLanguage!==i18n.language||displayedRouteScope!==dialogRenderScope(latest.dialog)||latest.anchor_message_id&&latest.anchor_message_id!==old.anchor_message_id)return false;
@@ -3483,6 +3553,7 @@
     for(const [key,value] of Object.entries(latest))if(!['messages','next_before','anchor_message_id','operator_events','operator_events_revision','operator_events_omitted_at','operator_events_retry_after_ms','operatorEventsRetryAt','shared_reminder_events','shared_reminder_events_omitted_at','sharedReminderTimeline','sharedReminderOmission','internal_comments','internal_comments_omitted_at','internalCommentTimeline'].includes(key))old[key]=value;
     updateLatestIncomingShortcut(chat,old);
     currentDialog=old.dialog;displayedPage=old;renderHistoryMergeReadPicker();if(historyMergeId(old)||$('operatorComposerSource')?.dataset.mergeActionScope)renderComposerSourcePicker();updateDialogueAcceptor(currentDialog);mountDialogCompany(currentDialog);rememberDialogPage(old.dialog,old);restoreCaseDraft(old.dialog,$('chatText'));
+    renderDealProposal(currentDialog);
     setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),timelinePlaced||suppressRead);
     document.dispatchEvent(new CustomEvent('tenant-chat-attachments-ready'));
     return true;
@@ -3515,6 +3586,7 @@
     const same=()=>renderSerial===dialogRenderSerial&&version===epoch&&revision===openRevision&&currentDialog?.lead_id===route.lead_id&&currentDialog?.channel_id===route.channel_id&&currentDialog?.conversation_id===route.conversation_id&&host.querySelector('[data-operator-dialog]');
     const reasonText=dialogReason(route);
     host.innerHTML=`<section data-operator-dialog data-dialog-key="${esc(dialogKey(route))}" ${route.owner_overview_read_only?'data-owner-overview-read-only':''} class="operator-dialog-shell"><p id="operatorChatError" class="operator-error" role="status"></p><div class="operator-dialog-body" id="operatorDialogBody"><section class="operator-chat-main"><div id="operatorMergedReadRoutes" hidden></div><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" class="outline" id="operatorEarlier" ${page.next_before?'':'hidden'}>${t('earlier')}</button><button type="button" id="operatorLatestIncoming" hidden>${esc(({ru:'К последнему входящему',az:'Son gələn mesaja',en:'Latest incoming'})[i18n.language]||'Latest incoming')}</button></div><div id="chatRows" class="operator-chat-history">${messageMarkup(page.messages)||t('emptyHistory')}</div><button type="button" class="outline" id="operatorNewMessages" hidden>${esc(({ru:'Новые сообщения ↓',az:'Yeni mesajlar ↓',en:'New messages ↓'})[i18n.language]||'New messages ↓')}</button></div><p id="operatorAIReplyStatus" class="operator-error" role="status" aria-live="polite"></p><div id="operatorAIContextUsage" class="operator-ai-context" hidden></div><p id="operatorSendReason" class="sub"></p><div id="operatorAcceptAction" class="operator-accept-action"></div><div class="operator-composer"><div id="operatorComposerSource" hidden></div><div id="operatorReplyQuote" hidden></div><textarea id="chatText" data-operator-composer rows="1" aria-label="${esc(t('message'))}" placeholder="${esc(t('message'))}"></textarea><div class="operator-composer-actions"><button type="button" class="outline operator-icon-action" id="operatorCopilotToggle" aria-label="${esc(copilotText('title'))}" title="${esc(copilotText('title'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.5 6.5L20 11l-6.5 1.5L12 19l-1.5-6.5L4 11l6.5-1.5L12 3Zm7 11 .8 3.2L23 18l-3.2.8L19 22l-.8-3.2L15 18l3.2-.8L19 14Z"/></svg></button><div id="operatorActiveLifecycleActions" class="operator-active-lifecycle-actions"></div><button type="button" class="outline operator-icon-action" id="operatorAIReply" aria-label="${esc(t('aiReply'))}" title="${esc(t('aiReply'))}"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 13.8 9l5.7 1.8-5.7 1.8L12 18.3l-1.8-5.7-5.7-1.8L10.2 9 12 3.5Zm7.2 11.8.9 2.6 2.4.8-2.4.8-.9 2.5-.8-2.5-2.5-.8 2.5-.8.8-2.6ZM5 15l.8 2.2 2.2.8-2.2.8L5 21l-.8-2.2-2.2-.8 2.2-.8L5 15Z"/></svg></button><button type="button" class="outline operator-icon-action operator-voice-launcher" id="operatorCopilotVoiceToggle" aria-label="${esc(copilotText('voice'))}" title="${esc(copilotText('voice'))}" data-voice-state="idle"><span class="operator-voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button><button type="button" class="outline" id="operatorTraining">${esc(trainingText('button'))}</button><button type="button" class="primary" id="sendChat" aria-label="${esc(t('send'))}" title="${esc(t('send'))}">↑</button></div></div></section><div class="operator-copilot-backdrop" id="operatorCopilotBackdrop" hidden aria-hidden="true"></div><section class="operator-copilot" id="operatorCopilot" role="dialog" aria-label="${esc(copilotText('title'))}" hidden><header class="operator-copilot-header"><div><strong>${copilotText('title')}</strong><small>${esc(dialogTitle(route))}</small></div><button type="button" class="operator-icon-button" id="operatorCopilotClose" aria-label="${esc(completionText('close'))}" title="${esc(completionText('close'))}">×</button></header><div class="operator-copilot-actions operator-copilot-modes" aria-label="${esc(copilotText('title'))}"><button type="button" class="outline" data-copilot-mode="chat">${copilotText('question')}</button><button type="button" class="outline" data-copilot-mode="solution">${copilotText('solution')}</button><button type="button" class="outline" data-copilot-mode="instruction">${copilotText('instruction')}</button></div><label class="operator-copilot-prompt-label" for="operatorCopilotPrompt">${copilotText('prompt')}</label><textarea id="operatorCopilotPrompt" maxlength="1600" aria-label="${copilotText('prompt')}" placeholder="${copilotText('prompt')}"></textarea><div class="operator-copilot-actions"><button type="button" class="primary" id="operatorCopilotAsk">${copilotText('ask')}</button><button type="button" class="outline" id="operatorCopilotClear">${copilotText('clear')}</button></div><p id="operatorCopilotStatus" class="operator-error" role="status"></p><div id="operatorCopilotResult" class="operator-copilot-result" hidden></div><button type="button" class="outline" id="operatorCopilotInsert" hidden>${copilotTemplateText('insertResult')}</button><details id="operatorCopilotTemplates" class="operator-copilot-templates" hidden aria-label="${copilotTemplateText('title')}"><summary>${copilotTemplateText('title')}</summary><div id="operatorCopilotTemplateList" class="operator-copilot-template-list"></div><button type="button" class="outline" id="operatorCopilotTemplateCreate">${copilotTemplateText('create')}</button><form id="operatorCopilotTemplateForm" hidden><label>${copilotTemplateText('name')}<input id="operatorCopilotTemplateName" maxlength="80" required></label><label>${copilotTemplateText('question')}<textarea id="operatorCopilotTemplateQuestion" maxlength="1600" required></textarea></label><div class="operator-copilot-actions"><button type="submit" class="primary">${copilotTemplateText('save')}</button><button type="button" class="outline" id="operatorCopilotTemplateCancel">${copilotTemplateText('cancel')}</button></div></form><p id="operatorCopilotTemplateStatus" class="operator-error" role="status" aria-live="polite"></p></details></section></div></section>`;
+    renderDealProposal(route);
     const saveDisplayName=async(kind,displayName,participantJid='',source=route)=>{await api('dialogs/display-name','POST',{provider:'connect',lead_id:source.source_lead_id||route.lead_id,channel_id:source.source_channel_id||route.channel_id,conversation_id:route.conversation_id,kind,display_name:displayName,...(participantJid?{participant_jid:participantJid}:{})});const sourceViewCurrent=()=>who===identity(member)&&hasRight('dialogs')&&sameDialog(route,currentDialog)&&$('view-dialogs')?.classList.contains('active');if(!sourceViewCurrent())return false;const saved=t(kind==='participant'?'participantNameSaved':'nameSaved');if(kind==='participant')notice(saved);await refresh();if(!sourceViewCurrent())return false;if(!await openDialog({...currentDialog},true))throw Error(saved+' '+t('error'));return true;};
     configureDialogHead(route,saveDisplayName);
     if(companyToggleFocused)$('operatorCompanyPanelOpen')?.focus({preventScroll:true});

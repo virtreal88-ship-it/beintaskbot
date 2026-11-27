@@ -1264,6 +1264,15 @@ def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=N
                             (uuid.uuid4(),tenant,lead_id,external,'connect:'+channel_id,_outbound_author(data),str(data.get('text') or ''),str(data.get('type') or 'text'),occurred,_json(data)))
                 stored = cur.fetchone()
                 message_inserted = stored is not None
+                if (message_inserted and data.get('fromMe') is True and not identity_conflict
+                        and metadata.get('kind') == 'contact' and provider_conversation == conversation):
+                    from tenant_deal_dialog_links import enabled as deal_links_enabled
+                    if deal_links_enabled(tenant):
+                        from tenant_crm_native_contacts import upsert_whatsapp_contact
+                        upsert_whatsapp_contact(cur, tenant, channel_id, conversation,
+                            _phone_from_jid(metadata.get('phone_jid') or provider_conversation),
+                            metadata.get('display_name') or '', str(data.get('id') or event_id),
+                            adopt_by_phone=False)
                 if not message_inserted:
                     cur.execute('''SELECT id,author_name,raw,kommo_lead_id,channel,message_type FROM saas_crm_messages
                       WHERE tenant_id=%s::uuid AND external_id=%s''', (tenant,external))
@@ -1346,9 +1355,10 @@ def _ingest_once(raw: bytes, signature: str, event: dict, *, _native_reference=N
                 # retries cannot leave a contact without its message.
                 if metadata.get('kind') == 'contact' and not identity_conflict:
                     from tenant_crm_native_contacts import upsert_whatsapp_contact
+                    from tenant_deal_dialog_links import enabled as deal_links_enabled
                     upsert_whatsapp_contact(cur, tenant, channel_id, provider_conversation,
                         _phone_from_jid(metadata.get('phone_jid') or provider_conversation), metadata.get('display_name') or '',
-                        str(data.get('id') or event_id))
+                        str(data.get('id') or event_id), adopt_by_phone=not deal_links_enabled(tenant))
                 occurred = str(event.get('occurred_at') or datetime.now(timezone.utc).isoformat())
                 is_group = metadata.get('kind') == 'group'
                 phone = '' if is_group else _phone_from_jid(metadata.get('phone_jid') or provider_conversation)

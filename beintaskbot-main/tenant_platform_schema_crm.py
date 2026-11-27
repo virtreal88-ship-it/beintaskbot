@@ -7,6 +7,7 @@ from tenant_crm_relation_schema import migrate_relation_schema
 from tenant_crm_scalar_schema import migrate_scalar_schema
 from tenant_crm_sync_history_schema import migrate_history_indexes
 from tenant_beinsystems_operator_schema import migrate_operator_identity_links
+from tenant_deal_dialog_link_schema import migrate as migrate_deal_dialog_links
 
 def migrate_crm_schema(cur) -> None:
     from tenant_kommo_board_provenance import migrate as migrate_board_provenance
@@ -14,6 +15,7 @@ def migrate_crm_schema(cur) -> None:
     migrate_crm_identity_schema(cur)
     migrate_native_contacts(cur)
     migrate_relation_schema(cur)
+    migrate_deal_dialog_links(cur)
     migrate_scalar_schema(cur)
     migrate_history_indexes(cur)
     migrate_operator_identity_links(cur)
