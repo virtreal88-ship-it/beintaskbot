@@ -17,7 +17,13 @@ const server=http.createServer((req,res)=>{const u=new URL(req.url,'http://fixtu
  };
  for(const width of [1280,390]){
   let b=await setup(width,{dealUpdate:true,companyUpdate:false});try{const{page,ids}=b;
-   await page.locator(`[data-native-open="deal:${ids.deal}"]`).click();await openDealCompany(page);await page.locator('[data-deal-company-select]').selectOption(ids.otherCompany);await page.locator('[data-deal-link-company]').click();await page.waitForFunction(()=>nativeTaskFixture.deals[0].company_id===nativeTaskFixture.ids.otherCompany&&!!document.querySelector('#nativeEntityBody .deal-info-panel')?.textContent.includes('Available company'));await openDealCompany(page);assert.deepEqual((await posts(page))[0].body,{company_id:ids.otherCompany,unlink:false});assert.equal((await posts(page))[0].path,'/api/platform/crm/native/deals/'+ids.deal+'/company-link');
+   await page.locator(`[data-native-open="deal:${ids.deal}"]`).click();
+   await openDealCompany(page);
+   await page.locator('[data-deal-company-select]').selectOption(ids.otherCompany);
+   await page.locator('[data-deal-link-company]').click();
+   await page.locator('#nativeEntityBody .deal-data-block dd').filter({hasText:/^Available company$/}).waitFor({state:'attached'});
+   await openDealCompany(page);
+   assert.deepEqual((await posts(page))[0].body,{company_id:ids.otherCompany,unlink:false});assert.equal((await posts(page))[0].path,'/api/platform/crm/native/deals/'+ids.deal+'/company-link');
    const bounds=await page.locator('#nativeEntityCard .modal-card').boundingBox();assert(bounds&&bounds.x>=0&&bounds.x+bounds.width<=width+1,'card fits viewport');await page.screenshot({path:'/tmp/crm-source-deal-'+width+'.png'});
    await page.evaluate(()=>{nativeTaskFixture.relationError='scoped_relation_sync_not_configured'});await page.locator('[data-deal-unlink-company]').click();await page.locator('#nativeEntityBody [role=alert]').waitFor();assert.match(await page.locator('#nativeEntityBody [role=alert]').textContent(),/Əlaqə dəyişdirilmədi/);assert.equal((await posts(page)).length,2);assert.equal(await page.evaluate(()=>nativeTaskFixture.deals[0].company_id),ids.otherCompany,'409 leaves link unchanged');
    await page.evaluate(()=>{nativeTaskFixture.relationError=null;nativeTaskFixture.holdRelations=true});await page.locator('[data-deal-unlink-company]').click();await page.evaluate(()=>document.querySelector('[data-deal-unlink-company]').click());await page.waitForFunction(()=>nativeTaskFixture.pendingRelations.length===1);assert.equal((await posts(page)).length,3);await page.locator('[data-native-card-close]').first().click();await page.evaluate(()=>nativeTaskFixture.pendingRelations.shift()());await page.waitForTimeout(50);assert.equal(await page.locator('#nativeEntityCard').isVisible(),false,'late response cannot reopen');assert.deepEqual(b.errors,[]);
