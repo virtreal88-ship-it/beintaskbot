@@ -7,11 +7,15 @@ const {installFixture} = require('./task_read_save_flow_fixture.cjs');
 const docs = path.resolve(__dirname, '../docs');
 const assets = new Set(['tenant-operator-i18n.js', 'tenant-request-coordinator.js', 'tenant-view-demand.js',
   'tenant-task-flow.js', 'tenant-kommo-deal-card.js', 'tenant-deal-chat.js', 'tenant-chat-history.js', 'tenant-chat-ai.js',
-  'tenant-dialog-company.js', 'tenant-deal-dialogue.js', 'tenant-operator-dialogs.js', 'tenant-chat-send.js']);
+  'tenant-dialog-company.js', 'tenant-deal-dialogue.js', 'tenant-operator-dialogs.js', 'tenant-chat-send.js',
+  'tenant-dialog-composer.js', 'tenant-customer-media-ui.js']);
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(
   /<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,
-  (_, url) => assets.has(path.basename(url)) ? '<script>' +
-    fs.readFileSync(path.join(docs, path.basename(url)), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '');
+  (_, url) => {
+    const file=path.basename(url.split('?')[0]);
+    return assets.has(file) ? '<script>' +
+      fs.readFileSync(path.join(docs, file), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '';
+  });
 
 function installDealResponses({native, linking, limited, operatorCompany, longDetails}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
@@ -243,7 +247,7 @@ async function open(page, native) {
           assert.equal(await operatorInput.inputValue(),'Черновик диалога');
           await modal.locator('#operatorReplyQuote').waitFor();
           await page.evaluate(()=>{dealProof.holdSend=true;});
-          await modal.locator('.deal-linked-dialog #sendChat').click();
+          await modal.locator('.deal-linked-dialog #operatorComposerPrimary').click();
           await page.waitForFunction(()=>!!dealProof.confirmSend);
           await modal.getByRole('tab',{name:'Чат',exact:true}).click();
           assert.equal(await modal.locator('#chatText').inputValue(),'Черновик сделки');
