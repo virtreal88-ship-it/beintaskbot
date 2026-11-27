@@ -49,6 +49,8 @@
     .deal-card-layout :is(.deal-info-panel,.deal-card-main){margin:0;min-height:0;min-width:0;border:1px solid var(--line);border-radius:12px;background:var(--card);overscroll-behavior:contain}
     .deal-card-layout .deal-info-panel{overflow:auto;padding:16px}
     .deal-info-panel>h3{margin:0 0 12px;font-size:16px}
+    .deal-operator-company-entry:not(:empty){margin-bottom:12px}
+    :is(#dealInfoPanel,#nativeDealInfoPanel) .deal-operator-company-entry>button{box-sizing:border-box;width:100%;min-height:44px;text-align:start;white-space:normal;overflow-wrap:anywhere}
     .deal-card-layout .chat-placeholder{display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;padding:0;margin:0;border:0;border-radius:0}
     .deal-feed-panel{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 16px}
     .deal-feed-panel :is([data-related-tasks],[data-related-notes]):empty,.deal-feed-actions>section:empty{display:none}
@@ -148,6 +150,7 @@
     const locale=detailsCopy(),tabs=document.createElement('div');tabs.className='deal-card-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',c.deal);
     const info=document.createElement('section');info.id=host.id==='modalContent'?'dealInfoPanel':'nativeDealInfoPanel';info.className='deal-info-panel';
     const infoTitle=document.createElement('h3');infoTitle.textContent=c.data;info.append(infoTitle);
+    const companyHost=document.createElement('div');companyHost.className='deal-operator-company-entry';info.append(companyHost);
     const columns=document.createElement('div');columns.className='deal-card-columns';
     const main=document.createElement('div');main.className='deal-card-main';
     if(!chat)chat=document.createElement('div');
@@ -203,7 +206,7 @@
       const tabHost=desktop?main:host;
       if(tabs.parentNode!==tabHost)tabHost.prepend(tabs);
       const stageHost=desktop?info:head;
-      if(stage&&stage.parentNode!==stageHost)stageHost.insertBefore(stage,desktop?sections[0].node:closeButton);
+      if(stage&&stage.parentNode!==stageHost)stageHost.insertBefore(stage,desktop?companyHost:closeButton);
     }
     function select(key){
       if(!isCurrent())return;
@@ -262,7 +265,7 @@
       }
       empty.hidden=timeline.children.length>1;
     }
-    return {link,history,composer,entry,chatCalls};
+    return {link,history,composer,entry,chatCalls,companyHost};
   }
   function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent,openDialog}){
     const c=labels(),words=copy(),locale=detailsCopy(),general=document.createElement('section'),tasksPanel=document.createElement('section'),notesPanel=document.createElement('section');

@@ -13,7 +13,7 @@ const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace
   (_, url) => assets.has(path.basename(url)) ? '<script>' +
     fs.readFileSync(path.join(docs, path.basename(url)), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '');
 
-function installDealResponses({native, linking, limited, operatorCompany}) {
+function installDealResponses({native, linking, limited, operatorCompany, longDetails}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
   const channel = '10000000-0000-4000-8000-000000000301';
   const route = {provider:'connect', channel_id:channel, conversation_id:'15550101010@s.whatsapp.net',
@@ -23,6 +23,8 @@ function installDealResponses({native, linking, limited, operatorCompany}) {
     responsible_name:'Айдан Алиева', description:'Подключить кассовый модуль для новой точки в Баку и согласовать время настройки.',
     pipeline_name:'Подключение', stage_name:'В работе', price:320};
   const kommo = {...detail, responsible_id:99, responsible_name:'',kommo_lead_id:7, pipeline_id:1, status_id:2};
+  if(longDetails)Object.assign(kommo,{contact_name:'',contact_phone:'',phone:'',company_name:'',
+    detail_fields:Array.from({length:26},(_,i)=>({label:'Custom field '+i,value:'Value '+i}))});
   const local = {...detail, id:f.deal, pipeline_id:'1', stage_id:'2', actions:{view:true,update:!limited},
     updated_at:'2026-11-25T16:00:00Z', channel_id:linking==='none'?'':channel,
     conversation_id:linking==='none'?'':route.conversation_id};
@@ -110,15 +112,16 @@ async function open(page, native) {
   const screenshots=process.env.DEAL_CARD_SCREENSHOTS;
   if(screenshots)fs.mkdirSync(screenshots,{recursive:true});
   try{
-    const variants=[[false,1440,'empty'],[false,1440,'none'],[true,390,'none'],[true,390,'wrong'],[true,390,'denied',true],[false,390,'none',true]];
+    const variants=[[false,360,'none',false,'dark',true],
+        [false,1440,'empty'],[false,1440,'none'],[true,390,'none'],[true,390,'wrong'],[true,390,'denied',true],[false,390,'none',true]];
     for(const native of [false,true])for(const width of [1440,390])for(const theme of ['light','dark'])variants.push([native,width,'linked',false,theme]);
-    for(const [native,width,linking,limited=false,theme='light'] of variants){
+    for(const [native,width,linking,limited=false,theme='light',longDetails=false] of variants){
       const operatorCompany=theme==='dark'||limited;
       const page=await browser.newPage({...(width<900?devices['Pixel 7']:{}),viewport:{width,height:900},colorScheme:theme}),errors=[];
       page.setDefaultTimeout(7000);
       page.on('pageerror',error=>errors.push(error.message));
       await page.addInitScript(installFixture,{});
-      await page.addInitScript(installDealResponses,{native,linking,limited,operatorCompany});
+      await page.addInitScript(installDealResponses,{native,linking,limited,operatorCompany,longDetails});
       await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
       await page.goto('https://fixture.test/app?view=deals&lang=ru');
       await page.addStyleTag({content:fs.readFileSync(path.join(docs,'../ui/src/app-theme.css'),'utf8')});
@@ -136,13 +139,23 @@ async function open(page, native) {
       assert.equal(await modal.getByRole('tab',{name:'Чат',exact:true}).getAttribute('aria-selected'),'true');
       if(width<900)await modal.locator('[data-deal-pane=data]').click();
       const info=modal.locator('.deal-info-panel');
-      assert(await info.getByText('Araz Retail',{exact:true}).isVisible());
-      assert(await info.getByText('Айгюн Мамедова',{exact:true}).isVisible());
-      assert(await info.getByText('+994 50 123 45 67',{exact:true}).isVisible());
+      if(longDetails){
+        assert.equal(await info.getByRole('heading',{name:'Контакт',exact:true}).count(),0);
+        assert(await info.evaluate(panel=>panel.scrollHeight>panel.clientHeight));
+      }else{
+        assert(await info.getByText('Araz Retail',{exact:true}).isVisible());
+        assert(await info.getByText('Айгюн Мамедова',{exact:true}).isVisible());
+        assert(await info.getByText('+994 50 123 45 67',{exact:true}).isVisible());
+      }
       if(!native)await info.getByText(limited?'Имя недоступно':'Айдан Алиева',{exact:true}).waitFor();
       if(limited)assert(await modal.locator('.deal-stage-trigger').isDisabled());
       if(operatorCompany){
         const trigger=info.locator('[data-deal-operator-company]');
+        const inView=await trigger.evaluate(button=>{
+          const bounds=button.getBoundingClientRect(),area=button.closest('.deal-info-panel').getBoundingClientRect();
+          return {height:bounds.height, top:bounds.top,bottom:bounds.bottom,panelTop:area.top,panelBottom:area.bottom,display:getComputedStyle(button).display,minHeight:getComputedStyle(button).minHeight};
+        });
+        assert(inView.height>=40&&inView.top>=inView.panelTop&&inView.bottom<=inView.panelBottom+1,JSON.stringify({native,width,limited,longDetails,...inView}));
         await trigger.click();
         const panel=modal.getByRole('dialog',{name:'Компания Operator',exact:true});
         const search=panel.locator('#operatorDialogueCompanySearch');
@@ -178,6 +191,9 @@ async function open(page, native) {
         await panel.getByRole('button',{name:'Закрыть',exact:true}).click();
         await panel.waitFor({state:'detached'});
         assert.equal(await page.evaluate(()=>dealProof.requests.some(r=>r.p.includes('/operator/dialog-company'))),false);
+      }else{
+        assert.equal(await info.locator('[data-deal-operator-company]').count(),0);
+        assert.equal(await page.evaluate(()=>dealProof.requests.some(r=>r.p.includes('/operator/deal-company'))),false);
       }
       if(width<900)await modal.locator('[data-deal-pane=chat]').click();
       assert.equal(await modal.locator('.modal-card').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
