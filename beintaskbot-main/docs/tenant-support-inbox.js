@@ -110,8 +110,8 @@
         #supportDetail .support-modal-card{height:100%;max-height:100%;padding:0;border-radius:0}#supportDetail .support-card-header{padding:8px 12px 0}
         #supportDetail .support-card-columns{display:flex;flex-direction:column;padding:0;gap:0}
         #supportDetail .support-card-columns>[data-support-panel]{flex:1;border:0;border-radius:0;padding:12px}
-        #supportDetail .support-case-tabs{overflow-x:auto}
-        #supportDetail .support-case-tabs button{flex:1;min-width:0}
+        #supportDetail .support-case-tabs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) max-content;overflow:visible}
+        #supportDetail .support-case-tabs button{min-width:0;padding:8px 3px;font-size:12px}
         #supportDetail .support-primary-actions{gap:6px}#supportDetail .support-primary-actions button{min-height:44px;padding:8px;font-size:12px}
         #supportDetail #supportResolve{width:auto;padding:8px}#supportDetail #supportMoreActions>summary{width:44px;height:44px}#supportDetail .support-save-actions{bottom:-16px}
       }`;document.head.append(style);
