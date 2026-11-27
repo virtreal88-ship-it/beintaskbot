@@ -235,7 +235,7 @@ def _allows(policy, action):
 
 
 def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, operators_only=False,
-                       source_channel=None, work_status_only=None):
+                       source_channel=None, work_status_only=None, ignore_non_operator_status=False):
     required = (absent is not None) if work_status_only is None else work_status_only
     if not (work_status_enabled() if required else _status_requested(tenant)):
         return None
@@ -265,6 +265,8 @@ def _authorized_status(cur, tenant, employee, *, lock, require_update, absent, o
           AND ({view}) AND ({update})""", (tenant, source_channel))
         if not cur.fetchone():
             return None
+    if ignore_non_operator_status and profile.get("role") != "operator":
+        return DEFAULT_STATUS
     cur.execute("""SELECT status FROM saas_dialog_employee_presence
       WHERE tenant_id=%s::uuid AND employee_id=%s""" + (" FOR SHARE" if lock else ""),
       (tenant, employee))
@@ -289,16 +291,29 @@ def is_effectively_online(cur, tenant, employee, *, lock=False):
 
 
 def is_sidebar_transfer_online(cur, tenant, employee, *, lock=False, source_channel):
-    """Manual menu presence, independent of automatic routing flags."""
+    """Manual transfer checks an employee's status and source access."""
     if not _status_requested(tenant) or not status_schema_ready(
             cur, require_offline=work_status_enabled(), require_dialog_acl=work_status_enabled()):
         return False
     # The status picker authoritatively defaults a missing row to Online.
     # Legacy deployments may know only three states but still use this default.
     return _authorized_status(cur, tenant, employee, lock=lock, require_update=True,
-                              absent=DEFAULT_STATUS, operators_only=True,
-                              source_channel=source_channel,
+                              absent=DEFAULT_STATUS, source_channel=source_channel,
                               work_status_only=work_status_enabled()) == DEFAULT_STATUS
+
+
+def is_transfer_online(cur, tenant, employee, *, source_channel, lock=False,
+                       online_only=False, _routing=None):
+    if online_only or work_status_routing_requested(tenant, source_channel):
+        return is_sidebar_transfer_online(cur, tenant, employee, lock=lock, source_channel=source_channel)
+    return is_online(cur, tenant, employee, lock=lock, _routing=_routing, source_channel=source_channel)
+
+
+def can_retain_assignment(cur, tenant, employee, *, source_channel):
+    """Status-based requeue applies to operators. Other assignees need current source access."""
+    return _authorized_status(cur, tenant, employee, lock=False, require_update=True,
+                              absent=DEFAULT_STATUS, source_channel=source_channel,
+                              ignore_non_operator_status=True) == DEFAULT_STATUS
 
 
 def is_online(cur, tenant, employee, *, lock=False, _routing=None, source_channel=None):
