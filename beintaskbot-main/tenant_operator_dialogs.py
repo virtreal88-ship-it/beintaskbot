@@ -1324,10 +1324,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     workflow=workflows.get((str(r['channel_id']),r['conversation_id']))
                     online=policy.profile.get('role')=='owner' or presence_online or bool(presence_sources and str(r['channel_id']) not in presence_sources)
                     observer=owner_overview and r['provider']=='connect' and is_owner_observer(cur,tenant,actor,r['channel_id'],workflow,online=online)
-                    search_observer=(search_overview and not observer and r['provider']=='connect' and workflow
-                        and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
                     group=group_work_snapshots.get(r['conversation_id']) if r['provider']=='connect' else None
                     group_source=group_modes.get(r['channel_id'],{})
+                    search_observer=(search_overview and not observer and r['provider']=='connect' and workflow
+                        and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor)
+                        and not (group and group_work.accepted_route(group,workflow)
+                                 and group_work.source_available(group_source)))
                     if group and (group['configured'] or group_work.active(group)) and not group['legacy_active'] and group_work.source_available(group_source):
                         r['can_send']=action_capabilities.get('update',False) and r.get('tenant_status')=='active'
                     lifecycle_decorate(cur,tenant,actor,r,details=False,allow_closed_archive=allow_closed_archive,owner_observer=observer,
@@ -1361,6 +1363,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
             # Mode is a read-only view over already-authorized physical routes.
             # Recheck lifecycle ownership from the later snapshot as well.
             rows=[r for r in rows if r.get('archive_read_only') or r.get('search_overview_read_only')
+                  or ((r.get('lifecycle') or {}).get('group_work') or {}).get('can_join')
                   or not (r.get('lifecycle') or {}).get('operator_id')
                   or int(r['lifecycle']['operator_id'])==int(profile['telegram_id'])]
             if allow_closed_archive:
@@ -1663,6 +1666,19 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                             and is_owner_observer(cur,tenant,actor,channel,workflow))
             search_observer=(search_overview and not owner_observer and provider=='connect' and workflow
                 and workflow.get('state')=='accepted' and int(workflow.get('operator_id') or 0)!=int(actor))
+            group_dialog=None
+            group_mode={}
+            group_modes={}
+            if provider=='connect' and not support_case_only:
+                import tenant_dialog_group_work as group_work
+                from tenant_whatsapp_native_rollout import modes as native_modes
+                group_modes=native_modes(cur,tenant)
+                group_mode=group_modes.get(channel,{})
+                if not (owner_observer or colleague) and lifecycle_enabled(cur,tenant):
+                    group_dialog=group_work.snapshot(cur,tenant,conversation,**group_work.source_selection(group_modes))
+                    if (search_observer and group_work.accepted_route(group_dialog,workflow)
+                            and group_work.source_available(group_mode)):
+                        search_observer=False
             closed_archive=is_shared_archive(workflow,actor)
             shared_archive=closed_archive or owner_observer or search_observer or colleague
             if shared_archive and requested_route != {'provider':provider,'channel_id':channel,'conversation_id':conversation,'lead_id':lead_id}:
@@ -1705,19 +1721,13 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 support=_linked_support_case(cur,tenant,policy,channel,history_members) if provider=='connect' else None
                 return {'dialog':{**public(row),'support_case':support}}
             dialog=decorate(row)
-            group_dialog=None
-            group_mode={}
-            group_modes={}
             if provider=='connect':
-                from tenant_whatsapp_native_rollout import modes as native_modes
-                group_modes=native_modes(cur,tenant)
-                group_mode=group_modes.get(channel,{})
                 dialog['wecall']=bool(group_mode.get('enabled'))
-                if not shared_archive and lifecycle_enabled(cur,tenant):
-                    import tenant_dialog_group_work as group_work
-                    group_dialog=group_work.snapshot(cur,tenant,conversation,**group_work.source_selection(group_modes))
-                    if group_dialog and (group_dialog['configured'] or group_work.active(group_dialog)) and not group_dialog['legacy_active'] and group_work.source_available(group_mode):
-                        dialog['can_send']=dialog.get('tenant_status')=='active'
+                if search_observer:
+                    group_dialog=None
+                if (not shared_archive and group_dialog and (group_dialog['configured'] or group_work.active(group_dialog))
+                        and not group_dialog['legacy_active'] and group_work.source_available(group_mode)):
+                    dialog['can_send']=dialog.get('tenant_status')=='active'
             if paired_history:
                 dialog['history_pair_id']=paired_history['id']
             if history_merge:
@@ -1909,13 +1919,15 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                         admission=False,can_update=False,online=False)
             if group_dialog:
                 from tenant_dialog_presence import is_online
+                group_admission=acceptance_enabled(cur,tenant)
                 group_work.decorate(dialog,actor,group_dialog,workflow,source=group_mode,
-                    admission=acceptance_enabled(cur,tenant),can_update=action_capabilities.get('update',False),
-                    online=policy.profile.get('role')=='owner' or is_online(cur,tenant,actor,source_channel=channel))
+                    admission=group_admission,can_update=action_capabilities.get('update',False),
+                    online=policy.profile.get('role')=='owner' or is_online(cur,tenant,actor,source_channel=channel),
+                    allow_archive_join=closed_archive)
                 group_state=dialog['lifecycle'].get('group_work')
-                if group_state and not group_state['role'] and not before and not anchor and acceptance_enabled(cur,tenant):
+                if group_state and not group_state['role'] and not before and not anchor and group_admission:
                     group_state['sources']=group_work.join_options(cur,tenant,actor,policy,conversation,
-                        group_dialog,group_channels,group_modes)
+                        group_dialog,group_modes)
             if provider=='connect' and not shared_archive and not colleague and dialog.get('wecall'):
                 from tenant_whatsapp_message_edit import attach_capabilities as attach_message_actions
                 attach_message_actions(messages[:50],dialog,actor)
@@ -1997,7 +2009,8 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                 dialog['can_add_internal_comment']=bool('internal_comments' in internal_comment_timeline
                     and action_capabilities.get('update') and not shared_archive
                     and (not dialog.get('lifecycle_enabled') or workflow and workflow['state']=='accepted'
-                         and workflow['operator_id']==actor))
+                         and (workflow['operator_id']==actor
+                              or work.get('role') in {'leader','participant'})))
     # Unread cursors use insertion order, while the UI orders history by
     # provider time. Capture only records in this response and on this route;
     # a later arrival must never be consumed by this snapshot.

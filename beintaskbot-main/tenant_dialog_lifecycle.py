@@ -216,6 +216,12 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state IN {private_states}
         AND dw.operator_id<>{actor})"""
+    shared_route = f"""(right({conversation_expr},5)='@g.us' AND EXISTS(SELECT 1 FROM saas_dialog_workflows shared
+      JOIN saas_dialog_episodes ep ON ep.tenant_id=shared.tenant_id AND ep.id=shared.id
+      WHERE shared.tenant_id='{tenant}'::uuid AND shared.channel_id::text={channel_expr}
+        AND shared.conversation_id={conversation_expr} AND shared.state='accepted'
+        AND ep.conversation_id=shared.conversation_id AND ep.closed_at IS NULL
+        AND to_jsonb(ep)->>'group_leader_channel_id' IS NOT NULL))"""
     search_visible = f"""EXISTS(SELECT 1 FROM saas_dialog_workflows sov
       WHERE sov.tenant_id='{tenant}'::uuid AND sov.channel_id::text={channel_expr}
         AND sov.conversation_id={conversation_expr} AND sov.state='accepted' AND sov.operator_id<>{actor})"""
@@ -223,7 +229,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
     # the normal ownership predicate still keeps another operator's active
     # dialogue out of the owner's personal view.
     if policy.profile.get('role') == 'owner' or not sources or is_online(cur,tenant,actor):
-        visible=f"({provider_expr}<>'connect' OR {ownership})"
+        visible=f"({provider_expr}<>'connect' OR {ownership} OR {shared_route})"
         return f"({visible} OR {search_visible})" if search_overview else visible
     # The literals have been normalized to UUIDs in work_status_routing_sources.
     selected = ",".join(f"'{source}'" for source in sorted(sources))
@@ -232,7 +238,7 @@ def visibility_sql(cur, policy, provider_expr='routes.provider', channel_expr='r
       WHERE dw.tenant_id='{tenant}'::uuid AND dw.channel_id::text={channel_expr}
         AND dw.conversation_id={conversation_expr} AND dw.state<>'waiting'
         AND (dw.operator_id={actor}{archive}))"""
-    visible=f"({provider_expr}<>'connect' OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
+    visible=f"({provider_expr}<>'connect' OR {shared_route} OR ({ownership} AND ({channel_expr} NOT IN ({selected}) OR {owned})))"
     return f"({visible} OR {search_visible})" if search_overview else visible
 
 
@@ -270,6 +276,14 @@ def require_access(cur, tenant, actor, provider, channel, conversation, action='
                  and row and row.get('state')=='accepted' and row.get('operator_id')!=int(actor))
     archive_read = (action == 'view' and allow_closed_archive and original_conversation == conversation
                     and is_shared_archive(row, actor))
+    from tenant_ai_group_coordination import group_jid
+    if row and row['state']=='accepted' and group_jid(conversation):
+        from tenant_dialog_group_work import accepted_route, participant, snapshot
+        group = snapshot(cur,tenant,conversation)
+        if accepted_route(group,row):
+            if action=='view' or participant(group,actor,channel):
+                return True
+            raise TenantLinearError('Подключитесь к группе через доступный WhatsApp-номер.',409)
     if (row and row['state'] != 'waiting' and int(row['operator_id']) != int(actor)
             and not (archive_read or overview_read or search_read)):
         raise TenantLinearError('Диалог недоступен: его принял другой сотрудник.', 404)
@@ -885,7 +899,7 @@ def _mutate_once(profile, payload):
                             raise TenantLinearError('Диалог недоступен.',404)
                         if owner_only_start:
                             raise TenantLinearError('Установите статус «Онлайн», чтобы принять диалог.',403)
-                        if not start_source_ready:
+                        if not (managed or start_source_ready):
                             raise TenantLinearError('Источник недоступен.',403)
                 elif row and row['state']!='waiting':
                     raise TenantLinearError('Диалог уже принят или завершён.',409)

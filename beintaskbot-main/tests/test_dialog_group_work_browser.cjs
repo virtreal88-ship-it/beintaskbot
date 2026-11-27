@@ -6,11 +6,11 @@ const {chromium} = require(process.env.PLAYWRIGHT_MODULE || '../.support-test-de
 const docs = path.resolve(__dirname, '../docs');
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
 
-async function setup(page, {emptySecondRoute=false}={}) {
+async function setup(page, {emptySecondRoute=false, archiveFirstRoute=false, sharedFirstRoute=false}={}) {
   await page.route('**/*', route => route.request().isNavigationRequest() ?
     route.fulfill({contentType:'text/html',body:html}) : route.abort());
   await page.goto('https://example.test/app?view=dialogs');
-  await page.evaluate(({emptySecondRoute}) => {
+  await page.evaluate(({emptySecondRoute, archiveFirstRoute, sharedFirstRoute}) => {
     document.querySelectorAll('.view').forEach(node => node.classList.toggle('active',node.id==='view-dialogs'));
     window.tenantProfileSnapshot={
       member:{tenant_id:'fixture',telegram_id:44,role:'operator',active:true},
@@ -21,7 +21,7 @@ async function setup(page, {emptySecondRoute=false}={}) {
     let joined = false;
     let leader = false;
     let revision = 0;
-    let active = false;
+    let active = archiveFirstRoute||sharedFirstRoute;
     let alone = false;
     let holdHistory = false;
     const acceptance = {id:'accepted',kind:'accept',employee_name:'Operator A',at:'2026-11-26T08:00:01Z'};
@@ -30,14 +30,18 @@ async function setup(page, {emptySecondRoute=false}={}) {
       channel_name:'Fixture '+id,lead_id:lead,conversation_id:group,number});
     const routes = [makeRoute('b',42,'+994500000112'),makeRoute('c',43,'+994500000113')];
     function dialog(route) {
-      const own = joined && route.channel_id==='c';
+      const own = joined && route.channel_id===(sharedFirstRoute?'b':'c');
+      const shared = sharedFirstRoute&&route.channel_id==='b';
+      const archive = archiveFirstRoute&&route.channel_id==='b';
       const hasInbound = !emptySecondRoute || route.channel_id!=='c' || own;
       return {...route,customer_name:'Fixture group',customer_kind:'group',lifecycle_enabled:true,
         group_work_revision:`${active?episode:'waiting'}:${revision}`,
-        can_send:own,lifecycle:{state:own?'accepted':'waiting',operator_id:own?44:null,has_inbound:hasInbound,
-          id:own?episode:null,revision,can_close:own&&alone,
-          ...(active?{group_work:{id:episode,role:own?(leader?'leader':'participant'):null,can_join:!joined,
-            can_leave:own&&!alone,number:route.number,colleagues:own&&!alone?peers:[],...(!joined?{sources:routes}:{})}}:
+        archive_read_only:archive,can_send:own,
+        lifecycle:{state:own||shared?'accepted':archive?'closed':'waiting',operator_id:own?44:archive||shared?33:null,has_inbound:hasInbound,
+          id:own||shared?episode:null,revision,can_close:own&&alone,
+          ...(active?{group_work:{id:episode,role:own?(leader?'leader':'participant'):null,can_join:!joined&&!archive,
+            can_leave:own&&!alone,number:route.number,colleagues:own&&!alone?peers:[],
+            ...(!joined?{sources:archiveFirstRoute?[routes[1]]:sharedFirstRoute?[routes[0]]:routes}:{})}}:
             {group_available:true,can_accept:hasInbound,last_inbound_id:hasInbound?'fixture-inbound':null})}};
     }
     window.groupRequests=[];
@@ -69,21 +73,21 @@ async function setup(page, {emptySecondRoute=false}={}) {
         if(command.action==='join_group')joined=true;
         if(command.action==='leave_group'||command.action==='close')joined=false;
         if(command.action==='transfer_group')leader=false;
-        const view=dialog(routes[1]);
+        const view=dialog(sharedFirstRoute?routes[0]:routes[1]);
         result={group_changed:true,lifecycle:view.lifecycle};
         if(command.action==='accept'){
           result.operator_event={...acceptance,employee_name:'Operator B'};
           result.controls={can_send:view.can_send,lifecycle:view.lifecycle,group_work_revision:view.group_work_revision};
         }
       }else if(url.pathname.endsWith('/dialogs')){
-        const sources=joined?[dialog(routes[1])]:routes.map(dialog);
+        const sources=joined?[dialog(sharedFirstRoute?routes[0]:routes[1])]:sharedFirstRoute?[dialog(routes[0])]:routes.map(dialog);
         result={dialogs:[{...sources[0],group_sources:sources,unread_count:2}],channels:[],agents:[],total_count:1};
       }else{
         result={};
       }
       return {ok:true,status:200,json:async()=>({success:true,result})};
     };
-  }, {emptySecondRoute});
+  }, {emptySecondRoute, archiveFirstRoute, sharedFirstRoute});
   for (const asset of ['tenant-operator-i18n.js','tenant-operator-dialogs.js']) {
     await page.addScriptTag({path:path.join(docs,asset)});
   }
@@ -133,6 +137,41 @@ async function verify(page) {
   await page.evaluate(()=>window.otherOperatorLeft());
   await page.locator('[data-operator-lifecycle="close"]').waitFor({timeout:8000});
   assert.equal(await leave.count(),0);
+}
+
+async function verifyJoinFromArchive(page) {
+  await setup(page,{archiveFirstRoute:true});
+  await page.evaluate(async()=>{
+    const card=document.querySelector('.operator-row');
+    card.click();
+  });
+  const join=page.locator('[data-group-join-source]');
+  await join.waitFor();
+  assert.match(await join.innerText(),/994500000113/);
+  assert.equal(await page.locator('#chatText').isDisabled(),true);
+  await join.click();
+  await page.waitForFunction(()=>window.tenantOperator.currentDialog?.lifecycle.group_work?.role==='participant');
+  const commands=await page.evaluate(()=>window.groupRequests);
+  assert.equal(commands.length,1);
+  assert.equal(commands[0].action,'join_group');
+  assert.equal(commands[0].channel_id,'c');
+  assert.equal(commands[0].lead_id,43);
+  assert.equal(await page.locator('#chatText').isDisabled(),false);
+}
+
+async function verifyJoinSharedNumber(page) {
+  await setup(page,{sharedFirstRoute:true});
+  await page.locator('.operator-row').click();
+  const join=page.locator('[data-operator-lifecycle="join_group"]');
+  await join.waitFor();
+  assert.equal(await page.locator('#chatText').isDisabled(),true);
+  await join.click();
+  await page.waitForFunction(()=>window.tenantOperator.currentDialog?.lifecycle.group_work?.role==='participant');
+  const [command]=await page.evaluate(()=>window.groupRequests);
+  assert.equal(command.action,'join_group');
+  assert.equal(command.channel_id,'b');
+  assert.equal(command.lead_id,42);
+  assert.equal(await page.locator('#chatText').isDisabled(),false);
 }
 
 async function verifyAcceptanceReceipt(page) {
@@ -187,9 +226,15 @@ async function verifyBackgroundAcceptance(page) {
       const background=await browser.newPage({viewport:{width,height:900}});
       await verifyBackgroundAcceptance(background);
       await background.close();
+      const archive=await browser.newPage({viewport:{width,height:900}});
+      await verifyJoinFromArchive(archive);
+      await archive.close();
+      const shared=await browser.newPage({viewport:{width,height:900}});
+      await verifyJoinSharedNumber(shared);
+      await shared.close();
     }
   } finally {
     await browser.close();
   }
-  console.log('PASS desktop and mobile group acceptance, foreground refresh of the second source, timeline, author, leave and handoff');
+  console.log('PASS desktop and mobile group acceptance, shared-number and archive join, timeline, author, leave and handoff');
 })().catch(error=>{console.error(error);process.exit(1);});

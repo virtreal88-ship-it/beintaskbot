@@ -1,7 +1,7 @@
 """Shared operator episodes for an exact tenant and WhatsApp group.
 
-Each participating operator owns a separate physical workflow route. The
-existing dialogue lock already serializes these routes on the group JID.
+Each participant is authorized on an exact physical route. Multiple employees
+may share that route. The dialogue lock serializes changes on the group JID.
 """
 import os
 import re
@@ -36,9 +36,10 @@ def migrate(cur):
       FOREIGN KEY(tenant_id,channel_id,conversation_id)
         REFERENCES saas_connect_conversations(tenant_id,connect_channel_id,conversation_id))""")
     cur.execute("ALTER TABLE saas_dialog_group_participants ADD COLUMN IF NOT EXISTS account_lid TEXT NOT NULL DEFAULT ''")
-    for column in ('channel_id', 'actor_id', 'account_jid'):
-        cur.execute(f"""CREATE UNIQUE INDEX IF NOT EXISTS saas_dialog_group_active_{column}_idx
-          ON saas_dialog_group_participants(tenant_id,episode_id,{column}) WHERE left_at IS NULL""")
+    cur.execute("DROP INDEX IF EXISTS saas_dialog_group_active_channel_id_idx")
+    cur.execute("DROP INDEX IF EXISTS saas_dialog_group_active_account_jid_idx")
+    cur.execute("""CREATE UNIQUE INDEX IF NOT EXISTS saas_dialog_group_active_actor_id_idx
+      ON saas_dialog_group_participants(tenant_id,episode_id,actor_id) WHERE left_at IS NULL""")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_dialog_group_participants_episode_idx
       ON saas_dialog_group_participants(tenant_id,episode_id,channel_id,actor_id)""")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_dialog_group_legacy_open_idx
@@ -143,6 +144,11 @@ def participant(group, actor, channel=None):
                  if int(p['actor_id']) == int(actor) and (channel is None or p['channel_id'] == channel)), None)
 
 
+def accepted_route(group, workflow):
+    return bool(active(group) and workflow and workflow['state']=='accepted'
+                and str(workflow['id'])==group['id'])
+
+
 def queue_has_inbound(group, workflow, has_inbound):
     if not group or not group['closed_at'] or group['legacy_active']:
         return has_inbound
@@ -236,7 +242,7 @@ def prepare_transfer(cur, tenant, group, target):
 
 def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workflow, group, payload, peer):
     """Apply one transition under the existing group lock and route grants."""
-    from tenant_dialog_lifecycle import require_access, is_shared_archive
+    from tenant_dialog_lifecycle import require_access
 
     action = payload['action']
     if not active(group) or payload.get('expected_group_episode_id') != group['id']:
@@ -246,19 +252,30 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
     leader = actor == group['operator_id'] and channel == group['leader_source']
     successor = None
     if action == 'join_group':
-        require_access(cur,tenant,actor,'connect',channel,conversation,'view',owner=policy.profile.get('role')=='owner')
-        if participant(group, actor) or any(p['channel_id']==channel for p in group['participants']):
-            raise TenantLinearError('Этот сотрудник или номер уже подключён к группе.',409)
-        if workflow and (workflow['state']=='accepted' or is_shared_archive(workflow,actor)):
+        require_access(cur,tenant,actor,'connect',channel,conversation,'view',
+                       allow_closed_archive=True,owner=policy.profile.get('role')=='owner')
+        if participant(group,actor):
+            raise TenantLinearError('Вы уже подключены к группе.',409)
+        existing_route = accepted_route(group, workflow)
+        if workflow and workflow['state']=='accepted' and not existing_route:
             raise TenantLinearError('Сначала выберите доступный источник группы.',409)
+        if existing_route:
+            cur.execute("""SELECT to_regclass('saas_dialog_group_active_channel_id_idx') IS NULL
+              AND to_regclass('saas_dialog_group_active_account_jid_idx') IS NULL AS ready""")
+            if not cur.fetchone()['ready']:
+                raise TenantLinearError('Работа с общим номером будет доступна после обновления CRM.',409)
         binding = verified_route(cur,tenant,actor,policy,channel,conversation,lead)
-        if any(p['account_jid']==binding['scope']['account'] for p in group['participants']):
-            raise TenantLinearError('Этот номер WhatsApp уже подключён к группе.',409)
+        if not join_source_matches(group,channel,binding['scope']['account']):
+            raise TenantLinearError('Связь номера WhatsApp с источником группы изменилась.',409)
+        for member in group['participants']:
+            if member['channel_id']==channel:
+                check_binding(member, {'native':binding})
         enroll(cur,tenant,episode,actor,channel,conversation,binding)
-        cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
-          VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',%s,0)
-          ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET id=EXCLUDED.id,
-          state='accepted',operator_id=EXCLUDED.operator_id,closed_at=NULL""",(tenant,channel,conversation,episode,actor))
+        if not existing_route:
+            cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
+              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',%s,0)
+              ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET id=EXCLUDED.id,
+              state='accepted',operator_id=EXCLUDED.operator_id,closed_at=NULL""",(tenant,channel,conversation,episode,actor))
     else:
         if not own or not workflow or workflow['state']!='accepted' or str(workflow['id'])!=episode:
             raise TenantLinearError('Вы не подключены к этому эпизоду группы.',403)
@@ -268,12 +285,19 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
             cur.execute("""UPDATE saas_dialog_group_participants SET left_at=clock_timestamp()
               WHERE tenant_id=%s::uuid AND id=%s::uuid AND left_at IS NULL RETURNING left_at""",(tenant,own['id']))
             left_at=cur.fetchone()['left_at']
-            cur.execute("""UPDATE saas_dialog_workflows SET state='closed', closed_at=%s,
-              revision=revision+1,updated_at=%s
-              WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
-              (left_at,left_at,tenant,channel,conversation))
+            remaining = [p for p in group['participants'] if p['id']!=own['id']]
+            same_route = next((p for p in remaining if p['channel_id']==channel), None)
+            if not same_route:
+                cur.execute("""UPDATE saas_dialog_workflows SET state='closed', closed_at=%s,
+                  revision=revision+1,updated_at=%s
+                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
+                  (left_at,left_at,tenant,channel,conversation))
+            elif workflow['operator_id']==actor:
+                cur.execute("""UPDATE saas_dialog_workflows SET operator_id=%s
+                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
+                  (same_route['actor_id'],tenant,channel,conversation))
             if leader:
-                successor=next(p for p in group['participants'] if p['id'] != own['id'])
+                successor=same_route or remaining[0]
         elif action == 'transfer_group':
             if not leader or peer['actor_id']==actor or participant(group,peer['actor_id'])!=peer:
                 raise TenantLinearError('Ведение группы или подключение коллеги изменилось. Обновите диалог.',409)
@@ -288,6 +312,9 @@ def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workf
     if successor:
         cur.execute("""UPDATE saas_dialog_episodes SET operator_id=%s,group_leader_channel_id=%s::uuid
           WHERE tenant_id=%s::uuid AND id=%s::uuid""",(successor['actor_id'],successor['channel_id'],tenant,episode))
+        cur.execute("""UPDATE saas_dialog_workflows SET operator_id=%s
+          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND id=%s::uuid AND state='accepted'""",
+          (successor['actor_id'],tenant,successor['channel_id'],conversation,episode))
     cur.execute("""UPDATE saas_dialog_workflows SET revision=revision+1,updated_at=clock_timestamp()
       WHERE tenant_id=%s::uuid AND conversation_id=%s AND id=%s::uuid AND state='accepted'""",
       (tenant,conversation,episode))
@@ -324,7 +351,13 @@ def send_context(cur, tenant, actor, policy, route):
     return {'group_participant_id':own['id'],'group_channel_id':channel}
 
 
-def decorate(dialog, actor, group, workflow, *, source, admission, can_update, online):
+def join_source_matches(group, channel, account):
+    # The same account can be shared only through its existing exact route.
+    return all((p['channel_id']==channel)==(p['account_jid']==account)
+               for p in group['participants'])
+
+
+def decorate(dialog, actor, group, workflow, *, source, admission, can_update, online, allow_archive_join=False):
     """Only expose an operator's own route and the names of joined colleagues."""
     if not group:
         return
@@ -335,7 +368,8 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
         # An owner observing someone else's route must never take over a
         # collaborative group, including a source-local episode still draining.
         state['can_takeover'] = False
-    if dialog.get('archive_read_only'):
+    archive = bool(dialog.get('archive_read_only'))
+    if archive and not allow_archive_join:
         return
     if ready_source and (group['configured'] or shared):
         dialog['group_work_revision'] = revision(group, workflow)
@@ -354,7 +388,9 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
                     state.update(state='closed',can_start=bool(admission and can_update and online),
                                  group_restart_episode_id=group['id'])
         state['can_accept'] = bool(ready_source and state['can_accept'])
-        state['can_start'] = bool(ready_source and state['can_start'])
+        archive_start = (archive and group['configured'] and state['state'] in {'closed','dismissed'}
+                         and admission and can_update and online)
+        state['can_start'] = bool(ready_source and (state['can_start'] or archive_start))
         state['group_available'] = bool(ready_source and group['configured'])
         return
     channel = dialog['channel_id']
@@ -369,28 +405,33 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
                  can_close=bool(leader and alone and can_update),can_dismiss=bool(leader and state['can_dismiss']))
     if left:
         state['can_submit_case'] = False
+    if own:
+        state['operator_id'] = actor
     state['group_work'] = {
         'id':group['id'], 'role':'leader' if leader else 'participant' if own else None,
         'can_join':bool(admission and can_update and online and ready_source and not participant(group,actor)
-                        and state['state'] in {'waiting','closed','dismissed'}),
+                        and (state['state'] in {'waiting','closed','dismissed'} or accepted_route(group,workflow))
+                        and join_source_matches(group,channel,source['account_jid'])),
         'can_leave':bool(own and not alone and can_update),
         'left':left,
         'colleagues':others if own else [],
     }
+    if not own:
+        dialog.update(can_use_copilot=False,can_edit_display_name=False,controls_allowed=False,
+                      available_actions=[],resume_allowed=False)
     if own or state['group_work']['can_join']:
         state['group_work']['number'] = '+'+(own or source)['account_jid'].split('@',1)[0]
-    dialog['can_send'] = bool(own and can_update and online and ready_source and state['state']=='accepted')
+    dialog['can_send'] = bool(not archive and own and can_update and online and ready_source
+                              and state['state']=='accepted')
     if own and not dialog['can_send']:
         dialog['send_block_reason'] = 'group_offline' if not online else 'channel_inactive'
 
 
-def join_options(cur, tenant, actor, policy, conversation, group, channels, modes):
+def join_options(cur, tenant, actor, policy, conversation, group, modes):
     from tenant_dialog_presence import is_online
 
-    remaining = [channel for channel in channels
-                 if source_available(modes.get(channel,{}))
-                 and not any(p['channel_id']==channel or p['account_jid']==modes[channel]['account_jid']
-                             for p in group['participants'])]
+    remaining = [channel for channel,source in modes.items()
+                 if source_available(source) and join_source_matches(group,channel,source['account_jid'])]
     if not remaining or participant(group,actor):
         return []
     cur.execute("""SELECT c.connect_channel_id::text AS channel_id,c.lead_id,c.conversation_id,ch.name AS channel_name
@@ -398,8 +439,9 @@ def join_options(cur, tenant, actor, policy, conversation, group, channels, mode
       LEFT JOIN saas_dialog_workflows w ON w.tenant_id=c.tenant_id AND w.channel_id=c.connect_channel_id
         AND w.conversation_id=c.conversation_id
       WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s AND c.connect_channel_id=ANY(%s::uuid[])
-        AND (w.state IS NULL OR w.state='waiting' OR (w.state IN ('closed','dismissed') AND w.operator_id=%s))
-      ORDER BY ch.name,c.connect_channel_id""",(tenant,conversation,remaining,actor))
+        AND (w.state IS NULL OR w.state IN ('waiting','closed','dismissed')
+             OR (w.state='accepted' AND w.id=%s::uuid))
+      ORDER BY ch.name,c.connect_channel_id""",(tenant,conversation,remaining,group['id']))
     result=[]
     for route in cur.fetchall():
         channel=route['channel_id']
