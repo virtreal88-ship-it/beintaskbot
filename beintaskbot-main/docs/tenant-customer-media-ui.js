@@ -152,7 +152,7 @@
   function paste(event){
     const s=active,input=event.target,clipboard=event.clipboardData,dialog=op()?.currentDialog;
     if(!s||!clipboard||event.defaultPrevented||!canStage(s)||!dialog?.can_send||dialog.archive_read_only||dialog.owner_overview_read_only||
-      !input?.matches?.('#view-dialogs .operator-composer textarea#chatText')||input.disabled||input.readOnly||
+      !input?.matches?.(':is(#view-dialogs,.deal-linked-dialog:not([hidden])) .operator-composer textarea#chatText')||input.disabled||input.readOnly||
       input.closest('.operator-composer')!==s.host.parentElement||clipboard.getData('text/plain'))return;
     const isPhoto=file=>file&&types.photo.split(',').includes(file.type);
     // Some browsers expose a screenshot only via clipboard items, not files.

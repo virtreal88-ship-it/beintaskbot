@@ -20,6 +20,7 @@ async function scenario(updateCustomers,updateDeals,del){
  var api=async(path,opts)=>{if(opts){writes.push(JSON.parse(opts.body));return {}};return {companies:[{id:'company-2',name:'Company 2'}],data:[{id:'contact-2',display_name:'Contact 2'}],deals:[{id:'deal-2',title:'Deal 2'}],company:{id:'company-1'}}};
  var notice=()=>{},confirm=()=>true,openNativeEntityCard=async()=>{},loadNativeDeals=async()=>{},loadNativeCompanies=async()=>{};
  var nativeDealMoveScope=()=>({current:()=>true}),loadNativeDealBoardCatalog=async()=>{},nativeDealBoardCatalog={workflows:[]};
+ var bindDealDialogue=()=>{};
  ${helpers}${deal}${company}`);
  w.eval(`renderNativeDealCard({id:'deal-1',company_id:'company-1',company_name:'Company 1',contact_id:'contact-1'},()=>true)`);
  const q=s=>w.document.querySelector(s);

@@ -52,7 +52,7 @@
   const evictionCandidate=()=>[...previews].find(([,preview])=>!playing(preview)&&!photoVisible(preview.host))||[...previews].find(([,preview])=>!playing(preview));
   const previewRoom=()=>previews.size<3||!!evictionCandidate();
   function photoVisible(host){
-    if(document.hidden||!freshProfile||!member||!host.isConnected||!host.closest?.('#chatRows')||!host.closest('#view-dialogs')?.classList.contains('active'))return false;
+    if(document.hidden||!freshProfile||!member||!host.isConnected||!host.closest?.('#chatRows')||!host.closest('#view-dialogs.active,.deal-linked-dialog:not([hidden])'))return false;
     if(document.getElementById('operatorCopilotBackdrop')?.hidden===false)return false;
     const rect=host.getBoundingClientRect(),chat=host.closest('#chatRows').getBoundingClientRect();
     return rect.width>0&&rect.height>0&&rect.bottom>Math.max(0,chat.top)&&rect.top<Math.min(innerHeight,chat.bottom)&&rect.right>0&&rect.left<innerWidth;

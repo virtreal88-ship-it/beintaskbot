@@ -141,7 +141,7 @@
       const r=Math.random()*16|0;return (c==='x'?r:(r&3|8)).toString(16);
     });
   }
-  const composerRoot=()=>document.querySelector('#view-dialogs.active #operatorConversationContent [data-operator-dialog] .operator-composer');
+  const composerRoot=()=>document.querySelector(':is(#view-dialogs.active,.deal-linked-dialog:not([hidden])) #operatorConversationContent [data-operator-dialog] .operator-composer');
   const canInsert=state=>state===mounted&&identity()?.key===state.identity&&window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates===true&&
     state.input.isConnected&&state.root===composerRoot()&&!state.input.disabled&&!state.input.readOnly;
   function completesPrefix(current,body,input){
@@ -379,7 +379,7 @@
   }
   async function attach(){
     const root=composerRoot(),input=root?.querySelector('#chatText[data-operator-composer]'),owner=identity();
-    const menu=document.querySelector('#view-dialogs.active #operatorConversationHeader #operatorMenuExtra');
+    const menu=document.querySelector(':is(#view-dialogs.active,.deal-linked-dialog:not([hidden])) #operatorConversationHeader #operatorMenuExtra');
     if(!menu||!input||!owner||window.tenantProfileSnapshot?.capabilities?.dialog_reply_templates!==true){teardown();return;}
     if(mounted?.root===root&&mounted.menu===menu&&mounted.identity===owner.key){if(!mounted.loaded&&!mounted.loading)void loadTemplates(mounted);return;}
     teardown();

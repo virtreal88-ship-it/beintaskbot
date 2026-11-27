@@ -25,19 +25,19 @@
     .deal-conversation .deal-chat-identity{flex:1;min-width:0}
     .deal-conversation .deal-chat-identity h2{font-size:17px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .deal-conversation .modal-head .close{flex:none;min-width:44px;min-height:44px}
-    .deal-conversation .deal-stage-bar{flex:none;min-width:0;display:grid;gap:3px;margin:0 0 16px}
+    .deal-conversation .deal-stage-bar{position:relative;flex:none;min-width:0;display:grid;gap:3px;margin:0 0 16px}
     .deal-conversation .deal-stage-trigger{display:flex;align-items:center;gap:9px;min-width:0;width:100%;color:var(--ink);font:inherit;background:var(--app-accent-soft,var(--paper));border:1px solid var(--line);border-radius:8px;padding:0 11px;min-height:44px}
     .deal-conversation .deal-stage-trigger:is(select){display:block}
     .deal-stage-trigger:is(button)::after{content:"";flex:none;width:6px;height:6px;border-right:1.5px solid;border-bottom:1.5px solid;transform:rotate(45deg);margin-bottom:3px}
     .deal-stage-trigger-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .deal-stage-bar>[role=status]{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
     .deal-stage-bar>[role=status]:empty{display:none}
-    .deal-stage-picker{position:absolute;inset:0;z-index:60;background:#0006;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box}
-    .deal-stage-sheet{width:100%;max-width:520px;max-height:80dvh;overflow:auto;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0003}
+    .deal-stage-picker{position:absolute;z-index:60;top:100%;left:0;width:min(360px,calc(100vw - 24px));display:flex;align-items:start;padding:4px 0;box-sizing:border-box}
+    .deal-stage-sheet{width:100%;max-width:520px;max-height:min(360px,55dvh);overflow:auto;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 40px #0003}
     .deal-stage-sheet header{display:flex;align-items:center;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
     .deal-stage-sheet select{flex:1;min-width:0;max-width:100%;font:inherit;color:var(--ink);background:var(--card);border:0;min-height:44px}
     .deal-stage-sheet button{min-height:44px}.deal-stage-choice{display:flex;width:100%;align-items:center;gap:14px;text-align:left;background:none;color:var(--ink);border:0;border-bottom:1px solid var(--line);border-radius:0;font:inherit}
-    .deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,var(--brand))}.deal-stage-choice-name{flex:1;overflow-wrap:anywhere}
+    .deal-stage-dot{height:16px;width:16px;border-radius:50%;flex:none;background:var(--stage-color,var(--brand))}.deal-stage-choice-name{flex:1;min-width:0;overflow-wrap:anywhere}
     #dealModal #modalContent.deal-card-layout,#nativeEntityCard[data-type=deal] #nativeEntityBody.deal-card-layout{display:flex;flex-direction:column;overflow:hidden}
     .deal-card-layout [hidden],.deal-conversation .deal-stage-picker[hidden]{display:none!important}
     .deal-card-tabs{display:flex;align-items:stretch;gap:4px;padding:0 18px;border-bottom:1px solid var(--line);min-width:0;flex:none}
@@ -49,21 +49,38 @@
     .deal-card-layout :is(.deal-info-panel,.deal-card-main){margin:0;min-height:0;min-width:0;border:1px solid var(--line);border-radius:12px;background:var(--card);overscroll-behavior:contain}
     .deal-card-layout .deal-info-panel{overflow:auto;padding:16px}
     .deal-info-panel>h3{margin:0 0 12px;font-size:16px}
-    .deal-operator-company-entry:not(:empty){margin-bottom:12px}
+    .deal-info-panel,.deal-feed-panel,.deal-chat-history{scrollbar-width:thin;touch-action:pan-y;overscroll-behavior:contain}
+    :is(.deal-info-panel,.deal-feed-panel,.deal-chat-history)::-webkit-scrollbar{width:6px}
+    :is(.deal-info-panel,.deal-feed-panel,.deal-chat-history)::-webkit-scrollbar-thumb{background:var(--muted);border-radius:8px;min-height:40px}
+    .deal-operator-company-entry:has(> :not(h3)){margin-bottom:18px}
+    .deal-operator-company-entry:not(:has(> :not(h3))){display:none}
+    .deal-operator-company-entry>h3{margin-bottom:9px}
     :is(#dealInfoPanel,#nativeDealInfoPanel) .deal-operator-company-entry>button{box-sizing:border-box;width:100%;min-height:44px;text-align:start;white-space:normal;overflow-wrap:anywhere}
     .deal-card-layout .chat-placeholder{display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden;padding:0;margin:0;border:0;border-radius:0}
     .deal-feed-panel{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:12px 16px}
     .deal-feed-panel :is([data-related-tasks],[data-related-notes]):empty,.deal-feed-actions>section:empty{display:none}
     .deal-feed-panel:has([aria-busy=true]) [data-deal-timeline]>.deal-card-empty{display:none}
-    .deal-feed-actions{display:flex;flex-wrap:wrap;gap:8px}
-    .deal-feed-actions>section{flex:1 1 200px;min-width:0}.deal-feed-actions header:empty{display:none}
+    .deal-feed-actions{display:flex;justify-content:flex-end;align-items:flex-start;flex-wrap:wrap;gap:8px}
+    .deal-feed-actions>section{flex:0 1 auto;min-width:0}.deal-feed-actions header:empty{display:none}
     .deal-feed-entry{display:block;margin:8px 0}
-    .deal-chat-header{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 16px;min-width:0;border-bottom:1px solid var(--line);flex:none}
+    .deal-chat-header{display:none;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:10px;padding:11px 16px;min-width:0;border-bottom:1px solid var(--line);flex:none}
+    .deal-chat-header:has(button:not([hidden])){display:flex}
     .deal-chat-header h3,.deal-data-block h3,.kommo-deal-section h3{margin:0;font-size:15px;font-weight:600;color:var(--ink)}
     .deal-chat-header button{white-space:normal}
-    .deal-chat-header:has(button[hidden]){display:none}
     .deal-card-layout .deal-chat-history{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;padding:10px 16px}
-    .deal-card-layout #chatRows{max-height:none;overflow:visible;margin:0}
+    .deal-chat-history #chatRows{max-height:none;overflow:visible;margin:0}
+    .deal-linked-dialog{display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden}
+    .deal-linked-dialog-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 12px}
+    .deal-linked-dialog-tools:empty{display:none}
+    .deal-linked-dialog-body{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
+    .deal-linked-dialog-body #operatorConversationPane{display:flex;flex:1;min-height:0;min-width:0;border:0;border-radius:0}
+    .deal-linked-dialog-body [data-operator-back]{display:none!important}
+    .deal-linked-dialog-body .operator-chat-history{scrollbar-width:thin;touch-action:pan-y}
+    .deal-linked-dialog-body .operator-chat-history::-webkit-scrollbar{width:6px}
+    .deal-linked-dialog-body .operator-chat-history::-webkit-scrollbar-thumb{min-height:40px;border-radius:8px;background:var(--muted)}
+    @supports selector(::-webkit-scrollbar-thumb){
+      :is(.deal-info-panel,.deal-feed-panel,.deal-chat-history,.deal-linked-dialog-body .operator-chat-history){scrollbar-width:auto}
+    }
     .deal-card-layout .deal-chat-compose{flex:0 1 auto;min-height:0;max-height:60%;overflow:auto;overscroll-behavior:contain;padding:8px 12px max(8px,env(safe-area-inset-bottom));border-top:1px solid var(--line)}
     .deal-card-layout .deal-chat-compose .operator-composer{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end;margin:0}
     .deal-card-layout .deal-chat-compose .operator-composer-actions{display:flex;align-items:center;gap:6px}
@@ -104,10 +121,11 @@
       #nativeEntityCard.deal-conversation[data-type=deal]:not(:has([data-deal-pane=data][aria-selected=true])) .crm-modal-actions{display:none}
       .deal-card-layout .deal-chat-compose textarea{font-size:16px}
       :is(#dealModal,#nativeEntityCard[data-type=deal])>.modal-card>.modal-head{gap:6px;padding:6px 8px}
-      .deal-conversation .deal-stage-bar{max-width:40%;margin:0}.deal-conversation .deal-stage-trigger{font-size:12px;padding-inline:7px}
+      .deal-conversation .deal-stage-bar{max-width:40%;margin:0}
+      .deal-stage-picker{position:fixed;left:12px;right:12px;width:auto}.deal-conversation .deal-stage-trigger{font-size:12px;padding-inline:7px}
       .deal-conversation .deal-chat-identity h2{font-size:15px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow-wrap:anywhere}
     }
-    @media(max-width:600px){.deal-stage-picker{align-items:flex-end;padding:0}.deal-stage-sheet{max-width:none;border-radius:16px 16px 0 0;padding-bottom:env(safe-area-inset-bottom)}}
+
   `;
   document.head.append(css);
   const date=value=>{const d=new Date(typeof value==='number'?value*1000:value);return value&&!Number.isNaN(d.getTime())?d.toLocaleString():'';};
@@ -121,17 +139,17 @@
   }
   function overview(deal,c=copy()){
     const l=detailsCopy();
-    const block=(title,values)=>{
+    const block=(title,values,attribute='')=>{
       const fields=values.filter(([,value])=>value!==undefined&&value!==null&&value!=='');
-      return fields.length?`<section class="deal-data-block"><h3>${esc(title)}</h3><dl>${fields.map(([label,value,track])=>`<div><dt>${esc(label)}</dt><dd ${track||''}>${esc(value)}</dd></div>`).join('')}</dl></section>`:'';
+      return fields.length?`<section class="deal-data-block" ${attribute}><h3>${esc(title)}</h3><dl>${fields.map(([label,value,track])=>`<div><dt>${esc(label)}</dt><dd ${track||''}>${esc(value)}</dd></div>`).join('')}</dl></section>`:'';
     };
     const company=deal.company_name||(deal.company_linked||deal.company_id?l.companyUnavailable:'');
     const assignee=deal.responsible_name||(deal.responsible_id?l.assigneeUnavailable:l.unassigned);
-    const extra=(deal.detail_fields||[]).map(({label,value})=>[label,value]);
-    return block(c.fields,[[c.pipeline,deal.pipeline_name||'—','data-deal-pipeline'],
+    const extra=(deal.detail_fields||[]).filter(({label})=>!['ttad_id','ttad_name','utm_campaign'].includes(String(label||'').trim().toLowerCase())).map(({label,value})=>[label,value]);
+    return block(c.company,[[c.company,company]],'data-deal-company-block')+block(c.contact,[[l.name,deal.contact_name],[l.phone,deal.contact_phone??deal.phone],['Email',deal.contact_email]])+
+      block(c.fields,[[c.pipeline,deal.pipeline_name||'—','data-deal-pipeline'],
       [c.responsible,assignee,'data-deal-assignee'],[c.amount,deal.price??deal.amount],
       [c.description,deal.description],...extra])+
-      block(c.contact,[[l.name,deal.contact_name],[l.phone,deal.contact_phone??deal.phone],['Email',deal.contact_email],[c.company,company]])+
       '<div class="deal-card-data-actions"></div>';
   }
   function layout({host,deal,sections,chat,stage,isCurrent,actions=[]}){
@@ -150,15 +168,17 @@
     const locale=detailsCopy(),tabs=document.createElement('div');tabs.className='deal-card-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',c.deal);
     const info=document.createElement('section');info.id=host.id==='modalContent'?'dealInfoPanel':'nativeDealInfoPanel';info.className='deal-info-panel';
     const infoTitle=document.createElement('h3');infoTitle.textContent=c.data;info.append(infoTitle);
-    const companyHost=document.createElement('div');companyHost.className='deal-operator-company-entry';info.append(companyHost);
+    const companyHost=document.createElement('section');companyHost.className='deal-operator-company-entry deal-data-block';
+    const companyTitle=document.createElement('h3');companyTitle.textContent=c.company;companyHost.append(companyTitle);
+    const companyBlock=sections[0].node.querySelector('[data-deal-company-block]');
+    if(companyBlock){companyBlock.querySelector('h3')?.remove();companyHost.append(companyBlock);}
+    info.append(companyHost);
     const columns=document.createElement('div');columns.className='deal-card-columns';
     const main=document.createElement('div');main.className='deal-card-main';
     if(!chat)chat=document.createElement('div');
     chat.id=host.id+'Conversation';
     chat.classList.add('chat-placeholder');
     const chatHeader=document.createElement('header');chatHeader.className='deal-chat-header';
-    const link=document.createElement('button');link.type='button';link.className='outline';link.dataset.dealOpenDialog='';link.textContent=c.dialog;link.hidden=true;
-    chatHeader.append(link);
     const history=document.createElement('div');history.className='deal-chat-history';
     const composer=document.createElement('div');composer.className='deal-chat-compose';composer.hidden=true;
     const rows=chat.querySelector('#chatRows');
@@ -182,11 +202,14 @@
       feedActions.append(section.node);
     }
     columns.append(info,main);
-    main.append(chat,feed);
+    const dialog=document.createElement('section');
+    dialog.id=host.id+'LinkedDialog';dialog.className='deal-linked-dialog';
+    const dialogueName=({ru:'Диалог',az:'Dialoq',en:'Dialogue'})[window.tenantI18n?.language]||'Dialoq';
+    main.append(chat,feed,dialog);
     host.classList.add('deal-card-layout');host.replaceChildren(columns);
-    sections[0].node.querySelector('.deal-card-data-actions')?.append(...actions);
-    const panels={chat,data:info,feed},names={chat:c.chat,data:c.data,feed:locale.feed};
-    const mobileOrder=['chat','data','feed'],desktopOrder=['chat','feed'];
+    chatHeader.append(...actions);
+    const panels={chat,data:info,feed,dialog},names={chat:c.chat,data:c.data,feed:locale.feed,dialog:dialogueName};
+    const mobileOrder=['chat','data','feed','dialog'],desktopOrder=['chat','feed','dialog'];
     const buttons=Object.fromEntries(mobileOrder.map(key=>{
       const button=document.createElement('button');button.type='button';button.textContent=names[key];button.dataset.dealPane=key;
       button.dataset.dealTab=key;button.id=host.id+'Tab'+key;button.setAttribute('role','tab');button.setAttribute('aria-controls',panels[key].id);
@@ -197,7 +220,7 @@
     function display(){
       const desktop=media?.matches===true;
       if(desktop&&selected==='data')selected='chat';
-      info.hidden=!desktop&&selected!=='data';chat.hidden=selected!=='chat';feed.hidden=selected!=='feed';
+      info.hidden=!desktop&&selected!=='data';chat.hidden=selected!=='chat';feed.hidden=selected!=='feed';dialog.hidden=selected!=='dialog';
       for(const key of mobileOrder){
         buttons[key].setAttribute('aria-selected',String(key===selected));buttons[key].tabIndex=key===selected?0:-1;
         panels[key].setAttribute('role',key==='data'&&desktop?'region':'tabpanel');
@@ -210,7 +233,10 @@
     }
     function select(key){
       if(!isCurrent())return;
+      if(key===selected)return;
+      const previous=selected;
       selected=key;display();
+      dialog.dispatchEvent(new CustomEvent('deal-pane-changed',{detail:{selected:key,previous}}));
       if(key==='feed'&&!feedStarted){
         feedStarted=true;
         for(const section of sections)if(!section.data)section.load?.();
@@ -265,9 +291,9 @@
       }
       empty.hidden=timeline.children.length>1;
     }
-    return {link,history,composer,entry,chatCalls,companyHost};
+    return {dialog,chat,history,composer,entry,chatCalls,companyHost};
   }
-  function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent,openDialog}){
+  function mount({host,deal,api=window.tenantTaskFlow?.api,isCurrent}){
     const c=labels(),words=copy(),locale=detailsCopy(),general=document.createElement('section'),tasksPanel=document.createElement('section'),notesPanel=document.createElement('section');
     general.innerHTML=overview(deal,words);
     tasksPanel.className=notesPanel.className='kommo-deal-section';
@@ -289,11 +315,10 @@
     sections.push({key:'notes',label:c.notes,node:notesPanel,load:loadNotes});
     // Reuse the board's policy catalog and immutable, receipt-verified move command.
 
-
     const stageBar=document.createElement('div');stageBar.className='deal-stage-bar';
     const stageLabel=({ru:'Этап сделки',az:'Sövdələşmə mərhələsi',en:'Deal stage'}[window.tenantI18n?.language]||'Deal stage');
     const trigger=document.createElement('button'),feedback=document.createElement('span');
-    trigger.type='button';trigger.className='deal-stage-trigger';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','dialog');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
+    trigger.type='button';trigger.className='deal-stage-trigger';trigger.setAttribute('aria-label',stageLabel);trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');trigger.disabled=true;
     const triggerLabel=document.createElement('span');triggerLabel.className='deal-stage-trigger-label';triggerLabel.textContent=deal.stage_name||stageLabel;trigger.title=triggerLabel.textContent;trigger.replaceChildren(triggerLabel);
     feedback.setAttribute('role','status');stageBar.append(trigger,feedback);
     const view=layout({host,deal,sections,chat,stage:stageBar,isCurrent,actions:duplicate?[duplicate]:[]});
@@ -301,13 +326,12 @@
       if(!current()||!flow.current(scope)||!result.details?.responsible_name)return;
       general.querySelector('[data-deal-assignee]').textContent=result.details.responsible_name;
     }).catch(()=>{});
-    if(openDialog){view.link.onclick=openDialog;view.link.hidden=false;}
     const picker=document.createElement('div');picker.className='deal-stage-picker';picker.hidden=true;
-    const sheet=document.createElement('section');sheet.className='deal-stage-sheet';sheet.setAttribute('role','dialog');sheet.setAttribute('aria-modal','true');sheet.setAttribute('aria-label',stageLabel);
+    const sheet=document.createElement('section');sheet.className='deal-stage-sheet';sheet.setAttribute('role','listbox');sheet.setAttribute('aria-label',stageLabel);
     const pickerHead=document.createElement('header'),pipelineSelect=document.createElement('select'),dismiss=document.createElement('button'),choices=document.createElement('div');
     pipelineSelect.setAttribute('aria-label',({ru:'Сменить воронку',az:'Satış xəttini dəyiş',en:'Change pipeline'}[window.tenantI18n?.language]||'Change pipeline'));pipelineSelect.dataset.dealPipelinePicker='';
     dismiss.type='button';dismiss.textContent='×';dismiss.setAttribute('aria-label',({ru:'Закрыть',az:'Bağla',en:'Close'}[window.tenantI18n?.language]||'Close'));
-    pickerHead.append(pipelineSelect,dismiss);sheet.append(pickerHead,choices);picker.append(sheet);modal.querySelector('.modal-card').append(picker);
+    pickerHead.append(pipelineSelect,dismiss);sheet.append(pickerHead,choices);picker.append(sheet);stageBar.append(picker);
     const closePicker=()=>{picker.hidden=true;trigger.setAttribute('aria-expanded','false');if(current())trigger.focus();};
     dismiss.onclick=closePicker;picker.onclick=e=>{if(e.target===picker)closePicker();};
     picker.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closePicker();}else if(e.key==='Tab'){const nodes=[...sheet.querySelectorAll('button,select')].filter(n=>!n.disabled);if(!nodes.length)return;const first=nodes[0],last=nodes[nodes.length-1];if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};
@@ -331,6 +355,10 @@
         const field=general.querySelector('[data-deal-pipeline]');
         if(field)field.textContent=catalog?.name||stageRow.pipeline_name||'—';
         triggerLabel.textContent=stageRow.stage_name||stageLabel;trigger.title=triggerLabel.textContent;
+        const stageColor=catalog?.stages?.find(item=>String(item.stage_id)===String(stageRow.status_id))?.color;
+        trigger.style.backgroundColor=/^#[a-fA-F0-9]{6}$/.test(stageColor||'')?stageColor:'';
+        trigger.style.color=trigger.style.backgroundColor?
+          ((parseInt(stageColor.slice(1,3),16)*299+parseInt(stageColor.slice(3,5),16)*587+parseInt(stageColor.slice(5,7),16)*114)<140000?'#fff':'#111'):'';
         trigger.disabled=busy||!permitted()||!policy.move_context||!window.tenantKommoStageMove?.canIdentify(stageRow)||!(policy.catalog||[]).some(p=>targetsFor(p.pipeline_id).length);
         pipelineSelect.replaceChildren();
         for(const p of policy.catalog||[]){if(String(p.pipeline_id)===String(stageRow.pipeline_id)||targetsFor(p.pipeline_id).length)pipelineSelect.add(new Option(p.name||String(p.pipeline_id),String(p.pipeline_id)));}
@@ -348,7 +376,7 @@
         }
       };
       pipelineSelect.onchange=renderChoices;
-      trigger.onclick=()=>{if(trigger.disabled||!current())return;render();picker.hidden=false;trigger.setAttribute('aria-expanded','true');(pipelineSelect.disabled?dismiss:pipelineSelect).focus();};
+      trigger.onclick=()=>{if(trigger.disabled||!current())return;if(!picker.hidden){closePicker();return;}render();if(window.matchMedia?.('(max-width:899px)').matches)picker.style.top=trigger.getBoundingClientRect().bottom+'px';else picker.style.top='';picker.hidden=false;trigger.setAttribute('aria-expanded','true');(pipelineSelect.disabled?dismiss:pipelineSelect).focus();};
       const choose=async(targetPipeline,target)=>{
         if(busy||!current()||!permitted()||!targetsFor(targetPipeline).some(t=>String(t.stage_id)===target))return;
         if(target===String(stageRow.status_id)&&targetPipeline===String(stageRow.pipeline_id))return;

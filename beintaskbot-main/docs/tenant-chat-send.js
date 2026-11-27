@@ -180,6 +180,7 @@
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
   }
   function bindFile({identity,leadId,me,isCurrent,reload,input,button}){
+    if(input.closest('.tc-legacy-composer')?.querySelector('.tc-legacy-composer-attachments'))return;
     const key='tenant-chat-file:'+identity+':'+leadId;
     const host=document.createElement('div');host.className='tc-legacy-composer-attachments';host.style.cssText='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0;min-width:0';
     host.innerHTML='<input type="file" hidden accept="image/jpeg,image/png,image/webp,application/pdf,audio/mpeg,audio/ogg,video/mp4"><button class="outline" type="button">Fayl seç</button><span role="status" style="overflow-wrap:anywhere;min-width:0"></span><button class="outline" type="button" hidden>Faylı göndər</button>';
