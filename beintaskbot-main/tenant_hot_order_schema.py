@@ -45,6 +45,7 @@ def ensure_hot_order_schema(conn) -> None:
                 ON saas_hot_orders(tenant_id,status,service_id,created_at DESC,id)''')
             cur.execute('''CREATE INDEX IF NOT EXISTS saas_hot_orders_worker_idx
                 ON saas_hot_orders(tenant_id,claimed_by,created_at DESC,id)''')
+            cur.execute('ALTER TABLE saas_hot_orders ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ NULL')
             migrate_hot_order_notices(cur)
             migrate_hot_order_completion(cur)
             migrate_hot_order_rewards(cur)

@@ -34,10 +34,11 @@ def authorize(profile: dict) -> HotOrderPolicy:
 
 def public_row(row: dict, policy: HotOrderPolicy | None = None) -> dict:
     result = {key: (value.isoformat() if hasattr(value, 'isoformat') else str(value) if isinstance(value, uuid.UUID) else value)
-            for key, value in row.items() if key not in {'fingerprint', 'request_id'}}
+            for key, value in row.items() if key not in {'fingerprint', 'request_id','archived_at'}}
     if policy:
         result['actions'] = {'claim':policy.can_claim(row), 'cancel':policy.can_edit(row),
             'complete':policy.can_complete(row),'approve':policy.can_review(row),'reject':policy.can_review(row),
+            'delete':policy.can_delete(row),
             'release':bool(policy.owns_tenant(row) and row.get('status') == 'claimed' and
                            row.get('claimed_by') == policy.policy.profile.get('telegram_id'))}
         result['service_name'] = next((service['name'] for service in policy.settings.get('services', [])
@@ -93,6 +94,8 @@ def create_order(profile: dict, data: dict) -> dict:
                 row = cur.fetchone()
                 if not row or row['fingerprint'] != fingerprint:
                     raise TenantHotOrderError('Bu sorğu ID-si başqa sifariş üçün istifadə edilib.', 409)
+                if row.get('archived_at') is not None:
+                    raise TenantHotOrderError('Sifariş silinib.', 410)
         conn.commit()
     return public_row(row, policy)
 
@@ -101,7 +104,7 @@ def list_orders(profile: dict, *, limit: int = 50, offset: int = 0, approvals_on
     policy = authorize(profile)
     limit, offset = max(1, min(int(limit), 100)), max(0, min(int(offset), 100000))
     tenant, user = str(profile['tenant_id']), int(profile['telegram_id'])
-    where, values = 'tenant_id=%s::uuid', [tenant]
+    where, values = 'tenant_id=%s::uuid AND archived_at IS NULL', [tenant]
     if approvals_only:
         if not policy.policy.privileged:
             raise TenantHotOrderError('Təsdiq üçün icazəniz yoxdur.',403)
@@ -121,11 +124,40 @@ def list_orders(profile: dict, *, limit: int = 50, offset: int = 0, approvals_on
     return {'orders':[public_row(row, policy) for row in rows], 'total':total, 'limit':limit, 'offset':offset}
 
 
+def delete_order(profile: dict, order_id: str) -> dict:
+    from tenant_scoped_access_store import read_access_profile
+
+    tenant, actor = str(profile['tenant_id']), int(profile['telegram_id'])
+    with _connect() as conn:
+        ensure_hot_order_schema(conn)
+        with conn.cursor() as cur:
+            fresh = read_access_profile(cur, tenant, actor, lock=True)
+            if not fresh:
+                raise TenantHotOrderError('Sifarişi silmək üçün icazəniz yoxdur.', 403)
+            policy = authorize(fresh)
+            if not policy.can_delete({'tenant_id':tenant}):
+                raise TenantHotOrderError('Sifarişi yalnız şirkətin sahibi silə bilər.', 403)
+            cur.execute('''SELECT archived_at FROM saas_hot_orders
+                WHERE tenant_id=%s::uuid AND id=%s::uuid FOR UPDATE''', (tenant,order_id))
+            row = cur.fetchone()
+            if not row:
+                raise TenantHotOrderError('Sifariş tapılmadı.', 404)
+            if row['archived_at'] is None:
+                # Bump the version to retire notices from before the deletion.
+                cur.execute('''UPDATE saas_hot_orders SET archived_at=clock_timestamp(),updated_at=clock_timestamp()
+                    WHERE tenant_id=%s::uuid AND id=%s::uuid''',(tenant,order_id))
+                audit(cur, fresh, order_id, 'delete')
+        conn.commit()
+    return {'id':order_id,'deleted':True}
+
+
 def change_order(profile: dict, *, order_id: str, action: str) -> dict:
     policy = authorize(profile)
-    if action not in {'claim','release','cancel'}:
+    if action not in {'claim','release','cancel','delete'}:
         raise TenantHotOrderError('Əməliyyat düzgün deyil.')
     order_id = identity(order_id)
+    if action == 'delete':
+        return delete_order(profile, order_id)
     tenant, user = str(profile['tenant_id']), int(profile['telegram_id'])
     with _connect() as conn:
         ensure_hot_order_schema(conn)

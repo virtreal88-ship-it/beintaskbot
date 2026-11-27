@@ -181,6 +181,25 @@ test('options404 with allowed exact view preserves a readonly draft and retries 
 test('uncertain exact editor proof stays concealed with a reachable outside retry, then restores the same draft',async()=>{
  const b=await mount({manager:true});try{await b.w.tenantTaskFlow.open('native',b.f.task);b.d.querySelector('[data-task-card-edit]').click();await settle();el(b,'nativeTaskText').value='Keep through unavailable proof';await refreshProfile(b,f=>{f.profile.member.workflow={review_revision:3};f.readErrors.native=true;});assert.equal(el(b,'nativeTaskModal').classList.contains('show'),true);assert.equal(el(b,'nativeTaskModal').style.visibility,'hidden');assert.equal(el(b,'nativeTaskText').value,'Keep through unavailable proof');assert.equal(el(b,'nativeTaskSave').disabled,true);const retry=b.d.querySelector('#tasksFlowNotice [data-task-editor-retry]');assert.ok(retry);assert.equal(retry.closest('#nativeTaskModal'),null);b.f.readErrors.native=false;retry.click();await settle();assert.equal(el(b,'nativeTaskModal').style.visibility,'');assert.equal(el(b,'nativeTaskText').value,'Keep through unavailable proof');assert.equal(el(b,'nativeTaskSave').disabled,false);assert.equal(posts(b).length,0);assert.deepEqual(b.errors,[]);}finally{b.w.close();}
 });
+test('Delete archives only the displayed native task after confirmation',async()=>{
+ const b=await mount();try{
+  const initial=b.f.native[0];
+  initial.capabilities={view:true,update:true,complete:true,reopen:true,delete:true};
+  await b.w.tenantTaskFlow.open('native',b.f.task);
+  const remove=b.d.querySelector('[data-task-card-archive]');
+  assert.equal(remove.textContent,'Удалить');
+  b.w.confirm=()=>false;remove.click();await settle();
+  assert.equal(posts(b).length,0);
+  b.w.confirm=()=>true;remove.click();await settle();
+  assert.equal(posts(b).length,1);
+  assert.ok(new URL(posts(b)[0].url,'https://fixture.test').pathname.endsWith('/'+b.f.task));
+  assert.equal(posts(b)[0].body.action,'archive');
+  assert.equal(posts(b)[0].body.expected_updated_at,initial.updated_at);
+  assert.equal(posts(b)[0].body.expected_tenant_id,b.f.A);
+  assert.equal(b.f.native.length,0);
+  assert.equal(el(b,'taskFlowCard').classList.contains('show'),false);
+ }finally{b.w.close();}
+});
 test('assigned native task exposes completion only, never edit, reopen or archive',async()=>{
  const b=await mount();try{b.f.native[0].capabilities={view:true,update:false,complete:true,reopen:false,delete:false};await b.w.tenantTaskFlow.open('native',b.f.task);assert.equal(b.d.querySelector('[data-task-card-edit]'),null);assert.equal(b.d.querySelector('[data-task-card-archive]'),null);assert.ok(b.d.querySelector('[data-task-card-state]'));b.d.querySelector('[data-task-card-state]').click();await settle();assert.equal(posts(b).length,1);assert.equal(posts(b)[0].body.action,'complete');assert.equal(b.d.querySelector('[data-task-card-state]'),null);assert.equal(b.d.querySelector('[data-task-card-edit]'),null);assert.equal(b.d.querySelector('[data-task-card-archive]'),null);assert.deepEqual(b.errors,[]);}finally{b.w.close();}
 });

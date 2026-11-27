@@ -15,17 +15,17 @@ ids.forEach(id=>new Element(id));const nav=new Element();
 const document={getElementById:id=>elements.get(id),querySelector:()=>nav,head:new Element(),body:new Element(),createElement:()=>new Element(),addEventListener:(event,listener)=>events[event]=listener};
 const $=id=>elements.get(id),session=new Map(),requests=[],posts=[];
 function me(tenant='company-a',enabled=true) {return {success:true,member:{tenant_id:tenant,telegram_id:20,role:'owner',active:true,permissions:['hot_orders']},capabilities:{modules:{hot_orders:enabled},hot_orders:{can_create:enabled,can_claim:false,services:[{id:'repair',name:'Təmir'}]}}};}
-const row=(tenant,client='Client')=>({id:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',tenant_id:tenant,client_name:client,description:'<script>unsafe</script>',service_id:'repair',service_name:'Təmir',status:'open',created_at:'2026-10-08T12:00:00Z',actions:{claim:false,cancel:true,release:false}});
+const row=(tenant,client='Client')=>({id:'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',tenant_id:tenant,client_name:client,description:'<script>unsafe</script>',service_id:'repair',service_name:'Təmir',status:'open',created_at:'2026-10-08T12:00:00Z',actions:{claim:false,cancel:true,release:false,delete:true}});
 const reply=(body,status=200)=>({ok:status===200,status,json:async()=>body});
-let current=me(),postFails=true,deferred=null,uuid=0;
+let current=me(),postFails=true,deferred=null,uuid=0,removed=false,confirmed=true;
 async function fetch(url,options={}) {
   requests.push(url);
   if(url.endsWith('/me'))return reply(current);
-  if(options.body) {posts.push(JSON.parse(options.body));return reply(postFails ? {success:false,error:'Network problem'} : {success:true,order:row(current.member.tenant_id)},postFails ? 503 : 200);}
+  if(options.body) {const body=JSON.parse(options.body);posts.push(body);if(body.action==='delete'){removed=true;return reply({success:true,order:{id:body.order_id,deleted:true}});}return reply(postFails ? {success:false,error:'Network problem'} : {success:true,order:row(current.member.tenant_id)},postFails ? 503 : 200);}
   if(deferred) {const wait=deferred;deferred=null;return wait;}
-  return reply({success:true,orders:[row(current.member.tenant_id,'<Client>')],total:75});
+  return reply({success:true,orders:removed?[]:[row(current.member.tenant_id,'<Client>')],total:removed?0:75});
 }
-const context={window:{},document,fetch,Date,JSON,URLSearchParams,confirm:()=>true,crypto:{randomUUID:()=>`bbbbbbbb-bbbb-4bbb-bbbb-${String(++uuid).padStart(12,'0')}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}};
+const context={window:{tenantI18n:{language:'ru'}},document,fetch,Date,JSON,URLSearchParams,confirm:()=>confirmed,crypto:{randomUUID:()=>`bbbbbbbb-bbbb-4bbb-bbbb-${String(++uuid).padStart(12,'0')}`},sessionStorage:{getItem:key=>session.get(key)||null,setItem:(key,value)=>session.set(key,value),removeItem:key=>session.delete(key)}};
 const source=fs.readFileSync(path.join(__dirname,'../docs/tenant-hot-orders.js'),'utf8');vm.runInNewContext(source,context);
 const flush=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
@@ -49,10 +49,17 @@ const flush=()=>new Promise(resolve=>setImmediate(resolve));
   current=me('company-b');$('view-hot_orders').classList.add('active');events['tenant-profile']({detail:current});await flush();
   resolveOld(reply({success:true,orders:[row('company-a','OLD SECRET')],total:999}));await oldLoad;
   assert.ok(!$('hotOrderList').innerHTML.includes('OLD SECRET'));assert.equal($('hotOrderCount').textContent,'75 sifariş');
+  assert.match($('hotOrderList').innerHTML,/data-hot-action="delete"[^>]*>Удалить</);
+  const removal=new Element();removal.dataset={hotAction:'delete',hotId:row('company-b').id};
+  const gesture={target:{closest:()=>removal}};
+  confirmed=false;await $('hotOrderList').onclick(gesture);assert.equal(posts.length,2);
+  confirmed=true;await Promise.all([$('hotOrderList').onclick(gesture),$('hotOrderList').onclick(gesture)]);
+  assert.equal(posts.length,3);assert.equal(posts.at(-1).action,'delete');assert.equal(posts.at(-1).expected_tenant_id,'company-b');
+  assert.equal($('hotOrderCount').textContent,'0 sifariş');assert.ok(!$('hotOrderList').innerHTML.includes('data-hot-action="delete"'));
   events['tenant-profile']({detail:me('company-b',false)});
   assert.equal($('hotOrderCreate').hidden,true);assert.equal($('hotOrderList').innerHTML,'');
   assert.ok(source.includes('max-height:calc(100dvh - 32px)'));assert.ok(source.includes('position:sticky;bottom:-22px'));
   const app=fs.readFileSync(path.join(__dirname,'../docs/tenant-app.html'),'utf8');
-  assert.ok(app.includes("['dialogs','support','tasks','customers','deals','hot_orders','settings']"));assert.ok(app.includes('/assets/tenant-hot-orders.js'));
+  assert.match(app,/state\.view=\[[^\]]*'hot_orders'/);assert.ok(app.includes('/assets/tenant-hot-orders.js'));
   console.log('PASS: tenant hot-order UI escapes text, follows server actions, paginates, retries exact requests and rejects old-company responses.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

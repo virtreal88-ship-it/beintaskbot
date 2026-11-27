@@ -36,7 +36,7 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
   if(phoneInChat)Object.assign(kommo,{contact_phone:'',phone:''});
   if(longDetails)Object.assign(kommo,{contact_name:'',contact_phone:'',phone:'',company_name:'',
     detail_fields:Array.from({length:26},(_,i)=>({label:'Custom field '+i,value:'Value '+i}))});
-  const local = {...detail, id:f.deal, pipeline_id:'1', stage_id:'2', actions:{view:true,update:!limited},
+  const local = {...detail, id:f.deal, pipeline_id:'1', stage_id:'2', actions:{view:true,update:!limited,archive:!limited},
     updated_at:'2026-11-25T16:00:00Z', channel_id:linking==='none'?'':channel,
     conversation_id:linking==='none'?'':route.conversation_id};
   const stages = [{pipeline_id:'1',pipeline_name:'Подключение',stage_id:'2',stage_name:'В работе'},
@@ -49,7 +49,7 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     ['incoming','Айгюн Мамедова','Завтра после 10:00 удобно. Спасибо!']
   ].map(([direction, author_name, body, message_type='text'],i)=>({external_id:'demo-'+i,
     channel:'WhatsApp', direction, author_name, body, message_type, happened_at:'2026-11-25T16:0'+i+':00Z'}));
-  const access = {view:true, create:!limited, update:!limited};
+  const access = {view:true, create:!limited, update:!limited, delete:!limited};
   Object.assign(f.profile.capabilities.modules,{deals:true,dialogs:true});
   f.profile.capabilities.actions={deals:access,tasks:access};
   f.profile.capabilities.pages={deals:true,dialogs:true,tasks:true,profile:true};
@@ -84,10 +84,16 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/native/deals'&&method==='POST')
       return limited?json({},403):json({deal:{...local,title:JSON.parse(options.body).title}});
     if(p==='/api/platform/crm/native/deals')
-      return json(url.searchParams.has('options')?{workflows:stages,contacts:[],members:[]}:{deals:[local]});
+      return json(url.searchParams.has('options')?{workflows:stages,contacts:[],members:[]}:{deals:dealProof.archived?[]:[local]});
     if(p==='/api/platform/crm/native/deals/'+f.deal){
       if(method==='POST'){if(dealProof.rejectMove)return json({error:'Смена этапа отклонена'},403);
-        const change=JSON.parse(options.body);local.stage_id=change.stage_id||local.stage_id;
+        const change=JSON.parse(options.body);
+        if(change.action==='archive'){
+          if(limited||url.searchParams.get('expected_tenant_id')!==f.A||url.searchParams.get('expected_user_id')!=='11')return json({},403);
+          dealProof.archived=true;
+          return json({archived:true});
+        }
+        local.stage_id=change.stage_id||local.stage_id;
         local.updated_at='2026-11-25T16:10:00Z';}
       return json({deal:local});
     }
@@ -327,6 +333,7 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
       assert(!/Айгюн Мамедова|\+994/.test(await modal.locator('.modal-head').textContent()));
       assert.equal(await modal.getByRole('tab',{name:'Чат',exact:true}).getAttribute('aria-selected'),'true');
       if(width<900)await modal.locator('[data-deal-pane=data]').click();
+      assert.equal(await modal.getByRole('button',{name:'Удалить',exact:true}).isVisible(),native&&!limited);
       const info=modal.locator('.deal-info-panel');
       if(longDetails){
         assert.equal(await info.getByRole('heading',{name:'Контакт',exact:true}).count(),0);
@@ -482,6 +489,18 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
         if(linking==='empty'){
           await modal.getByText('Запись операторского диалога',{exact:true}).waitFor();
         }else await modal.getByText('К сделке не привязан доступный диалог.',{exact:true}).filter({visible:true}).waitFor();
+      }
+      if(native&&linking==='none'&&!limited){
+        await modal.locator('[data-deal-pane=data]').click();
+        const remove=modal.getByRole('button',{name:'Удалить',exact:true});
+        await page.evaluate(()=>{window.confirm=()=>false;});
+        await remove.click();
+        assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.body?.action==='archive').length),0);
+        await page.evaluate(()=>{window.confirm=()=>true;});
+        await remove.click();
+        await modal.waitFor({state:'hidden'});
+        assert.equal(await page.evaluate(()=>dealProof.archived),true);
+        assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.body?.action==='archive').length),1);
       }
       assert.deepEqual(errors,[]);
       await page.close();
