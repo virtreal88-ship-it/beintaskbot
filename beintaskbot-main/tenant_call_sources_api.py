@@ -116,7 +116,6 @@ async def relay(request,profile,member,logger):
                             code,received['browser'],received['provider'])
                 logger.info('call_audio_transport_end browser_code=%s browser_error=%s provider_code=%s provider_error=%s',
                             browser_code,browser_error,provider_code,provider_error)
-                await socket.close()
                 evidence={'version':1,'code':code,'at_ms':int(time.time()*1000),
                           'browser_to_worker':arrivals['browser'].snapshot(),
                           'engine_to_worker':arrivals['provider'].snapshot(),
@@ -126,4 +125,6 @@ async def relay(request,profile,member,logger):
                     await asyncio.to_thread(save_relay,profile,authority,nonce,evidence)
                 except Exception:
                     logger.warning('call_diagnostics_save_failed stage=relay')
+                finally:
+                    await socket.close()
             return socket
