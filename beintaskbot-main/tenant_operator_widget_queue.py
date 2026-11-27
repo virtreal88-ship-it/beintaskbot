@@ -187,6 +187,10 @@ def cards(cur, policy, mode, rollout):
            AND (%s OR d.state<>'waiting' OR m.mid=d.latest_in)
            ORDER BY m.mid DESC LIMIT 1) last ON true
        WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
+         AND NOT EXISTS(SELECT 1 FROM saas_operator_dialog_removals removal
+           WHERE removal.provider='operator_widget' AND removal.tenant_id=d.tenant_id
+             AND removal.channel_id=d.instance AND removal.conversation_id=d.identity
+             AND removal.lead_id=d.chat_id AND removal.widget_inbound_id=d.latest_in)
          AND (%s OR (state='accepted' AND operator_id=%s) OR (%s AND state='waiting' AND operator_id IS NULL))
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
@@ -240,6 +244,8 @@ def history(profile, params, before=None):
             rollout,
             is_online(cur, key[0], actor, source_channel=key[1]),
         )
+        from tenant_operator_dialog_removal import can_remove
+        dialog["can_remove_dialog"] = can_remove(policy, dialog)
         admission_preview = _unassigned(row) and not widget_allowed(policy.profile)
         cur.execute(
             "SELECT *,at AS message_at FROM saas_widget_messages WHERE "
