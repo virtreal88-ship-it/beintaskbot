@@ -22,8 +22,8 @@ def _database_url() -> str:
     return value
 
 
-def _connect():
-    conn = psycopg.connect(_database_url(), row_factory=dict_row)
+def _connect(**connection_options):
+    conn = psycopg.connect(_database_url(), row_factory=dict_row, **connection_options)
     try:
         from tenant_employee_defaults import require_compatible_runtime
         require_compatible_runtime(conn)
@@ -56,3 +56,4 @@ def _kommo_domain(value: str) -> str:
     if not domain.endswith(".kommo.com") or "/" in domain or " " in domain:
         raise TenantPlatformError("Kommo hesab ünvanını daxil edin. Məsələn: company.kommo.com")
     return domain
+
