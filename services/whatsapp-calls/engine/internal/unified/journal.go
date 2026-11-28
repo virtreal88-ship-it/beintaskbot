@@ -49,6 +49,7 @@ type Journal struct {
 	key            []byte
 	scope          string
 	operationScope string
+	deliveryReady  chan struct{}
 }
 
 type Event struct {
@@ -90,7 +91,7 @@ func New(ctx context.Context, db *sql.DB, scope Scope, key []byte) (*Journal, er
 	if err != nil {
 		return nil, err
 	}
-	j := &Journal{db: db, binding: scope, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:]), operationScope: hex.EncodeToString(stableHash[:])}
+	j := &Journal{db: db, binding: scope, aead: aead, key: append([]byte(nil), key...), scope: hex.EncodeToString(hash[:]), operationScope: hex.EncodeToString(stableHash[:]), deliveryReady: make(chan struct{}, 1)}
 	_, err = db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS unified_bindings(scope TEXT PRIMARY KEY, key_check TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS unified_events(
@@ -217,8 +218,19 @@ func (j *Journal) Append(ctx context.Context, identity string, payload []byte) (
 			}
 			return "", err
 		}
+	} else {
+		// SQLite has committed the insert. Coalesce wakeups while the
+		// delivery worker is draining the journal.
+		select {
+		case j.deliveryReady <- struct{}{}:
+		default:
+		}
 	}
 	return id, nil
+}
+
+func (j *Journal) DeliveryReady() <-chan struct{} {
+	return j.deliveryReady
 }
 
 func (j *Journal) Events(ctx context.Context, after int64, limit int) ([]Event, error) {

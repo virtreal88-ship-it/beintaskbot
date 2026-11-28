@@ -276,11 +276,18 @@ func (g *appGateway) run(ctx context.Context) {
 	results := []appResult{}
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
+	flushResults := false
 	for {
-		select {
-		case <-ctx.Done():
+		flushing := flushResults
+		flushResults = false
+		if !flushing {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		} else if ctx.Err() != nil {
 			return
-		case <-timer.C:
 		}
 		if g.cfg.Managed && g.cfg.Session == "" {
 			infos := g.server.sessions.infos()
@@ -320,6 +327,9 @@ func (g *appGateway) run(ctx context.Context) {
 		for _, command := range envelope.Result.Commands {
 			results = append(results, g.execute(ctx, sess, command))
 		}
+		// At most one extra sync per regular tick. Once a command is
+		// executed, publish its result without another one-second wait.
+		flushResults = !flushing && len(results) > 0
 		if sess.reg.count() != 0 || len(envelope.Result.Commands) != 0 {
 			continue
 		}

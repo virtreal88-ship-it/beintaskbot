@@ -45,11 +45,13 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  const dom=new JSDOM(read('docs/tenant-app.html'),{url:'https://crm.test/app/dialogs',runScripts:'outside-only'}),w=dom.window,calls=[],timers=new Map();let timerId=0;Object.defineProperty(w.document,'hidden',{configurable:true,value:false});
  w.setTimeout=(fn,delay=0)=>{const id=++timerId;timers.set(id,{fn,delay});return id;};w.clearTimeout=id=>timers.delete(id);
  const member={tenant_id:tenant,telegram_id:33,role:'worker',permissions:['dialogs'],active:true},profile={member,capabilities:{modules:{dialogs:true}}};w.tenantProfileSnapshot=profile;w.AudioContext=class{constructor(){this.state='suspended';this.currentTime=1;soundCalls++;}resume(){this.state='running';return Promise.resolve();}createOscillator(){return{type:'',frequency:{value:0},connect(){},start(){soundCalls++;},stop(){}};}createGain(){return{gain:{setValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}};}};
- let historyName=route.customer_name,historyRouteOverride={},readCursorOverride;
- w.fetch=async (url,options={})=>{const value=String(url);calls.push(value);if(value.includes('/dialogs/read')){const body=JSON.parse(options.body||'{}');readThrough.set(body.conversation_id,body.message_id);return{ok:true,json:async()=>({success:true,result:{updated:true}})}};if(value.includes('/dialogs/history'))return{ok:true,json:async()=>({success:true,result:{dialog:{...route,...historyRouteOverride,customer_name:historyName,last_message_id:messages.at(-1).id},messages:messages.map(m=>({...m})),next_before:null,...(readCursorOverride?{read_through_message_id:readCursorOverride}:{})}})};if(value.includes('/dialogs?'))return{ok:true,json:async()=>latest()};if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};throw Error('Unexpected request '+value);};
+ let historyName=route.customer_name,historyRouteOverride={},readCursorOverride,messageRevision='revision-3';
+ w.fetch=async (url,options={})=>{const value=String(url);calls.push(value);if(value.includes('/dialogs/updates?'))return{ok:true,json:async()=>({success:true,result:{revision:messageRevision}})};if(value.includes('/dialogs/read')){const body=JSON.parse(options.body||'{}');readThrough.set(body.conversation_id,body.message_id);return{ok:true,json:async()=>({success:true,result:{updated:true}})}};if(value.includes('/dialogs/history'))return{ok:true,json:async()=>({success:true,result:{dialog:{...route,...historyRouteOverride,customer_name:historyName,last_message_id:messages.at(-1).id},messages:messages.map(m=>({...m})),next_before:null,...(readCursorOverride?{read_through_message_id:readCursorOverride}:{})}})};if(value.includes('/dialogs?'))return{ok:true,json:async()=>latest()};if(value.includes('/api/platform/me'))return{ok:true,json:async()=>profile};throw Error('Unexpected request '+value);};
  for(const file of ['docs/tenant-operator-i18n.js','docs/tenant-operator-dialogs.js'])w.eval(read(file));
  await settle();await w.tenantOperator.refresh();await settle();
  const view=w.document.getElementById('view-dialogs');view.classList.add('active');w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'dialogs'}}));await settle();
+ const tickMessageWatch=async()=>{const entry=[...timers.entries()].find(([,timer])=>timer.fn.name==='checkMessageUpdates');assert.ok(entry,'visible dialogs have one message revision watcher');timers.delete(entry[0]);await entry[1].fn();};
+ await tickMessageWatch();
  assert.ok([...timers.values()].some(timer=>timer.delay===30000),'visible dialogs view schedules a refresh every 30 seconds');
  const firstTimer=[...timers.entries()].find(([,timer])=>timer.delay===30000);timers.delete(firstTimer[0]);await firstTimer[1].fn();await settle();assert.ok([...timers.values()].some(timer=>timer.delay===30000),'subsequent refresh remains at 30 seconds');
  await w.tenantOperator.openDialog(route);await settle();w.dispatchEvent(new w.Event('pointerdown'));await settle();
@@ -91,7 +93,7 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  messages.push({id:'message-4',source:'connect',external_id:'external-4',direction:'incoming',message_type:'text',body:'New customer question',author_type:'customer',author_name:'Customer',happened_at:'2026-10-21T10:04:00Z'});
  historyName=route.customer_name='Current customer';messages[2].author_name=historyName;
  const beforeHistory=calls.filter(url=>url.includes('/dialogs/history')).length;
- await w.tenantOperator.refresh();await settle();
+ messageRevision='revision-4';await tickMessageWatch();await settle();
  assert.equal(calls.filter(url=>url.includes('/dialogs/history')).length,beforeHistory+1,'a changed latest message fetches the existing history API');
  assert.equal(title.textContent,historyName);assert.equal(oldAuthor.textContent,historyName);
  assert.equal(chat.querySelectorAll('.operator-message').length,4,'new history is appended once and duplicate external deliveries are ignored');
@@ -110,6 +112,7 @@ let readThrough=new Map(),unreadValue=1,soundCalls=0;const latest=()=>({success:
  w.dispatchEvent(new w.StorageEvent('storage',{key:'tenant.operator.read.other-tenant:33',newValue:'changed'}));await settle();
  assert.equal(calls.filter(url=>url.includes('/dialogs?')).length,beforeOtherTab+1,'a foreign tenant read receipt is ignored');
  view.classList.remove('active');w.document.dispatchEvent(new w.CustomEvent('tenant-view',{detail:{view:'home'}}));assert.ok([...timers.values()].some(timer=>timer.delay===30000),'app-level timer keeps observing incoming messages outside the dialogs view');
+ assert.ok(![...timers.values()].some(timer=>timer.fn.name==='checkMessageUpdates'),'leaving Dialogs stops fast updates');
  assert.ok(calls.filter(url=>url.includes('/dialogs?')).every(url=>url.includes('search=')&&url.includes('channel=')&&url.includes('agent=')&&url.includes('state=')),'refresh reuses current filter parameters');
  assert.ok(calls.every(url=>!url.includes('/conversations/')&&!url.includes('/copilot')),'refresh issues no mutations or AI requests');
  console.log('PASS: app-level low-frequency refresh, selected-chat incremental append, numeric unread count, server read marker, scroll/draft/Copilot preservation, request deduplication, existing API only.');dom.window.close();

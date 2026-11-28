@@ -65,15 +65,25 @@ func (g *appGateway) deliverMessages(ctx context.Context) {
 	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	var retryOnTick bool
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			retryOnTick = false
+		case <-g.messages.DeliveryReady():
+		}
+		if retryOnTick {
+			continue
 		}
 		for i := 0; i < 16; i++ {
 			delivered, err := g.messages.DeliverOnce(ctx, g.client, g.cfg.Endpoint+"/messages", g.cfg.Token)
-			if err != nil || !delivered {
+			if err != nil {
+				retryOnTick = true
+				break
+			}
+			if !delivered {
 				break
 			}
 		}

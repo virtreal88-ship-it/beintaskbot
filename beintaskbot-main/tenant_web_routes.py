@@ -79,6 +79,7 @@ class TenantWebContext:
 def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
     """Build before mounting so a factory error cannot leave a partial group."""
     member, origin, logger = context.member, context.origin, context.logger
+    message_updates = GroupWorkUpdates(timeout=15, reject_when_full=True)
     bindings = [
         ('/api/platform/test-call-recordings', call_recordings_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/browser-calls', browser_calls_handler(member,origin,logger), ('GET','POST')),
@@ -87,7 +88,7 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/browser-calls/{call_id:[0-9a-fA-F-]{36}}/audio', call_sources_handler(member,origin,logger,'audio'), ('GET',)),
         ('/api/platform/call-gateway/sync', browser_calls_handler(member,origin,logger,'sync'), ('POST',)),
         ('/api/platform/call-gateway/recording', browser_calls_handler(member,origin,logger,'recording'), ('POST',)),
-        ('/api/platform/call-gateway/messages', native_whatsapp_handler(member,origin,logger), ('POST',)),
+        ('/api/platform/call-gateway/messages', native_whatsapp_handler(member,origin,logger,message_updates=message_updates), ('POST',)),
         ('/api/platform/test-call-recordings/{record_id:[0-9a-fA-F-]{36}}', call_recordings_handler(member,origin,logger,'audio'), ('GET',)),
         ('/api/platform/instructions', instruction_handler(member,origin,logger), ('GET','POST')),
         ('/api/platform/instructions/{lesson_id}', instruction_handler(member,origin,logger), ('GET','POST')),
@@ -139,12 +140,12 @@ def feature_routes(context: TenantWebContext) -> list[tuple[str, str, Handler]]:
         ('/api/platform/crm/deal-approvals', deal_completion_handler(member, origin, deal_provider(context.crm_request, context.wait_slot), logger, review=True), ('GET', 'POST')),
     ]
     routes = [(method, path, handle) for path, handle, methods in bindings for method in methods]
-    routes.extend(ai_agent_routes(context))
+    routes.extend(ai_agent_routes(context,message_updates=message_updates))
     routes.extend(learning_mcp_routes(context.member))
     return routes
 
 
-def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/') -> list[tuple[str, str, Handler]]:
+def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/', *, message_updates=None) -> list[tuple[str, str, Handler]]:
     """AI Agents are a tenant product module, independent of message transports."""
     member, origin, logger = context.member, context.origin, context.logger
     group_work_updates = GroupWorkUpdates()
@@ -178,6 +179,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('agents/options', ai_agents_handler(member, origin, logger, 'options', context.crm_request), ('GET',)),
         ('agents/{agent_id:[0-9a-fA-F-]{36}}/delete-preview', ai_agents_handler(member, origin, logger, 'agent_delete_preview'), ('GET',)),
         ('dialogs', operator_handler(member, origin, logger, 'dialogs'), ('GET',)),
+        ('dialogs/updates', operator_handler(member, origin, logger, 'message_updates',message_updates=message_updates), ('GET',)),
         ('dialogs/for-deal', operator_handler(member, origin, logger, 'deal_dialogs'), ('GET',)),
         ('dialogs/deal-link', operator_handler(member, origin, logger, 'deal_dialog_link'), ('POST',)),
         ('dialogs/deal-history', operator_handler(member, origin, logger, 'deal_dialog_history'), ('GET',)),

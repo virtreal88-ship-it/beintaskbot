@@ -30,7 +30,13 @@
     return quoteCopy(sent.delivery_state||'unknown');
   };
   let activeReceiptDiagnostics=()=>{},activePrimaryObserver=null,activeSend=null;
-  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',draftKey='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true,controls,commandContext,onError=error=>alert(error.message)}){
+  const activeTextSends=new Set();
+  const previewCopy={
+    ru:{sending:'Отправляется',unknown:'Статус уточняется',accepted:'Принято к отправке'},
+    az:{sending:'Göndərilir',unknown:'Vəziyyəti yoxlanılır',accepted:'Göndərilməyə qəbul edildi'},
+    en:{sending:'Sending',unknown:'Status unconfirmed',accepted:'Accepted for sending'}
+  };
+  function bind({api,identity,leadId,me,isCurrent,reload,provider='kommo',channelId='',draftKey='',onAccepted=()=>{},getQuote=()=>null,onPending=()=>{},onDiscard=()=>{},isQuoteCurrent=()=>true,controls,commandContext,timeline,onError=error=>alert(error.message)}){
     activeReceiptDiagnostics=()=>{};
     activePrimaryObserver?.disconnect();activePrimaryObserver=null;
     const {button,input,primary}=controls||{button:document.getElementById('sendChat'),input:document.getElementById('chatText'),primary:document.getElementById('tcComposerPrimary')};
@@ -48,6 +54,31 @@
       status.textContent=text;
     };
     const key='tenant-chat-send:'+identity+':'+leadId;
+    const scope=JSON.stringify([key,provider,String(channelId),draftKey]);
+    const sendKey=pending=>scope+':'+pending.request_id;
+    function preview(pending,state){
+      if(!timeline?.isConnected||provider!=='connect'||!isCurrent())return;
+      let row=timeline.querySelector('[data-pending-text-send]');
+      if(!state){
+        if(row?.dataset.pendingTextSend===pending.request_id)row.remove();
+        return;
+      }
+      const scroll=timeline.scrollHeight-timeline.scrollTop-timeline.clientHeight<28;
+      if(row?.dataset.pendingTextSend!==pending.request_id){
+        row?.remove();
+        row=document.createElement('article');row.className='operator-message';
+        row.dataset.direction='outgoing';row.dataset.pendingTextSend=pending.request_id;
+        const body=document.createElement('p');body.className='operator-message-caption';
+        body.textContent=pending.text;
+        const status=document.createElement('footer');status.className='operator-message-meta operator-delivery-note';
+        status.setAttribute('role','status');row.append(body,status);timeline.append(row);
+      }
+      row.lastElementChild.textContent=previewCopy[language()][state];
+      if(scroll)timeline.scrollTop=timeline.scrollHeight;
+    }
+    const updatePreview=(pending,state)=>{
+      if(activeSend?.scope===scope&&activeSend.current())activeSend.preview(pending,state);
+    };
     const scoped=provider==='connect'&&String(me.tenant_id)==='e09a5c24-093f-4141-992d-532052e00c90'&&String(channelId)==='96863d75-d272-4c93-a25e-ffb2b16ecae3';
     const readStatus=(path,requestId)=>api('/api/platform/crm/chat/'+path+'?'+new URLSearchParams({
       lead_id:String(leadId),expected_tenant_id:String(me.tenant_id),expected_user_id:String(me.telegram_id),
@@ -73,6 +104,8 @@
       let saved;
       try{saved=JSON.parse(sessionStorage.getItem(key)||'null');}catch{}
       if(saved?.request_id!==pending.request_id)return;
+      updatePreview(saved,activeTextSends.has(sendKey(saved))?'sending':'unknown');
+      if(!saved.quote_message_id)return;
       onPending(saved,()=>{
         try{
           const current=JSON.parse(sessionStorage.getItem(key)||'null');
@@ -109,10 +142,11 @@
     const clearSavedDraft=text=>{
       if(draftKey&&sessionStorage.getItem(draftKey)?.trim()===text)sessionStorage.removeItem(draftKey);
     };
-    const scope=JSON.stringify([key,provider,String(channelId),draftKey]);
     const binding={
       scope,
       current:()=>input.isConnected&&isCurrent(),
+      preview,
+      unlock:()=>{button.disabled=false;button.classList.remove('loading');},
       async accepted(pending,sent){
         if(onAccepted(pending.text)!==true){
           clearSavedDraft(pending.text);
@@ -123,11 +157,17 @@
         }
         button.textContent=copy('send','Göndər');
         showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));
-        await reload();
+        preview(pending,'accepted');
+        await reload(sent);
+        preview(pending,null);
       }
     };
     activeSend=binding;
-    try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){button.textContent=copy('checkSend','Vəziyyəti yoxla');if(!saved.quote_message_id||isQuoteCurrent(saved))presentPending(saved);}}catch(e){button.disabled=true;}
+    try{const saved=JSON.parse(sessionStorage.getItem(key)||'null');if(saved){
+      const inFlight=activeTextSends.has(sendKey(saved));
+      button.textContent=copy('checkSend','Vəziyyəti yoxla');button.disabled=inFlight;
+      if(!saved.quote_message_id||isQuoteCurrent(saved))presentPending(saved);
+    }}catch(e){button.disabled=true;}
     button.onclick=async()=>{
       if(button.disabled||!isCurrent())return;
       let pending;try{pending=JSON.parse(sessionStorage.getItem(key)||'null');}catch(e){alert('Göndərmə yaddaşı oxunmadı.');return;}
@@ -140,10 +180,15 @@
       if(pending?.quote_message_id&&!isQuoteCurrent(pending)){alert('Əvvəlki mesaj başqa dialoqa aiddir.');return;}
       if(!pending){pending={...commandContext,lead_id:leadId,text,request_id:crypto.randomUUID(),expected_tenant_id:me.tenant_id,expected_user_id:me.telegram_id,...(quote||{})};try{sessionStorage.setItem(key,JSON.stringify(pending));}catch(e){alert('Göndərmə yaddaşı əlçatan deyil.');return;}}
       button.disabled=true;button.classList.add('loading');
-      if(!checking&&pending.quote_message_id)presentPending(pending,true);
+      if(!checking){
+        activeTextSends.add(sendKey(pending));
+        presentPending(pending,true);
+      }
       try{
         const sent=checking?await checkPending(pending):await api('/api/platform/crm/chat/send',{method:'POST',body:JSON.stringify(pending)});
+        activeTextSends.delete(sendKey(pending));
         if(checking&&sent.state==='blocked'&&sent.quote_protocol!==true){
+          updatePreview(pending,null);
           if(forgetPending(pending.request_id)&&isCurrent()){
             onDiscard();button.textContent=copy('send','Göndər');showAccepted(checkCopy('blocked'));
           }
@@ -155,7 +200,7 @@
         }
         if(sent.quote_protocol===true)showDiagnostic({...sent,request_id:sent.request_id||pending.request_id});
         if(pending.quote_message_id&&sent.quote_protocol===true&&sent.provider_accepted!==true&&sent.manual_review!==true){
-          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){if(forgetPending(pending.request_id)&&isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
+          if(sent.delivery_state==='failed'&&sent.retry_safe===true&&!sent.provider_message_id){updatePreview(pending,null);if(forgetPending(pending.request_id)&&isCurrent()){onDiscard();button.textContent=copy('send','Göndər');}}
           else if(isCurrent()){presentPending(pending);button.textContent=copy('checkSend','Vəziyyəti yoxla');}
           if(isCurrent()){alert(diagnostic(sent));await reload();}return;
         }
@@ -165,9 +210,13 @@
         if(activeSend?.scope===scope&&activeSend.current())await activeSend.accepted(pending,sent);
         else clearSavedDraft(pending.text);
       }catch(e){
+        activeTextSends.delete(sendKey(pending));
         const discard=!checking&&e.keepRequest===false&&(!pending?.quote_message_id||e.deliveryPhase==='not_sent');
-        if(discard){if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}
-        else if(isCurrent())presentPending(pending);
+        if(discard){updatePreview(pending,null);if(forgetPending(pending.request_id)&&isCurrent())onDiscard();}
+        else{
+          updatePreview(pending,'unknown');
+          if(isCurrent()&&pending.quote_message_id)presentPending(pending);
+        }
         if(isCurrent()){
           button.textContent=discard?copy('send','Göndər'):copy('checkSend','Vəziyyəti yoxla');
           const groupMessage=groupSendCopy(e.deliveryPhase,e.errorCode);
@@ -175,7 +224,11 @@
           else onError(e);
         }
       }
-      finally{button.disabled=false;button.classList.remove('loading');}
+      finally{
+        activeTextSends.delete(sendKey(pending));
+        button.disabled=false;button.classList.remove('loading');
+        if(activeSend!==binding&&activeSend?.scope===scope&&activeSend.current())activeSend.unlock();
+      }
     };
     if(provider!=='connect')bindFile({identity,leadId,me,isCurrent,reload,input,button});
   }

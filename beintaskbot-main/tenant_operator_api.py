@@ -14,7 +14,7 @@ from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
 from tenant_group_participants import get_participants
 from tenant_read_timing import ReadTiming
-from worker_crm_capacity import avatar_auth_io, session_io, dialog_io, CapacityUnavailable
+from worker_crm_capacity import avatar_auth_io, session_io, dialog_io, dialog_revision_io, CapacityUnavailable
 from tenant_operator_access import observed_operator
 from tenant_dialog_access import sources as dialog_sources
 from tenant_dialog_lifecycle import mutate as dialog_lifecycle
@@ -23,15 +23,18 @@ from tenant_dialog_view_preferences import company_panel_preferences, preference
 
 
 class GroupWorkUpdates:
-    """Wake open group cards after an authorized lifecycle transaction commits."""
-    def __init__(self, timeout=10):
+    """Wake bounded, scoped revision readers after a committed change."""
+    def __init__(self, timeout=10, *, reject_when_full=False):
         self.timeout=timeout
+        self.reject_when_full=reject_when_full
         self.waiters={}
 
     async def read(self, profile, conversation, known_revision, read_revision):
         scope=(str(profile['tenant_id']),conversation)
         actor=(scope[0],str(profile['telegram_id']))
         if len(self.waiters)>=128 or sum(owner==actor for _,owner in self.waiters.values())>=3:
+            if self.reject_when_full:
+                raise CapacityUnavailable()
             return await read_revision()
         changed=asyncio.Event()
         self.waiters[changed]=(scope,actor)
@@ -55,7 +58,7 @@ class GroupWorkUpdates:
                 changed.set()
 
 
-def handler(member_from_request,origin,logger,resource, *, group_work_updates=None):
+def handler(member_from_request,origin,logger,resource, *, group_work_updates=None,message_updates=None):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         scope_verified=False
@@ -78,6 +81,27 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     _expected(query,profile)
                     from tenant_saved_only_copilot import preflight
                     result=await asyncio.to_thread(preflight,profile,dict(query))
+                elif resource=='message_updates':
+                    from tenant_dialog_message_revision import read_revision
+                    if not scope_verified:
+                        _expected(query,profile)
+                    initial = True
+
+                    async def read_message_revision():
+                        nonlocal initial
+                        current=profile if initial else await session_io.run(member_from_request,request)
+                        initial=False
+                        if not current:
+                            raise TenantLinearError('Нет доступа.',403)
+                        _expected({'expected_tenant_id':profile['tenant_id'],
+                                   'expected_user_id':profile['telegram_id']},current)
+                        return await dialog_revision_io.run(read_revision,current)
+
+                    known=query.get('revision','')
+                    if message_updates and 0<len(known)<=80:
+                        result=await message_updates.read(profile,'',known,read_message_revision)
+                    else:
+                        result=await read_message_revision()
                 elif resource=='presence':
                     _expected(query,profile)
                     result=await asyncio.to_thread(presence_status,profile)
