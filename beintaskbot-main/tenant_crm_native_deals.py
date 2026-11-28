@@ -1,5 +1,6 @@
 """Tenant-scoped native deal CRUD with atomic scoped scalar sync receipts."""
 from __future__ import annotations
+import re
 import uuid
 
 from tenant_platform_core import _connect, _ensure_schema
@@ -34,7 +35,7 @@ def _fields(title, pipeline_id, stage_id, *, contact_id=None, responsible_id=Non
             _uuid(channel_id, 'channel id'), conversation_id, description)
 
 
-def _related(cur, tenant_id, values, *, profile=None, previous=None):
+def _related(cur, tenant_id, values, *, profile=None, previous=None, from_dialog=False):
     _, pipeline, stage, contact, responsible, channel, conversation, _ = values
     editing_existing = previous is not None
     previous = previous or {}
@@ -45,13 +46,14 @@ def _related(cur, tenant_id, values, *, profile=None, previous=None):
         require_local_relation(cur, tenant_id, 'deal')
     scoped_initial_contact = (not editing_existing and contact and profile is not None
         and any(TenantPolicy(profile).has_scoped_access(module) for module in ('deals', 'customers')))
-    if scoped_initial_contact:
+    if scoped_initial_contact or (from_dialog and contact and profile is not None):
         # Initial selection is authorized by deal C plus current contact R,
         # never contact U. Keep the target/department grant locked through insert.
         if not locked_resource(cur, profile, 'customers', 'view',
                 'saas_crm_native_contacts', tenant_id, contact):
             raise CRMAccessError('contact_unavailable', 404)
-        require_local_relation(cur, tenant_id, 'deal')
+        if scoped_initial_contact:
+            require_local_relation(cur, tenant_id, 'deal')
     if (str(channel or ''), conversation) != (str(previous.get('channel_id') or ''), previous.get('conversation_id') or ''):
         require_defined_relation(profile, 'deals', 'dialogs')
     cur.execute("""SELECT 1 FROM saas_tenant_pipeline_stages s JOIN saas_tenant_pipelines p
@@ -71,19 +73,39 @@ def _related(cur, tenant_id, values, *, profile=None, previous=None):
 
 
 def create_deal(tenant_id, title, pipeline_id, stage_id, *, contact_id=None, responsible_id=None,
-                channel_id=None, conversation_id='', description='', deal_id=None, actor_id=None):
+                channel_id=None, conversation_id='', description='', deal_id=None, actor_id=None,
+                dialog_phone=None, operator_company=None, operator_profile=None):
+    from_dialog = dialog_phone is not None
+    if from_dialog and not isinstance(dialog_phone, str):
+        raise ValueError('invalid dialog phone')
+    dialog_phone = (dialog_phone or '').strip()
+    if dialog_phone and (len(dialog_phone) > 40 or not re.fullmatch(r'\+?[0-9][0-9 ()\-.]*', dialog_phone)
+                         or not 7 <= len(re.sub(r'[^0-9]', '', dialog_phone)) <= 15):
+        raise ValueError('invalid dialog phone')
     fields = _fields(title, pipeline_id, stage_id, contact_id=contact_id, responsible_id=responsible_id,
                      channel_id=channel_id, conversation_id=conversation_id, description=description)
     ident = _uuid(deal_id, 'deal id') if deal_id else str(uuid.uuid4())
+    if operator_company is not None:
+        from tenant_deal_operator_company import prepare_create
+        if (not operator_profile or str(operator_profile.get('tenant_id')) != str(tenant_id)
+                or str(operator_profile.get('telegram_id')) != str(actor_id)):
+            raise CRMAccessError()
+        company = prepare_create(operator_profile, operator_company)
+    else:
+        company = None
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
-            lock_admission(cur, tenant_id, actor_id)
+            if company:
+                from tenant_deal_operator_company import check_create_connection, save_created_binding
+                check_create_connection(cur, company)
+            else:
+                lock_admission(cur, tenant_id, actor_id)
             profile = current_access(cur, tenant_id, actor_id, 'deals', 'create')
             authorize_create(cur, profile, 'deals', tenant_id, actor_id)
-            _related(cur, tenant_id, fields, profile=profile)
+            _related(cur, tenant_id, fields, profile=profile, from_dialog=from_dialog)
             if fields[5]:
-                cur.execute("""SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at
+                cur.execute("""SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at,dialog_phone
                     FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
                     AND conversation_id=%s AND archived_at IS NULL FOR UPDATE""", (tenant_id,fields[5],fields[6]))
                 existing=cur.fetchone()
@@ -95,25 +117,34 @@ def create_deal(tenant_id, title, pipeline_id, stage_id, *, contact_id=None, res
                             raise ValueError('deal id conflict')
                     if str(existing['id']) != ident or (existing['title'],existing['pipeline_id'],existing['stage_id'],str(existing['contact_id'] or ''),existing['responsible_id'],str(existing['channel_id']),existing['conversation_id'],existing['description']) != (fields[0],fields[1],fields[2],fields[3] or '',fields[4],fields[5],fields[6],fields[7]):
                         raise ValueError('conversation already linked to another deal')
+                    if existing.get('dialog_phone', '') != dialog_phone:
+                        raise ValueError('deal id conflict')
+                    if company:
+                        save_created_binding(cur, company, ident, created=False)
                     sync = queue_edit(cur, tenant_id, actor_id, profile, 'deal', existing, None, action='create')
                     if sync is not None: existing = {**existing, 'sync': sync}
                     conn.commit()
                     return existing
             cur.execute("""INSERT INTO saas_crm_native_deals
-                (id,tenant_id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,access_responsible_id)
-                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s,%s::uuid,%s,%s,%s)
+                (id,tenant_id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,access_responsible_id,dialog_phone)
+                VALUES (%s::uuid,%s::uuid,%s,%s,%s,%s::uuid,%s,%s::uuid,%s,%s,%s,%s)
                 ON CONFLICT (id) DO NOTHING
-                RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at""",
-                (ident,tenant_id,*fields,actor_id))
+                RETURNING id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at,dialog_phone""",
+                (ident,tenant_id,*fields,actor_id,dialog_phone))
             row = cur.fetchone()
+            created = row is not None
             if row is None:
-                cur.execute("SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL", (tenant_id, ident))
+                cur.execute("SELECT id,title,pipeline_id,stage_id,contact_id,responsible_id,channel_id,conversation_id,description,created_at,updated_at,dialog_phone FROM saas_crm_native_deals WHERE tenant_id=%s::uuid AND id=%s::uuid AND archived_at IS NULL", (tenant_id, ident))
                 row = cur.fetchone()
                 if profile is not None:
                     row = locked_resource(cur, profile, 'deals', 'create', 'saas_crm_native_deals', tenant_id, ident)
                     if row and TenantPolicy(profile).has_scoped_access('deals') and str(row.get('access_responsible_id')) != str(actor_id):
                         row = None
                 if not row or (row['title'],row['pipeline_id'],row['stage_id'],str(row['contact_id'] or ''),row['responsible_id'],str(row['channel_id'] or ''),row['conversation_id'],row['description']) != (fields[0],fields[1],fields[2],fields[3] or '',fields[4],fields[5] or '',fields[6],fields[7]): raise ValueError('deal id conflict')
+            if row.get('dialog_phone', '') != dialog_phone:
+                raise ValueError('deal id conflict')
+            if company:
+                save_created_binding(cur, company, ident, created=created)
             from tenant_crm_native_tasks import maybe_create_stage_task
             maybe_create_stage_task(cur,tenant_id,row,event_key='deal-created:'+str(row['id']))
             sync = queue_edit(cur, tenant_id, actor_id, profile, 'deal', row, None, action='create')
@@ -143,7 +174,7 @@ def get_deal(tenant_id, deal_id, *, actor_id=None):
             # The allowed deal contains its related client information, even
             # when the separate contact/company directory is closed.
             cur.execute(f"""SELECT d.id,d.title,d.pipeline_id,d.stage_id,d.contact_id,c.display_name AS contact_name,
-                c.phone AS contact_phone,c.email AS contact_email,
+                d.dialog_phone,c.phone AS contact_phone,c.email AS contact_email,
                 d.company_id,co.name AS company_name,co.phone AS company_phone,co.email AS company_email,
                 d.responsible_id,m.display_name AS responsible_name,
                 d.channel_id,d.conversation_id,d.description,d.created_at,d.updated_at {columns}
@@ -158,8 +189,8 @@ def get_deal(tenant_id, deal_id, *, actor_id=None):
 
 def list_deals(tenant_id, search='', limit=50, *, actor_id=None, offset=0):
     from tenant_crm_queries import search_predicate
-    predicate, terms = search_predicate(search, ('d.title','c.display_name','co.name','c.phone','co.phone','d.stage_id','stage.name'),
-                                        ('c.phone','co.phone')) if search else ('TRUE', [])
+    predicate, terms = search_predicate(search, ('d.title','c.display_name','co.name','c.phone','co.phone','d.dialog_phone','d.stage_id','stage.name'),
+                                        ('c.phone','co.phone','d.dialog_phone')) if search else ('TRUE', [])
     with _connect() as conn:
         _ensure_schema(conn)
         with conn.cursor() as cur:
@@ -207,6 +238,21 @@ def deal_options(tenant_id, *, actor_id=None, action='view'):
     return {'workflows':workflows,'members':members,'contacts':contacts,
             'scoped_relations':scoped_access_enabled(),
             'relation_actions':{'link_company':update,'unlink_company':update}}
+
+
+def search_create_contacts(tenant_id, search, *, actor_id):
+    from tenant_crm_queries import search_predicate
+    predicate, terms = search_predicate(search, ('c.display_name', 'c.phone', 'c.email'), ('c.phone',))
+    with _connect() as conn:
+        _ensure_schema(conn)
+        with conn.cursor() as cur:
+            profile = current_access(cur, tenant_id, actor_id, 'deals', 'create')
+            authorize_create(cur, profile, 'deals', tenant_id, actor_id)
+            where, params = scoped_sql(profile, 'customers', 'view', 'c')
+            cur.execute(f'''SELECT c.id, c.display_name, c.phone FROM saas_crm_native_contacts c
+                WHERE c.tenant_id=%s::uuid AND c.archived_at IS NULL AND ({where}) AND {predicate}
+                ORDER BY c.display_name,c.id LIMIT 10''', [tenant_id, *params, *terms])
+            return cur.fetchall()
 
 
 def update_deal(tenant_id, deal_id, title, pipeline_id, stage_id, *, contact_id=None, responsible_id=None,

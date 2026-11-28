@@ -145,3 +145,63 @@ def test_disposable_postgres_binding_persists_and_unlinks_by_exact_deal(db, monk
         company.binding({'tenant_id': B, 'telegram_id': 22}, route)
     assert company.unlink(profile, route, saved['id'])['company_id'] is None
     assert company.binding(profile, route)['company_id'] is None
+
+
+def test_native_creation_keeps_phone_and_operator_binding_in_one_transaction(db, monkeypatch):
+    import tenant_crm_native_deals as deals
+
+    monkeypatch.setenv('BEINSYSTEMS_OPERATOR_TENANT_ID', A)
+    monkeypatch.setenv('BEINSYSTEMS_DIALOG_OPERATOR_CHOOSER_ENABLED', 'true')
+    monkeypatch.setattr(company.operator, '_connect', lambda: db)
+    monkeypatch.setattr(deals, '_connect', lambda: db)
+    profile = {**PROFILE, 'tenant_id': A, 'telegram_id': 11}
+    provider = Mock(return_value=(A, 11, 'active', CREDENTIALS, ['verified-account']))
+    monkeypatch.setattr(company.chooser, '_read_live', provider)
+    monkeypatch.setattr(company.imports, '_lock_and_check_selected_source', Mock())
+    db.execute("INSERT INTO saas_tenant_pipelines(tenant_id,pipeline_id,name) VALUES(%s::uuid,'pipe','Sales')", (A,))
+    db.execute("""INSERT INTO saas_tenant_pipeline_stages(tenant_id,pipeline_id,stage_id,name)
+        VALUES(%s::uuid,'pipe','new','New')""", (A,))
+    db.commit()
+
+    selection = {'account': 'verified-account', 'search': 'verified'}
+    args = dict(actor_id=11, deal_id=DEAL, dialog_phone='+994 50 123 45 67',
+                operator_company=selection, operator_profile=profile)
+    deal = deals.create_deal(A, 'Synthetic deal', 'pipe', 'new', **args)
+    assert deal['dialog_phone'] == '+994 50 123 45 67'
+    assert not deals.get_deal(A, DEAL, actor_id=11)['contact_id']
+    assert deals.get_deal(A, DEAL, actor_id=11)['dialog_phone'] == deal['dialog_phone']
+    assert [row['id'] for row in deals.list_deals(A, '0501234567', actor_id=11)] == [deal['id']]
+    route = ('native', DEAL)
+    saved = company.binding(profile, route)
+    assert saved['operator_account'] == 'verified-account'
+    provider.assert_called_once_with(profile, None, 'verified-account', choice=True,
+                                     selection_search='verified', authorize=company._create_access)
+    assert deals.create_deal(A, 'Synthetic deal', 'pipe', 'new', **args)['id'] == deal['id']
+    assert company.binding(profile, route) == saved
+
+    company.unlink(profile, route, saved['company_id'])
+    with pytest.raises(OperatorError, match='Компания сделки изменилась'):
+        deals.create_deal(A, 'Synthetic deal', 'pipe', 'new', **args)
+    assert company.binding(profile, route)['company_id'] is None
+
+    other = '11111111-1111-4111-8111-111111111116'
+    monkeypatch.setattr(company, '_save', Mock(side_effect=OperatorError('Binding conflict.', 409)))
+    with pytest.raises(OperatorError, match='Binding conflict'):
+        deals.create_deal(A, 'Synthetic deal', 'pipe', 'new', **{**args, 'deal_id': other})
+    assert deals.get_deal(A, other, actor_id=11) is None
+
+
+def test_create_contact_search_finds_late_matches_inside_the_workspace(db, monkeypatch):
+    import tenant_crm_native_deals as deals
+
+    monkeypatch.setattr(deals, '_connect', lambda: db)
+    db.execute("""INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone)
+        SELECT gen_random_uuid(), %s::uuid, 'Earlier contact ' || number, ''
+        FROM generate_series(1, 260) number""", (A,))
+    db.execute("""INSERT INTO saas_crm_native_contacts(id,tenant_id,display_name,phone)
+        VALUES(gen_random_uuid(),%s::uuid,'Zulu contact','+994 (50) 123-45-67'),
+              (gen_random_uuid(),%s::uuid,'Foreign contact','+994 (50) 123-45-67')""", (A, B))
+    db.commit()
+    results = deals.search_create_contacts(A, '0501234567', actor_id=11)
+    assert [contact['display_name'] for contact in results] == ['Zulu contact']
+    assert deals.search_create_contacts(A, 'foreign', actor_id=11) == []
