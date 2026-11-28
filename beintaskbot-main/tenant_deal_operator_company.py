@@ -5,8 +5,10 @@ import re
 import uuid
 
 import tenant_beinsystems_operator as operator
+import tenant_beinsystems_operator_company_import as imports
 from tenant_beinsystems_operator_access import dialogue_chooser_enabled
-from tenant_crm_native_access import scoped_sql
+from tenant_crm_native_access import authorize_create, CRMAccessError, scoped_sql
+from tenant_crm_scalar_store import lock_admission
 from tenant_crm_relation_identity import current_binding
 from tenant_dialog_company_binding import normalize_company_id
 import tenant_dialog_company_operator as chooser
@@ -119,6 +121,64 @@ def _save(cur, tenant, actor, route, scope, previous, account, generation=None, 
 def _expected(row, expected_company_id):
     if (row['id'] if row and row['account'] else None) != expected_company_id:
         raise operator.OperatorError('Компания сделки изменилась. Обновите карточку.', 409)
+
+
+def _create_access(cur, profile, _route=None):
+    tenant, actor = operator._tenant(profile), int(profile['telegram_id'])
+    current = operator._current_profile(cur, tenant, actor)
+    policy = TenantPolicy(current)
+    if not feature_for(current) or not policy.allows_action('deals', 'create'):
+        raise operator.OperatorError('Нет доступа к выбору компании для новой сделки.', 403)
+    try:
+        authorize_create(cur, current, 'deals', tenant, actor)
+    except CRMAccessError:
+        raise operator.OperatorError('Нет доступа к созданию сделки.', 403) from None
+    return tenant, actor, policy
+
+
+def search_for_create(profile, term):
+    term = chooser._term(term)
+    tenant, actor, source, credentials, accounts = chooser._read_live(
+        profile, None, term, choice=False, authorize=_create_access)
+    with operator._connect() as conn, conn.cursor() as cur:
+        chooser._fenced_local(cur, profile, None, tenant, actor, source, credentials, authorize=_create_access)
+        chooser._assert_fresh(cur, tenant, actor, source, credentials)
+    return {'accounts': [{'account': account} for account in accounts]}
+
+
+def prepare_create(profile, selection):
+    if not isinstance(selection, dict) or set(selection) != {'account', 'search'}:
+        raise operator.OperatorError('Некорректный выбор компании Operator.')
+    account = chooser._term(selection['account'], exact=True)
+    term = chooser._term(selection['search'])
+    tenant, actor, source, credentials, _ = chooser._read_live(
+        profile, None, account, choice=True, selection_search=term, authorize=_create_access)
+    return profile, tenant, actor, source, credentials, account
+
+
+def check_create_connection(cur, company):
+    profile, tenant, actor, source, credentials, _ = company
+    # Keep the Operator credential fence ahead of native tenant admission.
+    operator._lock_accounts_capability_scope(cur, tenant)
+    imports._lock_and_check_selected_source(cur, tenant, actor, source, credentials)
+    lock_admission(cur, tenant, actor)
+    _, _, policy = _create_access(cur, profile)
+    if source == 'accounts_only':
+        imports._owner(profile, policy.profile)
+    chooser._assert_fresh(cur, tenant, actor, source, credentials)
+
+
+def save_created_binding(cur, company, deal_id, *, created):
+    _, tenant, actor, _, credentials, account = company
+    route = 'native', deal_id
+    previous = _row(cur, tenant, route, '', lock=True)
+    generation, instance = credentials['generation'], credentials['connection_instance_id']
+    if not created:
+        if not previous or (previous['account'], previous['generation'], previous['instance_id']) != (
+                account, generation, instance):
+            raise operator.OperatorError('Компания сделки изменилась. Обновите карточку.', 409)
+        return
+    _save(cur, tenant, actor, route, '', None, account, generation, instance)
 
 
 def select(profile, route, *, term, choice=False, selection_search=None, expected_company_id=None):

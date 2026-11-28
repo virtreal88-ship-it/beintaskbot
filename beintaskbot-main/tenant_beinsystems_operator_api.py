@@ -329,7 +329,7 @@ def deal_company_handler(member, origin, logger, *, public_link=False):
         try:
             if not profile:
                 raise operator.OperatorError("Интеграция недоступна.", 404)
-            from tenant_deal_operator_company import binding, read, select, target, unlink
+            from tenant_deal_operator_company import binding, read, search_for_create, select, target, unlink
             fields = {"source", "deal_id"}
             if request.method == "GET":
                 query = request.query
@@ -340,6 +340,10 @@ def deal_company_handler(member, origin, logger, *, public_link=False):
                 route = target(query["source"], query["deal_id"])
                 return _json_response({"binding": await asyncio.to_thread(binding, profile, route)})
             data = await _body(request, profile, origin)
+            if not public_link and data.get("source") == "native" and data.get("action") == "create_search":
+                if set(data) != {"source", "action", "operator_search"}:
+                    raise operator.OperatorError("Поля поиска компании некорректны.")
+                return _json_response(await asyncio.to_thread(search_for_create, profile, data["operator_search"]))
             route = target(data.get("source"), data.get("deal_id"))
             keys = set(data) - fields
             if public_link:

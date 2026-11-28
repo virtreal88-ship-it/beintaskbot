@@ -3007,7 +3007,9 @@
     const current=()=>authorized&&inDialogsView()&&owner===identity(member)&&card.isConnected&&$('operatorClientCard')===card&&sameDialog(route,currentDialog);
     const createDealButton=companyPanel?.querySelector('#operatorCreateDeal');
     if(createDealButton)createDealButton.onclick=()=>{
-      if(current()&&companyPanel.open&&canCreateDeal())void dealCreate.open({title:visualDialogTitle(currentDialog)});
+      if(!current()||!companyPanel.open||!canCreateDeal())return;
+      const phone=isDialogGroup(currentDialog)?'':verifiedDialogPhone({phone:visualDialogPhone(currentDialog)});
+      void dealCreate.open({title:visualDialogTitle(currentDialog),dialogPhone:phone});
     };
     const loadRoster=()=>{if(card.open&&groupBlock?.open)void renderGroupParticipants(route,card,current);};
     groupBlock?.addEventListener('toggle',loadRoster);

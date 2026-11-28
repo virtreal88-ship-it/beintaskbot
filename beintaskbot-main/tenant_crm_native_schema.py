@@ -76,6 +76,7 @@ def migrate_native_contacts(cur):
         CHECK ((channel_id IS NULL AND conversation_id='') OR (channel_id IS NOT NULL AND conversation_id<>''))
     )""")
     cur.execute("ALTER TABLE saas_crm_native_deals ADD COLUMN IF NOT EXISTS company_id UUID NULL")
+    cur.execute("ALTER TABLE saas_crm_native_deals ADD COLUMN IF NOT EXISTS dialog_phone TEXT NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE saas_crm_native_deals DROP CONSTRAINT IF EXISTS saas_crm_native_deals_company_fk")
     cur.execute("ALTER TABLE saas_crm_native_deals ADD CONSTRAINT saas_crm_native_deals_company_fk FOREIGN KEY(tenant_id,company_id) REFERENCES saas_crm_native_companies(tenant_id,id)")
     cur.execute("""CREATE INDEX IF NOT EXISTS saas_crm_native_deals_tenant_idx

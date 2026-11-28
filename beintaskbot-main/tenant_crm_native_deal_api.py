@@ -3,7 +3,8 @@ import asyncio
 from datetime import date, datetime
 from uuid import UUID
 from aiohttp import web
-from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options,set_deal_company_link,move_deal_stage
+from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options,set_deal_company_link,move_deal_stage,search_create_contacts
+from tenant_beinsystems_operator import OperatorError
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
 from tenant_policy import TenantPolicy
@@ -49,6 +50,16 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
                 return web.json_response({'success':True,'data':_jsonable(result)},
                     headers={'Cache-Control':'no-store'})
             if request.method=='GET':
+                if not deal_id and 'contact_search' in request.query:
+                    if not {'expected_tenant_id', 'expected_user_id'} <= set(request.query):
+                        raise CRMContextError('contacts_context_changed', 409)
+                    if not policy.allows_action('deals', 'create') or not policy.allows_action('customers', 'view'):
+                        raise CRMAccessError()
+                    term = request.query['contact_search'].strip()
+                    if not 2 <= len(term) <= 120:
+                        raise ValueError('invalid contact search')
+                    rows = await asyncio.to_thread(search_create_contacts, tenant_id, term, actor_id=actor)
+                    return web.json_response({'success':True,'contacts':_jsonable(rows)},headers={'Cache-Control':'no-store'})
                 if request.query.get('options')=='1':
                     action = next((item for item in ('view', 'create', 'update') if policy.allows_action('deals', item)), None)
                     if action is None:
@@ -101,7 +112,18 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
             fields={k:data.get(k) for k in ('title','pipeline_id','stage_id','contact_id','responsible_id','channel_id','conversation_id','description')}
             if action == 'move_stage': pass
             elif deal_id: result=await asyncio.to_thread(update_deal,tenant_id,deal_id,**fields,actor_id=actor)
-            else: result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'),actor_id=actor)
+            else:
+                if {'dialog_phone', 'operator_company'} & data.keys() and not {
+                        'expected_tenant_id', 'expected_user_id'} <= set(request.query):
+                    raise CRMContextError('contacts_context_changed', 409)
+                if 'dialog_phone' in data:
+                    if not isinstance(data['dialog_phone'], str):
+                        raise ValueError('invalid dialog phone')
+                    fields['dialog_phone'] = data['dialog_phone']
+                if 'operator_company' in data:
+                    fields['operator_company'] = data['operator_company']
+                    fields['operator_profile'] = profile
+                result=await asyncio.to_thread(create_deal,tenant_id,**fields,deal_id=data.get('id'),actor_id=actor)
             if deal_id and result is None: return web.json_response({'success':False,'error':'not_found'},status=404)
             try:
                 from tenant_crm_sync_outbox import enqueue_change
@@ -116,6 +138,8 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
         except CRMAccessError as exc:
             return web.json_response({'success': False, 'error': exc.code}, status=exc.status,
                                      headers={'Cache-Control': 'no-store'})
+        except OperatorError as exc:
+            return web.json_response({'success':False,'error':str(exc)},status=exc.status,headers={'Cache-Control':'no-store'})
         except TenantLinearError:
             return web.json_response({'success':False,'error':'invalid_origin'},status=403,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError) as exc:

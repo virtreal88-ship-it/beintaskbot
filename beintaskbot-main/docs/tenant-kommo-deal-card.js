@@ -147,7 +147,7 @@
     const company=deal.company_name||(deal.company_linked||deal.company_id?l.companyUnavailable:'');
     const assignee=deal.responsible_name||(deal.responsible_id?l.assigneeUnavailable:l.unassigned);
     const extra=(deal.detail_fields||[]).filter(({label})=>!['ttad_id','ttad_name','utm_campaign'].includes(String(label||'').trim().toLowerCase())).map(({label,value})=>[label,value]);
-    return block(c.company,[[c.company,company]],'data-deal-company-block')+block(c.contact,[[l.name,deal.contact_name],[l.phone,deal.contact_phone??deal.phone],['Email',deal.contact_email]])+
+    return block(c.company,[[c.company,company]],'data-deal-company-block')+block(c.contact,[[l.name,deal.contact_name],[l.phone,deal.dialog_phone||(deal.contact_phone??deal.phone)],['Email',deal.contact_email]])+
       block(c.fields,[[c.pipeline,deal.pipeline_name||'—','data-deal-pipeline'],
       [c.responsible,assignee,'data-deal-assignee'],[c.amount,deal.price??deal.amount],
       [c.description,deal.description],...extra])+

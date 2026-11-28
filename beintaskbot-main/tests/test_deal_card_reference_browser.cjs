@@ -8,7 +8,7 @@ const docs = path.resolve(__dirname, '../docs');
 const assets = new Set(['tenant-operator-i18n.js', 'tenant-request-coordinator.js', 'tenant-view-demand.js',
   'tenant-task-flow.js', 'tenant-kommo-deal-card.js', 'tenant-deal-chat.js', 'tenant-chat-history.js', 'tenant-chat-ai.js',
   'tenant-dialog-company.js', 'tenant-deal-dialogue.js', 'tenant-operator-dialogs.js', 'tenant-chat-send.js',
-  'tenant-dialog-composer.js', 'tenant-customer-media-ui.js']);
+  'tenant-dialog-composer.js', 'tenant-customer-media-ui.js', 'tenant-search-inputs.js']);
 const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace(
   /<script\b[^>]*src="([^"]+)"[^>]*><\/script>/gi,
   (_, url) => {
@@ -17,7 +17,7 @@ const html = fs.readFileSync(path.join(docs, 'tenant-app.html'), 'utf8').replace
       fs.readFileSync(path.join(docs, file), 'utf8').replace(/<\/script/gi, '<\\/script') + '</script>' : '';
   });
 
-function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot, phoneInChat, autoLink}) {
+function installDealResponses({native, linking, limited, operatorCompany, longDetails, pilot, phoneInChat, autoLink, dialogPhone}) {
   const f = window.taskFlowFixture, originalFetch = window.fetch;
   const channel = '10000000-0000-4000-8000-000000000301';
   const route = {provider:'connect', channel_id:channel,
@@ -49,9 +49,11 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     ['incoming','Айгюн Мамедова','Завтра после 10:00 удобно. Спасибо!']
   ].map(([direction, author_name, body, message_type='text'],i)=>({external_id:'demo-'+i,
     channel:'WhatsApp', direction, author_name, body, message_type, happened_at:'2026-11-25T16:0'+i+':00Z'}));
+  if(dialogPhone)route.phone=dialogPhone;
+  const contact='10000000-0000-4000-8000-000000000302';
   const access = {view:true, create:!limited, update:!limited, delete:!limited};
   Object.assign(f.profile.capabilities.modules,{deals:true,dialogs:true});
-  f.profile.capabilities.actions={deals:access,tasks:access};
+  f.profile.capabilities.actions={deals:access,tasks:access,customers:{view:!limited}};
   f.profile.capabilities.pages={deals:true,dialogs:true,tasks:true,profile:true};
   f.profile.capabilities.deal_operator_company=operatorCompany;
   f.profile.integrations=[{provider:'kommo',status:'connected'}];
@@ -67,6 +69,8 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     dealProof.requests.push({p,method,query:url.search,body:options.body?JSON.parse(options.body):null});
     if(p.startsWith('/api/platform/operator/deal-company')){
       const fields=method==='GET'?Object.fromEntries(url.searchParams):JSON.parse(options.body);
+      if(fields.source==='native'&&fields.action==='create_search')
+        return limited?json({},403):json({accounts:[{account:'deal-company'}]});
       if(fields.source!==(native?'native':'kommo')||fields.deal_id!==(native?f.deal:'7'))return json({},404);
       if(method==='GET')return json({binding:binding()});
       if('operator_search' in fields)return limited?json({},403):json({accounts:[{account:'deal-company'}]});
@@ -82,7 +86,9 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     }
     if(p==='/api/platform/crm/deal-view-preferences')return json({source:native?'native':'kommo'});
     if(p==='/api/platform/crm/native/deals'&&method==='POST')
-      return limited?json({},403):json({deal:{...local,title:JSON.parse(options.body).title}});
+      return limited?json({},403):json({deal:Object.assign(local,JSON.parse(options.body),{id:f.deal})});
+    if(p==='/api/platform/crm/native/deals'&&url.searchParams.has('contact_search'))
+      return limited?json({},403):json({contacts:[{id:contact,display_name:'Контакт вне первой страницы'}]});
     if(p==='/api/platform/crm/native/deals')
       return json(url.searchParams.has('options')?{workflows:stages,contacts:[],members:[]}:{deals:dealProof.archived?[]:[local]});
     if(p==='/api/platform/crm/native/deals/'+f.deal){
@@ -188,12 +194,14 @@ async function open(page, native) {
 }
 
 async function checkCreateDealFromDialog(browser,{width,limited=false}){
+  const phone=width>900?'+994 50 123 45 67':undefined;
   const page=await browser.newPage({...(width<900?devices['Pixel 7']:{}),viewport:{width,height:900}});
   page.setDefaultTimeout(7000);
   const errors=[];
   page.on('pageerror',error=>errors.push(error.message));
   await page.addInitScript(installFixture,{});
-  await page.addInitScript(installDealResponses,{native:true,linking:'linked',limited});
+  await page.addInitScript(installDealResponses,{native:true,linking:'linked',limited,dialogPhone:phone,
+    operatorCompany:!limited});
   await page.route('**/*',r=>r.request().isNavigationRequest()?r.fulfill({contentType:'text/html',body:html}):r.abort());
   await page.goto('https://fixture.test/app?view=dialogs&lang=ru');
   await page.waitForFunction(()=>window.tenantOperator?.member?.active===true);
@@ -221,6 +229,20 @@ async function checkCreateDealFromDialog(browser,{width,limited=false}){
     assert(await create.isVisible());
     await create.click();
     await modal.locator('#nativeDealStage option').first().waitFor({state:'attached'});
+    const phoneField=modal.locator('#nativeDealPhone');
+    assert.equal(await phoneField.isVisible(),Boolean(phone));
+    if(phone)assert.equal(await phoneField.inputValue(),phone);
+    const description=modal.locator('textarea#nativeDealDescription');
+    assert.equal(await description.evaluate(node=>getComputedStyle(node).resize),'vertical');
+    await description.fill('First line\nSecond line');
+    const contactSearch=modal.getByRole('searchbox',{name:'Контакт'});
+    await contactSearch.focus();
+    await contactSearch.pressSequentially('Контакт');
+    await modal.getByRole('button',{name:'Контакт вне первой страницы',exact:true}).click();
+    const companySearch=modal.getByRole('searchbox',{name:'Компания Operator'});
+    await companySearch.focus();
+    await companySearch.pressSequentially('deal');
+    await modal.getByRole('button',{name:'@deal-company',exact:true}).click();
     await modal.locator('button[type=submit]').click();
     await modal.waitFor({state:'hidden'});
     const saves=await page.evaluate(()=>dealProof.requests.filter(r=>
@@ -229,6 +251,10 @@ async function checkCreateDealFromDialog(browser,{width,limited=false}){
     assert.equal(saves[0].body.title,'Тестовый клиент');
     assert.equal(saves[0].body.channel_id,null);
     assert.equal(saves[0].body.conversation_id,'');
+    assert.equal(saves[0].body.dialog_phone,phone||'');
+    assert.equal(saves[0].body.description,'First line\nSecond line');
+    assert.deepEqual(saves[0].body.operator_company,{account:'deal-company',search:'deal'});
+    assert.equal(saves[0].body.contact_id,'10000000-0000-4000-8000-000000000302');
   }
   assert.deepEqual(errors,[]);
   await page.close();
