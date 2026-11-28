@@ -2,6 +2,7 @@
 import asyncio
 import os
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_chat_upload_api import handler as upload_handler
 from tenant_customer_media_service import run,check,capability,video_upload_limit
 from tenant_linear_policy import TenantLinearError
@@ -30,7 +31,7 @@ def read_handler(member,logger,*,receipt=False):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            session=require_read_session(request,member)
+            session=await session_io.run(require_read_session, request, member)
             from tenant_consultation_chat_media import validate_read
             await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'),request.query.get('request_id') if receipt else None)
             if receipt: result=await check(session,request.query.get('lead_id'),request.query.get('request_id'))

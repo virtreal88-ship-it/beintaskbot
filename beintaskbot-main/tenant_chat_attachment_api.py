@@ -8,6 +8,7 @@ from collections import OrderedDict
 from contextlib import nullcontext
 from urllib.parse import quote
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_chat_attachment_store import load, token
 from tenant_chat_attachment_provider import download
 from tenant_linear_policy import TenantLinearError
@@ -159,7 +160,7 @@ def handler(member_from_request, request_provider, logger):
         headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                    'Content-Security-Policy': "default-src 'none'; sandbox", 'Referrer-Policy': 'no-referrer'}
         try:
-            session = require_read_session(request, member_from_request)
+            session = await session_io.run(require_read_session, request, member_from_request)
             lead, message = request.query.get('lead_id'), request.query.get('message_id')
             scope={'channel_id':request.query.get('channel_id') or None,
                    'conversation_id':request.query.get('conversation_id') or None}

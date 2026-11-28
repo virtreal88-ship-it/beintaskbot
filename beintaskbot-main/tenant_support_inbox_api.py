@@ -2,6 +2,7 @@
 import asyncio
 import json
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io
 from tenant_ai_agents_api import _origin, _expected, _json_dumps
 from tenant_linear_policy import TenantLinearError
 from tenant_support_inbox_store import listing, detail, create, update, delete, complete, attach_case_media, available_case_media, attach_case_messages, available_case_messages
@@ -12,34 +13,34 @@ def handler(member_from_request, origin, logger, resource):
     async def handle(request):
         headers = {'Cache-Control':'no-store'}
         try:
-            profile = member_from_request(request)
+            profile = await session_io.run(member_from_request, request)
             if not profile: raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 if resource=='tickets':
-                    result = await asyncio.to_thread(listing,profile,request.query.get('status','unresolved'),request.query.get('assignee',''),request.query.get('offset',0),request.query.get('search',''),request.query.get('channel_id',''))
+                    result = await record_read_io.run(listing,profile,request.query.get('status','unresolved'),request.query.get('assignee',''),request.query.get('offset',0),request.query.get('search',''),request.query.get('channel_id',''))
                 elif resource=='consultation':
                     from tenant_internal_consultations import listing as consultation_listing
-                    result=await asyncio.to_thread(consultation_listing,profile,request.query.get('case_id',''))
+                    result=await record_read_io.run(consultation_listing,profile,request.query.get('case_id',''))
                 elif resource=='consultation_group':
                     from tenant_consultation_group import read
-                    result=await asyncio.to_thread(read,profile,request.match_info['consultation_id'])
+                    result=await record_read_io.run(read,profile,request.match_info['consultation_id'])
                 elif resource=='consultation_groups':
                     from tenant_consultation_group import destinations
-                    result=await asyncio.to_thread(destinations,profile)
+                    result=await record_read_io.run(destinations,profile)
                 elif resource=='ticket_attachments':
-                    result=await asyncio.to_thread(available_case_media,profile,request.match_info['ticket_id'],request.query.get('before'))
+                    result=await record_read_io.run(available_case_media,profile,request.match_info['ticket_id'],request.query.get('before'))
                 elif resource=='ticket_messages':
-                    result=await asyncio.to_thread(available_case_messages,profile,request.match_info['ticket_id'],request.query.get('before'))
+                    result=await record_read_io.run(available_case_messages,profile,request.match_info['ticket_id'],request.query.get('before'))
                 elif resource=='ticket_recommendations':
                     from tenant_support_copilot import recommendations
-                    result=await asyncio.to_thread(recommendations,profile,request.match_info['ticket_id'])
+                    result=await record_read_io.run(recommendations,profile,request.match_info['ticket_id'])
                 elif resource=='sla_policy':
                     from tenant_support_copilot import read_sla_policy
-                    result=await asyncio.to_thread(read_sla_policy,profile)
+                    result=await record_read_io.run(read_sla_policy,profile)
                 elif resource=='ticket' and request.query.get('reply_context')=='1':
                     from tenant_support_reply import context
                     _expected(request.query,profile)
-                    result=await asyncio.to_thread(context,profile,request.match_info['ticket_id'])
+                    result=await record_read_io.run(context,profile,request.match_info['ticket_id'])
                 else:
                     options={}
                     if 'notification_id' in request.query:
@@ -51,7 +52,7 @@ def handler(member_from_request, origin, logger, resource):
                         try:options['notification_id']=identifier(request.query['notification_id'])
                         except TenantLinearError:
                             raise TenantLinearError('notification_context_invalid',400) from None
-                    result = await asyncio.to_thread(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'),**options)
+                    result = await record_read_io.run(detail,profile,request.match_info['ticket_id'],request.query.get('before'),request.query.get('message_id'),**options)
             else:
                 _origin(request,origin)
                 if request.content_type!='application/json': raise TenantLinearError('Ожидается JSON.',415)
@@ -98,7 +99,8 @@ def handler(member_from_request, origin, logger, resource):
             return web.json_response({'success':False,'error':str(error)},status=error.status,headers=headers)
         except (TypeError,ValueError,KeyError):
             return web.json_response({'success':False,'error':'Некорректный запрос.'},status=400,headers=headers)
-        except Exception:
-            logger.exception('Support inbox request failed')
+        except Exception as error:
+            if not isinstance(error, CapacityUnavailable):
+                logger.exception('Support inbox request failed')
             return web.json_response({'success':False,'error':'Очередь обращений временно недоступна.'},status=503,headers=headers)
     return handle

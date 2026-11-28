@@ -1,6 +1,7 @@
 """Authenticated explicit consultation actions. No content-triggered dispatch."""
 import asyncio
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_ai_agents_api import _origin,_expected
 from tenant_linear_policy import TenantLinearError
 import tenant_dialog_consultations as flow
@@ -10,7 +11,7 @@ def handler(member,origin,logger,resource):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            profile=member(request)
+            profile=await session_io.run(member, request)
             if not profile:raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:

@@ -2,6 +2,7 @@
 import asyncio
 import json
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io
 
 from tenant_ai_agents_api import _origin, _expected
 from tenant_linear_policy import TenantLinearError
@@ -12,14 +13,14 @@ def handler(member, origin, logger, resource='list'):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            profile = member(request)
+            profile = await session_io.run(member, request)
             if not profile:
                 raise TenantLinearError('Нет доступа.', 403)
             if request.method == 'GET' and resource == 'list':
                 if 'X-Tenant-Id' in request.headers or 'X-User-Id' in request.headers:
                     _expected({'expected_tenant_id': request.headers.get('X-Tenant-Id'),
                                'expected_user_id': request.headers.get('X-User-Id')}, profile)
-                result = await asyncio.to_thread(center.listing, profile,
+                result = await record_read_io.run(center.listing, profile,
                     request.query.get('status', 'unread'), request.query.get('limit', 20), request.query.get('before', ''))
             elif request.method == 'POST' and resource == 'read':
                 _origin(request, origin)
@@ -43,7 +44,8 @@ def handler(member, origin, logger, resource='list'):
             return web.json_response({'success': False, 'error': str(exc)}, status=exc.status, headers=headers)
         except (ValueError, TypeError, KeyError):
             return web.json_response({'success': False, 'error': 'Некорректный запрос.'}, status=400, headers=headers)
-        except Exception:
-            logger.exception('Personal notification center failed')
+        except Exception as error:
+            if not isinstance(error, CapacityUnavailable):
+                logger.exception('Personal notification center failed')
             return web.json_response({'success': False, 'error': 'Уведомления временно недоступны.'}, status=503, headers=headers)
     return handle

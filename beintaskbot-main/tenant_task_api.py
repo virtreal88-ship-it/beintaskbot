@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io, with_capacity_response
 from tenant_task_flow import (TaskFlowError, query as flow_query, read as read_flow,
     current_profile, external_options, execution_profiles, authority_key)
 from tenant_task_commands import TaskCommandUnavailable
@@ -60,7 +61,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
     async def fresh_external(request, profile):
         params = intent(request, profile)
         if params.get('flow') == '1' or 'expected_tenant_id' in params:
-            profile = await asyncio.to_thread(current_profile, profile or {})
+            profile = await record_read_io.run(current_profile, profile or {})
         return profile, params
 
     async def guarded_transport(profile, executor_id=None):
@@ -73,8 +74,9 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             return await context.crm_request(*args, **kwargs)
         return actor, dispatch
 
+    @with_capacity_response
     async def tasks(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return flow_error(TaskFlowError('task_forbidden', 403))
         try:
@@ -91,19 +93,21 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                                offset=params.get('offset', 0), recent=params.get('order') == 'recent')
                 if 'deal_filter' in params:
                     options['deal_filter'] = params['deal_filter']
-                result = await asyncio.to_thread(read_flow, profile, **options)
+                result = await record_read_io.run(read_flow, profile, **options)
                 # Resolve provider type labels only after the scoped read grants access.
                 if search and result.get('source') == 'kommo' and 'tasks' in result:
                     names = await titles.names(str(profile['tenant_id']))
                     matched = [key for key, name in names.items() if search.casefold() in name.casefold()]
                     if matched:
-                        result = await asyncio.to_thread(read_flow, profile, type_ids=matched, **options)
+                        result = await record_read_io.run(read_flow, profile, type_ids=matched, **options)
                 await titles.enrich(profile['tenant_id'], result)
                 return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
             if 'expected_tenant_id' in params:
-                profile = await asyncio.to_thread(current_profile, profile or {})
+                profile = await record_read_io.run(current_profile, profile or {})
         except TaskFlowError as exc:
             return flow_error(exc)
+        except CapacityUnavailable:
+            raise
         except Exception:
             context.logger.exception('Task flow read unavailable')
             return flow_error(TaskFlowError('task_unavailable', 503))
@@ -122,14 +126,15 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             except Exception:
                 context.logger.exception("Tenant CRM task sync failed: tenant=%s", profile["tenant_id"])
                 sync_error = "Kommo tapşırıqları yenilənmədi. Son saxlanmış siyahı göstərilir."
-        rows = await asyncio.to_thread(
+        rows = await record_read_io.run(
             context.list_tasks, tenant_id=profile["tenant_id"], limit=200,
             scope=context.policy(profile).kommo_task_scope(),
         )
         return web.json_response({"success": True, "tasks": rows, "stale": bool(sync_error), "warning": sync_error})
 
+    @with_capacity_response
     async def options(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return flow_error(TaskFlowError('task_forbidden', 403))
         try:
@@ -137,7 +142,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             if params.get('flow') == '1':
                 if params.get('source') not in (None, 'kommo') or params.get('task_id') or params.get('request_id'):
                     raise TaskFlowError('task_invalid_query')
-                result = await asyncio.to_thread(external_options, profile)
+                result = await record_read_io.run(external_options, profile)
                 return web.json_response({'success': True, **result}, headers={'Cache-Control': 'no-store'})
         except TaskFlowError as exc:
             return flow_error(exc)
@@ -147,7 +152,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
         if not _can_use_tasks(context, profile):
             return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
         try:
-            profiles = await asyncio.to_thread(context.executor_profiles, profile)
+            profiles = await record_read_io.run(context.executor_profiles, profile)
             executors = []
             for person in profiles:
                 if not context.policy(person).allows("tasks"):
@@ -163,7 +168,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                 })
             rows = []
             if not TenantPolicy(profile).legacy_crm_view_restricted():
-                rows, _ = await asyncio.to_thread(
+                rows, _ = await record_read_io.run(
                     context.list_deals, tenant_id=profile["tenant_id"],
                 scope=context.policy(profile).kommo_pipeline_scope(), limit=200,
                 creator_id=context.policy(profile).kommo_user_id() or None,
@@ -171,12 +176,15 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             deals = [{"id": row["kommo_lead_id"], "name": row["name"], "pipeline_id": row["pipeline_id"]}
                      for row in rows]
             return web.json_response({"success": True, "executors": executors, "deals": deals})
+        except CapacityUnavailable:
+            raise
         except Exception:
             context.logger.exception("Tenant task options failed: tenant=%s", profile["tenant_id"])
             return web.json_response({"success": False, "error": "Tapşırıq ayarları yüklənmədi."}, status=500)
 
+    @with_capacity_response
     async def create(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return flow_error(TaskFlowError('task_forbidden', 403))
         try:
@@ -207,7 +215,7 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
                     task_id=str(result['task_id']) if result.get('task_id') else None,
                     task=None, cache_state='unavailable' if result.get('task_id') else 'not_applicable')
                 try:
-                    saved = await asyncio.to_thread(read_flow, profile, source='kommo', request_id=data.get('request_id'))
+                    saved = await record_read_io.run(read_flow, profile, source='kommo', request_id=data.get('request_id'))
                     if saved['command']['state'] != 'not_confirmed':
                         command = saved['command']
                 except Exception:
@@ -226,8 +234,9 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             context.logger.exception("Tenant task create failed: tenant=%s", profile["tenant_id"])
             return web.json_response({"success": False, "error": "Nəticə təsdiqlənmədi. Eyni sorğu ilə yenidən yoxlayın; yeni tapşırıq yaratmayın."}, status=500)
 
+    @with_capacity_response
     async def complete(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return flow_error(TaskFlowError('task_forbidden', 403))
         try:
@@ -261,8 +270,9 @@ def handlers(context: TaskApiContext) -> dict[str, Callable]:
             context.logger.exception("Tenant task completion failed: tenant=%s", profile["tenant_id"])
             return web.json_response({"success": False, "error": "Nəticə yoxlanmalıdır. Eyni sorğu ilə yoxlayın; yeni sorğu yaratmayın."}, status=500)
 
+    @with_capacity_response
     async def approvals(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         policy = context.policy(profile) if profile else None
         if not policy or not policy.privileged or not policy.allows("tasks"):
             return web.json_response({"success": False, "error": "Təsdiq üçün icazəniz yoxdur."}, status=403)

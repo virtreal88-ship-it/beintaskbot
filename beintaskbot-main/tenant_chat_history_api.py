@@ -1,6 +1,6 @@
 """Separate cache pagination API; no provider calls or external writes."""
-import asyncio
 from aiohttp import web
+from worker_crm_capacity import dialog_io, session_io
 from tenant_chat_history_store import page
 from tenant_linear_policy import TenantLinearError
 from tenant_read_session import require_read_session
@@ -10,8 +10,8 @@ def handler(member_from_request, logger):
     async def handle(request):
         headers = {'Cache-Control':'no-store'}
         try:
-            session = require_read_session(request, member_from_request)
-            result = await asyncio.to_thread(page, session, request.query.get('lead_id'),
+            session = await session_io.run(require_read_session, request, member_from_request)
+            result = await dialog_io.run(page, session, request.query.get('lead_id'),
                 request.query.get('cursor', ''), request.query.get('limit', '120'))
             return web.json_response({'success':True, **result}, headers=headers)
         except TenantLinearError as error:

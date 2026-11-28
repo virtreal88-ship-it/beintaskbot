@@ -10,6 +10,7 @@ import re
 import uuid
 
 from aiohttp import web
+from worker_crm_capacity import session_io
 
 from tenant_ai_agents_api import _expected
 from tenant_chat_send_policy import command as send_command, fingerprint
@@ -182,7 +183,7 @@ def handler(member_from_request,canonical_origin,request_provider,wait_slot,logg
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            profile=member_from_request(request)
+            profile=await session_io.run(member_from_request, request)
             if not profile:raise TenantLinearError('Нет доступа.',403)
             if request.method=='GET':
                 _expected(request.query,profile)

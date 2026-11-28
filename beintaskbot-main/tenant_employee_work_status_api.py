@@ -2,6 +2,7 @@
 import asyncio
 import json
 from aiohttp import web
+from worker_crm_capacity import session_io
 
 from tenant_ai_agents_api import _expected, _origin
 from tenant_dialog_presence import get_status, set_status
@@ -14,7 +15,7 @@ _HEADERS = {"Cache-Control": "no-store", "Vary": "Cookie"}
 def handler(member_from_request, origin, logger):
     async def handle(request):
         try:
-            profile = member_from_request(request)
+            profile = await session_io.run(member_from_request, request)
             if not profile:
                 raise TenantLinearError("Нет доступа.", 403)
             if request.method == "GET":

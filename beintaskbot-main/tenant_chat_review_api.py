@@ -1,6 +1,7 @@
 """Read-only listing and same-origin, identity-bound manual attestation."""
 import asyncio
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_chat_review_store import list_receipts, resolve
 from tenant_linear_policy import TenantLinearError
 from tenant_request_origin import require_json_post
@@ -10,7 +11,7 @@ def handler(member_from_request, canonical_origin, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = member_from_request(request)
+            session = await session_io.run(member_from_request, request)
             if not session:
                 raise TenantLinearError('İcazə yoxdur.', 403)
             if request.method == 'GET':

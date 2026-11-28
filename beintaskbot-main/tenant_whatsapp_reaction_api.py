@@ -2,6 +2,7 @@
 import asyncio
 
 from aiohttp import web
+from worker_crm_capacity import session_io
 
 from tenant_linear_policy import TenantLinearError
 from tenant_platform import TenantPlatformError
@@ -15,7 +16,7 @@ def handler(member, origin, logger):
         headers = {'Cache-Control': 'no-store'}
         try:
             if request.method == 'POST':
-                session = member(request)
+                session = await session_io.run(member, request)
                 if not session:
                     raise TenantLinearError('reaction_access_denied', 403)
                 require_json_post(request, origin)
@@ -29,7 +30,7 @@ def handler(member, origin, logger):
                 result = await asyncio.to_thread(send, session, data['lead_id'], data['message_id'],
                                                  data['request_id'], data['emoji'])
             else:
-                session = require_read_session(request, member)
+                session = await session_io.run(require_read_session, request, member)
                 result = await asyncio.to_thread(status, session, request.query.get('lead_id'),
                                                  request.query.get('request_id'))
             return web.json_response({'success':True, **result}, headers=headers)

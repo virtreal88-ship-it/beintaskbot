@@ -1,6 +1,7 @@
 """Identity-bound, GET-only catalogue/state APIs. Errors never echo provider data."""
 import asyncio
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_ai_channel_catalog import catalog
 from tenant_ai_state import snapshot
 from tenant_read_session import require_read_session
@@ -13,7 +14,7 @@ def handler(member_from_request, logger, resource='state'):
         try:
             if request.method not in {'GET', 'HEAD'}:
                 return web.json_response({'success': False, 'error_code': 'method_not_allowed'}, status=405, headers=headers)
-            profile = require_read_session(request, member_from_request)
+            profile = await session_io.run(require_read_session, request, member_from_request)
             raw_limit = request.query.get('limit', '30')
             if not str(raw_limit).isascii() or not str(raw_limit).isdigit() or len(str(raw_limit)) > 3:
                 return web.json_response({'success': False, 'error_code': 'invalid_limit'}, status=400, headers=headers)

@@ -7,6 +7,7 @@ import threading
 import time
 
 from gh_storage import read_json, write_json
+from worker_crm_capacity import CapacityUnavailable
 from legacy_runtime_config import ADMIN_CHAT_ID, HUSEYN_CHAT_ID, RASIM_CHAT_ID, RUFAT_CHAT_ID
 from legacy_user_registry import (
     _KNOWN_EMPLOYEE_REGISTRATIONS,
@@ -57,6 +58,8 @@ def _load_employee_access_records(force: bool = False) -> dict[str, dict]:
             return dict(_employee_access_cache)
         try:
             raw = read_json(_EMPLOYEE_ACCESS_FILE) or {}
+        except CapacityUnavailable:
+            raise
         except Exception as exc:
             logger.warning("employee access storage load failed: %s", exc)
             raw = {}

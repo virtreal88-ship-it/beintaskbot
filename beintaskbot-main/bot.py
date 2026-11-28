@@ -5685,13 +5685,21 @@ async def handle_api_chats_pulse(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    def read_pulse():
+        if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+            return web.json_response({"success": False, "error": "Access denied"}, status=403)
+        try:
+            since_rev = int(request.rel_url.query.get("rev") or 0)
+        except (TypeError, ValueError):
+            since_rev = 0
+        return web.json_response(_inbox_pulse_payload(chat_id, since_rev))
+
     try:
-        since_rev = int(request.rel_url.query.get("rev") or 0)
-    except (TypeError, ValueError):
-        since_rev = 0
-    return web.json_response(_inbox_pulse_payload(chat_id, since_rev))
+        return await legacy_access_io.run(read_pulse)
+    except CapacityUnavailable:
+        return unavailable_response()
 
 
 async def handle_kommo_webhook(request: web.Request) -> web.Response:
@@ -17280,10 +17288,9 @@ async def handle_api_settings_integrations(request: web.Request) -> web.Response
     })
 
 
-async def handle_api_session(request: web.Request) -> web.Response:
-    chat_id = int(request.get("authenticated_chat_id") or 0)
+def _legacy_session_payload(chat_id: int) -> dict:
     profile = employee_access_profile(chat_id)
-    return web.json_response({
+    return {
         "success": True,
         "chat_id": chat_id,
         "active": bool(profile["active"]),
@@ -17293,7 +17300,18 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "linear_can_create": _linear_can_create_for_chat(chat_id),
         "ai_enabled": bool(profile.get("ai_enabled")),
         "whatsapp_number": get_employee_whatsapp_number(chat_id),
-    })
+    }
+
+
+async def handle_api_session(request: web.Request) -> web.Response:
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    try:
+        payload = await legacy_access_io.run(_legacy_session_payload, chat_id)
+    except CapacityUnavailable:
+        return unavailable_response()
+    return web.json_response(payload)
 
 
 async def handle_web_login_start(request: web.Request) -> web.Response:
@@ -17361,7 +17379,12 @@ async def handle_telegram_login(request: web.Request) -> web.Response:
     chat_id = _telegram_login_user_id(payload)
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
-    profile = employee_access_profile(chat_id)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    try:
+        profile = await legacy_access_io.run(employee_access_profile, chat_id)
+    except CapacityUnavailable:
+        return unavailable_response()
     if not profile.get("active"):
         return web.json_response({"success": False, "error": "Bu Telegram hesabı üçün giriş icazəsi yoxdur."}, status=403)
     response = web.json_response({"success": True, "chat_id": chat_id})
@@ -17533,7 +17556,13 @@ async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
 async def handle_web_login_complete(request: web.Request) -> web.Response:
     token = request.rel_url.query.get("token") or ""
     chat_id = _consume_web_login_request(token) or _consume_permanent_web_login_token(token)
-    if not chat_id or not employee_access_profile(chat_id).get("active"):
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    try:
+        profile = await legacy_access_io.run(employee_access_profile, chat_id) if chat_id else None
+    except CapacityUnavailable:
+        return unavailable_response()
+    if not profile or not profile.get("active"):
         return web.Response(status=403, text="Login link is invalid or access is disabled.")
     response = web.HTTPFound(APP_URL)
     response.set_cookie(_WEB_SESSION_COOKIE, _make_web_session(chat_id), max_age=_WEB_SESSION_TTL_SEC,
@@ -17938,6 +17967,14 @@ def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
     return None
 
 
+def _legacy_api_access(chat_id: int, required_permissions) -> tuple[dict, bool]:
+    profile = employee_access_profile(chat_id)
+    permitted = profile.get("active") and (
+        not required_permissions or any(employee_has_permission(chat_id, permission) for permission in required_permissions)
+    )
+    return profile, bool(permitted)
+
+
 @web.middleware
 async def telegram_auth_middleware(request, handler):
     """Require a signed Telegram identity for private Mini App API calls."""
@@ -17952,12 +17989,17 @@ async def telegram_auth_middleware(request, handler):
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram authorization required"}, status=401)
 
-    profile = employee_access_profile(int(chat_id))
-    if not profile.get("active"):
-        return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
     required_permission = _required_api_permission(request.path)
     required_permissions = (required_permission,) if isinstance(required_permission, str) else required_permission
-    if required_permissions and not any(employee_has_permission(int(chat_id), permission) for permission in required_permissions):
+    try:
+        profile, permitted = await legacy_access_io.run(_legacy_api_access, int(chat_id), required_permissions)
+    except CapacityUnavailable:
+        return unavailable_response()
+    if not profile.get("active"):
+        return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
+    if not permitted:
         return web.json_response({"success": False, "error": "Permission denied"}, status=403)
 
     for supplied in (

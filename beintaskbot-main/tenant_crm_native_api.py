@@ -3,6 +3,7 @@ import asyncio
 from datetime import date, datetime
 from uuid import UUID
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io, with_capacity_response
 from tenant_crm_native_contacts import create_contact, get_contact, list_contacts, update_contact, archive_contact, set_contact_deal_link, set_contact_company_link
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
@@ -40,8 +41,9 @@ def _jsonable(value):
 
 
 def handler(member_from_request, origin, logger):
+    @with_capacity_response
     async def handle(request):
-        profile = member_from_request(request)
+        profile = await session_io.run(member_from_request, request)
         if not profile:
             return web.json_response({'success': False, 'error': 'forbidden', 'code': 'contacts_forbidden'}, status=403,
                                      headers={'Cache-Control': 'no-store'})
@@ -61,16 +63,16 @@ def handler(member_from_request, origin, logger):
                 if request.method != 'GET' or contact_id:
                     raise ContactsDirectoryError('contacts_invalid_query')
                 query = _listing_query(request)
-                result = await asyncio.to_thread(directory, profile, **query)
+                result = await record_read_io.run(directory, profile, **query)
                 return web.json_response({'success': True, **_jsonable(result)},
                                          headers={'Cache-Control': 'no-store', 'Vary': 'Cookie'})
             if request.method == 'GET':
                 if not policy.allows_action('customers','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if contact_id:
-                    result = await asyncio.to_thread(get_contact, tenant_id, contact_id, actor_id=actor)
+                    result = await record_read_io.run(get_contact, tenant_id, contact_id, actor_id=actor)
                 else:
-                    result = await asyncio.to_thread(list_contacts, tenant_id,
+                    result = await record_read_io.run(list_contacts, tenant_id,
                         request.query.get('search', ''), 50, actor_id=actor)
                 if contact_id and result is None:
                     return web.json_response({'success': False, 'error': 'not_found'}, status=404)
@@ -133,8 +135,9 @@ def handler(member_from_request, origin, logger):
         except ValueError:
             return web.json_response({'success': False, 'error': 'invalid_contact'}, status=400,
                                      headers={'Cache-Control': 'no-store'})
-        except Exception:
-            logger.exception('Native CRM contact operation failed')
+        except Exception as exc:
+            if not isinstance(exc, CapacityUnavailable):
+                logger.exception('Native CRM contact operation failed')
             if 'listing' in request.query:
                 return web.json_response({'success':False,'error':'contacts_unavailable','code':'contacts_unavailable'},
                                          status=503,headers={'Cache-Control':'no-store','Vary':'Cookie'})
