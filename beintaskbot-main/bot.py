@@ -18955,6 +18955,8 @@ def _register_tenant_web_routes(app_web: web.Application) -> None:
     app_web.router.add_get("/news", serve_news_page)
     app_web.router.add_get("/documentation", serve_documentation_page)
     app_web.router.add_get("/", serve_landing_page)
+    from worker_crm_health import readiness_handler
+    app_web.router.add_get("/readyz", readiness_handler())
     app_web.router.add_get("/health", health_check)
 
 async def start_webhook_server():

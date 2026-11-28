@@ -61,6 +61,7 @@ def prepare_database() -> None:
             cur.execute("SET transaction_timeout='5000ms'")
             cur.execute("SET lock_timeout='2000ms'")
             cur.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))',(_STARTUP_SCHEMA_LOCK,))
+            cur.execute("SET application_name='crm-migration'")
         conn.commit()
         ensure_agents_schema(conn)
         ensure_pilot_case_schema(conn)

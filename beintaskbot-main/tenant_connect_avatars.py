@@ -9,7 +9,7 @@ from urllib.parse import quote, urlsplit
 import aiohttp
 import psycopg
 
-from tenant_connect_transport import CONNECT_URL, _schema as ensure_connect_schema, connect_route
+from tenant_connect_transport import CONNECT_URL, connect_route
 from tenant_linear_policy import TenantLinearError
 from tenant_operator_access import access, assert_route
 from tenant_connect_media import PublicResolver, IMAGE_TYPES
@@ -23,7 +23,7 @@ _AVATAR_DB_SLOTS = threading.BoundedSemaphore(_AVATAR_DB_WORKERS)
 
 
 def _connect():
-    return _platform_connect(connect_timeout=3, options='-c lock_timeout=1500 -c statement_timeout=3000')
+    return _platform_connect(connect_timeout=3, application_name='crm-avatar', options='-c lock_timeout=1500 -c statement_timeout=3000')
 
 
 def _avatar_db_unavailable():
@@ -44,7 +44,8 @@ async def _avatar_db(operation, *args):
     work.add_done_callback(lambda _: slots.release())
     try:
         return await asyncio.wait_for(asyncio.wrap_future(work), timeout=_AVATAR_DB_DEADLINE)
-    except (TimeoutError, psycopg.OperationalError, psycopg.errors.QueryCanceled, psycopg.errors.LockNotAvailable):
+    except (TimeoutError, psycopg.OperationalError, psycopg.errors.QueryCanceled, psycopg.errors.LockNotAvailable,
+            psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
         raise _avatar_db_unavailable() from None
 
 
@@ -109,7 +110,6 @@ def _prepare_avatar(profile, params):
     if params.get('provider') != 'connect':
         raise TenantLinearError('Bu dialoq üçün WhatsApp fotosu yoxdur.', 404)
     with _connect() as conn:
-        ensure_connect_schema(conn)
         with conn.cursor() as cur:
             tenant, _, policy = access(cur, profile, 'dialogs')
             selected = assert_route(cur, tenant, policy, 'connect', params.get('conversation_id', ''), params.get('channel_id', ''), params.get('lead_id'))
@@ -165,7 +165,19 @@ def _complete_avatar(profile, params, tenant, route):
               (tenant, route['channel_id'], route['conversation_id']))
 
 
+_avatar_requests = threading.BoundedSemaphore(6)
+
+
 async def get_avatar(profile, params):
+    if not _avatar_requests.acquire(blocking=False):
+        raise _avatar_db_unavailable()
+    try:
+        return await _load_avatar(profile, params)
+    finally:
+        _avatar_requests.release()
+
+
+async def _load_avatar(profile, params):
     tenant, route = await _avatar_db(_prepare_avatar, profile, params)
     try:
         body, mime = await _fetch(route)

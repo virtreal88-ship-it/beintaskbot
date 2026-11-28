@@ -2,9 +2,9 @@
 
 Resource codes: 1=list, 2=history, 3=case resolver. At most one completed
 request per resource per minute per process is logged (not a percentile sample).
-Authentication remains synchronous and uncached; this module only measures it.
+Authentication stays uncached; this module only measures it.
 """
-import asyncio
+from worker_crm_capacity import dialog_io
 import threading
 import time
 
@@ -44,7 +44,7 @@ class ReadTiming:
                 self.work_ms = (finished - started) * 1000
 
         try:
-            result = await asyncio.to_thread(work)
+            result = await dialog_io.run(work)
             self.completed = 1
             return result
         finally:

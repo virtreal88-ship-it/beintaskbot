@@ -25,7 +25,7 @@ def test_numeric_stage_boundaries(monkeypatch):
     async def inline(function):
         return function()
 
-    monkeypatch.setattr(timing.asyncio, 'to_thread', inline)
+    monkeypatch.setattr(timing.dialog_io, 'run', inline)
     logger = Mock()
     measured = timing.ReadTiming(1, logger)
     assert measured.authenticate(lambda request: request, 'secret-cookie') == 'secret-cookie'

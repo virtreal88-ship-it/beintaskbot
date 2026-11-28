@@ -23,6 +23,13 @@ def _database_url() -> str:
 
 
 def _connect(**connection_options):
+    from worker_crm_capacity import db_scope
+    scope = db_scope.get()
+    if scope:
+        name, statement_ms = scope
+        connection_options.setdefault('application_name', name)
+        connection_options.setdefault('connect_timeout', 3)
+        connection_options.setdefault('options', f'-c lock_timeout=1500 -c statement_timeout={statement_ms}')
     conn = psycopg.connect(_database_url(), row_factory=dict_row, **connection_options)
     try:
         from tenant_employee_defaults import require_compatible_runtime

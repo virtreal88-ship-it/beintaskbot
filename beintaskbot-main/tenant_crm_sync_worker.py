@@ -1,5 +1,6 @@
 """Bounded background reads. Never mutate Kommo or use legacy credentials."""
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable
 
 from tenant_crm_sync_data import PAGE_SIZE, page_items, normalize_page, deleted_page
@@ -62,7 +63,22 @@ def page_catalog(payload: dict) -> list[dict]:
     return pipelines
 
 
+_batch_slot = threading.BoundedSemaphore(1)
+
+
 async def run_sync_batch(request: KommoRead, logger) -> None:
+    if not _batch_slot.acquire(blocking=False):
+        return  # Jobs remain durable and eligible for the next tick.
+    try:
+        await _run_claimed_batch(request, logger)
+    finally:
+        _batch_slot.release()
+
+
+async def _run_claimed_batch(request: KommoRead, logger) -> None:
+    async def bounded_request(*args, **kwargs):
+        return await asyncio.wait_for(request(*args, **kwargs), timeout=20)
+
     for _ in range(4):
         claim = asyncio.create_task(asyncio.to_thread(SyncPageStore.claim))
         try:
@@ -75,7 +91,7 @@ async def run_sync_batch(request: KommoRead, logger) -> None:
         if store is None:
             break
         try:
-            await sync_one_page(store, request)
+            await sync_one_page(store, bounded_request)
         except Exception:
             # Do not persist/log provider bodies, tokens or customer details.
             logger.warning('Tenant CRM sync page failed: tenant=%s resource=%s page=%s',
