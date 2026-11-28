@@ -75,7 +75,7 @@ jobs:
           npm install --prefix .support-test-deps --no-save @electric-sql/pglite@0.5.11 jsdom@26
           command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y ffmpeg)
       - name: Lifecycle SQL, ownership, AI and native races
-        run: python -m pytest -q --tb=short tests/test_dialog_lifecycle*.py tests/test_dialog_colleague_observer_pglite.py tests/test_dialog_completion_preview.py tests/test_dialog_completion_retry.py tests/test_*rollout*.py tests/test_dialog_episode_cases.py tests/test_tenant_chat_api.py tests/test_tenant_notification_center.py tests/test_knowledge_candidates.py tests/test_tenant_web_routes.py
+        run: python -m pytest -q --tb=short tests/test_dialog_lifecycle*.py tests/test_dialog_colleague_observer_pglite.py tests/test_dialog_completion_preview.py tests/test_dialog_completion_retry.py tests/test_operator_dialog_removal.py tests/test_tenant_hot_order_removal.py tests/test_*rollout*.py tests/test_dialog_episode_cases.py tests/test_tenant_chat_api.py tests/test_tenant_notification_center.py tests/test_knowledge_candidates.py tests/test_tenant_web_routes.py
       - name: Public-link authorization and status
         run: python -m pytest -q --tb=short tests/test_dialog_company_public_link.py tests/test_dialog_company_public_link_pglite.py tests/test_operator_public_link_proof.py
       - name: UI lifecycle and repeated actions

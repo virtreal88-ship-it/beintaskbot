@@ -100,10 +100,10 @@ class QueueTests(unittest.TestCase):
     def test_server_actions_follow_status_and_rights(self):
         policy=self.service.authorize(fixtures.person())
         result=self.service.public_row(self.order,policy)
-        self.assertEqual(result['actions'],{'claim':True,'cancel':False,'release':False,'complete':False,'approve':False,'reject':False})
+        self.assertEqual(result['actions'],{'claim':True,'cancel':False,'release':False,'complete':False,'approve':False,'reject':False,'delete':False})
         self.assertEqual(result['service_name'],'Təmir')
         result=self.service.public_row({**self.order,'status':'claimed','claimed_by':20},policy)
-        self.assertEqual(result['actions'],{'claim':False,'cancel':False,'release':True,'complete':True,'approve':False,'reject':False})
+        self.assertEqual(result['actions'],{'claim':False,'cancel':False,'release':True,'complete':True,'approve':False,'reject':False,'delete':False})
 
     def test_creator_cannot_cancel_or_release_order_accepted_by_another_employee(self):
         self.cur.fetchone.return_value={**self.order,'created_by':20,'status':'claimed','claimed_by':21}

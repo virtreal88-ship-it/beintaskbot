@@ -118,6 +118,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/agent-assignment', ('GET','POST')),
     ('dialogs/agent-assignment-bulk', ('GET','POST')),
     ('dialogs_lifecycle', ('POST',)),
+    ('dialogs/remove', ('POST',)),
     ('dialogs/legacy-continuation', ('GET','POST')),
     ('dialogs/legacy-recovery', ('GET','POST')),
     ('dialogs/group-legacy-resolution', ('GET',)),

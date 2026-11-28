@@ -146,17 +146,39 @@ def ingest(cur, route, messages, full):
     )
 
 
-def sync_once(tenant):
+def _safe_failure(exc):
+    if isinstance(exc, operator.OperatorError):
+        upstream = getattr(exc, "upstream_http_status", None)
+        if upstream == 401:
+            return "operator_http_401"
+        if upstream == 403:
+            return "operator_http_403"
+        if exc.status == 502:
+            return "operator_invalid_response"
+        return "operator_error"
+    sqlstate = getattr(exc, "sqlstate", None)
+    if sqlstate in {"42P01", "42703", "42501", "08006", "57014", "55P03"}:
+        return "postgres_" + sqlstate
+    return "internal_error"
+
+
+def sync_once(tenant, *, stage=None):
+    if stage is None:
+        stage = lambda _: None
+    stage("credentials")
     credentials = operator._credentials(tenant)
     instance = credentials["connection_instance_id"]
     # A session-level lock serializes workers without holding a transaction during REST calls.
+    stage("database_lock")
     with operator._connect() as db, db.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS held", ("widget-sync/" + tenant,))
         if not cur.fetchone()["held"]:
             return
         db.commit()
         try:
+            stage("active_chats")
             routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
+            stage("snapshot")
             connection = operator._operator_row(cur, tenant)
             if (
                 not connection
@@ -176,6 +198,7 @@ def sync_once(tenant):
             )
             batch = cur.fetchall()
             db.commit()
+            stage("history")
             for route in batch:
                 row, _ = routes[route["chat_id"]]
                 query = {"chat_id": route["chat_id"], "client_id": row["client_id"], "limit": PAGE}
@@ -225,10 +248,17 @@ def install(app, logger):
         except Exception:
             logger.warning("Operator widget realtime check could not start")
         while True:
+            current_stage = "start"
+
+            def stage(value):
+                nonlocal current_stage
+                current_stage = value
+
             try:
-                await asyncio.to_thread(sync_once, tenant)
-            except Exception:
-                logger.warning("Operator widget queue refresh failed")
+                await asyncio.to_thread(sync_once, tenant, stage=stage)
+            except Exception as exc:
+                logger.warning("Operator widget queue refresh failed: stage=%s reason=%s",
+                               current_stage, _safe_failure(exc))
             await asyncio.sleep(10)
 
     async def context(_):

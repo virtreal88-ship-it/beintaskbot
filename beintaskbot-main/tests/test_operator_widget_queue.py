@@ -309,6 +309,18 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     with pytest.raises(TenantLinearError):
         queue.history(PROFILE, {**params, "conversation_id": "other"})
 
+    import tenant_operator_dialog_removal as removal
+    monkeypatch.setattr(removal, "_connect", lambda: db)
+    assert page()["dialog"]["can_remove_dialog"]
+    remove = {**params, "confirmed": True, "request_id": str(uuid.uuid4())}
+    assert removal.remove(PROFILE, remove)["removed"]
+    assert queue.cards(cur, policy, "all", queue.guard(cur, A))[0] == []
+    assert [m["id"] for m in page()["messages"]] == ["2", "3"]
+    send(4, start + timedelta(seconds=6))
+    assert len(queue.cards(cur, policy, "all", queue.guard(cur, A))[0]) == 1
+    removal.remove(PROFILE, remove)
+    assert len(queue.cards(cur, policy, "all", queue.guard(cur, A))[0]) == 1
+
 
 def test_worker_skips_dormant_history_and_resumes_new_pages(db, monkeypatch):
     monkeypatch.setattr(op, "_connect", lambda: db)
@@ -363,3 +375,22 @@ def test_worker_skips_dormant_history_and_resumes_new_pages(db, monkeypatch):
     assert not any(req.get("before_id", 77) < 77 for req in calls)
     cur.execute("SELECT state,latest_in,high_id FROM saas_widget_dialogs WHERE tenant_id=%s", (A,))
     assert cur.fetchone() == {"state": "waiting", "latest_in": ids[-1], "high_id": ids[-1]}
+
+
+def test_sync_failure_diagnostics_do_not_include_sensitive_exception_text(db, monkeypatch):
+    monkeypatch.setattr(op, "_connect", lambda: db)
+    monkeypatch.setattr(op, "_credentials", lambda tenant: CREDENTIALS)
+    stages = []
+
+    def denied(*_):
+        raise op.OperatorError("secret response body", upstream_http_status=403)
+
+    monkeypatch.setattr(sync, "_post", denied)
+    with pytest.raises(op.OperatorError) as error:
+        sync.sync_once(A, stage=stages.append)
+    assert stages == ["credentials", "database_lock", "active_chats"]
+    assert sync._safe_failure(error.value) == "operator_http_403"
+    invalid = op.OperatorError("secret response body", 502)
+    assert sync._safe_failure(invalid) == "operator_invalid_response"
+    other = RuntimeError("customer text must never enter logs")
+    assert sync._safe_failure(other) == "internal_error"

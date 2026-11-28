@@ -164,6 +164,16 @@ def migrate_operations_schema(cur) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )
     """)
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_operator_dialog_removals (
+        tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        channel_id UUID NOT NULL,
+        conversation_id TEXT NOT NULL,
+        lead_id BIGINT NOT NULL,
+        removed_at TIMESTAMPTZ NOT NULL,
+        widget_inbound_id BIGINT,
+        PRIMARY KEY(tenant_id,provider,channel_id,conversation_id,lead_id)
+    )""")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_tenant_audit_events (
             id UUID PRIMARY KEY,

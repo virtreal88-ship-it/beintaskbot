@@ -555,3 +555,48 @@ def test_old_target_paginates_and_bulk_read_preserves_no_reply_state_and_new_arr
     assert after_repeat['dialogs'][0]['unread_count']==0
     assert after_repeat['dialogs'][0]['lifecycle']['state']=='accepted'
     assert not after_repeat['dialogs'][0]['lifecycle']['no_reply_needed']
+
+
+def test_new_missed_call_restores_hidden_exact_route_until_accepted(active, monkeypatch, missed_attention_receipts):
+    import tenant_operator_dialog_removal as removal
+
+    monkeypatch.setattr(removal, '_connect', lambda: active)
+    route = dict(provider='connect', channel_id=CA, conversation_id='client', lead_id=41)
+    def card():
+        return next((r for r in dialogs.listing(PROFILE, lifecycle='all', channel='connect:'+CA)['dialogs']
+                     if r['lead_id'] == 41), None)
+    def event(n, kind, *, channel=CA, at=None, direction='system'):
+        mid = message(active, n, channel=channel, direction=direction, message_type=kind)
+        active.execute("UPDATE saas_crm_messages SET created_at=clock_timestamp(), happened_at=%s WHERE id=%s",
+                       (at, mid))
+        active.commit()
+        return mid
+
+    # Prove that the original incoming message does not itself restore visibility.
+    event(800, 'text', direction='incoming')
+    assert card() is not None
+    command = dict(route, confirmed=True, request_id=str(uuid.uuid4()))
+    assert removal.remove(PROFILE, command)['removed'] is True
+    assert card() is None
+
+    event(801, 'call_missed', at='2020-01-01T00:00:00Z')
+    event(802, 'call_observed')
+    event(803, 'call_invalidated')
+    event(804, 'call_missed', channel=CB)
+    assert card() is None
+
+    call = event(805, 'call_missed')
+    restored = card()
+    assert restored is not None and restored['missed_call_pending'] is True
+    assert restored['lifecycle']['state'] == 'waiting'
+    history = dialogs.history(PROFILE, 'connect', 41, CA, 'client')
+    assert history['read_through_message_id'] == call
+    dialogs.mark_read(PROFILE, dict(route, message_id=call))
+    assert card()['missed_call_pending'] is True
+
+    request = str(uuid.uuid4())
+    missed_attention_receipts.append(request)
+    result = lifecycle.mutate(PROFILE, dict(route, action='accept',
+        expected_revision=restored['lifecycle']['revision'], request_id=request))
+    assert result['lifecycle']['state'] == 'accepted'
+    assert card()['missed_call_pending'] is False
