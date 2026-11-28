@@ -187,7 +187,9 @@ def developer_marker(profile,data):
     with _connect() as conn:
         require_schema(conn)
         with conn.cursor() as cur:
-            tenant,actor,_,_=_scope(cur,profile,data['channel_id'],data['conversation_id'])
+            tenant,actor,policy,_=_scope(cur,profile,data['channel_id'],data['conversation_id'])
+            if 'enabled' in data and policy.profile.get('role')!='owner':
+                raise TenantLinearError('Только владелец может менять отметку разработчика.',403)
             from tenant_ai_dialog_scope import lock_dialog
             lock_dialog(cur,tenant,'connect',data['channel_id'],data['conversation_id'])
             if 'enabled' in data:
