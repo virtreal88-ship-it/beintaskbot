@@ -73,12 +73,13 @@ class ListAccess:
             if resolved() != canonical:
                 raise TenantLinearError('Адрес диалога изменился. Обновите диалог.', 409)
             cur.execute('''SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,w.state,w.operator_id,
-                (w.state='accepted' AND ep.id IS NOT NULL) AS shared_route
+                (right(c.conversation_id,5)='@g.us' AND EXISTS (
+                  SELECT 1 FROM saas_dialog_episodes ep WHERE ep.tenant_id=c.tenant_id
+                    AND ep.conversation_id=c.conversation_id AND ep.closed_at IS NULL
+                    AND to_jsonb(ep)->>'group_leader_channel_id' IS NOT NULL
+                )) AS shared_route
               FROM saas_connect_conversations c LEFT JOIN saas_dialog_workflows w
               ON w.tenant_id=c.tenant_id AND w.channel_id=c.connect_channel_id AND w.conversation_id=c.conversation_id
-              LEFT JOIN saas_dialog_episodes ep ON ep.tenant_id=w.tenant_id AND ep.id=w.id
-                AND ep.conversation_id=w.conversation_id AND ep.closed_at IS NULL
-                AND to_jsonb(ep)->>'group_leader_channel_id' IS NOT NULL
               WHERE c.tenant_id=%s::uuid AND c.conversation_id=ANY(%s::text[])''', (tenant, targets))
             states = {(r['channel_id'], r['conversation_id']): r for r in cur.fetchall()}
             for channel, jid in routes:
