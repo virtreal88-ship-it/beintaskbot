@@ -16890,6 +16890,11 @@ async def check_tenant_approval_notifications(context: ContextTypes.DEFAULT_TYPE
     ], logger)
 
 
+async def check_owner_operational_alerts(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from tenant_owner_operational_alerts import deliver
+    await deliver(context.bot, logger)
+
+
 async def check_tenant_hot_order_notifications(context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await deliver_hot_order_notifications(context.bot,VAPID_PRIVATE_KEY,VAPID_CLAIMS,logger)
@@ -20030,6 +20035,7 @@ def main():
             (check_tenant_hot_order_notifications, 60, 35, {"max_instances": 1, "coalesce": True}),
             (check_tenant_linear_observer, 60, 40, {"max_instances": 1, "coalesce": True}),
             (check_tenant_news_telegram, 60, 45, {"max_instances": 1, "coalesce": True}),
+            (check_owner_operational_alerts, 60, 50, {"max_instances": 1, "coalesce": True}),
             (check_operator_company_import, 6, 10, {"max_instances": 1, "coalesce": True}),
             (check_tenant_crm_sync, 15, 10, {"max_instances": 1, "coalesce": True}),
             (check_linear_status_notifications, 60, 20, None),

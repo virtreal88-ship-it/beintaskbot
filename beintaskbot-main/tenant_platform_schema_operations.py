@@ -1,6 +1,13 @@
 """Additive PostgreSQL migration slice; executed inside the shared transaction."""
 
 def migrate_operations_schema(cur) -> None:
+    # Internal delivery checkpoint: never part of employee/workflow settings.
+    cur.execute("""CREATE TABLE IF NOT EXISTS saas_owner_operational_alert_checkpoints (
+      tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+      signal TEXT NOT NULL CHECK (signal IN ('send','queue','sync')),
+      value JSONB NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(value)='object'),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (tenant_id, signal))""")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_crm_deals (
             tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
