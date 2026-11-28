@@ -12,7 +12,7 @@ import requests
 import psycopg
 from datetime import datetime, timezone
 from psycopg.rows import dict_row
-from worker_crm_capacity import CapacityUnavailable, db_scope, legacy_access_io, postgres_budget
+from worker_crm_capacity import CapacityUnavailable, db_scope, legacy_access_io, legacy_deal_io, postgres_budget
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def _postgres_load_file(filename: str, force: bool = False):
                     _cache_sha[filename] = "postgres"
                 return data
     except Exception as exc:
-        if db_scope.get() == legacy_access_io.db_settings:
+        if db_scope.get() in (legacy_access_io.db_settings, legacy_deal_io.db_settings):
             # A failed PostgreSQL authorization read cannot use the legacy fallback.
             raise CapacityUnavailable() from None
         logger.error("PostgreSQL load %s failed: %s", filename, exc)

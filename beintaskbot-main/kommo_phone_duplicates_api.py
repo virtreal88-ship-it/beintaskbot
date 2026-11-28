@@ -1,6 +1,6 @@
 """Legacy authorised search: only GETs and no global contact-search fallback."""
-import asyncio
 from aiohttp import web
+from worker_crm_capacity import legacy_deal_io, session_io
 from kommo_phone_duplicates import search
 from tenant_policy import TenantPolicy
 
@@ -15,7 +15,7 @@ def handler(identify, authorize, can_view, http, base_url, headers, logger):
             lead_id = int(request.query.get('lead_id') or 0)
             if lead_id <= 0:
                 raise ValueError('Sövdələşmə seçilməyib.')
-            lead, denied = await asyncio.to_thread(authorize, actor, lead_id)
+            lead, denied = await legacy_deal_io.run(authorize, actor, lead_id)
             if denied is not None:
                 return denied
             async def read(path, params):
@@ -27,13 +27,17 @@ def handler(identify, authorize, can_view, http, base_url, headers, logger):
                     if response.status_code != 200:
                         raise RuntimeError('Provider unavailable')
                     return response.json()
-                return await asyncio.to_thread(get)
-            result = await search(request.query.get('phone', ''), lead_id, read, lambda row: can_view(actor, row))
+                return await legacy_deal_io.run(get)
+            async def allowed(row):
+                return await legacy_deal_io.run(can_view, actor, row)
+
+            result = await search(request.query.get('phone', ''), lead_id, read, allowed)
             # Re-check the source after the external reads (no stale-authority response).
-            _, denied = await asyncio.to_thread(authorize, actor, lead_id)
+            _, denied = await legacy_deal_io.run(authorize, actor, lead_id)
             if denied is not None:
                 return denied
-            result['deals'] = [row for row in result['deals'] if can_view(actor, row)]
+            result['deals'] = await legacy_deal_io.run(
+                lambda: [row for row in result['deals'] if can_view(actor, row)])
             return web.json_response({'success': True, **result}, headers=output_headers)
         except (ValueError, TypeError):
             return web.json_response({'success': False, 'error': 'Telefon nömrəsini tam yazın.'}, status=400, headers=output_headers)
@@ -47,7 +51,7 @@ def tenant_handler(member_from_request, request_provider, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            profile = member_from_request(request)
+            profile = await session_io.run(member_from_request, request)
             if not profile:
                 return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403, headers=headers)
             identity = (str(profile['tenant_id']), str(profile['telegram_id']))
@@ -63,7 +67,7 @@ def tenant_handler(member_from_request, request_provider, logger):
                 return web.json_response({'success': False, 'error': 'İcazə yoxdur.'}, status=403, headers=headers)
             result = await search(request.query.get('phone', ''), lead_id, read,
                                   lambda row: TenantPolicy(profile).can_access_deal({**row, 'tenant_id': identity[0]}))
-            current = member_from_request(request)
+            current = await session_io.run(member_from_request, request)
             if not current or (str(current['tenant_id']), str(current['telegram_id'])) != identity:
                 return web.json_response({'success': False, 'error': 'Kabinet dəyişib. Yeniləyin.'}, status=409, headers=headers)
             if not TenantPolicy(current).can_access_deal({**lead, 'tenant_id': identity[0]}):

@@ -1,5 +1,6 @@
 """Read-only, bounded candidate search. A matching phone is not proof of a duplicate order."""
 import asyncio
+from inspect import isawaitable
 import re
 from typing import Awaitable, Callable
 from crm_stage_labels import stage_display_name
@@ -52,7 +53,7 @@ def rows(payload: dict, kind: str) -> list[dict]:
     return result
 
 
-async def search(phone: str, source_id: int, read: Read, allowed: Callable[[dict], bool]) -> dict:
+async def search(phone: str, source_id: int, read: Read, allowed: Callable[[dict], bool | Awaitable[bool]]) -> dict:
     canonical = normalize_phone(phone)
     matched, candidates, incomplete = {}, {}, False
     async with asyncio.timeout(35):
@@ -86,7 +87,12 @@ async def search(phone: str, source_id: int, read: Read, allowed: Callable[[dict
             payload = await read('leads', {'filter[id][]': ids[:50], 'limit': 50})
             for lead in rows(payload, 'leads'):
                 lead_id = int(lead.get('id') or 0)
-                if lead_id not in matched or lead_id not in ids[:50] or not allowed(lead):
+                if lead_id not in matched or lead_id not in ids[:50]:
+                    continue
+                access = allowed(lead)
+                if isawaitable(access):
+                    access = await access
+                if not access:
                     continue
                 candidates[lead_id] = {'id': lead_id, 'name': str(lead.get('name') or '')[:240],
                     **matched[lead_id], 'pipeline_id': int(lead.get('pipeline_id') or 0),

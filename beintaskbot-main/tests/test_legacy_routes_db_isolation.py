@@ -165,6 +165,14 @@ def test_crm_record_lock_returns_503_while_dialogs_work_and_preserves_tenant_sco
     asyncio.run(scenario())
 
 
+def load_bot_functions(namespace, *names):
+    script = Path(__file__).resolve().parents[1] / 'bot.py'
+    module = ast.parse(script.read_text(encoding='utf-8-sig'))
+    module.body = [node for node in module.body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
+    exec(compile(module, str(script), 'exec'), namespace)
+
+
 def test_legacy_middleware_fails_closed_during_postgres_lock(database, monkeypatch):
     # Import the legacy authorization policy without any live credentials.
     for name in ('TELEGRAM_TOKEN', 'KOMMO_TOKEN', 'VAPID_PRIVATE_KEY', 'VAPID_PUBLIC_KEY'):
@@ -172,11 +180,6 @@ def test_legacy_middleware_fails_closed_during_postgres_lock(database, monkeypat
     import legacy_employee_access as employees
 
     # Exercise the production middleware without starting bot.py.
-    script = Path(__file__).resolve().parents[1] / 'bot.py'
-    module = ast.parse(script.read_text(encoding='utf-8-sig'))
-    names = {'telegram_auth_middleware', '_legacy_api_access', '_required_api_permission'}
-    module.body = [node for node in module.body
-                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names]
     namespace = {
         'web': web, '_is_public_api_request': lambda _: False,
         '_web_session_user_id': lambda req: ACTOR if req.cookies.get('synthetic-session') else None,
@@ -185,7 +188,7 @@ def test_legacy_middleware_fails_closed_during_postgres_lock(database, monkeypat
         'employee_access_profile': employees.employee_access_profile,
         'employee_has_permission': employees.employee_has_permission,
     }
-    exec(compile(module, str(script), 'exec'), namespace)
+    load_bot_functions(namespace, 'telegram_auth_middleware', '_legacy_api_access', '_required_api_permission')
     monkeypatch.setattr(documents, '_DATABASE_URL', database)
     monkeypatch.setattr(documents, '_pg_schema_ready', True)
     monkeypatch.setattr(documents, '_cache', {})
@@ -231,4 +234,35 @@ def test_legacy_middleware_fails_closed_during_postgres_lock(database, monkeypat
             assert (await client.get('/api/notifications', headers=cookies)).status == 200
             assert (await client.get('/api/chats/pulse', headers=cookies)).status == 403
             fallback.assert_not_called()
+    asyncio.run(scenario())
+
+
+def test_legacy_kommo_reply_cannot_send_while_deal_access_waits(database, workspace, monkeypatch):
+    def authorize(*_):
+        with _connect() as conn:
+            conn.execute('SELECT 1 FROM budget_markers')
+        return {'id': 101}, None
+
+    provider = Mock(side_effect=AssertionError('No provider call while access is unverified'))
+    namespace = {'web': web, 'asyncio': asyncio, '_deal_request_user': lambda _: ACTOR,
+                 '_authorized_deal_lead': authorize, '_resolve_channel_talk_id': provider}
+    load_bot_functions(namespace, '_authorized_legacy_deal', 'handle_api_deal_kommo_reply')
+    app = app_with_dialogs(workspace.profile, monkeypatch)
+    path = '/api/deal/chat/kommo-reply'
+    app.router.add_post(path, namespace['handle_api_deal_kommo_reply'])
+
+    async def scenario():
+        cookie = workspace.issue(TENANT, ACTOR)
+        async with TestClient(TestServer(app)) as client:
+            with psycopg.connect(database) as blocker:
+                blocker.execute('LOCK budget_markers IN ACCESS EXCLUSIVE MODE')
+                waiting = asyncio.create_task(client.post(path, json={'lead_id': 101, 'text': 'Synthetic'}))
+                try:
+                    await observe_waiters(database, blocker.info.backend_pid, 'crm-legacy-deal')
+                    assert (await client.get('/dialogs', headers=headers_for(cookie))).status == 200
+                    assert (await asyncio.wait_for(waiting, 5)).status == 503
+                    provider.assert_not_called()
+                finally:
+                    blocker.rollback()
+                    await asyncio.gather(waiting, return_exceptions=True)
     asyncio.run(scenario())

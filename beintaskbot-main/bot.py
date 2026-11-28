@@ -12544,6 +12544,16 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
     return lead, None
 
 
+async def _authorized_legacy_deal(chat_id: int, lead_id: int):
+    from worker_crm_capacity import CapacityUnavailable, legacy_deal_io, unavailable_response
+
+    try:
+        return await legacy_deal_io.run(_authorized_deal_lead, chat_id, lead_id)
+    except CapacityUnavailable:
+        return None, unavailable_response()
+
+
+
 _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
 _chat_open_preview: dict[int, list] = {}
 _deal_chat_cache_lock = threading.Lock()
@@ -13310,7 +13320,7 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    _lead, err = await asyncio.to_thread(_authorized_deal_lead, chat_id, lead_id)
+    _lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     try:
@@ -13362,7 +13372,7 @@ async def handle_api_deal_kommo_reply(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     talk_id = await asyncio.to_thread(_resolve_channel_talk_id, lead, "whatsapp")
@@ -13416,7 +13426,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
 
     sender_digits = _hinted_wa_sender_digits(chat_id, message.sender_phone)
-    lead, err = _authorized_deal_lead(chat_id, message.lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, message.lead_id)
     if err:
         return err
     reply_talk_id, reply_chat_id = _resolve_channel_talk(
@@ -13646,7 +13656,7 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     phones = _phones_for_wa_lead(lead_id)
     lead = {"id": lead_id, "phone": phones[0] if phones else "", "phones": phones}
     if not phones:
-        lead, err = _authorized_deal_lead(chat_id, lead_id)
+        lead, err = await _authorized_legacy_deal(chat_id, lead_id)
         if err:
             return err
         _ids, phones = _contact_ids_and_phones(lead)
@@ -13705,7 +13715,7 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
     _record_user_seen(chat_id, lead_id)
     if not wamid:
         return web.json_response({"success": True, "seen_recorded": True})
-    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    _lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
@@ -13809,7 +13819,7 @@ async def handle_api_deal_bot_run(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     bot_id = int(data.get("bot_id") or 60151)
@@ -13833,7 +13843,7 @@ async def handle_api_deal_bot_stop(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     bot_id = int(data.get("bot_id") or 60151)
@@ -13892,7 +13902,7 @@ async def handle_api_deal_chat_pin(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     pin = None
@@ -14265,7 +14275,7 @@ async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Nümunə üçün məlumat natamamdır."}, status=400)
     if len(reply) > 2000:
         return web.json_response({"success": False, "error": "Cavab çox uzundur."}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     context_lines = []
@@ -14313,7 +14323,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     summary_action = str(data.get("summary_action") or "").strip().casefold()
@@ -14485,7 +14495,7 @@ async def handle_api_deal_chat_transcribe(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     probe = {
