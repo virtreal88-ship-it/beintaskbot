@@ -1,0 +1,17 @@
+name: CRM independent availability observer tests
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/crm-independent-observer-test.yml'
+      - 'ops/crm-availability/**'
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s ops/crm-availability -p 'test_*telegram_monitor.py'

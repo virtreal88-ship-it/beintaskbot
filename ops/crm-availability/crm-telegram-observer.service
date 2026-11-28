@@ -1,0 +1,28 @@
+[Unit]
+Description=External Beintaskbot CRM availability observer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=crm-telegram-observer
+StateDirectoryMode=0700
+LoadCredential=telegram-bot-token:/etc/crm-telegram-observer/telegram-bot-token
+LoadCredential=telegram-chat-id:/etc/crm-telegram-observer/telegram-chat-id
+ExecStart=/usr/bin/python3 -B /opt/crm-telegram-observer/continuous_telegram_monitor.py
+Restart=on-failure
+RestartSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
