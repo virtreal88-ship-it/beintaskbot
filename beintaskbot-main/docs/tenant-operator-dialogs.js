@@ -303,9 +303,9 @@
     clearTimeout(messageUpdateTimer);messageUpdateTimer=null;
     messageUpdateRequest?.abort();messageUpdateRequest=null;
   }
-  function scheduleMessageUpdates(delay=0){
+  function scheduleMessageUpdates(delay=1000){
     if(!canWatchMessages()){stopMessageUpdates();return;}
-    if(messageUpdateTimer!==null||messageUpdateRequest)return;
+    if(!messageRevision||messageUpdateTimer!==null||messageUpdateRequest)return;
     messageUpdateTimer=setTimeout(checkMessageUpdates,delay);
   }
   async function checkMessageUpdates(){
@@ -1586,7 +1586,13 @@
     const revision=++listRevision,version=epoch;
     $('operatorRows').setAttribute('aria-busy','true');if(!rows.length)notice(t('loading'));
     const promise=(async()=>{try{
-      const result=await api(key);if(version!==epoch||revision!==listRevision)return;
+      const needsRevision=!observed&&!append&&!messageRevision;
+      const result=await api(needsRevision?key+'&message_revision=1':key);
+      if(version!==epoch||revision!==listRevision)return;
+      if(needsRevision&&typeof result.message_revision==='string'){
+        messageRevision=result.message_revision;
+        scheduleMessageUpdates();
+      }
       if(observed){
         rows=(append?rows:[]).concat((result.dialogs||[]).map(row=>({...row,observed_operator_id:observed})));
         nextOffset=result.next_offset;lastListKey=key;lastListAt=Date.now();

@@ -167,6 +167,8 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                         options['owner_overview']=True
                     if colleague is not None:
                         options['observed_operator_id']=colleague
+                    elif query.get('message_revision')=='1':
+                        options['include_message_revision']=True
                     read=partial(listing,**options) if options else listing
                     result=await timing.run(read,profile,query.get('search',''),query.get('channel',''),query.get('agent',''),query.get('state',''),query.get('offset',0))
                 elif revision_read:

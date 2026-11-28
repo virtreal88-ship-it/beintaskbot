@@ -15,8 +15,13 @@ import tenant_whatsapp_native_inbox as inbox
 
 def test_browser_message_revision_is_fenced_by_tenant_and_active_source(db,monkeypatch):
     import tenant_dialog_message_revision as updates
-    monkeypatch.setattr(updates,'_connect',lambda:psycopg.connect(db.dsn,row_factory=dict_row))
+    import tenant_operator_dialogs as dialogs
+    def connect():
+        return psycopg.connect(db.dsn,row_factory=dict_row)
+    monkeypatch.setattr(updates,'_connect',connect)
+    monkeypatch.setattr(dialogs,'_connect',connect)
     first=updates.read_revision(PROFILE)
+    assert dialogs.listing(PROFILE,include_message_revision=True)['message_revision']==first['revision']
     db.execute("UPDATE saas_connect_conversations SET updated_at=now()+interval '1 hour' WHERE tenant_id=%s",(B,))
     db.commit()
     assert updates.read_revision(PROFILE)==first

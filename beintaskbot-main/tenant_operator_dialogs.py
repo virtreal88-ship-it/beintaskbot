@@ -1199,7 +1199,8 @@ def _colleague_listing(cur,tenant,policy,target,search,channel,lifecycle,offset)
 
 
 def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=False,completion_preview=False,lifecycle="active",include_read_cursors=False,combine_history=False,
-            owner_overview=False,search_overview=False,allow_mixed_history_card=False,observed_operator_id=None):
+            owner_overview=False,search_overview=False,allow_mixed_history_card=False,observed_operator_id=None,
+            include_message_revision=False):
     if lifecycle not in {'active','all','completed'}: raise TenantLinearError('Некорректный режим диалогов.',400)
     if state not in {'','automatic','manual','needs_assignment','attention','no_agent'}: raise TenantLinearError('Некорректный статус.')
     offset=max(0,min(int(offset),1000000))
@@ -1216,6 +1217,12 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                         or owner_overview or search_overview or agent or state):
                     raise TenantLinearError('Некорректный режим просмотра.',400)
                 return _colleague_listing(cur,tenant,policy,observed_operator_id,search,str(channel or '')[:250],lifecycle,offset)
+            message_revision=None
+            if include_message_revision:
+                from tenant_dialog_message_revision import visible_revision
+                # Seed the watch before reading the list. A concurrent commit can
+                # cause an extra refresh, but cannot be skipped on startup.
+                message_revision=visible_revision(cur,tenant,policy)
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
@@ -1516,6 +1523,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                     and (not r.get('archive_read_only') or show_archive_labels)]
                 attach_list_company_names(cur,tenant,company_cards,policy=policy)
     return {**({'completion_preview':True} if completion_preview else {}),
+            **({'message_revision':message_revision} if message_revision is not None else {}),
             'dialogs':rows if all_rows else rows[:50],'channels':channels,'agents':agents,
             'ai_management_restricted':restricted_ai,
             'attention_count':count,'unread_count':unread_total,'total_count':total_count,
