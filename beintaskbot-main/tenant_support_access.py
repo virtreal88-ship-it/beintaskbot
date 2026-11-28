@@ -20,8 +20,10 @@ def require(cur, profile, ticket_id, action='view', *, lock=False):
     tenant, actor, policy = policy_access(cur, profile, action)
     scoped = policy.action_scope('support', action) is not None
     columns = '*' if scoped else 'id'
+    # Legacy workflows order their own action locks. The visibility check
+    # must not take a ticket lock ahead of a dialog or consultation fence.
     cur.execute(f'SELECT {columns} FROM saas_support_tickets WHERE tenant_id=%s::uuid AND id=%s::uuid AND deleted_at IS NULL'
-                + (' FOR UPDATE' if lock else ''), (tenant, identifier(ticket_id)))
+                + (' FOR UPDATE' if lock and scoped else ''), (tenant, identifier(ticket_id)))
     row = cur.fetchone()
     if not row or (scoped and not policy.allows_resource('support', action,
             owned_resource_metadata(cur, tenant, row, lock=True))):
