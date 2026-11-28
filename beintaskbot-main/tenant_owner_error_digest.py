@@ -8,7 +8,6 @@ from tenant_notice_transport import attempt
 
 _ZONE = ZoneInfo("Asia/Baku")
 _DUE = time(18, 0)
-_KEY = "operator_owner_error_digest_v1"
 # Fixed statements, no raw error code, customer ID, or provider payload is selected.
 _COUNTS = (
     ("saas_crm_sync_outbox", "Ошибки синхронизации контактов и сделок",
@@ -57,10 +56,10 @@ def _claim(tenant, period):
     with _db() as conn, conn.cursor() as cur:
         # The row only holds the last processed period. Lock the transaction
         # across claim and snapshot, never across network delivery.
-        cur.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key)
-          VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING""", (tenant, _KEY))
-        cur.execute("""SELECT value->>'day' AS day FROM saas_tenant_workflow_policies
-          WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE""", (tenant, _KEY))
+        cur.execute("""INSERT INTO saas_owner_crm_digest_checkpoint(tenant_id)
+          VALUES(%s::uuid) ON CONFLICT DO NOTHING""", (tenant,))
+        cur.execute("""SELECT last_day::text AS day FROM saas_owner_crm_digest_checkpoint
+          WHERE tenant_id=%s::uuid FOR UPDATE""", (tenant,))
         saved = cur.fetchone()
         if not saved or (saved['day'] or '') >= day:
             return None
@@ -68,8 +67,8 @@ def _claim(tenant, period):
         if owner is None:
             return None
         items = _collect(cur, tenant, start, end)
-        cur.execute("""UPDATE saas_tenant_workflow_policies SET value=jsonb_build_object('day',%s::text),
-          updated_at=now() WHERE tenant_id=%s::uuid AND policy_key=%s""", (day, tenant, _KEY))
+        cur.execute("""UPDATE saas_owner_crm_digest_checkpoint SET last_day=%s::date,
+          updated_at=now() WHERE tenant_id=%s::uuid""", (day, tenant))
         if items:
             return {'recipient_id': owner, 'day': day, 'items': items, 'send': True}
     return None
