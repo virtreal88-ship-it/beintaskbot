@@ -40,8 +40,10 @@ type CallManager struct {
 	encodeBuf    []float32
 	encodeBufPos int
 
-	lastCaptureAt time.Time
-	keepaliveStop chan struct{}
+	lastCaptureAt   time.Time
+	keepaliveStop   chan struct{}
+	peerAudio       peerAudioBuffer
+	peerPlayoutStop chan struct{}
 
 	OnStateChange func(*CallInfo)
 	OnIncoming    func(*CallInfo)

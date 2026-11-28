@@ -15,7 +15,7 @@ async function main(){
  let busyReads=0,busyReplies=0,calls=[],posts=[],dropStart=false,deny=false,failAccept=false,failEnd=false,frames=0,holdConnection=false,holdAnswer=true,delayEnd=false,resumeEndReply;
  if(managed)await context.routeWebSocket('**/api/platform/browser-calls/*/audio?*',ws=>ws.onMessage(data=>{assert(Buffer.isBuffer(data)&&data.length<=6400&&data.length%2===0);frames++;ws.send(data);}));
  await context.route('**/api/platform/browser-calls?*',async r=>{const req=r.request(),url=new URL(req.url());if(deny)return r.fulfill({status:403,json:{error:'access revoked'}});
-   if(req.method()==='GET'&&busyReads>0){busyReads--;busyReplies++;return r.fulfill({status:429,json:{error:'temporary capacity'}});}
+   if(req.method()==='GET'&&busyReads>0){busyReads--;busyReplies++;return r.fulfill({status:managed?503:429,json:{error:'temporary capacity',code:'call_service_busy'}});}
    if(req.method()==='GET')return r.fulfill({json:{result:{enabled:true,online:true,test_number:'994123456789',sources:[{channel_id:'source',number:'994123456789',online:true,media:managed?'websocket':'webrtc',permanent:managed,max_seconds:managed?900:120,retention_hours:managed?720:24}],calls:calls.map(c=>({...c,audio_ready:managed&&c.claimed&&!holdConnection,request_matches:url.searchParams.get('request_id')===c.nonce}))}}});
    const d=req.postDataJSON();posts.push(d);
    if(d.op==='accept'&&failAccept)return r.fulfill({status:409,json:{error:'Приём новых диалогов приостановлен.'}});
@@ -70,7 +70,7 @@ async function main(){
   const beforeBusyEnds=posts.filter(x=>x.op==='end').length;
   busyReads=1;await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
   await p.getByText('Сервер занят. Проверяем состояние звонка…',{exact:true}).waitFor();
-  assert.equal(posts.filter(x=>x.op==='end').length,beforeBusyEnds,'one temporary status 429 must not hang up');
+  assert.equal(posts.filter(x=>x.op==='end').length,beforeBusyEnds,'one temporary capacity response must not hang up');
   assert.equal(calls[0].state,'connected');assert(await p.evaluate(()=>streams.some(s=>s.getTracks().some(t=>t.readyState==='live'))));
   await p.getByText('Сервер занят. Проверяем состояние звонка…',{exact:true}).waitFor({state:'hidden',timeout:10000});assert.equal(busyReplies,1);
   const duration=p.getByRole('timer',{name:'Длительность разговора'});await duration.waitFor();await p.waitForFunction(()=>/^00:[0-5][0-9]$/.test(document.querySelector('[role=timer]').textContent)&&document.querySelector('[role=timer]').textContent!=='00:00');
@@ -102,7 +102,7 @@ async function main(){
   await p.getByText('Звонок завершён',{exact:true}).waitFor({timeout:30000});assert.equal(calls[0].state,'ended','stalled audio readiness must send fenced end');assert(await p.getByText('Не удалось подтвердить подключение звука.',{exact:false}).isVisible());holdConnection=false;await p.getByRole('button',{name:'Закрыть звонок'}).click();await phone.click();await p.getByRole('button',{name:'Позвонить',exact:true}).click();await p.getByText('Разговор',{exact:true}).waitFor();
   const beforeBusyStop=posts.filter(x=>x.op==='end').length;busyReads=20;await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
   await p.waitForFunction(()=>streams.every(s=>s.getTracks().every(t=>t.readyState==='ended')),{},{timeout:14000});
-  assert(posts.filter(x=>x.op==='end').length>beforeBusyStop,'persistent 429 must still stop audio and request fenced end');busyReads=0;
+  assert(posts.filter(x=>x.op==='end').length>beforeBusyStop,'persistent capacity errors must still stop audio and request fenced end');busyReads=0;
   deny=true;await p.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));await p.locator('dialog').waitFor({state:'detached'});assert(await p.evaluate(()=>streams.every(s=>s.getTracks().every(t=>t.readyState==='ended'))));
   await p.setViewportSize({width:390,height:844});const rect=await phone.boundingBox();assert(rect&&rect.x>=0&&rect.x+rect.width<=390);
   const refreshBeforeIdentity=await p.evaluate(()=>window.refreshes||0);for(const c of calls){c.recording_id='after-revocation';c.recording_state='ready';}deny=false;await p.evaluate(()=>{tenantOperator.member={tenant_id:'other-tenant',telegram_id:12};document.dispatchEvent(new Event('tenant-profile'));});await p.waitForResponse(r=>r.url().includes('expected_tenant_id=other-tenant'));assert.equal(await p.evaluate(()=>window.refreshes||0),refreshBeforeIdentity,'revocation and company change discard pending recording refreshes');

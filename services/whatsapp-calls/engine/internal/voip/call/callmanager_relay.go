@@ -83,6 +83,11 @@ func (m *CallManager) cleanupMedia() {
 		close(m.keepaliveStop)
 		m.keepaliveStop = nil
 	}
+	if m.peerPlayoutStop != nil {
+		close(m.peerPlayoutStop)
+		m.peerPlayoutStop = nil
+	}
+	m.peerAudio.stop()
 	m.rtpSession = nil
 	m.srtpSession = nil
 	m.firstPacketSent = false

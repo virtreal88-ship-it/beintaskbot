@@ -165,7 +165,7 @@
     const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),7000);
     try{const response=await fetch('/api/platform/browser-calls?'+q,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,
       headers:data?{'Content-Type':'application/json'}:undefined,body:data?JSON.stringify(data):undefined,keepalive});
-      const payload=await response.json();if(!response.ok){const error=new Error(payload.error||'Не удалось подтвердить звонок');error.status=response.status;throw error;}return payload.result;
+      const payload=await response.json();if(!response.ok){const error=new Error(payload.error||'Не удалось подтвердить звонок');error.status=response.status;error.code=payload.code;throw error;}return payload.result;
     }finally{clearTimeout(timeout);}
   }
   function release(s){if(!s)return;clearTimeout(s.connectTimer);clearInterval(s.diagnosticTimer);s.media?.close();s.media=null;s.release?.();s.release=null;}
@@ -377,7 +377,8 @@
       // or membership has ended. Retry only this read, for at most six seconds;
       // the audio relay independently rechecks live authority every 3 seconds.
       const s=session;
-      if(e.status===429&&s?.call?.id&&s.media&&!s.stopping&&!terminal(s.call)){
+      const capacity=e.status===429||e.status===503&&e.code==='call_service_busy';
+      if(capacity&&s?.call?.id&&s.media&&!s.stopping&&!terminal(s.call)){
         const now=performance.now();s.controlBusySince??=now;
         if(now-s.controlBusySince<6000){s.controlWarning='Сервер занят. Проверяем состояние звонка…';draw();return;}
         diagnostic(s,'control_unavailable');s.controlWarning='';s.error='Связь управления не восстановлена. Завершаем звонок.';
