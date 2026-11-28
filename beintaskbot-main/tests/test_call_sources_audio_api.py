@@ -1,5 +1,6 @@
 """Real local WebSockets and synthetic PCM; no microphones/provider calls."""
 import asyncio
+import threading
 from unittest.mock import Mock
 import pytest
 from aiohttp import WSMsgType,web
@@ -22,6 +23,15 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch, d
         tenant='00000000-0000-0000-0000-000000000001';call='00000000-0000-0000-0000-000000000002'
         gateway='00000000-0000-0000-0000-000000000003';nonce='00000000-0000-0000-0000-000000000004'
         profile={'tenant_id':tenant,'telegram_id':11};revoked=False;connections=[]
+        checking=threading.Event();finish_check=threading.Event()
+        loop_thread=threading.get_ident()
+        block_recheck=False
+        def member(_):
+            if block_recheck:
+                assert threading.get_ident()!=loop_thread
+                checking.set()
+                assert finish_check.wait(4)
+            return profile
         async def engine(request):
             assert request.headers.get('Authorization')=='Bearer '+('x'*48)
             assert not request.headers.get('Cookie') and not request.headers.get('Origin')
@@ -38,7 +48,7 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch, d
                 if revoked or p!=profile or c!=call or n!=nonce:raise TenantLinearError('call_audio_denied',403)
                 return gateway,'provider-synthetic',call
             monkeypatch.setattr(sources,'audio_authority',authority)
-            app=web.Application();app.router.add_get('/calls/{call_id}/audio',handler(lambda _:profile,'https://app.invalid',Mock(),'audio'))
+            app=web.Application();app.router.add_get('/calls/{call_id}/audio',handler(member,'https://app.invalid',Mock(),'audio'))
             async with TestClient(TestServer(app)) as client:
                 url=f'/calls/{call}/audio?expected_tenant_id={tenant}&expected_user_id=11&request_id={nonce}'
                 response=await client.get(url,headers={'Origin':'https://other.invalid'});assert response.status==403 and not connections
@@ -48,7 +58,15 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch, d
                     await socket.send_bytes(raw)
                     message=await asyncio.wait_for(socket.receive(),2)
                     assert message.type==WSMsgType.BINARY and message.data==raw
-                    revoked=True
+                    block_recheck=True
+                    try:
+                        assert await asyncio.to_thread(checking.wait,5)
+                        await socket.send_bytes(raw)
+                        message=await asyncio.wait_for(socket.receive(),2)
+                        assert message.type==WSMsgType.BINARY and message.data==raw
+                        revoked=True
+                    finally:
+                        finish_check.set()
                     ended=await asyncio.wait_for(socket.receive(),5)
                     assert ended.type in {WSMsgType.CLOSE,WSMsgType.CLOSED}
                 assert connections==[f'/v1/sources/{gateway}/audio/provider-synthetic/{call}']
@@ -56,7 +74,7 @@ def test_relay_identity_origin_pcm_and_live_permission_revocation(monkeypatch, d
         saved_profile,authority,saved_nonce,evidence=diagnostic_sink[0]
         assert saved_profile==profile and authority==(gateway,'provider-synthetic',call) and saved_nonce==nonce
         assert evidence['code']=='authority_denied'
-        assert evidence['browser_to_worker']['frames']==evidence['engine_to_worker']['frames']==1
+        assert evidence['browser_to_worker']['frames']==evidence['engine_to_worker']['frames']==2
         from tenant_call_diagnostics import checked
         assert checked(evidence,'relay')==evidence
     asyncio.run(run())

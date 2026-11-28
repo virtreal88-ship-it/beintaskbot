@@ -329,7 +329,13 @@ def test_live_call_status_and_commands_have_capacity_during_background_load(monk
             monkeypatch.setattr(api, name, asyncio.Semaphore(limit))
         app = web.Application()
         app.router.add_post('/sync', api.handler(lambda _: None, origin, Mock(), 'sync'))
-        app.router.add_route('*', '/browser', api.handler(lambda _: PROFILE, origin, Mock()))
+        loop_thread = threading.get_ident()
+
+        def member(_):
+            assert threading.get_ident() != loop_thread
+            return PROFILE
+
+        app.router.add_route('*', '/browser', api.handler(member, origin, Mock()))
         async with TestClient(TestServer(app)) as client:
             sync = [asyncio.create_task(client.post('/sync', headers={'Authorization': 'Bearer ' + TOKEN}, json={}))
                     for _ in range(4)]

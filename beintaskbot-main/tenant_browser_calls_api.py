@@ -59,6 +59,12 @@ async def body(request,limit):
 
 
 def handler(member,origin,logger,resource='browser'):
+    def profile_for(request):
+        profile=member(request)
+        if not profile:raise TenantLinearError('Войдите в программу.',403)
+        _expected(request.query,profile)
+        return profile
+
     async def handle(request):
         try:
             if resource in {'sync','recording'}:
@@ -75,15 +81,13 @@ def handler(member,origin,logger,resource='browser'):
                     else:
                         result=await asyncio.to_thread(store.sync,cfg,json.loads(raw))
             else:
-                profile=member(request)
-                if not profile:raise TenantLinearError('Войдите в программу.',403)
-                _expected(request.query,profile)
                 if request.method=='GET':
                     request_id=request.query.get('request_id')
                     if request_id is not None and str(UUID(request_id))!=request_id:
                         raise TenantLinearError('call_identity_invalid',400)
                     slots=BROWSER_LIVE_SLOTS if request_id else BROWSER_POLL_SLOTS
                     async with _browser_slot(slots,live=bool(request_id)):
+                        profile=await asyncio.to_thread(profile_for,request)
                         result=await asyncio.to_thread(store.status,profile,request_id,request.query.get('heartbeat')!='0')
                 else:
                     _origin(request,origin)
@@ -93,6 +97,7 @@ def handler(member,origin,logger,resource='browser'):
                     command=data.get('op') in ('start','accept','reject','end')
                     slots=BROWSER_COMMAND_SLOTS if command else BROWSER_POLL_SLOTS
                     async with _browser_slot(slots,live=command):
+                        profile=await asyncio.to_thread(profile_for,request)
                         result=await asyncio.to_thread(store.action,profile,data)
             return web.json_response({'result':result},headers=HEADERS)
         except CallServiceBusy as error:

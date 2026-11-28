@@ -90,7 +90,9 @@ async def relay(request,profile,member,logger):
             async def recheck():
                 while True:
                     await asyncio.sleep(3)
-                    fresh=member(request)
+                    # Browser session and membership checks read PostgreSQL.
+                    # Keep the WebSocket audio pumps running during those reads.
+                    fresh=await asyncio.to_thread(member,request)
                     if not fresh or any(str(fresh.get(k))!=v for k,v in identity.items()):return 'membership_changed'
                     try:
                         if await asyncio.to_thread(store.audio_authority,fresh,call,nonce)!=authority:return 'authority_changed'
