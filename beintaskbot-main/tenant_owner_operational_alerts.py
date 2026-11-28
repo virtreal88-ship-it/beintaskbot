@@ -8,7 +8,6 @@ from tenant_notice_transport import attempt
 
 MIN_COUNT = 3
 CAP = 20
-KEY_PREFIX = 'owner_operational_alert_v1.'
 SIGNS = {
     'send': ('Проверить отправку сообщений', (
         ("saas_chat_send_receipts", """state IN ('sending','unknown') AND
@@ -86,7 +85,6 @@ def _count(cur, tenant, signal):
 
 def _step(tenant, signal, now):
     from tenant_connect_health import _owner
-    key = KEY_PREFIX + signal
     with _db() as conn, conn.cursor() as cur:
         owner = _owner(cur, tenant)
         if owner is None:
@@ -94,27 +92,27 @@ def _step(tenant, signal, now):
         value = _count(cur, tenant, signal)
         if value is None:
             return None
-        cur.execute("""INSERT INTO saas_tenant_workflow_policies(tenant_id,policy_key)
-          VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING""", (tenant, key))
-        cur.execute("""SELECT value FROM saas_tenant_workflow_policies
-          WHERE tenant_id=%s::uuid AND policy_key=%s FOR UPDATE""", (tenant,key))
+        cur.execute("""INSERT INTO saas_owner_operational_alert_checkpoints(tenant_id,signal)
+          VALUES(%s::uuid,%s) ON CONFLICT DO NOTHING""", (tenant, signal))
+        cur.execute("""SELECT value FROM saas_owner_operational_alert_checkpoints
+          WHERE tenant_id=%s::uuid AND signal=%s FOR UPDATE""", (tenant,signal))
         row = cur.fetchone()
         if row is None:
             return None
         state = row['value']
         result, item = transition(state, value, now, owner)
         if result != state:
-            cur.execute("""UPDATE saas_tenant_workflow_policies SET value=%s::jsonb,updated_at=now()
-              WHERE tenant_id=%s::uuid AND policy_key=%s""", (json.dumps(result),tenant,key))
+            cur.execute("""UPDATE saas_owner_operational_alert_checkpoints SET value=%s::jsonb,updated_at=now()
+              WHERE tenant_id=%s::uuid AND signal=%s""", (json.dumps(result),tenant,signal))
         return item
 
 
 def _confirm(tenant, signal, item):
     with _db() as conn, conn.cursor() as cur:
-        cur.execute("""UPDATE saas_tenant_workflow_policies SET
+        cur.execute("""UPDATE saas_owner_operational_alert_checkpoints SET
           value=jsonb_set(value,'{acknowledged}','true'::jsonb),updated_at=now()
-          WHERE tenant_id=%s::uuid AND policy_key=%s AND value->>'incident'=%s
-          AND value->>'recipient'=%s""", (tenant,KEY_PREFIX+signal,item['incident'],str(item['recipient_id'])))
+          WHERE tenant_id=%s::uuid AND signal=%s AND value->>'incident'=%s
+          AND value->>'recipient'=%s""", (tenant,signal,item['incident'],str(item['recipient_id'])))
 
 
 def _still_owner(tenant, item):
