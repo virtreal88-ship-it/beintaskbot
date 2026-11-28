@@ -1,4 +1,6 @@
 """A scoped local association. This module never creates or exports a CRM record."""
+import hashlib
+import json
 import os
 import re
 import uuid
@@ -224,7 +226,124 @@ def _phone_evidence(cur, tenant, binding, policy, deal_id, message_id=None, *, l
     return number, str(external_contact), proof_id
 
 
-def _phone_routes(cur, tenant, number):
+def _auto_lock(cur, tenant, deal_id):
+    cur.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',
+                (f'deal-whatsapp-auto:{tenant}:{deal_id}',))
+
+
+def _auto_source(cur, tenant, deal_id, binding):
+    cur.execute("""
+        SELECT channel_id::text AS channel_id FROM saas_crm_deal_whatsapp_sources
+        WHERE tenant_id=%s::uuid AND deal_id=%s AND account_id=%s AND connection_generation=%s
+    """, (tenant, deal_id, *kommo_scope(binding)))
+    row = cur.fetchone()
+    return row['channel_id'] if row else None
+
+
+def _auto_revision(tenant, deal_id, binding, selected):
+    return hashlib.sha256(json.dumps([tenant, str(deal_id), *kommo_scope(binding), selected]).encode()).hexdigest()
+
+
+def _has_deal_link(cur, tenant, deal_id, binding):
+    cur.execute("""
+        SELECT 1 FROM saas_crm_deal_dialog_links
+        WHERE tenant_id=%s::uuid AND deal_source='kommo' AND deal_id=%s
+          AND account_id=%s AND connection_generation=%s LIMIT 1
+    """, (tenant, deal_id, *kommo_scope(binding)))
+    return bool(cur.fetchone())
+
+
+def auto_settings(cur, tenant, policy, deal_id, binding, *, linked=False):
+    from tenant_whatsapp_native_rollout import modes
+
+    try:
+        require_source(cur, tenant, policy, 'kommo', action='view')
+    except TenantLinearError as error:
+        if error.status in (403, 404):
+            return None
+        raise
+    selected = _auto_source(cur, tenant, deal_id, binding)
+    cur.execute("""
+        SELECT connect_channel_id::text AS id, name FROM saas_connect_channels
+        WHERE tenant_id=%s::uuid AND active ORDER BY name,connect_channel_id
+    """, (tenant,))
+    channels = cur.fetchall()
+    native = modes(cur, tenant)
+    options = []
+    for row in channels:
+        channel = row['id']
+        try:
+            require_source(cur, tenant, policy, 'connect', channel, 'view')
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+        except TenantLinearError as error:
+            if error.status not in (403, 404):
+                raise
+            continue
+        phone = native.get(channel, {}).get('account_jid', '').partition('@')[0]
+        options.append({**row, 'phone_suffix': phone[-4:] if re.fullmatch(r'[0-9]{4,15}',phone) else ''})
+    visible = any(item['id'] == selected for item in options)
+    return {'channel_id': selected if visible else None, 'unavailable': bool(selected and not visible),
+            'sources': options, 'locked': linked,
+            'revision': _auto_revision(tenant, deal_id, binding, selected)}
+
+
+def _set_auto_source(profile, deal_id, channel_id, expected_revision):
+    channel = identifier(channel_id) if channel_id is not None else None
+    if not isinstance(expected_revision, str) or not re.fullmatch(r'[0-9a-f]{64}', expected_revision):
+        raise TenantLinearError('Некорректная версия выбора источника.', 400)
+    with _connect() as conn, conn.cursor() as cur:
+        tenant, _, policy = access(cur, profile, action='update')
+        _auto_lock(cur, tenant, deal_id)
+        binding = current_binding(cur, tenant, lock=False)
+        deal = _kommo_deal(cur, tenant, binding, policy, deal_id, update=True, lock=True)
+        if not deal or deal['status_id'] <= 0 or deal['status_id'] in (142, 143):
+            raise _unavailable()
+        require_source(cur, tenant, policy, 'kommo', action='view')
+        cur.execute("""
+            SELECT 1 FROM saas_crm_messages WHERE tenant_id=%s::uuid AND kommo_lead_id=%s
+              AND lower(channel) IN ('tiktok','tiktok_kommo')
+              AND raw->>'message_deleted' IS DISTINCT FROM 'true'
+              AND created_at>=%s::timestamptz LIMIT 1
+        """, (tenant, deal_id, binding.connection_generation.split(':', 1)[1]))
+        if not cur.fetchone():
+            raise _unavailable()
+        if channel:
+            require_source(cur, tenant, policy, 'connect', channel, 'view')
+            require_source(cur, tenant, policy, 'connect', channel, 'update')
+            cur.execute("""
+                SELECT 1 FROM saas_connect_channels WHERE tenant_id=%s::uuid AND connect_channel_id=%s::uuid
+                  AND active FOR SHARE
+            """, (tenant, channel))
+            if not cur.fetchone():
+                raise _unavailable()
+        before = _auto_source(cur, tenant, deal_id, binding)
+        revision = _auto_revision(tenant, deal_id, binding, channel)
+        if before == channel:
+            return {'channel_id': channel, 'revision': revision}
+        if (expected_revision != _auto_revision(tenant, deal_id, binding, before)
+                or _has_deal_link(cur, tenant, deal_id, binding)):
+            raise TenantLinearError('Источник или связь сделки изменились. Обновите карточку.', 409)
+        if binding != current_binding(cur, tenant, lock=False):
+            raise _unavailable()
+        key = (tenant, deal_id, *kommo_scope(binding))
+        if channel is None:
+            cur.execute("""
+                DELETE FROM saas_crm_deal_whatsapp_sources WHERE tenant_id=%s::uuid AND deal_id=%s
+                  AND account_id=%s AND connection_generation=%s
+            """, key)
+        else:
+            cur.execute("""
+                INSERT INTO saas_crm_deal_whatsapp_sources
+                  (tenant_id,deal_id,account_id,connection_generation,channel_id)
+                VALUES (%s::uuid,%s,%s,%s,%s::uuid)
+                ON CONFLICT (tenant_id,deal_id,account_id,connection_generation)
+                DO UPDATE SET channel_id=EXCLUDED.channel_id
+            """, (*key, channel))
+        conn.commit()
+        return {'channel_id': channel, 'revision': revision}
+
+
+def _phone_routes(cur, tenant, number, channel=None):
     aliases = [number+'@s.whatsapp.net', number+'@c.us']
     cur.execute("""
             SELECT c.connect_channel_id::text AS channel_id,c.conversation_id,c.lead_id,
@@ -241,8 +360,9 @@ def _phone_routes(cur, tenant, number):
             JOIN saas_connect_conversations c ON c.tenant_id=s.tenant_id
               AND c.connect_channel_id=s.connect_channel_id AND c.conversation_id=x.conversation_id
             WHERE s.tenant_id=%s::uuid AND s.active AND c.conversation_kind='contact'
+              AND (%s::uuid IS NULL OR s.connect_channel_id=%s::uuid)
             ORDER BY s.connect_channel_id,c.conversation_id
-    """, (aliases, aliases, tenant))
+    """, (aliases, aliases, tenant, channel, channel))
     return cur.fetchall()
 
 
@@ -300,7 +420,8 @@ def _auto_attach(profile, deal_id):
             tenant, actor, policy = access(cur, profile, action='update')
             binding = current_binding(cur, tenant, lock=False)
             number, external, message_id = _phone_evidence(cur, tenant, binding, policy, deal_id)
-            routes = _phone_routes(cur, tenant, number)
+            channel = _auto_source(cur, tenant, deal_id, binding)
+            routes = _phone_routes(cur, tenant, number, channel)
             if len(routes) != 1:
                 return {'linked':False}
             eligible = _phone_candidates(cur, tenant, actor, policy, binding, number, external, routes,
@@ -309,7 +430,8 @@ def _auto_attach(profile, deal_id):
             return {'linked':False}
         candidate = {key:value for key, value in eligible[0].items() if key != 'channel_name'}
         return attach(profile, {**candidate,'deal_source':'kommo','deal_id':deal_id,
-                                'suggested':True,'phone_message_id':message_id})
+                                'suggested':True,'phone_message_id':message_id},
+                      _expected_auto_source=(channel, kommo_scope(binding)))
     except TenantLinearError as error:
         if error.status not in (403, 404, 409, 422):
             raise
@@ -334,12 +456,15 @@ def _other_tiktok_deal_for_number(cur, tenant, binding, deal_id, number):
     return bool(cur.fetchone())
 
 
-def attach(profile, data):
+def attach(profile, data, *, _expected_auto_source=None):
     tenant = identifier(profile.get('tenant_id'))
     if not enabled(tenant):
         raise _unavailable()
     if set(data) == {'auto_phone','deal_id'} and data['auto_phone'] is True:
         return _auto_attach(profile, _deal_id('kommo', data['deal_id']))
+    if set(data) == {'auto_source','deal_id','channel_id','expected_revision'} and data['auto_source'] is True:
+        return _set_auto_source(profile, _deal_id('kommo', data['deal_id']),
+                                data['channel_id'], data['expected_revision'])
     required = {'channel_id','conversation_id','lead_id','context_id','deal_source','deal_id','suggested'}
     if set(data) not in (required, required|{'phone_message_id'}):
         raise TenantLinearError('Некорректный запрос.', 400)
@@ -355,6 +480,9 @@ def attach(profile, data):
 
     with _connect() as conn, conn.cursor() as cur:
         tenant, actor, policy = access(cur, profile, action='update')
+        if source == 'kommo':
+            # Preference writes and every link writer for a deal share this lock.
+            _auto_lock(cur, tenant, ident)
         require_source(cur, tenant, policy, 'connect', channel, 'view')
         require_source(cur, tenant, policy, 'connect', channel, 'update')
         cur.execute("""
@@ -373,6 +501,14 @@ def attach(profile, data):
         if not contact and not phone_message_id:
             raise _unavailable()
         binding = current_binding(cur, tenant, lock=False)
+        selected = None
+        if phone_message_id and suggested:
+            if not binding:
+                raise _unavailable()
+            selected = _auto_source(cur, tenant, ident, binding)
+            if ((selected and selected != channel) or (_expected_auto_source is not None
+                    and _expected_auto_source != (selected, kommo_scope(binding)))):
+                raise _unavailable()
         cur.execute("""
             SELECT * FROM saas_crm_deal_dialog_links WHERE tenant_id=%s::uuid AND channel_id=%s::uuid
               AND conversation_id=%s AND lead_id=%s AND (message_id=%s::uuid OR episode_id=%s::uuid)
@@ -395,9 +531,13 @@ def attach(profile, data):
         if phone_message_id:
             number, explicit_contact, proof_id = _phone_evidence(
                 cur, tenant, binding, policy, ident, None if suggested else phone_message_id, lock=True)
-            if suggested and (proof_id != phone_message_id or len(_phone_routes(cur, tenant, number)) != 1
-                              or _other_tiktok_deal_for_number(cur, tenant, binding, ident, number)):
-                raise TenantLinearError('Совпадение перестало быть однозначным.', 409)
+            if suggested:
+                matches = _phone_routes(cur, tenant, number, selected)
+                if (proof_id != phone_message_id or len(matches) != 1
+                        or (matches[0]['channel_id'],matches[0]['conversation_id'],matches[0]['lead_id']) != (channel,conversation,lead)
+                        or _has_deal_link(cur, tenant, ident, binding)
+                        or _other_tiktok_deal_for_number(cur, tenant, binding, ident, number)):
+                    raise TenantLinearError('Совпадение перестало быть однозначным.', 409)
             if _route_number(cur, tenant, channel, conversation) != number:
                 raise _unavailable()
             if not contact:

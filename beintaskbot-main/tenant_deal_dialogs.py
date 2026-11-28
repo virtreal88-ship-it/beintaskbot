@@ -8,7 +8,7 @@ from tenant_platform import _connect
 
 
 def linked_dialogs(profile, source, deal_id):
-    from tenant_deal_dialog_links import enabled as deal_links_enabled, routes
+    from tenant_deal_dialog_links import auto_settings, enabled as deal_links_enabled, routes
     tenant = identifier(profile.get('tenant_id'))
     binding = None
     if source == 'native':
@@ -88,4 +88,5 @@ def linked_dialogs(profile, source, deal_id):
                 if (deal['status_id'] > 0 and deal['status_id'] not in (142,143) and allowed_kommo(policy, deal, update=True)
                         and policy.allows_action('dialogs', 'update')):
                     result['can_find_whatsapp'] = True
+                    result['auto_whatsapp'] = auto_settings(cur, tenant, policy, deal_id, binding, linked=bool(attached))
             return result

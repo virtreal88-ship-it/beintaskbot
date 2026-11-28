@@ -19,13 +19,26 @@
       en:{loading:'Finding the WhatsApp chat…',empty:'There is no accessible WhatsApp chat for this number yet.',
         attach:'Link WhatsApp chat',error:'Could not verify the WhatsApp chat. Search again.',close:'Close search'}
     })[window.tenantI18n?.language||'az'];
-    const tools=document.createElement('div'),body=document.createElement('div');
+    const sourceCopy=({
+      ru:{label:'Источник WhatsApp для автопривязки',automatic:'Любой при единственном совпадении',unavailable:'Выбранный источник недоступен',
+        locked:'Переписка уже привязана',pending:'Проверяем выбранный источник…',notLinked:'Подходящий чат на выбранном источнике пока не привязан.',
+        error:'Не удалось сохранить источник. Обновите карточку сделки.'},
+      az:{label:'Avtomatik bağlama üçün WhatsApp mənbəyi',automatic:'Yalnız bir uyğunluq olduqda istənilən mənbə',unavailable:'Seçilmiş mənbə əlçatan deyil',
+        locked:'Yazışma artıq bağlanıb',pending:'Seçilmiş mənbə yoxlanılır…',notLinked:'Seçilmiş mənbədə uyğun dialoq hələ bağlanmayıb.',
+        error:'Mənbə saxlanmadı. Sövdələşmə kartını yeniləyin.'},
+      en:{label:'WhatsApp source for automatic linking',automatic:'Any source with a single match',unavailable:'Selected source is unavailable',
+        locked:'A conversation is already linked',pending:'Checking the selected source…',notLinked:'No matching chat has been linked on this source yet.',
+        error:'Could not save the source. Refresh the deal.'}
+    })[window.tenantI18n?.language||'az'];
+    const tools=document.createElement('div'),body=document.createElement('div'),sourceControl=document.createElement('div');
+    sourceControl.className='deal-whatsapp-source';
+    sourceControl.hidden=true;
     tools.className='deal-linked-dialog-tools';
     body.className='deal-linked-dialog-body';
-    panel.append(tools,body);
+    panel.append(sourceControl,tools,body);
     const slot=document.createComment('deal chat position');
     let active=false,disposed=false,resumeNeeded=false,request,conversation,routes,selection,historyRequest;
-    let phoneRequest,autoLinkRequest,canFindWhatsApp=false;
+    let phoneRequest,autoLinkRequest,sourceRequest,autoSettings,canFindWhatsApp=false;
     const snapshots=new Map();
     const visible=()=>active&&!disposed&&current()&&panel.isConnected&&!panel.hidden;
     const button=(label,callback)=>{
@@ -109,8 +122,69 @@
         if(currentPhone())status.textContent=whatsappCopy.error;
       }
     }
+    function renderSource(note=''){
+      sourceControl.replaceChildren();
+      sourceControl.hidden=!autoSettings||(!autoSettings.sources.length&&!autoSettings.unavailable);
+      if(sourceControl.hidden)return;
+      const label=document.createElement('label');
+      label.textContent=sourceCopy.label+' ';
+      const select=document.createElement('select'),status=document.createElement('span');
+      status.setAttribute('role','status');
+      const option=(value,text)=>{const item=document.createElement('option');item.value=value;item.textContent=text;select.append(item);};
+      if(autoSettings.unavailable)option('unavailable',sourceCopy.unavailable);
+      option('',sourceCopy.automatic);
+      for(const candidate of autoSettings.sources){
+        option(candidate.id,[candidate.name||'WhatsApp',candidate.phone_suffix?'…'+candidate.phone_suffix:''].filter(Boolean).join(' · '));
+      }
+      const before=autoSettings.unavailable?'unavailable':autoSettings.channel_id||'';
+      select.value=before;
+      select.disabled=autoSettings.locked||Boolean(sourceRequest);
+      status.textContent=autoSettings.locked?sourceCopy.locked:note;
+      label.append(select);sourceControl.append(label,status);
+      select.onchange=async()=>{
+        if(!visible()||sourceRequest||autoSettings.locked||select.value==='unavailable'){
+          select.value=before;return;
+        }
+        if(phoneRequest){
+          phoneRequest.abort();
+          phoneRequest=null;
+          tools.replaceChildren();
+          if(routes.length>1)tools.append(button(c.back,choose));
+        }
+        autoLinkRequest?.abort();
+        autoLinkRequest=null;
+        const channel=select.value||null,controller=new AbortController();
+        sourceRequest=controller;
+        select.disabled=true;
+        status.textContent=sourceCopy.pending;
+        try{
+          const {result}=await api('/api/platform/ai/dialogs/deal-link',{
+            method:'POST',signal:controller.signal,body:JSON.stringify({deal_id:String(id),auto_source:true,
+              channel_id:channel,expected_revision:autoSettings.revision,
+              expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id})
+          });
+          if(!visible()||controller.signal.aborted)return;
+          autoSettings={...autoSettings,channel_id:result.channel_id,revision:result.revision,unavailable:false};
+          sourceRequest=null;
+          if(selection?.provider==='kommo'&&!routes.some(item=>item.deal_link_id)){
+            const checking=renderSource(sourceCopy.pending);
+            const linked=await attemptAutoLink(selection);
+            if(visible()&&sourceControl.contains(checking)&&!linked)checking.textContent=channel?sourceCopy.notLinked:'';
+          }else renderSource();
+        }catch{
+          if(visible()&&!controller.signal.aborted){
+            select.value=before;
+            status.textContent=sourceCopy.error;
+          }
+        }finally{
+          if(sourceRequest===controller)sourceRequest=null;
+          if(visible()&&sourceControl.contains(select))select.disabled=autoSettings.locked;
+        }
+      };
+      return status;
+    }
     async function attemptAutoLink(route){
-      if(!visible()||selection!==route||phoneRequest||autoLinkRequest)return;
+      if(!visible()||selection!==route||phoneRequest||autoLinkRequest||sourceRequest)return false;
       const controller=new AbortController();
       autoLinkRequest=controller;
       const currentLink=()=>visible()&&selection===route&&!controller.signal.aborted;
@@ -131,8 +205,11 @@
         const linked=next.find(item=>item.deal_link_id===linkId);
         if(!linked)return;
         routes=next;
+        autoSettings=refreshed.result?.auto_whatsapp||(autoSettings&&{...autoSettings,locked:true});
+        renderSource();
         const label=['WhatsApp',linked.channel_name==='WhatsApp'?'':linked.channel_name];
         tools.append(button(label.filter(Boolean).join(' · '),()=>show(linked)));
+        return true;
       }catch{
         // A failed or ambiguous automatic attempt leaves the chat and manual action available.
       }finally{
@@ -240,6 +317,8 @@
         if(!visible()||controller.signal.aborted)return;
         routes=response.result?.dialogs||[];
         canFindWhatsApp=response.result?.can_find_whatsapp===true;
+        autoSettings=response.result?.auto_whatsapp;
+        renderSource();
         const selected=typeof preferredLink==='string'&&routes.find(route=>route.deal_link_id===preferredLink);
         if(selected)void show(selected);
         else if(routes.length===1)void show(routes[0]);
@@ -253,6 +332,9 @@
     }
     function hide(){
       active=false;
+      if(sourceRequest){
+        sourceRequest.abort();sourceRequest=null;routes=null;selection=null;
+      }
       request?.abort();
       request=null;
       stopConversation();

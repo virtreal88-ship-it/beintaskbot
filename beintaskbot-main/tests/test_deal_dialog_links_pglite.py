@@ -421,3 +421,69 @@ def test_phone_lookup_links_an_existing_confirmed_crm_send_without_a_contact(sal
         WHERE entity_id=%s AND entity_type='deal_dialog_link'""", (saved['link_id'],)) == [
             {'action':'deal_dialog_auto_link'}]
     db.commit()
+
+
+def test_saved_whatsapp_source_only_links_the_selected_chat_for_the_deal(sale):
+    from tenant_connect_transport import _upsert_conversation
+
+    db, reference = sale
+    peer = '994555000103@s.whatsapp.net'
+    other = [str(uuid.uuid4()), str(uuid.uuid4())]
+    with db.cursor() as cur:
+        cur.execute("""
+            INSERT INTO saas_crm_messages(id,tenant_id,kommo_lead_id,external_id,channel,direction,body)
+            VALUES(%s::uuid,%s::uuid,%s,'TIKTOK_SCOPED_NUMBER','tiktok_kommo','incoming','0555000103')
+        """, (str(uuid.uuid4()), A, int(LEAD)))
+        for source in other:
+            cur.execute("""
+                INSERT INTO saas_connect_channels(tenant_id,connect_channel_id,name)
+                VALUES(%s::uuid,%s::uuid,'Other source')
+            """, (A, source))
+            _upsert_conversation(cur, A, source, peer, {'kind':'contact'})
+    db.commit()
+    consume(phone_event(reference, chat=peer, alternate=''))
+
+    automatic = {'deal_id':LEAD, 'auto_phone':True}
+    assert links.attach(PROFILE, automatic) == {'linked':False}
+    settings = tenant_deal_dialogs.linked_dialogs(PROFILE, 'kommo', LEAD)['auto_whatsapp']
+    assert settings['channel_id'] is None
+    assert {source['id'] for source in settings['sources']} == {CA, *other}
+    select = {'deal_id':LEAD,'auto_source':True,'expected_revision':settings['revision']}
+    with pytest.raises(TenantLinearError):
+        links.attach(PROFILE, {**select, 'channel_id':CB})
+    saved = asyncio.run(attach_from_browser({**select, 'channel_id':CA}))
+    assert saved['channel_id'] == CA
+    with pytest.raises(TenantLinearError) as stale:
+        links.attach(PROFILE, {**select, 'channel_id':other[0]})
+    assert stale.value.status == 409
+
+    selected = tenant_deal_dialogs.linked_dialogs(PROFILE,'kommo',LEAD)['auto_whatsapp']
+    assert selected['channel_id'] == CA
+    db.execute("""UPDATE saas_connect_channels SET active=FALSE
+                  WHERE tenant_id=%s::uuid AND connect_channel_id IN (%s::uuid,%s::uuid)""",
+               (A, CA, other[1]))
+    db.commit()
+    unavailable = tenant_deal_dialogs.linked_dialogs(PROFILE,'kommo',LEAD)['auto_whatsapp']
+    assert unavailable['unavailable'] and unavailable['channel_id'] is None
+    assert unavailable['revision'] == selected['revision']
+    assert links.attach(PROFILE, automatic) == {'linked':False}
+    assert not db.execute("SELECT 1 FROM saas_crm_deal_dialog_links")
+    db.execute("""UPDATE saas_connect_channels SET active=TRUE
+                  WHERE tenant_id=%s::uuid AND connect_channel_id IN (%s::uuid,%s::uuid)""",
+               (A, CA, other[1]))
+    db.commit()
+    first = asyncio.run(attach_from_browser(automatic))
+    assert first['linked'] is True
+    assert links.attach(PROFILE, automatic) == first
+    assert db.execute("""
+        SELECT channel_id::text, conversation_id FROM saas_crm_deal_dialog_links
+        WHERE tenant_id=%s::uuid AND deal_id=%s
+    """, (A, LEAD)) == [{'channel_id':CA, 'conversation_id':peer}]
+    assert db.execute("""
+        SELECT count(*) AS n FROM saas_tenant_audit_events
+        WHERE tenant_id=%s::uuid AND action='deal_dialog_auto_link'
+    """, (A,)) == [{'n':1}]
+    assert [row['body'] for row in links.history(PROFILE,'kommo',LEAD,first['link_id'])['messages']] == [TEXT]
+    with pytest.raises(TenantLinearError) as locked:
+        links.attach(PROFILE, {**select, 'channel_id':other[0], 'expected_revision':selected['revision']})
+    assert locked.value.status == 409

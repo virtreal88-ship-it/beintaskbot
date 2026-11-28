@@ -72,6 +72,11 @@
     .deal-linked-dialog{display:flex;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden}
     .deal-linked-dialog-tools{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:8px 12px}
     .deal-linked-dialog-tools:empty{display:none}
+    .deal-whatsapp-source:not([hidden]){display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--line);font-size:.85rem}
+    .deal-whatsapp-source label{display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:100%}
+    .deal-whatsapp-source select{max-width:100%;min-height:34px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+    .deal-whatsapp-source [role=status]{color:var(--muted)}
+    .deal-whatsapp-source [role=status]:empty{display:none}
     .deal-linked-dialog-body{display:flex;flex:1;min-height:0;min-width:0;overflow:hidden}
     .deal-linked-dialog-body .deal-linked-transcript{flex:1;padding:12px;overflow:auto}
     .deal-linked-dialog-body #operatorConversationPane{display:flex;flex:1;min-height:0;min-width:0;border:0;border-radius:0}

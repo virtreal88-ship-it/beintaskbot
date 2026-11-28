@@ -33,3 +33,14 @@ def migrate(cur):
         CREATE INDEX IF NOT EXISTS saas_crm_deal_dialog_links_deal_idx
         ON saas_crm_deal_dialog_links (tenant_id,deal_source,deal_id,account_id,connection_generation)
     """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_crm_deal_whatsapp_sources (
+            tenant_id UUID NOT NULL REFERENCES saas_tenants(id) ON DELETE CASCADE,
+            deal_id BIGINT NOT NULL,
+            account_id TEXT NOT NULL,
+            connection_generation TEXT NOT NULL,
+            channel_id UUID NOT NULL,
+            PRIMARY KEY (tenant_id,deal_id,account_id,connection_generation)
+        )
+    """)
