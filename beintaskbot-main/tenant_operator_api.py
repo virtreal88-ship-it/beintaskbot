@@ -14,7 +14,7 @@ from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
 from tenant_group_participants import get_participants
 from tenant_read_timing import ReadTiming
-from worker_crm_capacity import avatar_auth_io, session_io, CapacityUnavailable
+from worker_crm_capacity import avatar_auth_io, session_io, dialog_io, CapacityUnavailable
 from tenant_operator_access import observed_operator
 from tenant_dialog_access import sources as dialog_sources
 from tenant_dialog_lifecycle import mutate as dialog_lifecycle
@@ -152,17 +152,17 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     from tenant_dialog_group_work import read_revision
                     conversation=query.get('conversation_id')
                     async def read_group_revision():
-                        current=member_from_request(request)
+                        current=await session_io.run(member_from_request, request)
                         if not current:
                             raise TenantLinearError('Нет доступа.',403)
                         _expected(query,current)
-                        return await asyncio.to_thread(read_revision,current,query.get('channel_id'),
+                        return await dialog_io.run(read_revision,current,query.get('channel_id'),
                             conversation,query.get('lead_id'))
                     known=query.get('known_group_work_revision','')
                     if group_work_updates and 0<len(known)<=80:
                         result=await group_work_updates.read(profile,conversation,known,read_group_revision)
                     else:
-                        result=await asyncio.to_thread(read_revision,profile,query.get('channel_id'),
+                        result=await dialog_io.run(read_revision,profile,query.get('channel_id'),
                             conversation,query.get('lead_id'))
                 elif resource=='history':
                     colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
