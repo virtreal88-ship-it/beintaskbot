@@ -212,6 +212,13 @@ def migrate_identity_schema(cur) -> None:
             PRIMARY KEY (tenant_id, policy_key)
         )
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS saas_owner_crm_digest_checkpoint (
+            tenant_id UUID PRIMARY KEY REFERENCES saas_tenants(id) ON DELETE CASCADE,
+            last_day DATE,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
     cur.execute("CREATE INDEX IF NOT EXISTS saas_tenant_pipeline_owner_idx ON saas_tenant_pipelines(tenant_id, owner_telegram_id, active)")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS saas_tenant_oauth_states (
