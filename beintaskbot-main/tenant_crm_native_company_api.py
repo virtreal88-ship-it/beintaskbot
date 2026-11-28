@@ -3,6 +3,7 @@ import asyncio
 from datetime import date,datetime
 from uuid import UUID
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io, unavailable_response, with_capacity_response
 from tenant_crm_native_companies import create_company,get_company,list_companies,update_company,archive_company,link_entity,unlink_entity
 from tenant_request_origin import require_json_post
 from tenant_linear_policy import TenantLinearError
@@ -31,8 +32,9 @@ def relation_actions(policy):
 
 
 def handler(member_from_request,origin,logger):
+    @with_capacity_response
     async def handle(request):
-        profile=member_from_request(request)
+        profile = await session_io.run(member_from_request, request)
         if not profile:
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
         profile = native_policy_profile(profile)
@@ -52,11 +54,11 @@ def handler(member_from_request,origin,logger):
                     if not page.isascii() or not page.isdecimal() or len(page)>5 or not 1<=int(page)<=10000:
                         return web.json_response({'success':False,'error':'invalid_page'},status=400,headers={'Cache-Control':'no-store'})
                     size = 50
-                    rows = await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),size+1,
+                    rows = await record_read_io.run(list_companies,tenant,request.query.get('search',''),size+1,
                         actor_id=actor,offset=(int(page)-1)*size)
                     return web.json_response({'success':True,'companies':_jsonable(rows[:size]),
                         'has_more':len(rows)>size and int(page)<10000},headers={'Cache-Control':'no-store'})
-                result=await asyncio.to_thread(get_company,tenant,ident,actor_id=actor) if ident else await asyncio.to_thread(list_companies,tenant,request.query.get('search',''),50,actor_id=actor)
+                result=await record_read_io.run(get_company,tenant,ident,actor_id=actor) if ident else await record_read_io.run(list_companies,tenant,request.query.get('search',''),50,actor_id=actor)
                 if ident and result is None:return web.json_response({'success':False,'error':'not_found'},status=404)
                 return web.json_response({'success':True,('company' if ident else 'companies'):_jsonable(result)},headers={'Cache-Control':'no-store'})
             require_json_post(request,origin); body=await request.json()
@@ -96,6 +98,8 @@ def handler(member_from_request,origin,logger):
                                      headers={'Cache-Control': 'no-store'})
         except TenantLinearError:return web.json_response({'success':False,'error':'invalid_origin'},status=403)
         except (ValueError,TypeError):return web.json_response({'success':False,'error':'invalid_company'},status=400)
+        except CapacityUnavailable:
+            return unavailable_response()
         except Exception:
             logger.exception('Native company operation failed tenant=%s',tenant)
             return web.json_response({'success':False,'error':'company_operation_failed'},status=503)

@@ -1,5 +1,6 @@
 """Same-origin, company/user-bound chat send endpoint."""
 from aiohttp import web
+from worker_crm_capacity import dialog_io, session_io
 from tenant_chat_send_service import run
 from tenant_chat_send_policy import send_error_payload
 from tenant_linear_policy import TenantLinearError
@@ -10,7 +11,7 @@ def handler(member_from_request, canonical_origin, request_provider, wait_slot, 
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = member_from_request(request)
+            session = await session_io.run(member_from_request, request)
             if not session:
                 raise TenantLinearError('İcazə yoxdur.', 403)
             require_json_post(request, canonical_origin)
@@ -39,8 +40,8 @@ def send_status_handler(member_from_request, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = require_read_session(request, member_from_request)
-            result = await asyncio.to_thread(read_send_status, session, request.query.get('lead_id'),
+            session = await session_io.run(require_read_session, request, member_from_request)
+            result = await dialog_io.run(read_send_status, session, request.query.get('lead_id'),
                                              request.query.get('request_id'))
             return web.json_response({'success': True, **result}, headers=headers)
         except TenantLinearError as error:
@@ -61,7 +62,7 @@ def close_unsubmitted_handler(member_from_request, canonical_origin, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = member_from_request(request)
+            session = await session_io.run(member_from_request, request)
             if not session:
                 raise TenantLinearError('İcazə yoxdur.', 403)
             require_json_post(request, canonical_origin)
@@ -94,7 +95,7 @@ def receipt_handler(member_from_request,logger):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            session=require_read_session(request,member_from_request)
+            session=await session_io.run(require_read_session, request, member_from_request)
             lead_id=request.query.get('lead_id');request_id=request.query.get('request_id')
             item=await asyncio.to_thread(read_quoted_receipt,session,lead_id,request_id)
             status=await asyncio.to_thread(quoted_delivery_status,item['credentials'],item['message_id'],item['key'][2],item['quote'])

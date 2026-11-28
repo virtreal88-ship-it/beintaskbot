@@ -4,6 +4,7 @@ import json
 from contextlib import AsyncExitStack
 from io import BytesIO
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_chat_upload_policy import prepare, MAX_BYTES
 from tenant_chat_send_policy import send_error_payload
 from tenant_chat_upload_service import run
@@ -17,7 +18,7 @@ def handler(member_from_request, origin, provider, wait_slot, logger, *, runner=
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = member_from_request(request)
+            session = await session_io.run(member_from_request, request)
             if (not session or request.method != 'POST' or request.content_type != 'multipart/form-data'
                     or request.headers.get('Origin','').rstrip('/') != origin.rstrip('/')):
                 raise TenantLinearError('İcazə yoxdur.', 403)

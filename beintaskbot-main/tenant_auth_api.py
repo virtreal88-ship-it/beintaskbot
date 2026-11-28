@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
 from aiohttp import web
-from worker_crm_capacity import session_io, CapacityUnavailable
+from worker_crm_capacity import session_io, CapacityUnavailable, with_capacity_response
 
 
 def telegram_display_name(payload: dict) -> str:
@@ -107,7 +107,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
 
     async def auth_page(request: web.Request) -> web.Response:
         product = str(request.query.get('product') or '')
-        if (request.path == '/connector/login' or product == 'connect') and context.member(request):
+        if (request.path == '/connector/login' or product == 'connect') and await session_io.run(context.member, request):
             raise web.HTTPFound(_product_destination('connect'))
         return _page(context, 'auth.html', 'Platform authentication page not found')
 
@@ -115,7 +115,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         """Issue a one-time code only for the already authenticated company."""
         if context.sso is None:
             return web.json_response({'error': 'sso_unavailable'}, status=503)
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             # Continue the same authorization request after the user signs in.
             # The destination is always a local, fixed route; the caller cannot
@@ -249,11 +249,11 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'success': False}, status=503)
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         try:
-            source = context.source_session(request) if context.source_session else None
+            source = await session_io.run(context.source_session, request) if context.source_session else None
             if not source:
                 return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
             data = await request.json(); data = data if isinstance(data, dict) else {}
@@ -269,7 +269,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'success': False}, status=503)
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         try:
@@ -299,7 +299,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'success': False}, status=503)
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-        profile = context.legacy_member(request)
+        profile = await session_io.run(context.legacy_member, request)
         if not profile or profile.get('role') != 'owner':
             return web.json_response({'success': False, 'error': 'Şirkət sahibinin təsdiqi tələb olunur.'}, status=403)
         try:
@@ -339,7 +339,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if not chat_id:
             return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
         try:
-            existing = await asyncio.to_thread(context.tenants_for_user, chat_id)
+            existing = await session_io.run(context.tenants_for_user, chat_id)
             tenant = next((item for item in existing if item.get("role") == "owner" and item.get("status") == "onboarding"), None)
             if tenant is None:
                 tenant = await asyncio.to_thread(
@@ -442,13 +442,15 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
     async def logout(request: web.Request) -> web.Response:
         if request.headers.get("Origin", "").rstrip("/") != context.origin.rstrip("/"):
             return web.json_response({"success": False, "error": "Sorğunun mənbəyi düzgün deyil."}, status=403)
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if profile and context.revoke_session and context.session_id:
-            sid = context.session_id(request)
+            sid = await session_io.run(context.session_id, request)
             if sid:
                 try:
-                    await asyncio.to_thread(context.revoke_session, tenant_id=str(profile['tenant_id']),
+                    await session_io.run(context.revoke_session, tenant_id=str(profile['tenant_id']),
                         actor_id=int(profile['telegram_id']), session_id=sid)
+                except CapacityUnavailable:
+                    raise
                 except Exception:
                     context.logger.exception('Tenant browser session revocation failed')
                     return web.json_response({"success": False, "error": "Sessiya bağlanmadı. Yenidən cəhd edin."}, status=503)
@@ -467,18 +469,18 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         return response
 
     async def account(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         actor_id = int(profile['telegram_id'])
         try:
             if request.method == 'GET':
-                result = await asyncio.to_thread(context.account_profile, actor_id=actor_id) if context.account_profile else {}
+                result = await session_io.run(context.account_profile, actor_id=actor_id) if context.account_profile else {}
             else:
                 if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
                     return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
                 data = await request.json(); data = data if isinstance(data, dict) else {}
                 if not context.update_account_profile: return web.json_response({'success': False}, status=503)
-                result = await asyncio.to_thread(context.update_account_profile, actor_id=actor_id,
+                result = await session_io.run(context.update_account_profile, actor_id=actor_id,
                     first_name=data.get('first_name'), last_name=data.get('last_name'), phone=data.get('phone'),
                     avatar_url=data.get('avatar_url'), login=data.get('login'))
             return web.json_response({'success': True, 'account': result}, headers={'Cache-Control': 'no-store'})
@@ -486,33 +488,34 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
 
     async def sessions(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         tenant_id, actor_id = str(profile['tenant_id']), int(profile['telegram_id'])
         if request.method == 'GET':
-            rows = await asyncio.to_thread(context.list_sessions, tenant_id=tenant_id, actor_id=actor_id) if context.list_sessions else []
-            current = context.session_id(request) if context.session_id else None
+            rows = await session_io.run(context.list_sessions, tenant_id=tenant_id, actor_id=actor_id) if context.list_sessions else []
+            current = await session_io.run(context.session_id, request) if context.session_id else None
             return web.json_response({'success': True, 'sessions': [{**row, 'current': row.get('id') == current} for row in rows]}, headers={'Cache-Control':'no-store'})
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
         data = await request.json(); data = data if isinstance(data, dict) else {}
         sid = data.get('session_id')
-        if sid and context.session_id and str(sid) == context.session_id(request):
+        current = await session_io.run(context.session_id, request) if sid and context.session_id else None
+        if sid and str(sid) == current:
             return web.json_response({'success': False, 'error': 'Cari sessiyanı bu siyahıdan bağlamaq olmaz. Çıxış edin.'}, status=400)
-        count = await asyncio.to_thread(context.revoke_session, tenant_id=tenant_id, actor_id=actor_id,
+        count = await session_io.run(context.revoke_session, tenant_id=tenant_id, actor_id=actor_id,
             session_id=str(sid) if sid else None) if context.revoke_session else 0
         return web.json_response({'success': True, 'revoked': count}, headers={'Cache-Control':'no-store'})
 
     async def switch_workspace(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile: return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         if request.headers.get('Origin', '').rstrip('/') != context.origin.rstrip('/'):
             return web.json_response({'success': False, 'error': 'Sorğunun mənbəyi düzgün deyil.'}, status=403)
-        source = context.source_session(request) if context.source_session else None
+        source = await session_io.run(context.source_session, request) if context.source_session else None
         if not source:
             return web.json_response({'success': False, 'error': 'Platforma girişi tələb olunur.'}, status=401)
         data = await request.json(); data = data if isinstance(data, dict) else {}
-        companies = await asyncio.to_thread(context.tenants_for_user, int(profile['telegram_id']))
+        companies = await session_io.run(context.tenants_for_user, int(profile['telegram_id']))
         tenant = next((item for item in companies if str(item.get('id')) == str(data.get('tenant_id') or '')), None)
         if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
         response = web.json_response({'success': True, 'tenant': {'id': tenant['id'], 'name': tenant['name']}, 'redirect': '/app'})
@@ -543,15 +546,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }
 
-    def bounded_response(handler):
-        async def handle(request):
-            try:
-                return await handler(request)
-            except CapacityUnavailable:
-                return web.json_response({'success': False, 'error': 'CRM müvəqqəti əlçatan deyil.'},
-                                         status=503, headers={'Cache-Control':'no-store'})
-        return handle
-
-    for name in ('register', 'me', 'login', 'email_login', 'email_confirm', 'email_link_confirm', 'switch_workspace'):
-        routes[name] = bounded_response(routes[name])
+    for name in ('register', 'me', 'login', 'email_login', 'email_confirm', 'email_link_confirm',
+                 'auth_page', 'sso_authorize', 'password_change', 'email_link_request',
+                 'legacy_email_link_request', 'account', 'sessions', 'switch_workspace', 'logout'):
+        routes[name] = with_capacity_response(routes[name])
     return routes

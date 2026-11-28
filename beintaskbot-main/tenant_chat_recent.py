@@ -2,6 +2,7 @@
 import asyncio
 from time import perf_counter
 from aiohttp import web
+from worker_crm_capacity import dialog_io, session_io
 from tenant_chat_history_store import page
 from tenant_read_session import require_read_session
 from tenant_linear_policy import TenantLinearError
@@ -13,11 +14,11 @@ def handler(context):
     async def handle(request, lead_id):
         headers = {'Cache-Control': 'no-store'}
         try:
-            profile = require_read_session(request, context.member)
+            profile = await session_io.run(require_read_session, request, context.member)
             size = max(1, min(50, int(request.query.get('limit', '40'))))
             start = perf_counter()
-            await asyncio.to_thread(page, profile, lead_id, limit=1)
-            deal = await asyncio.to_thread(context.get_deal, tenant_id=profile['tenant_id'], kommo_lead_id=lead_id)
+            await dialog_io.run(page, profile, lead_id, limit=1)
+            deal = await dialog_io.run(context.get_deal, tenant_id=profile['tenant_id'], kommo_lead_id=lead_id)
             authorized = perf_counter()
             warning = ''
             if context.policy(profile).can_read_kommo_chat(deal) and (deal.get('raw') or {}).get('source') != 'connect':
@@ -40,8 +41,8 @@ def handler(context):
                     warning = 'Yeniləmə alınmadı. Saxlanmış tarixçə köhnəlmiş ola bilər.'
             refreshed = perf_counter()
             # Recheck session identity AND current DB membership/channel grants.
-            profile = require_read_session(request, context.member)
-            result = await asyncio.to_thread(page, profile, lead_id, limit=size)
+            profile = await session_io.run(require_read_session, request, context.member)
+            result = await dialog_io.run(page, profile, lead_id, limit=size)
             finished = perf_counter()
             headers['Server-Timing'] = f'authorize;dur={(authorized-start)*1000:.1f}, provider_refresh;dur={(refreshed-authorized)*1000:.1f}, cache;dur={(finished-refreshed)*1000:.1f}'
             return web.json_response({'success': True, **result, 'stale': bool(warning), 'warning': warning}, headers=headers)

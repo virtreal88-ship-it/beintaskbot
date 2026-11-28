@@ -5685,13 +5685,21 @@ async def handle_api_chats_pulse(request: web.Request) -> web.Response:
     chat_id = _deal_request_user(request)
     if not chat_id:
         return web.json_response({"success": False, "error": "User not identified"}, status=401)
-    if not is_funnel_chat(chat_id) and not is_admin(chat_id):
-        return web.json_response({"success": False, "error": "Access denied"}, status=403)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    def read_pulse():
+        if not is_funnel_chat(chat_id) and not is_admin(chat_id):
+            return web.json_response({"success": False, "error": "Access denied"}, status=403)
+        try:
+            since_rev = int(request.rel_url.query.get("rev") or 0)
+        except (TypeError, ValueError):
+            since_rev = 0
+        return web.json_response(_inbox_pulse_payload(chat_id, since_rev))
+
     try:
-        since_rev = int(request.rel_url.query.get("rev") or 0)
-    except (TypeError, ValueError):
-        since_rev = 0
-    return web.json_response(_inbox_pulse_payload(chat_id, since_rev))
+        return await legacy_access_io.run(read_pulse)
+    except CapacityUnavailable:
+        return unavailable_response()
 
 
 async def handle_kommo_webhook(request: web.Request) -> web.Response:
@@ -12536,6 +12544,16 @@ def _authorized_deal_lead(chat_id: int, lead_id: int):
     return lead, None
 
 
+async def _authorized_legacy_deal(chat_id: int, lead_id: int):
+    from worker_crm_capacity import CapacityUnavailable, legacy_deal_io, unavailable_response
+
+    try:
+        return await legacy_deal_io.run(_authorized_deal_lead, chat_id, lead_id)
+    except CapacityUnavailable:
+        return None, unavailable_response()
+
+
+
 _deal_chat_cache: dict[tuple, tuple[float, dict]] = {}
 _chat_open_preview: dict[int, list] = {}
 _deal_chat_cache_lock = threading.Lock()
@@ -13302,7 +13320,7 @@ async def handle_api_deal_chat_history(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    _lead, err = await asyncio.to_thread(_authorized_deal_lead, chat_id, lead_id)
+    _lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     try:
@@ -13354,7 +13372,7 @@ async def handle_api_deal_kommo_reply(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Mesaj boş ola bilməz"}, status=400)
     if len(text) > 2000:
         return web.json_response({"success": False, "error": "Mesaj çox uzundur"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     talk_id = await asyncio.to_thread(_resolve_channel_talk_id, lead, "whatsapp")
@@ -13408,7 +13426,7 @@ async def handle_api_deal_chat_send(request: web.Request) -> web.Response:
         )
 
     sender_digits = _hinted_wa_sender_digits(chat_id, message.sender_phone)
-    lead, err = _authorized_deal_lead(chat_id, message.lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, message.lead_id)
     if err:
         return err
     reply_talk_id, reply_chat_id = _resolve_channel_talk(
@@ -13638,7 +13656,7 @@ async def handle_api_deal_chat_react(request: web.Request) -> web.Response:
     phones = _phones_for_wa_lead(lead_id)
     lead = {"id": lead_id, "phone": phones[0] if phones else "", "phones": phones}
     if not phones:
-        lead, err = _authorized_deal_lead(chat_id, lead_id)
+        lead, err = await _authorized_legacy_deal(chat_id, lead_id)
         if err:
             return err
         _ids, phones = _contact_ids_and_phones(lead)
@@ -13697,7 +13715,7 @@ async def handle_api_deal_chat_read(request: web.Request) -> web.Response:
     _record_user_seen(chat_id, lead_id)
     if not wamid:
         return web.json_response({"success": True, "seen_recorded": True})
-    _lead, err = _authorized_deal_lead(chat_id, lead_id)
+    _lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     if not _wa_cloud_ready(_hinted_wa_sender_digits(chat_id, data.get("sender_phone"))):
@@ -13801,7 +13819,7 @@ async def handle_api_deal_bot_run(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     bot_id = int(data.get("bot_id") or 60151)
@@ -13825,7 +13843,7 @@ async def handle_api_deal_bot_stop(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id lazımdır"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     bot_id = int(data.get("bot_id") or 60151)
@@ -13884,7 +13902,7 @@ async def handle_api_deal_chat_pin(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     pin = None
@@ -14257,7 +14275,7 @@ async def handle_api_deal_ai_example(request: web.Request) -> web.Response:
         return web.json_response({"success": False, "error": "Nümunə üçün məlumat natamamdır."}, status=400)
     if len(reply) > 2000:
         return web.json_response({"success": False, "error": "Cavab çox uzundur."}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     context_lines = []
@@ -14305,7 +14323,7 @@ async def handle_api_deal_chat_suggest(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     summary_action = str(data.get("summary_action") or "").strip().casefold()
@@ -14477,7 +14495,7 @@ async def handle_api_deal_chat_transcribe(request: web.Request) -> web.Response:
         lead_id = 0
     if not lead_id:
         return web.json_response({"success": False, "error": "lead_id required"}, status=400)
-    lead, err = _authorized_deal_lead(chat_id, lead_id)
+    lead, err = await _authorized_legacy_deal(chat_id, lead_id)
     if err:
         return err
     probe = {
@@ -17280,10 +17298,9 @@ async def handle_api_settings_integrations(request: web.Request) -> web.Response
     })
 
 
-async def handle_api_session(request: web.Request) -> web.Response:
-    chat_id = int(request.get("authenticated_chat_id") or 0)
+def _legacy_session_payload(chat_id: int) -> dict:
     profile = employee_access_profile(chat_id)
-    return web.json_response({
+    return {
         "success": True,
         "chat_id": chat_id,
         "active": bool(profile["active"]),
@@ -17293,7 +17310,18 @@ async def handle_api_session(request: web.Request) -> web.Response:
         "linear_can_create": _linear_can_create_for_chat(chat_id),
         "ai_enabled": bool(profile.get("ai_enabled")),
         "whatsapp_number": get_employee_whatsapp_number(chat_id),
-    })
+    }
+
+
+async def handle_api_session(request: web.Request) -> web.Response:
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    chat_id = int(request.get("authenticated_chat_id") or 0)
+    try:
+        payload = await legacy_access_io.run(_legacy_session_payload, chat_id)
+    except CapacityUnavailable:
+        return unavailable_response()
+    return web.json_response(payload)
 
 
 async def handle_web_login_start(request: web.Request) -> web.Response:
@@ -17361,7 +17389,12 @@ async def handle_telegram_login(request: web.Request) -> web.Response:
     chat_id = _telegram_login_user_id(payload)
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
-    profile = employee_access_profile(chat_id)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    try:
+        profile = await legacy_access_io.run(employee_access_profile, chat_id)
+    except CapacityUnavailable:
+        return unavailable_response()
     if not profile.get("active"):
         return web.json_response({"success": False, "error": "Bu Telegram hesabı üçün giriş icazəsi yoxdur."}, status=403)
     response = web.json_response({"success": True, "chat_id": chat_id})
@@ -17533,7 +17566,13 @@ async def handle_api_deal_duplicates(request: web.Request) -> web.Response:
 async def handle_web_login_complete(request: web.Request) -> web.Response:
     token = request.rel_url.query.get("token") or ""
     chat_id = _consume_web_login_request(token) or _consume_permanent_web_login_token(token)
-    if not chat_id or not employee_access_profile(chat_id).get("active"):
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
+    try:
+        profile = await legacy_access_io.run(employee_access_profile, chat_id) if chat_id else None
+    except CapacityUnavailable:
+        return unavailable_response()
+    if not profile or not profile.get("active"):
         return web.Response(status=403, text="Login link is invalid or access is disabled.")
     response = web.HTTPFound(APP_URL)
     response.set_cookie(_WEB_SESSION_COOKIE, _make_web_session(chat_id), max_age=_WEB_SESSION_TTL_SEC,
@@ -17938,6 +17977,14 @@ def _required_api_permission(path: str) -> str | tuple[str, ...] | None:
     return None
 
 
+def _legacy_api_access(chat_id: int, required_permissions) -> tuple[dict, bool]:
+    profile = employee_access_profile(chat_id)
+    permitted = profile.get("active") and (
+        not required_permissions or any(employee_has_permission(chat_id, permission) for permission in required_permissions)
+    )
+    return profile, bool(permitted)
+
+
 @web.middleware
 async def telegram_auth_middleware(request, handler):
     """Require a signed Telegram identity for private Mini App API calls."""
@@ -17952,12 +17999,17 @@ async def telegram_auth_middleware(request, handler):
     if not chat_id:
         return web.json_response({"success": False, "error": "Telegram authorization required"}, status=401)
 
-    profile = employee_access_profile(int(chat_id))
-    if not profile.get("active"):
-        return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
+    from worker_crm_capacity import CapacityUnavailable, legacy_access_io, unavailable_response
+
     required_permission = _required_api_permission(request.path)
     required_permissions = (required_permission,) if isinstance(required_permission, str) else required_permission
-    if required_permissions and not any(employee_has_permission(int(chat_id), permission) for permission in required_permissions):
+    try:
+        profile, permitted = await legacy_access_io.run(_legacy_api_access, int(chat_id), required_permissions)
+    except CapacityUnavailable:
+        return unavailable_response()
+    if not profile.get("active"):
+        return web.json_response({"success": False, "error": "Employee access is disabled"}, status=403)
+    if not permitted:
         return web.json_response({"success": False, "error": "Permission denied"}, status=403)
 
     for supplied in (

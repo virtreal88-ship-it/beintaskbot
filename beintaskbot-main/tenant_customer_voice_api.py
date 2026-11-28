@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_customer_voice import MAX_RECORDING_BYTES
 from tenant_customer_voice_service import can_send, check, check_visible, prepare, record_manual_confirmation, run
 from tenant_linear_policy import TenantLinearError
@@ -36,7 +37,7 @@ def handler(member_from_request, origin, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = member_from_request(request)
+            session = await session_io.run(member_from_request, request)
             if not session:raise TenantLinearError('İcazə yoxdur.',401)
             if not enabled():
                 raise TenantLinearError('Səs göndərilməsi əlçatan deyil.', 404)
@@ -93,7 +94,7 @@ def receipt_handler(member_from_request, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = read_session(request, member_from_request)
+            session = await session_io.run(read_session, request, member_from_request)
             from tenant_consultation_chat_media import validate_read
             await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'),request.query.get('request_id'))
             result = await check(session, request.query.get('lead_id'), request.query.get('request_id'))
@@ -110,7 +111,7 @@ def manual_confirmation_handler(member_from_request, origin, logger):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            session=member_from_request(request)
+            session=await session_io.run(member_from_request, request)
             if not session:
                 raise TenantLinearError('İcazə yoxdur.',401)
             if (request.method!='POST' or request.content_type!='application/json'
@@ -136,7 +137,7 @@ def capability_handler(member_from_request, logger):
     async def handle(request):
         headers = {'Cache-Control': 'no-store'}
         try:
-            session = read_session(request,member_from_request)
+            session = await session_io.run(read_session, request, member_from_request)
             from tenant_consultation_chat_media import validate_read
             await asyncio.to_thread(validate_read,session,request.query.get('lead_id'),request.query.get('consultation_id'))
             allowed = await asyncio.to_thread(can_send, session, request.query.get('lead_id'))
@@ -154,7 +155,7 @@ def status_handler(member_from_request, logger):
     async def handle(request):
         headers={'Cache-Control':'no-store'}
         try:
-            session=read_session(request,member_from_request)
+            session=await session_io.run(read_session, request, member_from_request)
             result=await check_visible(session,request.query.get('lead_id'),request.query.get('message_row_id'))
             return web.json_response({'success':True,**result},headers=headers)
         except TenantLinearError as error:

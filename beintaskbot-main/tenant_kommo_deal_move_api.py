@@ -2,6 +2,7 @@
 import asyncio
 import uuid
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_task_flow import TaskFlowError
 from tenant_crm_request_context import require_expected_context, CRMContextError
 from tenant_kommo_deal_move import move, normalize, prepare, verified, authorize_cached, cache_confirmed
@@ -11,7 +12,7 @@ def handler(member, origin, bound_request, logger):
     async def handle(request):
         headers={'Cache-Control':'no-store','Vary':'Cookie'}
         try:
-            profile=member(request)
+            profile=await session_io.run(member, request)
             if not profile or profile.get('active') is not True:
                 raise TaskFlowError('kommo_stage_forbidden',403)
             if request.method=='GET':

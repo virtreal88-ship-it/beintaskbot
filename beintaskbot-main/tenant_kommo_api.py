@@ -2,6 +2,7 @@
 import asyncio
 from collections.abc import Callable
 from aiohttp import web
+from worker_crm_capacity import session_io, with_capacity_response
 import requests
 from urllib.parse import quote, urlencode
 
@@ -103,8 +104,14 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": False, "error": "Kommo bağlantısı tamamlanmadı."},
                                          status=503, headers=headers)
 
+        async def integration_member(request):
+            if scoped_access_enabled():
+                return await session_io.run(context.member, request)
+            return await session_io.run(context.member, request, owner_only=True)
+
+        @with_capacity_response
         async def request_connection(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
+            profile = await integration_member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             if scoped_access_enabled():
@@ -136,8 +143,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 ready = False
             return web.json_response({"success": True, "integration": integration, "oauth_ready": ready})
 
+        @with_capacity_response
         async def disconnect(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
+            profile = await integration_member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             if scoped_access_enabled():
@@ -163,8 +171,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
             return web.json_response({"success": True, "integration": item})
 
+        @with_capacity_response
         async def start(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = await session_io.run(context.member, request, owner_only=True)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             if scoped_access_enabled():
@@ -239,8 +248,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
                 raise web.HTTPFound("/setup?kommo=error&reason=" + quote("Kommo bağlantısı tamamlanmadı.", safe=""))
             raise web.HTTPFound("/setup?kommo=connected")
 
+        @with_capacity_response
         async def pipelines(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
+            profile = await integration_member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             try:
@@ -259,8 +269,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
 
+        @with_capacity_response
         async def test(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True) if not scoped_access_enabled() else context.member(request)
+            profile = await integration_member(request)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             try:
@@ -275,8 +286,9 @@ def handlers(context: KommoContext, client: TenantKommo) -> dict[str, Callable]:
             except context.platform_error as exc:
                 return web.json_response({"success": False, "error": str(exc)}, status=400)
 
+        @with_capacity_response
         async def save_pipelines(request: web.Request) -> web.Response:
-            profile = context.member(request, owner_only=True)
+            profile = await session_io.run(context.member, request, owner_only=True)
             if not profile:
                 return web.json_response({"success": False, "error": "İcazə yoxdur."}, status=403)
             if scoped_access_enabled():

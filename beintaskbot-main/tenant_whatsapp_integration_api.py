@@ -1,6 +1,7 @@
 import asyncio
 import json
 from aiohttp import web
+from worker_crm_capacity import session_io
 from tenant_ai_agents_api import _expected,_origin
 from tenant_browser_calls_api import HEADERS,body
 from tenant_linear_policy import TenantLinearError
@@ -10,7 +11,7 @@ import tenant_whatsapp_integration as store
 def handler(member,origin,logger):
     async def handle(request):
         try:
-            profile=member(request)
+            profile=await session_io.run(member, request)
             if not profile:raise TenantLinearError('Войдите в программу.',403)
             _expected(request.query,profile)
             if request.method=='GET':

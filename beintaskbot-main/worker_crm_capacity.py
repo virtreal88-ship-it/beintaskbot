@@ -2,7 +2,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import ContextVar, copy_context
-from functools import partial
+from functools import partial, wraps
 from threading import BoundedSemaphore
 
 import psycopg
@@ -13,6 +13,31 @@ class CapacityUnavailable(RuntimeError):
 
 
 db_scope = ContextVar('crm_db_scope', default=None)
+
+
+def postgres_budget():
+    scope = db_scope.get()
+    if scope is None:
+        return {}
+    name, statement_ms = scope
+    return {'application_name': name, 'connect_timeout': 3,
+            'options': f'-c lock_timeout=1500 -c statement_timeout={statement_ms}'}
+
+
+def unavailable_response():
+    from aiohttp import web
+    return web.json_response({'success': False, 'error': 'CRM müvəqqəti əlçatan deyil.'}, status=503,
+                             headers={'Cache-Control': 'no-store'})
+
+
+def with_capacity_response(handler):
+    @wraps(handler)
+    async def handle(request):
+        try:
+            return await handler(request)
+        except CapacityUnavailable:
+            return unavailable_response()
+    return handle
 
 
 class WorkPool:
@@ -42,4 +67,7 @@ class WorkPool:
 
 session_io = WorkPool('crm-session', 6, 12, 8, 5000)
 dialog_io = WorkPool('crm-dialog', 6, 12, 12, 9000)
+record_read_io = WorkPool('crm-record-read', 6, 12, 12, 9000)
+legacy_access_io = WorkPool('crm-legacy-access', 4, 8, 8, 5000)
+legacy_deal_io = WorkPool('crm-legacy-deal', 3, 6, 12, 6000)
 avatar_auth_io = WorkPool('crm-avatar-auth', 2, 2, 4, 2000)

@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 
 from aiohttp import web
+from worker_crm_capacity import session_io, with_capacity_response
 
 import tenant_beinsystems_operator as operator
 import tenant_beinsystems_operator_company_import as company_import
@@ -74,10 +75,11 @@ def _json_response(data, *, status=200):
 
 
 def widget_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request):
         from tenant_operator_widget import handle
         try:
-            profile = _profile(member, request)
+            profile = await session_io.run(_profile, member, request)
             if not profile:
                 raise operator.OperatorError("Источник недоступен.", 404)
             data = await _body(request, profile, origin)
@@ -95,8 +97,9 @@ def widget_handler(member: Callable, origin: str, logger):
 
 
 def integration_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -173,8 +176,9 @@ def integration_handler(member: Callable, origin: str, logger):
 
 
 def accounts_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -257,8 +261,9 @@ def accounts_handler(member: Callable, origin: str, logger):
 
 
 def dialog_company_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -323,8 +328,9 @@ def dialog_company_handler(member: Callable, origin: str, logger):
     return endpoint
 
 def deal_company_handler(member, origin, logger, *, public_link=False):
+    @with_capacity_response
     async def endpoint(request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
         try:
             if not profile:
@@ -379,8 +385,9 @@ def deal_company_handler(member, origin, logger, *, public_link=False):
 
 
 def dialog_company_action_handler(member, origin, logger):
+    @with_capacity_response
     async def endpoint(request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
         try:
             if not profile:
@@ -401,9 +408,10 @@ def dialog_company_action_handler(member, origin, logger):
 
 
 def dialog_company_public_link_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
         headers = {"Cache-Control": "no-store", "Vary": "Cookie"}
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False}, status=404, headers=headers)
         try:
@@ -428,8 +436,9 @@ def dialog_company_public_link_handler(member: Callable, origin: str, logger):
 
 
 def links_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -465,8 +474,9 @@ def links_handler(member: Callable, origin: str, logger):
 
 
 def revoke_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -488,8 +498,9 @@ def revoke_handler(member: Callable, origin: str, logger):
 
 
 def employee_users_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -512,8 +523,9 @@ def employee_users_handler(member: Callable, origin: str, logger):
 
 
 def employee_links_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -549,8 +561,9 @@ def employee_links_handler(member: Callable, origin: str, logger):
 
 
 def employee_link_revoke_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -572,8 +585,9 @@ def employee_link_revoke_handler(member: Callable, origin: str, logger):
 
 
 def dialog_context_handler(member: Callable, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -594,8 +608,9 @@ def dialog_context_handler(member: Callable, logger):
 
 
 def account_data_handler(member: Callable, origin: str, logger, resource: str):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})
@@ -631,8 +646,9 @@ def account_data_handler(member: Callable, origin: str, logger, resource: str):
 
 
 def ticket_draft_handler(member: Callable, origin: str, logger):
+    @with_capacity_response
     async def endpoint(request: web.Request):
-        profile = _profile(member, request)
+        profile = await session_io.run(_profile, member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Интеграция недоступна."},
                                      status=404, headers={"Cache-Control": "no-store"})

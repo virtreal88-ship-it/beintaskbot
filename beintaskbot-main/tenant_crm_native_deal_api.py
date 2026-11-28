@@ -3,6 +3,7 @@ import asyncio
 from datetime import date, datetime
 from uuid import UUID
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io, unavailable_response, with_capacity_response
 from tenant_crm_native_deals import create_deal,get_deal,list_deals,update_deal,archive_deal,deal_options,set_deal_company_link,move_deal_stage,search_create_contacts
 from tenant_beinsystems_operator import OperatorError
 from tenant_request_origin import require_json_post
@@ -21,8 +22,9 @@ def _jsonable(value):
 
 
 def handler(member_from_request,origin,logger,*,company_relation=False):
+    @with_capacity_response
     async def handle(request):
-        profile=member_from_request(request)
+        profile = await session_io.run(member_from_request, request)
         if not profile:
             return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
         profile = native_policy_profile(profile)
@@ -58,18 +60,18 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
                     term = request.query['contact_search'].strip()
                     if not 2 <= len(term) <= 120:
                         raise ValueError('invalid contact search')
-                    rows = await asyncio.to_thread(search_create_contacts, tenant_id, term, actor_id=actor)
+                    rows = await record_read_io.run(search_create_contacts, tenant_id, term, actor_id=actor)
                     return web.json_response({'success':True,'contacts':_jsonable(rows)},headers={'Cache-Control':'no-store'})
                 if request.query.get('options')=='1':
                     action = next((item for item in ('view', 'create', 'update') if policy.allows_action('deals', item)), None)
                     if action is None:
                         return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
-                    result=await asyncio.to_thread(deal_options,tenant_id,actor_id=actor,action=action)
+                    result=await record_read_io.run(deal_options,tenant_id,actor_id=actor,action=action)
                     return web.json_response({'success':True,**_jsonable(result)},headers={'Cache-Control':'no-store'})
                 if not policy.allows_action('deals','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if deal_id:
-                    deal = await asyncio.to_thread(get_deal, tenant_id, deal_id, actor_id=actor)
+                    deal = await record_read_io.run(get_deal, tenant_id, deal_id, actor_id=actor)
                     if deal is None:
                         return web.json_response({'success':False,'error':'not_found'},status=404)
                     result = {'deal': deal}
@@ -79,7 +81,7 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
                             or len(raw[0]) > 10 or int(raw[0]) > 2_147_483_647):
                         raise ValueError('invalid_offset')
                     offset, limit = int(raw[0]), 50
-                    deals = await asyncio.to_thread(list_deals, tenant_id, request.query.get('search', ''),
+                    deals = await record_read_io.run(list_deals, tenant_id, request.query.get('search', ''),
                                                     limit + 1, actor_id=actor, offset=offset)
                     result = {'deals': deals[:limit],
                               'next_offset': offset + limit if len(deals) > limit else None}
@@ -144,6 +146,8 @@ def handler(member_from_request,origin,logger,*,company_relation=False):
             return web.json_response({'success':False,'error':'invalid_origin'},status=403,headers={'Cache-Control':'no-store'})
         except (ValueError,TypeError) as exc:
             return web.json_response({'success':False,'error':str(exc)[:120]},status=400)
+        except CapacityUnavailable:
+            return unavailable_response()
         except Exception:
             logger.exception('Native CRM deal operation failed: tenant=%s',tenant_id)
             return web.json_response({'success':False,'error':'deal_operation_failed'},status=503,headers={'Cache-Control':'no-store'})

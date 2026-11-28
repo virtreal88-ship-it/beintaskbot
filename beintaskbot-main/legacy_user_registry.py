@@ -7,6 +7,7 @@ import logging
 import os
 
 from gh_storage import read_json, write_json
+from worker_crm_capacity import CapacityUnavailable
 from legacy_runtime_config import (
     ADMIN_CHAT_ID,
     ADMIN_KOMMO_USER_ID,
@@ -51,6 +52,8 @@ def load_users() -> dict:
         loaded = read_json("users.json") or {}
         if isinstance(loaded, dict):
             durable_users = loaded
+    except CapacityUnavailable:
+        raise
     except Exception as exc:
         logger.warning("users.json durable load failed: %s", exc)
 

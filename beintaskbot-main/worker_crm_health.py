@@ -63,7 +63,7 @@ SELECT w.pid, w.wait_event, b.pid, b.backend_xid::text,
        CASE WHEN b.state='idle in transaction' THEN 'idle_in_transaction'
             WHEN b.state='active' THEN 'active' ELSE 'other' END,
        CASE WHEN b.application_name IN ('crm-sync','crm-session','crm-avatar-auth','crm-avatar',
-                                        'crm-dialog','crm-migration','crm-connect') THEN b.application_name ELSE 'other' END,
+                                        'crm-dialog','crm-migration','crm-connect','crm-record-read','crm-legacy-access','crm-legacy-deal') THEN b.application_name ELSE 'other' END,
        CASE upper(split_part(ltrim(b.query),' ',1))
             WHEN 'SELECT' THEN 'select' WHEN 'UPDATE' THEN 'update' WHEN 'INSERT' THEN 'insert'
             WHEN 'ALTER' THEN 'alter' WHEN 'CREATE' THEN 'create' ELSE 'other' END

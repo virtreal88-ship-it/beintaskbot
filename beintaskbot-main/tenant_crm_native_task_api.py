@@ -3,6 +3,7 @@ import asyncio
 from datetime import date,datetime
 from uuid import UUID
 from aiohttp import web
+from worker_crm_capacity import CapacityUnavailable, record_read_io, session_io, unavailable_response, with_capacity_response
 from tenant_crm_native_tasks import create_task,get_task,list_tasks,update_task,set_task_state,archive_task,task_options,NativeTaskAccessError,task_access_allowed
 from tenant_policy import TenantPolicy
 from tenant_scoped_access import scoped_access_enabled
@@ -31,8 +32,9 @@ def _expected(data,tenant,actor):
     if not matches:raise NativeTaskAccessError('task_context_changed',409)
 
 def handler(member_from_request,origin,logger):
+    @with_capacity_response
     async def handle(request):
-        profile=member_from_request(request)
+        profile = await session_io.run(member_from_request, request)
         profile=native_policy_profile(profile) if profile else None
         policy=TenantPolicy(profile or {})
         # Assignment is a row-level read/completion exception. Do not require a
@@ -52,17 +54,17 @@ def handler(member_from_request,origin,logger):
                 if not scoped_access_enabled() and not policy.allows_action('tasks','view'):
                     return web.json_response({'success':False,'error':'forbidden'},status=403,headers={'Cache-Control':'no-store'})
                 if not task_id and request.query.get('options')=='1':
-                    options=await asyncio.to_thread(task_options,tenant,actor,policy.privileged,
+                    options=await record_read_io.run(task_options,tenant,actor,policy.privileged,
                       deal_id=request.query.get('deal_id'),task_id=request.query.get('task_id'))
                     return web.json_response({'success':True,**_jsonable(options)},headers={'Cache-Control':'no-store'})
                 if 'expected_tenant_id' in params:
-                    result=await asyncio.to_thread(read_flow,profile,source='native',task_id=task_id,search=request.query.get('search',''))
+                    result=await record_read_io.run(read_flow,profile,source='native',task_id=task_id,search=request.query.get('search',''))
                     return web.json_response({'success':True,**result},headers={'Cache-Control':'no-store'})
                 if task_id:
-                    row=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor)
+                    row=await record_read_io.run(get_task,tenant,task_id,actor_id=actor)
                     if not row:return web.json_response({'success':False,'error':'not_found'},status=404)
                     return web.json_response({'success':True,'task':_jsonable(row)},headers={'Cache-Control':'no-store'})
-                rows=await asyncio.to_thread(list_tasks,tenant,search=request.query.get('search',''),actor_id=actor,limit=100)
+                rows=await record_read_io.run(list_tasks,tenant,search=request.query.get('search',''),actor_id=actor,limit=100)
                 return web.json_response({'success':True,'tasks':_jsonable(rows)},headers={'Cache-Control':'no-store'})
             require_json_post(request,origin)
             data=await request.json()
@@ -84,7 +86,7 @@ def handler(member_from_request,origin,logger):
                 if not policy.privileged and policy.requires_task_approval(creator_id=actor,executor_id=responsible):return web.json_response({'success':False,'error':'approval_required'},status=403)
                 row=await asyncio.to_thread(create_task,tenant,data.get('deal_id'),data.get('text'),responsible,due_at=data.get('due_at'),created_by=actor,idempotency_key=data.get('request_id'),actor_id=actor)
             else:
-                current=await asyncio.to_thread(get_task,tenant,task_id,actor_id=actor,operation='complete' if data.get('action')=='complete' else permission_action)
+                current=await record_read_io.run(get_task,tenant,task_id,actor_id=actor,operation='complete' if data.get('action')=='complete' else permission_action)
                 if not current:return web.json_response({'success':False,'error':'not_found'},status=404)
                 action=data.get('action')
                 if action=='archive' and data=={'action':'archive'}:
@@ -106,6 +108,8 @@ def handler(member_from_request,origin,logger):
             return web.json_response({'success':False,'error':'invalid_origin'},status=403)
         except (ValueError,TypeError) as exc:
             return web.json_response({'success':False,'error':str(exc)[:120]},status=400)
+        except CapacityUnavailable:
+            return unavailable_response()
         except Exception:
             logger.exception('Native CRM task operation failed: tenant=%s',tenant)
             return web.json_response({'success':False,'error':'task_operation_failed'},status=503,headers={'Cache-Control':'no-store'})

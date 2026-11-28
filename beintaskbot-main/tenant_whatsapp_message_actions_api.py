@@ -3,6 +3,7 @@ import asyncio
 import uuid
 
 from aiohttp import web
+from worker_crm_capacity import session_io
 
 from tenant_linear_policy import TenantLinearError
 from tenant_read_session import require_read_session
@@ -43,7 +44,7 @@ def handler(member, origin, logger, *, action='edit'):
         headers = {'Cache-Control': 'no-store'}
         try:
             if request.method == 'GET':
-                session = require_read_session(request, member)
+                session = await session_io.run(require_read_session, request, member)
                 data = request.query
                 if (str(data.get('expected_tenant_id')), str(data.get('expected_user_id'))) != (
                         str(session['tenant_id']), str(session['telegram_id'])):
@@ -51,7 +52,7 @@ def handler(member, origin, logger, *, action='edit'):
                 lead, message_id, request_id = _ids(data)
                 result = await asyncio.to_thread(status, session, lead, message_id, request_id, action)
             else:
-                session = _session(request, member, origin)
+                session = await session_io.run(_session, request, member, origin)
                 data = await _body(request, session)
                 fields = {'lead_id', 'message_id', 'request_id', 'version',
                           'expected_tenant_id', 'expected_user_id'}

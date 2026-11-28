@@ -49,7 +49,9 @@ STATE_TABLES = (
 
 @pytest.fixture
 def staff(db, monkeypatch):
-    factory = lambda: psycopg.connect(db.dsn, row_factory=dict_row)
+    def factory(**options):
+        return psycopg.connect(db.dsn, row_factory=dict_row, **options)
+
     for name in ('tenant_platform', 'tenant_platform_core', 'tenant_member_store',
                  'tenant_workflow_store', 'tenant_account_store', 'tenant_integration_store',
                  'tenant_invite_store', 'tenant_push', 'tenant_crm_native_tasks',
