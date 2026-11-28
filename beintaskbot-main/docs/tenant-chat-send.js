@@ -156,7 +156,12 @@
           }
         }
         button.textContent=copy('send','Göndər');
-        showAccepted(sent.manual_review?'Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.':pending.quote_message_id&&sent.quote_protocol===true?quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'):copy('sendAccepted','Mesaj qəbul edildi. Tarixçədə çatdırılmanı yoxlayın.'));
+        if(sent.manual_review)showAccepted('Administrator əvvəlki mesajı təsdiqləyib; təkrar göndərilmədi.');
+        else if(pending.quote_message_id&&sent.quote_protocol===true)showAccepted(quoteCopy(sent.delivered===true?(sent.delivery_state==='read'?'read':'delivered'):'sent'));
+        else {
+          const status=controls?.status||document.getElementById('tenantChatSendStatus');
+          if(status&&isCurrent()&&input.isConnected)status.textContent='';
+        }
         preview(pending,'accepted');
         await reload(sent);
         preview(pending,null);
