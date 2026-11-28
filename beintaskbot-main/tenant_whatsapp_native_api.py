@@ -36,7 +36,7 @@ async def _finish_thread(function, *args):
     return result
 
 
-def handler(member, origin, logger):
+def handler(member, origin, logger, *, message_updates=None):
     async def handle(request):
         try:
             if os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_INBOX') != '1':
@@ -60,7 +60,11 @@ def handler(member, origin, logger):
                 receipt = await _finish_thread(inbox.store_delivery, authorization, raw)
                 if os.environ.get('BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION') == '1':
                     from tenant_whatsapp_native_consumer import project_stored
-                    await _finish_thread(project_stored, receipt)
+                    projected = await _finish_thread(project_stored, receipt)
+                    if projected and message_updates:
+                        # Only an authenticated, committed projection can wake a
+                        # browser. The browser revision read rechecks visibility.
+                        message_updates.publish({'tenant_id': receipt['scope']['tenant']}, '')
             return web.json_response(receipt, headers=HEADERS)
         except TenantLinearError as error:
             return web.json_response({'error': str(error)}, status=error.status, headers=HEADERS)

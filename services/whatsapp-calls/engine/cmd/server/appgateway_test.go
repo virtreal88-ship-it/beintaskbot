@@ -173,3 +173,54 @@ func TestGatewayIdleSyncAlwaysUsesResultArray(t *testing.T) {
 	cancel()
 	<-done
 }
+
+func TestGatewayFlushesCommandResultBeforeNextTick(t *testing.T) {
+	g, _ := testGateway(t)
+	issued := make(chan time.Time, 1)
+	received := make(chan time.Time, 1)
+	cmd := cancelledCommand()
+	remote := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var snapshot struct {
+			Results []appResult `json:"results"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&snapshot); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if len(snapshot.Results) == 0 {
+			select {
+			case issued <- time.Now():
+			default:
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": map[string]any{"commands": []appCommand{cmd}},
+			})
+			return
+		}
+		if result := snapshot.Results[0]; result.ID != cmd.ID || !result.NotStarted || result.Error != "call_ended" {
+			t.Errorf("unexpected command result: %+v", result)
+		}
+		select {
+		case received <- time.Now():
+		default:
+		}
+		w.Write([]byte(`{"result":{"commands":[]}}`))
+	}))
+	defer remote.Close()
+	g.cfg.Endpoint, g.client = remote.URL, remote.Client()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { g.run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case reported := <-received:
+		if elapsed := reported.Sub(<-issued); elapsed >= 800*time.Millisecond {
+			t.Fatalf("result waited for the regular sync tick: %v", elapsed)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("result never reached the Worker")
+	}
+}

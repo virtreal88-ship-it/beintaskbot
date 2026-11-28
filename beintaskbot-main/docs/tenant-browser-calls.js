@@ -386,7 +386,14 @@
       if(s)diagnostic(s,e.status===403?'auth_changed':'control_unavailable');online=false;sources=sources.map(source=>({...source,online:false}));if(e.status===403){enabled=false;release(session);session=null;pendingRecordings.clear();closeModal();}else {if(session&&!session.stopping)void stop(session);if(modal)modal.error.textContent='Связь управления потеряна. Микрофон выключен; проверяем завершение звонка…';}draw();}
     finally{polling=false;schedule();}
   }
-  function schedule(){clearTimeout(timer);if(identity&&enabled)timer=setTimeout(()=>void poll(),2000);}
+  function schedule(){
+    clearTimeout(timer);
+    if(!identity||!enabled)return;
+    const s=session;
+    const connecting=s?.sent&&s.call&&!s.stopping&&!terminal(s.call)&&!s.controlBusySince&&
+      (!s.answered||!s.pcmSent||s.call.direction==='inbound'&&s.call.state!=='connected');
+    timer=setTimeout(()=>void poll(),connecting?500:2000);
+  }
   function mount(){
     const host=document.getElementById('operatorBrowserCallHost'),route=window.tenantOperator?.currentDialog;if(!host)return;
     const routeKey=route?identity+':'+[route.channel_id,route.conversation_id,route.lead_id].join(':'):'';

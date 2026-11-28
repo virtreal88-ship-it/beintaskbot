@@ -67,6 +67,7 @@ class WorkPool:
 
 session_io = WorkPool('crm-session', 6, 12, 8, 5000)
 dialog_io = WorkPool('crm-dialog', 6, 12, 12, 9000)
+dialog_revision_io = WorkPool('crm-dialog-revision', 2, 12, 4, 1500)
 record_read_io = WorkPool('crm-record-read', 6, 12, 12, 9000)
 legacy_access_io = WorkPool('crm-legacy-access', 4, 8, 8, 5000)
 legacy_deal_io = WorkPool('crm-legacy-deal', 3, 6, 12, 6000)

@@ -4,13 +4,14 @@ const {JSDOM} = require('../.support-test-deps/node_modules/jsdom');
 const source = fs.readFileSync('docs/tenant-chat-send.js', 'utf8');
 const page = fs.readFileSync('docs/tenant-app.html', 'utf8');
 
-async function withComposer(run) {
-  const dom = new JSDOM('<div><textarea id="chatText"></textarea><button id="sendChat">Göndər</button></div>', {
+async function withComposer(run, provider='kommo') {
+  const dom = new JSDOM('<div><div id="chatRows"></div><textarea id="chatText"></textarea><button id="sendChat">Göndər</button></div>', {
     url: 'https://crm.test/app',
     runScripts: 'outside-only'
   });
   const w = dom.window;
   const input = w.document.getElementById('chatText');
+  const timeline = w.document.getElementById('chatRows');
   const button = w.document.getElementById('sendChat');
   const calls = [];
   const key = 'tenant-chat-send:tenant:20:7';
@@ -27,13 +28,14 @@ async function withComposer(run) {
     me:{tenant_id:'tenant',telegram_id:20},
     identity:'tenant:20',
     leadId:7,
+    provider,timeline,
     isCurrent:()=>env.current,
     onAccepted:text=>{env.accepted=text;},
     reload:async()=>{}
   });
   input.value='Salam';
   try{
-    await run({env,input,button,calls,pending:()=>w.sessionStorage.getItem(key),click:()=>button.onclick(),
+    await run({env,input,button,calls,timeline,pending:()=>w.sessionStorage.getItem(key),click:()=>button.onclick(),
       status:()=>w.document.getElementById('tenantChatSendStatus')?.textContent});
   }finally{
     w.close();
@@ -114,6 +116,27 @@ async function withComposer(run) {
     assert.equal(env.accepted,undefined);
     assert.equal(pending(),null);
   });
+  await withComposer(async({click,pending,input,env,calls,timeline})=>{
+    let confirmSend;
+    env.result=()=>new Promise(resolve=>{confirmSend=resolve;});
+    input.value='<b>Тест</b>';
+    const send=click();
+    const row=timeline.querySelector('[data-pending-text-send]');
+    assert.equal(row.lastElementChild.textContent,'Göndərilir');
+    assert.equal(row.firstElementChild.textContent,input.value);
+    assert.equal(row.querySelector('b'),null);
+    assert.ok(pending());
+    confirmSend({state:'accepted',message_id:'durable-id'});
+    await send;
+    assert.equal(timeline.querySelector('[data-pending-text-send]'),null);
+    assert.equal(calls.length,1);
+  },'connect');
+  await withComposer(async({click,pending,env,timeline})=>{
+    env.result=async()=>{throw new Error('response lost');};
+    await click();
+    assert.equal(timeline.querySelector('[data-pending-text-send] footer').textContent,'Vəziyyəti yoxlanılır');
+    assert.ok(pending(),'unknown status still uses the same request');
+  },'connect');
   assert.ok(page.includes('/assets/tenant-chat-send.js'));
   console.log('PASS: exact GET recovery, no duplicate POST, draft preservation and scoped late responses.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

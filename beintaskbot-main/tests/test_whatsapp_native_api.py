@@ -22,7 +22,7 @@ def test_projection_finishes_before_receipt_and_failure_is_retried(monkeypatch):
         monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_PROJECTION', '1')
         monkeypatch.setattr(api, 'SLOTS', asyncio.Semaphore(2))
         monkeypatch.setattr(api.tenant_browser_calls, 'gateway_auth', lambda _: {'managed':True})
-        receipt = {'state':'stored', 'sequence':7}
+        receipt = {'state':'stored', 'sequence':7,'scope':{'tenant':A}}
         order = []
         def store(*args):
             order.append('store_committed')
@@ -30,17 +30,22 @@ def test_projection_finishes_before_receipt_and_failure_is_retried(monkeypatch):
         def project(value):
             assert value == receipt and order[-1] == 'store_committed'
             order.append('crm_committed')
+            return True
+        updated=Mock()
+        updated.publish.side_effect=lambda *_:order.append('browser_woken')
         monkeypatch.setattr(api.inbox, 'store_delivery', store)
         monkeypatch.setattr(consumer, 'project_stored', project)
         app = web.Application()
-        app.router.add_post('/messages', api.handler(Mock(), 'https://example.invalid', Mock()))
+        app.router.add_post('/messages', api.handler(Mock(), 'https://example.invalid', Mock(),message_updates=updated))
         async with TestClient(TestServer(app)) as client:
             response = await client.post('/messages', json={})
             assert response.status == 200
-            assert order == ['store_committed', 'crm_committed']
+            assert order == ['store_committed', 'crm_committed', 'browser_woken']
+            updated.publish.assert_called_once_with({'tenant_id':A},'')
             monkeypatch.setattr(consumer, 'project_stored', Mock(side_effect=RuntimeError('PRIVATE')))
             response = await client.post('/messages', json={})
             assert response.status == 503 and 'PRIVATE' not in await response.text()
+            assert updated.publish.call_count == 1
     asyncio.run(run())
 
 

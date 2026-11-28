@@ -30,6 +30,26 @@ func next(t *testing.T, j *Journal) *Delivery {
 	return d
 }
 
+func TestCommittedDeliveryWakesOneDrainerAndCoalesces(t *testing.T) {
+	j := journal(t, database(t, filepath.Join(t.TempDir(), "journal.db")), testScope)
+	appendFixture(t, j, "one")
+	appendFixture(t, j, "two")
+	select {
+	case <-j.DeliveryReady():
+	default:
+		t.Fatal("a committed event did not wake delivery")
+	}
+	appendFixture(t, j, "one")
+	select {
+	case <-j.DeliveryReady():
+		t.Fatal("a duplicate or queued notification caused another wakeup")
+	default:
+	}
+	if next(t, j).Event.Sequence != 1 {
+		t.Fatal("wakeups did not preserve journal order")
+	}
+}
+
 func TestDeliveryLostReplyRestartAndNoDeletion(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "journal.db")

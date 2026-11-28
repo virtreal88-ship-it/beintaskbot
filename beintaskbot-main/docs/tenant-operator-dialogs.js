@@ -296,6 +296,53 @@
   }
   function stopAutoRefresh(){clearTimeout(autoRefreshTimer);autoRefreshTimer=null;}
   function scheduleAutoRefresh(delay=AUTO_REFRESH_MS){stopAutoRefresh();const backgroundNoticePolling=document.hidden&&window.Notification?.permission==='granted'&&!pushDeviceConnected;if((document.hidden&&!backgroundNoticePolling)||!hasRight('dialogs'))return;autoRefreshTimer=setTimeout(async()=>{if(autoRefreshBusy){scheduleAutoRefresh();return;}autoRefreshBusy=true;void refreshClientSupportCase();try{await refresh();}finally{autoRefreshBusy=false;scheduleAutoRefresh();}},delay);}
+  let messageRevision='',messageUpdateTimer=null,messageUpdateRequest=null;
+  const canWatchMessages=()=>!document.hidden&&inDialogsView()&&!embeddedConversation&&
+    member?.active===true&&hasRight('dialogs')&&!colleagueId();
+  function stopMessageUpdates(){
+    clearTimeout(messageUpdateTimer);messageUpdateTimer=null;
+    messageUpdateRequest?.abort();messageUpdateRequest=null;
+  }
+  function scheduleMessageUpdates(delay=1000){
+    if(!canWatchMessages()){stopMessageUpdates();return;}
+    if(!messageRevision||messageUpdateTimer!==null||messageUpdateRequest)return;
+    messageUpdateTimer=setTimeout(checkMessageUpdates,delay);
+  }
+  async function checkMessageUpdates(){
+    messageUpdateTimer=null;
+    if(!canWatchMessages())return;
+    const controller=new AbortController(),version=epoch;
+    const current=()=>messageUpdateRequest===controller&&version===epoch&&canWatchMessages();
+    const deadline=setTimeout(()=>controller.abort(),22000);
+    messageUpdateRequest=controller;
+    let retry=1000;
+    try{
+      const query=new URLSearchParams({revision:messageRevision});
+      const selected=currentDialog?.provider==='connect'&&currentPage?currentDialog:null;
+      if(selected){
+        query.set('channel_id',selected.channel_id);
+        query.set('conversation_id',selected.conversation_id);
+      }
+      const {result}=await rawApi(endpoint+'dialogs/updates?'+query,{signal:controller.signal},{optionalScopedRead:true});
+      if(!current()||typeof result?.revision!=='string')return;
+      if(result.revision!==messageRevision){
+        let liveHistory=null;
+        if(result.selected_latest&&selected&&sameDialog(selected,currentDialog)&&!pendingDialogRoute){
+          const promise=selected.lifecycle_enabled||selected.wecall||historyMergeId(currentPage)
+            ?openDialog(selected,true):appendNewMessages(selected);
+          liveHistory={route:selected,promise};
+        }
+        // A list started before the commit can have a stale snapshot.
+        await listFlight?.promise;
+        if(!current())return;
+        if(await refresh(false,false,{messageChangeOnly:true,liveHistory})&&current())messageRevision=result.revision;
+      }
+    }catch{retry=10000;}
+    finally{
+      clearTimeout(deadline);
+      if(messageUpdateRequest===controller){messageUpdateRequest=null;scheduleMessageUpdates(retry);}
+    }
+  }
   const helperDrafts=new Map();let helperHistoryClosing=false;
   const contextKey=(kind,route=currentDialog)=>`tenant.operator.${kind}.${member?.tenant_id||''}.${member?.telegram_id||''}.${kind==='route'?'':(route?.provider||'connect')+'.'+(route?.channel_id||'')+'.'+(route?.conversation_id||'')}`;
   const atBottom=node=>!node||node.scrollHeight-node.scrollTop-node.clientHeight<28;
@@ -1550,7 +1597,13 @@
     const revision=++listRevision,version=epoch;
     $('operatorRows').setAttribute('aria-busy','true');if(!rows.length)notice(t('loading'));
     const promise=(async()=>{try{
-      const result=await api(key);if(version!==epoch||revision!==listRevision)return;
+      const needsRevision=!observed&&!append&&!messageRevision;
+      const result=await api(needsRevision?key+'&message_revision=1':key);
+      if(version!==epoch||revision!==listRevision)return;
+      if(needsRevision&&typeof result.message_revision==='string'){
+        messageRevision=result.message_revision;
+        scheduleMessageUpdates();
+      }
       if(observed){
         rows=(append?rows:[]).concat((result.dialogs||[]).map(row=>({...row,observed_operator_id:observed})));
         nextOffset=result.next_offset;lastListKey=key;lastListAt=Date.now();
@@ -1563,10 +1616,18 @@
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
       $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
+      const liveHistory=options.liveHistory;
+      const historyUpdated=liveHistory&&sameDialog(liveHistory.route,currentDialog)&&await liveHistory.promise;
+      if(version!==epoch||revision!==listRevision)return;
+      if(historyUpdated&&sameDialog(liveHistory.route,currentDialog)){
+        const listed=(result.dialogs||[]).flatMap(row=>row.group_sources||[row]).find(row=>sameDialog(row,currentDialog));
+        if(!listed?.last_message_id||String(listed.last_message_id)===String(currentPage?.dialog?.last_message_id))return result;
+      }
       const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
       const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
         sameDialog(nameHint,currentPage.dialog)&&nameHint.customer_name!==currentPage.dialog.customer_name);
-      if(currentDialog&&!pendingDialogRoute&&(currentDialog.lifecycle_enabled||currentDialog.wecall||historyMergeId(currentPage)||options.revalidateSelected)){
+      if(currentDialog&&!pendingDialogRoute&&(!options.messageChangeOnly||selectedChanged||nameOnly)&&
+        (currentDialog.lifecycle_enabled||currentDialog.wecall||historyMergeId(currentPage)||options.revalidateSelected)){
         await openDialog(currentDialog,true,'',{suppressRead:options.suppressRead===true||nameOnly,revalidateAccess:options.revalidateSelected===true});
       }else if(nameOnly&&!pendingDialogRoute)await appendNewMessages(currentDialog,true,true);
       else if(selectedChanged&&currentDialog)await appendNewMessages(currentDialog,options.suppressRead===true);
@@ -1662,7 +1723,7 @@
     try{
       const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
-      if(applyHistoryMergeChange(route,latest))return;
+      if(applyHistoryMergeChange(route,latest))return true;
       if(route.provider==='operator_widget'){
         for(const snapshot of new Set([currentDialog,page.dialog])){
           Object.assign(snapshot,{operator_account:latest.dialog.operator_account,crm_company_id:latest.dialog.crm_company_id,dialog_company_name:latest.dialog.dialog_company_name});
@@ -1687,7 +1748,7 @@
         }
         setTimelineScroll(chat,follow?(placed?chat.scrollHeight:top):timelineScrollTop(top,anchor),true);
         rememberDialogPage(route,page);
-        return;
+        return true;
       }
       reconcileGroupCopies(page,latest,chat,route);
       patchDirectDialogNames(latest,page,chat);
@@ -1699,7 +1760,7 @@
       retainOperatorEvents(currentPage,latest);
       if(Array.isArray(latest.group_read_targets))currentPage.group_read_targets=latest.group_read_targets;
       else delete currentPage.group_read_targets;
-      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return true;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',dialogMessageMarkup(added,route));
@@ -1710,14 +1771,15 @@
       if(follow){setTimelineScroll(chat,chat.scrollHeight,timelinePlaced);if(!suppressRead)void markDialogReadIfVisible(currentPage);}
       else {setTimelineScroll(chat,timelineScrollTop(oldTop,anchor),timelinePlaced);const button=$('operatorNewMessages');if(button)button.hidden=false;}
       const error=$('operatorChatError');if(error)error.textContent='';
+      return true;
     }catch(error){
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog))return;
       if(lifecycleUnavailable(error,route))return;
       const status=$('operatorChatError');if(status)status.textContent=error.message;
     }
   }
-  async function refreshSentAttachment(messageId){
-    if(typeof messageId!=='string'||!messageId)return;
+  async function refreshSentMessage(messageId){
+    if(typeof messageId!=='string'||!messageId)return false;
     const route=currentDialog,version=epoch,revision=openRevision,external='connect:'+messageId;
     const selected=()=>version===epoch&&revision===openRevision&&currentPage&&!pendingDialogRoute&&inDialogsView()&&sameDialog(route,currentDialog);
     // Another incremental request may supersede the first read. Try once more
@@ -1725,6 +1787,7 @@
     for(let attempt=0;attempt<2&&selected()&&!(currentPage.messages||[]).some(message=>message.external_id===external);attempt++){
       await appendNewMessages(route,true);
     }
+    return Boolean(selected()&&currentPage.messages?.some(message=>message.external_id===external));
   }
   const usableDialogName=(value,route)=>{
     const name=typeof value==='string'?value.trim():'';
@@ -4094,7 +4157,21 @@
       message.addEventListener('keydown',event=>{if(sendAllowed&&event.key==='Enter'&&!event.shiftKey&&!event.isComposing){
         event.preventDefault();button.click();
       }});
-    }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({api:async(url,options)=>{if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}},identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,reload:async()=>{if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}}});else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='group_offline'?groupWorkText('offline'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
+    }else if(sendAllowed&&window.tenantChatSend)window.tenantChatSend.bind({
+      api:async(url,options)=>{
+        if(options.method==='GET'||url==='/api/platform/crm/chat/send-status/close-unsubmitted')return rawApi(url,options,{optionalScopedRead:true});
+        try{return await rawApi(url,options);}catch(error){if(same())lifecycleUnavailable(error,route);throw error;}
+      },
+      identity:who,leadId:route.lead_id,me:member,provider:route.provider,channelId:route.channel_id,draftKey:sendDraftKey,
+      timeline:chatRowsHost,getQuote:()=>draftQuote,onPending:restorePendingReply,onDiscard:settlePendingReply,
+      isQuoteCurrent:pending=>String(pending.quote_channel_id)===String(route.channel_id)&&String(pending.quote_conversation_id)===String(route.conversation_id),
+      onAccepted:()=>{settlePendingReply();return !!draftQuote;},isCurrent:same,
+      reload:async(sent)=>{
+        if(!same())return;
+        if(route.provider==='connect'&&await refreshSentMessage(sent?.message_id))return;
+        if(same()){sessionStorage.removeItem(contextKey('scroll',route));await openDialog(route);}
+      }
+    });else $('operatorSendReason').textContent=route.owner_overview_read_only?(({ru:'Только просмотр',az:'Yalnız baxış',en:'Read only'})[i18n.language]||'Read only'):route.send_block_reason==='group_offline'?groupWorkText('offline'):route.send_block_reason==='dialog_accept_required'?'':t(route.send_block_reason||'sendUnavailable');
     const replyDiagnostics=$('operatorReplyDiagnostics');
     if(replyDiagnostics){replyDiagnostics.replaceChildren();window.tenantChatSend?.renderDiagnostics?.(replyDiagnostics);}
     renderHistoryMergeReadPicker();renderComposerSourcePicker();
@@ -4194,16 +4271,17 @@
     const next=data.member||null,changed=identity(next)!==identity(member)||JSON.stringify(next?.permissions)!==JSON.stringify(member?.permissions)||next?.role!==member?.role||next?.active!==member?.active||next?.department_id!==member?.department_id||JSON.stringify(data.capabilities)!==JSON.stringify(capabilities)||JSON.stringify(data.role_permissions)!==permissionScope;
     permissionScope=JSON.stringify(data.role_permissions);
     member=next;capabilities=data.capabilities||{};loadSoundPreference();
-    if(changed){mergeRequests.clear();closeDuplicateSearch(true);}syncDuplicateButton();
+    if(changed){stopMessageUpdates();messageRevision='';mergeRequests.clear();closeDuplicateSearch(true);}syncDuplicateButton();
     if($('operatorBulkAssignment')){$('operatorBulkAssignment').hidden=member?.role!=='owner';$('operatorBulkAssignment').textContent=bulkText('preview');}
 if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorColleagueLabel').remove();$('operatorAgent').disabled=false;$('operatorState').disabled=false;$('operatorCompleteAll').hidden=false;$('operatorMarkAllRead').hidden=false;}companyPanelPreference=null;filterPreferencesLoaded=false;filterPreferencesFlight=null;filterSaveQueue=Promise.resolve();if($('operatorState'))$('operatorState').value='';if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent='';if($('operatorLifecycle'))$('operatorLifecycle').value='all';rememberOwnerOverviewMode();completeAllNotice('');viewReturnDialog=null;viewReturnDialogOwner='';pendingCopilotRequests.clear();lifecycleRequests.clear();lifecycleListStates.clear();dialogPageCache.clear();selectedDialog=null;selectedDialogOwner='';readMarkers.clear();readInFlight.clear();clearContactLookups();avatarAttempts.clear();avatarReady.clear();avatarQueue.length=0;listFlight=null;lastListKey='';lastListAt=0;stopAutoRefresh();latestMessageIds.clear();hasInitialDialogSnapshot=false;lastDialogSnapshotAt=0;epoch++;listRevision++;closeDialog(false);helperDrafts.clear();caseLinkKey='';rows=[];nextOffset=null;badge(0);if($('operatorRows'))$('operatorRows').innerHTML='';if($('operatorConversationContent'))$('operatorConversationContent').innerHTML=`<div class="operator-conversation-placeholder">${t('chooseDialog')}</div>`;if($('operatorChannel')){$('operatorChannel').value='';$('operatorAgent').value='';setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');}}
     if(hasRight('dialogs')){if(!changed&&pendingDialogRoute)void openDialog(pendingDialogRoute);refresh(false,true);scheduleAutoRefresh();const fromNotification=!notificationRouteHandled?notificationDialogRoute():null;if(fromNotification){notificationRouteHandled=true;clearNotificationDialogRoute();const version=epoch;setTimeout(()=>{if(version===epoch&&!currentDialog&&hasRight('dialogs'))openDialog(fromNotification);},0);return;}if(openLocationCaseLink())return;const route=history.state?.view==='dialogs'&&history.state?.operatorDialogOwner===identity(member)&&new URLSearchParams(location.search).get('view')==='dialogs'?history.state.operatorDialog:null;if(route?.channel_id&&route?.conversation_id&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending){const version=epoch,revision=openRevision;setTimeout(()=>{if(version===epoch&&revision===openRevision&&!currentDialog&&!pendingDialogRoute&&!caseLinkPending&&hasRight('dialogs')&&$('view-dialogs')?.classList.contains('active'))openDialog(route,true);},0);}}else stopAutoRefresh();
   }
   window.addEventListener('storage',event=>{if(event.key===soundPrefKey())loadSoundPreference();if(event.key===readSyncKey()&&!document.hidden&&$('view-dialogs')?.classList.contains('active'))void refresh();});
-  document.addEventListener('tenant-auth-pending',()=>{if(currentDialog?.colleague_read_only)closeDialog(false,true);mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);});
-  document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();});
+  document.addEventListener('tenant-auth-pending',()=>{stopMessageUpdates();if(currentDialog?.colleague_read_only)closeDialog(false,true);mergeRequests.clear();stopRowContacts();closeDuplicateSearch(true);if(currentDialog?.archive_read_only&&member?.role!=='owner')paintArchiveCompany(null);});
+  document.addEventListener('tenant-profile',event=>{profileChanged(event.detail);restoreDialogCompany();scheduleMessageUpdates();});
   document.addEventListener('tenant-auth-invalid',()=>profileChanged({}));
   for(const name of ['tenant-view','visibilitychange'])document.addEventListener(name,()=>scheduleGroupWorkRefresh());
+  for(const name of ['tenant-view','visibilitychange','tenant-dialog-reauthorized'])document.addEventListener(name,()=>scheduleMessageUpdates());
   document.addEventListener('tenant-chat-close',stopGroupWorkRefresh);
   for(const event of ['tenant-chat-render','tenant-chat-close','tenant-auth-invalid','tenant-auth-pending','tenant-view'])document.addEventListener(event,()=>{document.querySelectorAll('audio[data-test-call-audio]').forEach(audio=>{audio.pause();audio.removeAttribute('src');audio.load();});});
   document.addEventListener('tenant-auth-pending',()=>{if(caseLinkPending){cancelCaseLink();caseLinkKey='';}listFlight=null;listRevision++;lastListAt=0;if($('operatorDialogs'))$('operatorDialogs').style.visibility='hidden';});
@@ -4224,6 +4302,7 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
   });
   window.addEventListener('focus',()=>{scheduleGroupWorkRefresh();updateBrowserNoticeButton();if(embeddedConversation)void refreshEmbeddedConversation();else if(!document.hidden&&!window.tenantRequestCoordinator)void markDialogReadIfVisible(currentPage);});
   window.addEventListener('beforeunload',stopAutoRefresh);
+  window.addEventListener('beforeunload',stopMessageUpdates);
   window.addEventListener('popstate',event=>{helperHistoryClosing=false;if(document.querySelector('.operator-photo-viewer'))return;if(!event.state?.operatorHelper&&$('operatorCopilot')&&!$('operatorCopilot').hidden)closeCopilotPanel(true);cancelCaseLink();const route=(event.state?.operatorDialogOwner===identity(member)?event.state.operatorDialog:null)||(event.state?.view==='dialogs'&&viewReturnDialogOwner===identity(member)?viewReturnDialog:null);if(event.state?.view==='dialogs'&&route&&hasRight('dialogs')){viewReturnDialog=null;viewReturnDialogOwner='';const workspace=$('operatorWorkspace');if(!sameDialog(currentDialog,route)||workspace?.dataset.selected!=='true')void openDialog(route,true);}else if(currentDialog||pendingDialogRoute||$('operatorTransferConfirmation'))closeDialog(true,true);const query=new URLSearchParams(location.search),linkKey=[query.get('case_id')||'',query.get('message_id')||'',query.get('review_run_id')||'',query.get('case_version')||''].join(':');if(!event.state?.operatorCaseHandled||event.state.operatorCaseHandled!==linkKey)openLocationCaseLink();});
   document.addEventListener('tenant-language',()=>{syncDuplicateButton();closeDuplicateSearch(true);updateSoundButton();updateBrowserNoticeButton();if($('operatorRows')){setStates();setQueueModes();refresh();}if($('operatorBulkAssignment'))$('operatorBulkAssignment').textContent=bulkText('preview');if(currentDialog&&currentPage){const diagnosticsOpen=$('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden,settingsOpen=$('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden;renderDialog(currentPage);if(diagnosticsOpen)openDialogDiagnostics(currentDialog);if(settingsOpen)openGroupSettings(currentDialog);}});
   document.addEventListener('keydown',event=>{if(event.key==='Tab'&&$('operatorCopilot')&&!$('operatorCopilot').hidden&&window.matchMedia?.('(max-width: 900px)').matches){const nodes=[...$('operatorCopilot').querySelectorAll('button,input,select,textarea,summary,a[href]')].filter(node=>!node.disabled&&node.getClientRects().length);if(nodes.length){const first=nodes[0],last=nodes[nodes.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}}if(event.key!=='Escape'||$('operatorInternalComment'))return;if($('operatorCopilot')&&!$('operatorCopilot').hidden){$('operatorCopilotClose')?.click();return;}if($('operatorGroupSettingsModal')&&!$('operatorGroupSettingsModal').hidden){closeGroupSettings();return;}if($('operatorDiagnosticsModal')&&!$('operatorDiagnosticsModal').hidden){closeDialogDiagnostics();return;}if(currentDialog||caseLinkPending||$('operatorTransferConfirmation'))closeDialog();});
@@ -4310,8 +4389,8 @@ if(changed){colleagueChoicesFlight=null;if($('operatorColleague')){$('operatorCo
     const article=[...document.querySelectorAll('#chatRows [data-message-id]')].find(node=>node.dataset.messageId===String(id));
     const footer=article?.querySelector('[data-message-footer-actions]');if(footer)footer.innerHTML=deliveryMarkup(message)+copyControlMarkup(message);
   }
-  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,refreshSentAttachment,hasRight,updateCustomerVoiceDelivery,mountConversation,parkConversation,inDialogsView,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
-  if(window.tenantProfileSnapshot)profileChanged(window.tenantProfileSnapshot);else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member)profileChanged(data);}).catch(()=>{});
+  window.tenantOperator={messageMarkup,attachmentLabel,bindHistoryMessages,openDialog,openManualCaseCreate,showReplyContext,openCaseLink,openLearningReviewLink,openLocationCaseLink,closeDialog,changeState,refresh,refreshSentAttachment:refreshSentMessage,hasRight,updateCustomerVoiceDelivery,mountConversation,parkConversation,inDialogsView,get resolvingCaseLink(){return caseLinkPending},get dialogRevision(){return openRevision},get member(){return member},get currentDialog(){return currentDialog?{...currentDialog}:null}};
+  if(window.tenantProfileSnapshot){profileChanged(window.tenantProfileSnapshot);scheduleMessageUpdates();}else fetch(window.TENANT_AI_AGENTS_CONFIG?.profileUrl||'/api/platform/me',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(data=>{if(!member&&data?.member){profileChanged(data);scheduleMessageUpdates();}}).catch(()=>{});
 })();
 
 
