@@ -169,8 +169,11 @@ def test_group_notes_remain_exact_to_selected_source_even_with_union_message_cur
     episodes.execute("""INSERT INTO saas_connect_conversations(tenant_id,connect_channel_id,conversation_id,lead_id,
         display_name,conversation_kind) VALUES(%s::uuid,%s::uuid,%s,43,'Synthetic group','group')""",(A,alternate,group))
     episodes.commit()
-    for lead,channel in ((41,CA),(43,alternate)):
-        lifecycle.mutate(PROFILE,{**payload('accept',0),'lead_id':lead,'channel_id':channel,'conversation_id':group})
+    original={'lead_id':41,'channel_id':CA,'conversation_id':group}
+    sibling={'lead_id':43,'channel_id':alternate,'conversation_id':group}
+    lifecycle.mutate(PROFILE,{**payload('accept',0),**original})
+    lifecycle.mutate(PROFILE,{**payload('close',1),**original})
+    lifecycle.mutate(PROFILE,{**payload('accept',0),**sibling})
     grouped={row["channel"]:row["id"] for row in episodes.execute("""SELECT id::text,payload->>'channel_id' AS channel
       FROM saas_tenant_audit_events WHERE tenant_id=%s::uuid AND action='dialog_accept'""",(A,))}
     for event in grouped.values():
@@ -188,7 +191,7 @@ def test_group_notes_remain_exact_to_selected_source_even_with_union_message_cur
     assert all(message['source_channel_id']==alternate for message in first['messages'])
     primary=operator.history(PROFILE,'connect',41,CA,group,before=first['next_before'],include_operator_events=True)
     alternate_page=operator.history(PROFILE,'connect',43,alternate,group,before=first['next_before'],include_operator_events=True)
-    assert [e['id'] for e in primary['operator_events']]==[grouped[CA]]
+    assert [e['id'] for e in primary['operator_events'] if e['kind']=='accept']==[grouped[CA]]
     assert [e['id'] for e in alternate_page['operator_events']]==[grouped[alternate]]
     with pytest.raises(TenantLinearError):
         operator.history(PROFILE,'connect',41,alternate,group,include_operator_events=True)

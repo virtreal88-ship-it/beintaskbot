@@ -199,10 +199,13 @@ def test_same_group_multiple_sources_bind_only_exact_accepted_route(companies):
     first={'channel_id':CA,'conversation_id':group,'lead_id':104}
     sibling={'channel_id':second,'conversation_id':group,'lead_id':105}
     lifecycle.mutate(PROFILE,{**payload(),**first})
-    lifecycle.mutate(PROFILE,{**payload(),**sibling})
+    with pytest.raises(TenantLinearError) as occupied:
+        lifecycle.mutate(PROFILE,{**payload(),**sibling})
+    assert occupied.value.status==409
     lifecycle.mutate(PROFILE,{**payload('close',1,company_id=company),**first})
+    sibling_episode=lifecycle.mutate(PROFILE,{**payload(),**sibling})
     with pytest.raises(TenantLinearError) as unlinked:
-        lifecycle.mutate(PROFILE,{**payload('close',1),**sibling})
+        lifecycle.mutate(PROFILE,{**payload('close',sibling_episode['lifecycle']['revision']),**sibling})
     assert unlinked.value.status==422
     assert bindings(database)==[{'tenant_id':A,'channel_id':CA,'conversation_id':group,'company_id':company,'created_by':11}]
 

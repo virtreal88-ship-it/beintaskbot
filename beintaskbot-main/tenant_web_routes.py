@@ -206,7 +206,7 @@ def ai_agent_routes(context: TenantWebContext, prefix: str = '/api/platform/ai/'
         ('dialogs/personal-reminders', reminders_handler(member, origin, logger), ('GET','POST')),
         ('dialogs/shared-reminders', reminders_handler(member, origin, logger, shared=True), ('GET','POST')),
         ('dialogs/read', operator_handler(member, origin, logger, 'dialogs_read'), ('POST',)),
-        ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle',group_work_updates=group_work_updates), ('POST',)),
+        ('dialogs_lifecycle', operator_handler(member, origin, logger, 'dialogs_lifecycle',group_work_updates=group_work_updates,message_updates=message_updates), ('POST',)),
         ('dialogs/remove', operator_handler(member, origin, logger, 'dialogs_remove'), ('POST',)),
         ('dialogs/read-all', operator_handler(member, origin, logger, 'dialogs_read_all'), ('POST',)),
         ('dialogs/audio-transcription', dialog_audio_transcription_handler(member, origin, logger), ('GET', 'POST')),

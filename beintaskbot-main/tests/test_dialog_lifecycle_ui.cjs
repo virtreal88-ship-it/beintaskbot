@@ -56,7 +56,7 @@ const read=p=>fs.readFileSync(p,'utf8'),tick=()=>new Promise(r=>setTimeout(r,0))
  caseResult={case_state:'not_suitable',case_id:null,suitability:{suitable:false,reason:'Only a greeting; no reusable knowledge'}};await w.tenantOperator.openDialog(route);d.querySelector('[data-operator-lifecycle=case]').click();await tick();assert.equal(calls.filter(c=>c.body?.action==='case').length,1,'opening historical case selector never submits');
  let episodeModal=d.querySelector('#operatorLifecycleModal'),episodeSelect=episodeModal.querySelector('[data-episode-select]');assert(episodeModal.querySelector('[type=submit]').disabled);assert(episodeSelect.querySelector('[value="already-sent"]').disabled);episodeSelect.value='old-completed';episodeSelect.dispatchEvent(new w.Event('change'));episodeModal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();assert.equal(calls.filter(c=>c.body?.action==='case').at(-1).body.episode_id,'old-completed');assert.equal(calls.filter(c=>c.body?.action==='case').at(-1).body.expected_revision,4);assert.match(d.querySelector('#operatorChatError').textContent,/Only a greeting/);
  denyCase=true;d.querySelector('[data-operator-lifecycle=case]').click();episodeModal=d.querySelector('#operatorLifecycleModal');episodeSelect=episodeModal.querySelector('select');episodeSelect.value='old-completed';episodeSelect.dispatchEvent(new w.Event('change'));episodeModal.querySelector('form').dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();await tick();assert(!d.querySelector('#chatRows'),'stale ownership blocks historical submission and clears chat');assert(!d.querySelector('#operatorLifecycleModal'));denyCase=false;
- d.querySelector('#operatorLifecycle').value='active';
+ d.querySelector('#operatorLifecycle').value='working';
  route={...route,can_send:false,lifecycle:{state:'waiting',revision:4,can_accept:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
  await w.tenantOperator.openDialog(route);assert(!d.querySelector('[data-operator-lifecycle=dismiss]'),'waiting never shows rhetorical even if an older server advertises it');
  route={...route,can_send:true,lifecycle:{state:'accepted',revision:4,operator_id:33,can_close:true,last_inbound_id:'latest-inbound',can_dismiss:true}};
@@ -148,7 +148,7 @@ async function verifyOwnerOverview(){
  await w.tenantOperator.refresh();
  const lifecycle=d.querySelector('#operatorLifecycle');
  assert.equal(d.querySelectorAll('#operatorAdvanced select').length,4);
- assert.deepEqual([...lifecycle.options].map(option=>option.value),['all','active','completed']);
+ assert.deepEqual([...lifecycle.options].map(option=>option.value),['all','working','completed']);
  const channel=d.querySelector('#operatorChannel');channel.value='connect:a';channel.dispatchEvent(new w.Event('change'));await tick();
  const list=calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams;
  assert.equal(list.get('lifecycle'),'all');assert(!list.has('lifecycle_state'));assert.equal(list.get('channel'),'connect:a');
@@ -157,7 +157,7 @@ async function verifyOwnerOverview(){
  assert(d.querySelector('#sendChat').disabled);
  assert(!d.querySelector('[data-operator-lifecycle]')&&!d.querySelector('#operatorConversationNameInput'));
  assert.equal(acks,0);assert(!calls.some(c=>c.url.pathname.endsWith('/dialogs/read')));
- lifecycle.value='active';lifecycle.dispatchEvent(new w.Event('change'));await tick();
+ lifecycle.value='working';lifecycle.dispatchEvent(new w.Event('change'));await tick();
  assert(!d.querySelector('#chatRows'),'leaving All hides the observational chat');
  assert(!calls.filter(c=>c.url.pathname.endsWith('/dialogs')).at(-1).url.searchParams.has('owner_overview'));
  lifecycle.value='all';lifecycle.dispatchEvent(new w.Event('change'));await tick();
@@ -208,7 +208,7 @@ async function verifyImmediateListState(grouped){
  assert.equal(historyReads,priorReads,'accept does not reload history');await w.tenantOperator.refresh();assert.equal(badge().dataset.lifecycleState,'accepted','older list snapshot cannot restore New');
  if(!grouped){
  const filter=d.querySelector('#operatorLifecycle');
- listState={...state};filter.value='active';filter.dispatchEvent(new w.Event('change'));await w.tenantOperator.refresh();
+ listState={...state};filter.value='working';filter.dispatchEvent(new w.Event('change'));await w.tenantOperator.refresh();
  assert.equal(badge(),null,'In work does not repeat the Accepted badge');
  assert.equal(d.querySelector('.operator-unread-count').textContent,'7');
  assert.equal(w.getComputedStyle(d.querySelector('.operator-unread-count')).backgroundColor,'rgb(185, 28, 28)','unread counter stays red in the active list');
