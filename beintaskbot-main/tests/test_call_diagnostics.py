@@ -17,7 +17,8 @@ def test_gateway_diagnostics_remain_scoped_to_each_call(gateway):
         external='provider-'+str(seq)
         item=provider('ended',peer=started['conversation_id'],direction='outbound',id=external)
         item['diagnostics']={'version':1,'end':{'origin':code,'code':'user_ended','at_ms':1000+seq},
-                             'whatsapp_to_engine':{'frames':30,'gaps_over_200ms':3,'max_gap_ms':700}}
+                             'whatsapp_to_engine':{'frames':30,'gaps_over_200ms':3,'max_gap_ms':700},
+                             'whatsapp_rtp':{'frames':30,'gaps_over_200ms':5,'reordered_frames':seq}}
         calls.sync(config,snapshot(seq+1,ended=[item],results=[{'id':work['id'],'ok':True,'provider_id':external}]))
         return started,item
 
@@ -28,6 +29,8 @@ def test_gateway_diagnostics_remain_scoped_to_each_call(gateway):
     assert len(rows)==2
     assert rows[0]['diagnostics']['gateway']['end']['origin']=='whatsapp_terminate'
     assert rows[1]['diagnostics']['gateway']['end']['origin']=='audio_transport'
+    assert rows[0]['diagnostics']['gateway']['whatsapp_rtp']['reordered_frames']==2
+    assert rows[1]['diagnostics']['gateway']['whatsapp_rtp']['reordered_frames']==4
     assert calls.status(PROFILE)['calls'][0]['state']=='ended'
 
 

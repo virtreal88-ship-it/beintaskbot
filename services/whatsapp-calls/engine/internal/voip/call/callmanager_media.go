@@ -121,6 +121,7 @@ func (m *CallManager) onRelayData(data []byte) {
 		return
 	}
 
+	arrived := time.Now()
 	m.mu.Lock()
 	if m.srtpSession == nil || m.codec == nil {
 		m.mu.Unlock()
@@ -131,10 +132,10 @@ func (m *CallManager) onRelayData(data []byte) {
 		m.mu.Unlock()
 		return
 	}
-	// Authenticate before changing peer identity or relay subscriptions. Keep
-	// codec access under the call lock so teardown cannot close it during decode.
+	// Authenticate before changing a subscription or buffering any audio.
 	pkt, err := m.srtpSession.Unprotect(data)
 	if err != nil {
+		m.peerAudio.reject()
 		m.mu.Unlock()
 		m.log.Debug("srtp unprotect error")
 		return
@@ -151,14 +152,10 @@ func (m *CallManager) onRelayData(data []byte) {
 			go m.relay.ResendSubscriptions()
 		}
 	}
-	pcm, err := m.codec.Decode(pkt.Payload)
-	if err != nil {
-		m.mu.Unlock()
-		return
+	m.peerAudio.push(pkt, arrived)
+	if m.peerPlayoutStop == nil {
+		m.peerPlayoutStop = make(chan struct{})
+		go m.playPeerAudio(m.peerPlayoutStop)
 	}
-	pcm = media.NormalizeFrame(pcm, m.codec.FrameSize())
 	m.mu.Unlock()
-	if m.OnPeerAudio != nil {
-		m.OnPeerAudio(pcm)
-	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"wacalls/internal/recording"
+	"wacalls/internal/voip/call"
 )
 
 type callDiagnostics struct {
@@ -154,12 +155,13 @@ type callAudioDiagnostic struct {
 	stream   atomic.Pointer[streamEndDiagnostic]
 }
 type perCallDiagnostic struct {
-	Version  int                  `json:"version"`
-	AtMS     int64                `json:"at_ms"`
-	End      *callEndDiagnostic   `json:"end,omitempty"`
-	Stream   *streamEndDiagnostic `json:"stream,omitempty"`
-	Browser  audioArrivalSnapshot `json:"browser_to_engine"`
-	WhatsApp audioArrivalSnapshot `json:"whatsapp_to_engine"`
+	Version  int                       `json:"version"`
+	AtMS     int64                     `json:"at_ms"`
+	End      *callEndDiagnostic        `json:"end,omitempty"`
+	Stream   *streamEndDiagnostic      `json:"stream,omitempty"`
+	Browser  audioArrivalSnapshot      `json:"browser_to_engine"`
+	WhatsApp audioArrivalSnapshot      `json:"whatsapp_to_engine"`
+	PeerRTP  *call.PeerAudioStatistics `json:"whatsapp_rtp,omitempty"`
 }
 
 func (a *activeCall) audioDiagnostic() *perCallDiagnostic {
@@ -169,6 +171,15 @@ func (a *activeCall) audioDiagnostic() *perCallDiagnostic {
 			end = &callEndDiagnostic{*origin, "unknown", time.Now().UnixMilli()}
 		}
 	}
-	return &perCallDiagnostic{1, time.Now().UnixMilli(), end, a.diagnostic.stream.Load(),
-		a.diagnostic.browser.snapshot(), a.diagnostic.whatsapp.snapshot()}
+	snapshot := &perCallDiagnostic{
+		Version: 1, AtMS: time.Now().UnixMilli(), End: end, Stream: a.diagnostic.stream.Load(),
+		Browser: a.diagnostic.browser.snapshot(), WhatsApp: a.diagnostic.whatsapp.snapshot(),
+	}
+	if a.cm != nil {
+		rtp := a.cm.PeerAudioStats()
+		if rtp.Frames != 0 || rtp.RejectedPackets != 0 {
+			snapshot.PeerRTP = &rtp
+		}
+	}
+	return snapshot
 }
