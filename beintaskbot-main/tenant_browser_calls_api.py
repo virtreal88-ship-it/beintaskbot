@@ -1,6 +1,9 @@
 """Browser membership API and narrow outbound-gateway HTTPS protocol."""
 import asyncio
 import json
+from contextlib import asynccontextmanager
+from uuid import UUID
+
 from aiohttp import web
 from tenant_ai_agents_api import _origin, _expected
 from tenant_linear_policy import TenantLinearError
@@ -10,6 +13,38 @@ import tenant_browser_calls as store
 HEADERS={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}
 SLOTS=asyncio.Semaphore(4)
 RECORDING_SLOTS=asyncio.Semaphore(1)
+BROWSER_POLL_SLOTS=asyncio.Semaphore(2)
+BROWSER_LIVE_SLOTS=asyncio.Semaphore(3)
+BROWSER_COMMAND_SLOTS=asyncio.Semaphore(2)
+BROWSER_WAIT_SLOTS=asyncio.Semaphore(4)
+
+
+class CallServiceBusy(TenantLinearError):
+    def __init__(self):
+        super().__init__('Сервер занят. Повторите проверку звонка.', 503)
+
+
+@asynccontextmanager
+async def browser_slot(slots, *, live=False):
+    # Background polls and optional diagnostics cannot occupy the slots used
+    # by call heartbeats or commands. Bound both the queue and the time in it.
+    if slots.locked():
+        if not live:
+            raise TenantLinearError('Звонки заняты. Повторите позже.',429)
+        if BROWSER_WAIT_SLOTS.locked():
+            raise CallServiceBusy()
+        async with BROWSER_WAIT_SLOTS:
+            try:
+                async with asyncio.timeout(1.5):
+                    await slots.acquire()
+            except TimeoutError:
+                raise CallServiceBusy() from None
+    else:
+        await slots.acquire()
+    try:
+        yield
+    finally:
+        slots.release()
 
 
 async def body(request,limit):
@@ -26,10 +61,10 @@ async def body(request,limit):
 def handler(member,origin,logger,resource='browser'):
     async def handle(request):
         try:
-            slots=RECORDING_SLOTS if resource=='recording' else SLOTS
-            if slots.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
             if resource in {'sync','recording'}:
                 if request.headers.get('Origin') or request.headers.get('Cookie'):raise TenantLinearError('gateway_access_denied',403)
+                slots=RECORDING_SLOTS if resource=='recording' else SLOTS
+                if slots.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
                 async with slots:
                     cfg=await asyncio.to_thread(store.gateway_auth,request.headers.get('Authorization',''))
                     limit=(MAX_MANAGED_BUNDLE if cfg.get('managed') else MAX_BUNDLE) if resource=='recording' else 128*1024
@@ -43,12 +78,25 @@ def handler(member,origin,logger,resource='browser'):
                 profile=member(request)
                 if not profile:raise TenantLinearError('Войдите в программу.',403)
                 _expected(request.query,profile)
-                async with slots:
-                    if request.method=='GET':result=await asyncio.to_thread(store.status,profile,request.query.get('request_id'),request.query.get('heartbeat')!='0')
-                    else:
-                        _origin(request,origin)
-                        result=await asyncio.to_thread(store.action,profile,json.loads(await body(request,28000)))
+                if request.method=='GET':
+                    request_id=request.query.get('request_id')
+                    if request_id is not None and str(UUID(request_id))!=request_id:
+                        raise TenantLinearError('call_identity_invalid',400)
+                    slots=BROWSER_LIVE_SLOTS if request_id else BROWSER_POLL_SLOTS
+                    async with browser_slot(slots,live=bool(request_id)):
+                        result=await asyncio.to_thread(store.status,profile,request_id,request.query.get('heartbeat')!='0')
+                else:
+                    _origin(request,origin)
+                    data=json.loads(await asyncio.wait_for(body(request,28000),4))
+                    if not isinstance(data,dict):
+                        raise TenantLinearError('call_request_invalid',400)
+                    command=data.get('op') in ('start','accept','reject','end')
+                    slots=BROWSER_COMMAND_SLOTS if command else BROWSER_POLL_SLOTS
+                    async with browser_slot(slots,live=command):
+                        result=await asyncio.to_thread(store.action,profile,data)
             return web.json_response({'result':result},headers=HEADERS)
+        except CallServiceBusy as error:
+            return web.json_response({'error':str(error),'code':'call_service_busy'},status=error.status,headers=HEADERS)
         except TenantLinearError as error:
             return web.json_response({'error':str(error)},status=error.status,headers=HEADERS)
         except (ValueError,TypeError,KeyError):

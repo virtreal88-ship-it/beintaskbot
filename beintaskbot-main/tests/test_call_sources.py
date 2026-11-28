@@ -285,6 +285,85 @@ def test_gateway_database_auth_is_off_loop_and_bounded(monkeypatch):
     asyncio.run(run())
 
 
+def test_live_call_status_and_commands_have_capacity_during_background_load(monkeypatch):
+    import asyncio
+    import threading
+
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+    import tenant_browser_calls_api as api
+
+    sync_full = threading.Event()
+    polls_full = threading.Event()
+    release = threading.Event()
+    busy_sync = []
+    busy_polls = []
+    request_id = str(uuid.uuid4())
+    origin = 'https://example.invalid'
+
+    def auth(_):
+        busy_sync.append(True)
+        if len(busy_sync) == 4:
+            sync_full.set()
+        assert release.wait(8)
+        return {}
+
+    def status(profile, nonce, heartbeat):
+        if nonce == request_id:
+            assert profile == PROFILE and heartbeat
+            return {'calls': [{'state': 'connected'}]}
+        busy_polls.append(True)
+        if len(busy_polls) == 2:
+            polls_full.set()
+        assert release.wait(8)
+        return {'calls': []}
+
+    monkeypatch.setattr(calls, 'gateway_auth', auth)
+    monkeypatch.setattr(calls, 'sync', lambda *_: {})
+    monkeypatch.setattr(calls, 'status', status)
+    monkeypatch.setattr(calls, 'action', lambda _, data: {'op': data['op']})
+
+    async def run():
+        for name, limit in [('SLOTS', 4), ('BROWSER_POLL_SLOTS', 2), ('BROWSER_LIVE_SLOTS', 3),
+                            ('BROWSER_COMMAND_SLOTS', 2), ('BROWSER_WAIT_SLOTS', 4)]:
+            monkeypatch.setattr(api, name, asyncio.Semaphore(limit))
+        app = web.Application()
+        app.router.add_post('/sync', api.handler(lambda _: None, origin, Mock(), 'sync'))
+        app.router.add_route('*', '/browser', api.handler(lambda _: PROFILE, origin, Mock()))
+        async with TestClient(TestServer(app)) as client:
+            sync = [asyncio.create_task(client.post('/sync', headers={'Authorization': 'Bearer ' + TOKEN}, json={}))
+                    for _ in range(4)]
+            background = []
+            url = f"/browser?expected_tenant_id={PROFILE['tenant_id']}&expected_user_id={PROFILE['telegram_id']}"
+            try:
+                assert await asyncio.to_thread(sync_full.wait, 2)
+                live = await client.get(url + '&request_id=' + request_id)
+                assert live.status == 200
+                background = [asyncio.create_task(client.get(url)) for _ in range(2)]
+                assert await asyncio.to_thread(polls_full.wait, 2)
+                assert (await client.get(url)).status == 429
+                live = await client.get(url + '&request_id=' + request_id)
+                assert live.status == 200 and (await live.json())['result']['calls'][0]['state'] == 'connected'
+                ended = await client.post(url, headers={'Origin': origin}, json={'op': 'end'})
+                assert ended.status == 200 and (await ended.json())['result']['op'] == 'end'
+                assert (await client.post(url, json={'op': 'end'})).status == 403
+                for _ in range(3):
+                    await api.BROWSER_LIVE_SLOTS.acquire()
+                try:
+                    busy = await asyncio.wait_for(client.get(url + '&request_id=' + request_id), 3)
+                    assert busy.status == 503 and (await busy.json())['code'] == 'call_service_busy'
+                finally:
+                    for _ in range(3):
+                        api.BROWSER_LIVE_SLOTS.release()
+                assert (await client.get(url + '&request_id=' + request_id)).status == 200
+            finally:
+                release.set()
+                completed = await asyncio.gather(*sync, *background)
+            assert all(response.status == 200 for response in completed)
+
+    asyncio.run(run())
+
+
 def test_managed_restart_requires_closed_process_proof_and_fences_late_boot(managed):
     from test_browser_calls import OTHER_BOOT
     db,key,cfg=managed;started=calls.action(PROFILE,command(media='websocket'))
