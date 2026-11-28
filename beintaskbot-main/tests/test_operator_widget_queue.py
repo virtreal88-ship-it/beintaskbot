@@ -375,3 +375,22 @@ def test_worker_skips_dormant_history_and_resumes_new_pages(db, monkeypatch):
     assert not any(req.get("before_id", 77) < 77 for req in calls)
     cur.execute("SELECT state,latest_in,high_id FROM saas_widget_dialogs WHERE tenant_id=%s", (A,))
     assert cur.fetchone() == {"state": "waiting", "latest_in": ids[-1], "high_id": ids[-1]}
+
+
+def test_sync_failure_diagnostics_do_not_include_sensitive_exception_text(db, monkeypatch):
+    monkeypatch.setattr(op, "_connect", lambda: db)
+    monkeypatch.setattr(op, "_credentials", lambda tenant: CREDENTIALS)
+    stages = []
+
+    def denied(*_):
+        raise op.OperatorError("secret response body", upstream_http_status=403)
+
+    monkeypatch.setattr(sync, "_post", denied)
+    with pytest.raises(op.OperatorError) as error:
+        sync.sync_once(A, stage=stages.append)
+    assert stages == ["credentials", "database_lock", "active_chats"]
+    assert sync._safe_failure(error.value) == "operator_http_403"
+    invalid = op.OperatorError("secret response body", 502)
+    assert sync._safe_failure(invalid) == "operator_invalid_response"
+    other = RuntimeError("customer text must never enter logs")
+    assert sync._safe_failure(other) == "internal_error"
