@@ -43,7 +43,7 @@ async function withComposer(run, provider='kommo') {
 }
 
 (async()=>{
-  await withComposer(async({click,calls,pending,input,env})=>{
+  await withComposer(async({click,calls,pending,input,env,status})=>{
     await click();
     assert.equal(calls.length,1);
     assert.equal(calls[0].method,'POST');
@@ -52,8 +52,9 @@ async function withComposer(run, provider='kommo') {
     assert.equal(pending(),null);
     assert.equal(input.value,'');
     assert.equal(env.accepted,'Salam');
+    assert.equal(status(),undefined,'ordinary acceptance does not add a composer banner');
   });
-  await withComposer(async({click,calls,pending,input,button,env})=>{
+  await withComposer(async({click,calls,pending,input,button,env,status})=>{
     env.result=async()=>{throw new Error('network lost');};
     await click();
     assert.ok(pending());
@@ -68,6 +69,7 @@ async function withComposer(run, provider='kommo') {
     await click();
     assert.equal(pending(),null);
     assert.equal(input.value,'Another message','checking preserves the replacement draft');
+    assert.ok(!status(),'confirmed send clears the prior pending notice');
     assert.deepEqual(calls.map(call=>call.method),['POST','GET','GET']);
     for(const call of calls.slice(1)){
       const query=new URL(call.path,'https://crm.test').searchParams;
