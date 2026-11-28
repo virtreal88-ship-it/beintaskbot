@@ -778,14 +778,8 @@
         showLifecycleTimelineEvent(result.operator_event,action==='dismiss'?'no_reply':action);
         if(action==='transfer'){closeDialog();void refresh();return;}
         if(action==='close'&&result.lifecycle?.state==='closed'){
-          // Self-scoped operators can no longer load history after completion.
-          // Return to the queue rather than turning a successful close into a 403.
-          closeDialog(true,true);
-          const state={...history.state};for(const key of ['operatorDialog','operatorDialogOwner','operatorDialogHistoryEntry','operatorHelper'])delete state[key];history.replaceState(state,'');
-          listFlight=null;lastListAt=0;
-          await refresh(false,false,{suppressRead:true});
-          if(version===epoch&&!currentDialog&&$('view-dialogs')?.classList.contains('active'))notice(({ru:'Диалог завершён',az:'Dialoq tamamlandı',en:'Dialogue completed'})[i18n.language]||'Dialogue completed');
-          return;
+          if($('sendChat'))$('sendChat').disabled=true;
+          if($('chatText'))$('chatText').disabled=true;
         }
         await openDialog(route,true,'',{suppressRead:true});void refresh();return;
       }
@@ -1038,6 +1032,14 @@
   }
   function renderLifecycleActions(route,host,only=null){
     const state=route.lifecycle||{};
+    if(!only&&route.provider==='operator_widget'&&['waiting','closed'].includes(state.state)&&
+      !state.can_accept&&!state.can_start&&state.action_block_reason){
+      const reason=document.createElement('span');
+      reason.className='sub';reason.setAttribute('role','status');
+      reason.dataset.widgetActionReason='';
+      reason.textContent=t(state.action_block_reason);
+      $('operatorAcceptAction').append(reason);
+    }
     for(const [action,allowed] of [['takeover',state.can_takeover===true],['accept',state.state==='waiting'&&state.can_accept&&(state.last_inbound_id||member?.role==='owner'||(route.provider==='connect'&&route.last_message_type==='call_missed'&&route.last_message_direction==='system'))],['start',['closed','dismissed'].includes(state.state)&&state.can_start],['dismiss',state.state==='accepted'&&(state.can_dismiss||(state.can_close&&state.no_reply_needed))&&queueMode()!=='completed'],['close',state.can_close===true],['case',state.can_submit_case||(state.completed_episodes||[]).some(episode=>!episode.case_id)]]){
       if(!allowed||(only&&!only.has(action)))continue;const button=document.createElement('button');button.type='button';button.className=['accept','start','takeover'].includes(action)?'primary':'outline';button.textContent=action==='takeover'?({ru:'Забрать себе',az:'Üzərimə götür',en:'Take over'}[i18n.language]||'Take over'):lifecycleText(action);button.dataset.operatorLifecycle=action;
       if(action==='dismiss'||action==='close'){
@@ -1744,9 +1746,10 @@
       if(applyHistoryMergeChange(route,latest))return true;
       if(route.provider==='operator_widget'){
         for(const snapshot of new Set([currentDialog,page.dialog])){
-          Object.assign(snapshot,{operator_account:latest.dialog.operator_account,crm_company_id:latest.dialog.crm_company_id,dialog_company_name:latest.dialog.dialog_company_name});
+        Object.assign(snapshot,{operator_account:latest.dialog.operator_account,crm_company_id:latest.dialog.crm_company_id,
+          dialog_company_name:latest.dialog.dialog_company_name,company_status:latest.dialog.company_status,company_details:latest.dialog.company_details});
         }
-        paintArchiveCompany(latest.dialog);
+        mountDialogCompany(latest.dialog);
       }else if(route.archive_read_only&&member?.role!=='owner'){
         paintArchiveCompany(latest.dialog);
         // Restore must use the same freshly authorized label, not the old list card.
@@ -2903,6 +2906,23 @@
     if(route.provider==='operator_widget'){
       window.tenantDialogueCompany?.clear();
       paintArchiveCompany(route);
+      const host=$('operatorClientCompanyHost');
+      if(!host)return;
+      host.replaceChildren();
+      const row=(label,value)=>{
+        const item=document.createElement('div');item.className='operator-client-panel-row';
+        const title=document.createElement('small');title.textContent=label;
+        const data=document.createElement('span');data.textContent=value;item.append(title,data);
+        host.append(item);
+      };
+      if(route.crm_company_id){
+        row(clientCardText('company'),route.dialog_company_name);
+        for(const field of ['phone','email','description']){
+          const value=route.company_details?.[field];
+          if(value)row(t('widget_company_'+field),value);
+        }
+      }else row(clientCardText('company'),t(route.company_status==='denied'?'widget_company_denied':'widget_company_unlinked'));
+      if(route.operator_account)row('Operator',route.operator_account);
       return;
     }
     if((route.archive_read_only||route.owner_overview_read_only||route.search_overview_read_only)&&member?.role!=='owner'){
@@ -2923,6 +2943,12 @@
   }
   function restoreDialogCompany(){
     if(currentDialog&&sameDialog(displayedPage?.dialog,currentDialog)&&$('view-dialogs')?.classList.contains('active')){
+      if(currentDialog.provider==='operator_widget'){
+        $('operatorClientCompanyHost')?.replaceChildren();
+        paintArchiveCompany(null);
+        void openDialog(currentDialog,true,'',{revalidateAccess:true,suppressRead:true});
+        return;
+      }
       if(currentDialog.archive_read_only&&member?.role!=='owner'){
         paintArchiveCompany(null);
         void openDialog(currentDialog,true,'',{revalidateAccess:true,suppressRead:true});
@@ -2994,7 +3020,7 @@
   function configureDialogHead(route,saveDisplayName){
     const head=$('operatorConversationHeader'),layout=$('operatorConversationLayout');
     if(!head||!layout)return;
-    const hasCompany=()=>route.provider!=='operator_widget'&&capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
+    const hasCompany=()=>route.provider==='operator_widget'||capabilities.dialog_company_binding===true&&(member?.role==='owner'||(!route.archive_read_only&&!route.owner_overview_read_only));
     const hasReminder=dialog=>(capabilities.shared_dialog_reminder_creation===true||capabilities.shared_dialog_reminders===true)&&dialog?.shared_reminder?.can_schedule===true;
     const dealCreate=window.tenantDealCreate;
     const canCreateDeal=()=>!embeddedConversation&&!route.archive_read_only&&!route.owner_overview_read_only
@@ -3050,7 +3076,7 @@
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
       const createDealRow=dealCreate?`<div id="operatorSidebarDealCreate" class="operator-client-panel-row"${canCreateDeal()?'':' hidden'}><button type="button" class="outline" id="operatorCreateDeal">${esc(dealCreate.label())}</button></div>`:'';
-      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${groupOwner?`<div class="operator-client-panel-row" data-group-operator><span data-user-content>${esc(groupOwner)}</span></div>`: ''}${createDealRow}${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()&&route.provider!=='operator_widget'?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${groupOwner?`<div class="operator-client-panel-row" data-group-operator><span data-user-content>${esc(groupOwner)}</span></div>`: ''}${createDealRow}${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
       companyPanelResize.id='operatorCompanyPanelResize';companyPanelResize.type='button';companyPanelResize.setAttribute('role','separator');companyPanelResize.setAttribute('aria-orientation','vertical');companyPanelResize.setAttribute('aria-label',clientCardText('resize'));companyPanelResize.setAttribute('aria-controls',companyPanel.id);companyPanelResize.setAttribute('tabindex','0');
       layout.append(companyPanelResize,companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
@@ -3753,9 +3779,10 @@
     if(actions.has('handoff')&&primaryAction!=='handoff')appendMenu(actionButton('takeover','handoff'));
     if(resumeUiAllowed&&primaryAction!=='resume')appendMenu(actionButton('resumeAutomatic','resume'));
     const websiteChat=route.provider==='operator_widget';
-    if(capabilities.operator_widget===true&&!route.case_attachment&&(websiteChat||
-        (route.provider==='connect'&&(route.wecall||/@(s\.whatsapp\.net|g\.us|lid)$/i.test(route.conversation_id||''))))){
-      const canComment=()=>identity(member)===who&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true;
+    if(!route.case_attachment&&(websiteChat||capabilities.operator_widget===true&&
+        route.provider==='connect'&&(route.wecall||/@(s\.whatsapp\.net|g\.us|lid)$/i.test(route.conversation_id||'')))){
+      const canComment=()=>identity(member)===who&&sameDialog(route,currentDialog)&&currentDialog.can_add_internal_comment===true&&
+        !currentDialog.owner_overview_read_only&&!currentDialog.search_overview_read_only&&!currentDialog.colleague_read_only;
       window.tenantDialogSourceTabs?.({
         source:websiteChat?'widget':'whatsapp',key:contextKey('source',route),panel:host.querySelector('.operator-composer'),
         lifecycleActions:websiteChat?$('operatorActiveLifecycleActions'):null,
@@ -4127,6 +4154,8 @@
           az:'Operator çatı ilə bağlantı yoxdur. Qaralamanı saxlaya bilərsiniz.',
           en:'Operator chat is unavailable. You can save a draft.'
         }[i18n.language]||'Operator chat is unavailable.');
+      }else if(route.lifecycle?.state==='accepted'&&route.send_block_reason){
+        reason.textContent=t(route.send_block_reason);
       }
       let sending=false;
       button.onclick=async()=>{

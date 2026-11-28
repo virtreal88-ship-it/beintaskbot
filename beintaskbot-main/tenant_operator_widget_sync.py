@@ -62,14 +62,21 @@ def snapshot(cur, tenant, credentials, routes, login):
         account = _string(row.get("account"), 240)
         if not account or account != account.strip() or not account.isprintable():
             account = None
+        assignment = row.get("operator")
+        login_name = _string(assignment, 240) or None
+        upstream_status = row.get("status")
+        if upstream_status not in ("open", "closed") or (
+            upstream_status == "open" and ("operator" not in row or assignment is not None and not login_name)
+        ):
+            upstream_status = None
         cur.execute(
             """INSERT INTO saas_widget_dialogs
-            (tenant_id,instance,chat_id,identity,revision,title,operator_account,upstream_at,writable,open_operator_login,visible)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
+            (tenant_id,instance,chat_id,identity,revision,title,operator_account,upstream_at,writable,open_operator_login,upstream_status,visible)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)
             ON CONFLICT(tenant_id,instance,chat_id,identity) DO UPDATE SET
             revision=excluded.revision,title=excluded.title,upstream_at=excluded.upstream_at,
             operator_account=excluded.operator_account,writable=excluded.writable,
-            open_operator_login=excluded.open_operator_login,visible=true""",
+            open_operator_login=excluded.open_operator_login,upstream_status=excluded.upstream_status,visible=true""",
             (
                 tenant,
                 instance,
@@ -80,7 +87,8 @@ def snapshot(cur, tenant, credentials, routes, login):
                 account,
                 str(row.get("updated_at") or ""),
                 bool(_can_reply(row, login)),
-                (_string(row.get("operator"), 240) or None) if row.get("status") == "open" else None,
+                login_name if upstream_status == "open" else None,
+                upstream_status,
             ),
         )
 

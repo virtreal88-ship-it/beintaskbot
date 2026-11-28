@@ -87,6 +87,8 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     page1 = page()
     assert len(page1["messages"]) == 1
     assert page1["dialog"]["lifecycle"]["state"] == "waiting"
+    assert page1["dialog"]["can_add_internal_comment"]
+    assert page1["dialog"]["company_status"] == "unlinked"
     _, _, policy = queue.access(cur, PROFILE)
     rows, channel = queue.cards(cur, policy, "active", queue.guard(cur, A))
     assert [(c["lead_id"], c["unread_count"]) for c in rows] == [(15, 1)]
@@ -102,7 +104,7 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     assert regular["dialogs"][0]["dialog_company_name"] == account
     assert [r["lead_id"] for r in inbox.listing(PROFILE, search=account)["dialogs"]] == [15]
     company = str(uuid.uuid4())
-    cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name) VALUES(%s,%s,'Confirmed Co')", (company, A))
+    cur.execute("INSERT INTO saas_crm_native_companies(id,tenant_id,name,email) VALUES(%s,%s,'Confirmed Co','synthetic@example.invalid')", (company, A))
     cur.execute("""INSERT INTO saas_beinsystems_operator_links
         (id,tenant_id,connection_generation,connection_instance_id,local_entity_type,local_entity_id,
          external_entity_type,external_id,verification_basis,evidence_summary,verified_by)
@@ -112,6 +114,8 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     linked = page()["dialog"]
     assert (linked["dialog_company_name"], linked["crm_company_id"], linked["operator_account"]) == (
         "Confirmed Co", company, account)
+    assert linked["company_status"] == "linked"
+    assert linked["company_details"]["email"] == "synthetic@example.invalid"
     assert [r["lead_id"] for r in inbox.listing(PROFILE, search="Confirmed Co")["dialogs"]] == [15]
     # Same route without new activity: replace or remove only the source assertion.
     for changed, expected in [("other-account", "other-account"), (None, None), (["invalid"], None), (account, "Confirmed Co")]:
@@ -121,13 +125,19 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
         assert page()["dialog"]["lifecycle"]["state"] == "waiting"
     with pytest.raises(TenantLinearError):
         queue.history({"tenant_id": B, "telegram_id": 22}, params)
-    change("accept")
-    assert page()["dialog"]["send_block_reason"] == "widget_socket_unavailable"
     import tenant_platform
 
     monkeypatch.setattr(tenant_platform, "_connect", lambda: db)
     note = {**params, "request_id": str(uuid.uuid4()), "note": "internal only"}
     assert comments.save(PROFILE, note) == comments.save(PROFILE, note)
+    assert queue.cards(cur, policy, "active", queue.guard(cur, A))[0][0]["unread_count"] == 1
+    monkeypatch.setattr(widget, "_post", lambda *_: [CHAT])
+    with monkeypatch.context() as closed_in_operator:
+        closed_in_operator.setattr(widget, "_post", lambda *_: [{**CHAT, "status":"closed"}])
+        with pytest.raises(TenantLinearError, match="Сессия закрыта"):
+            change("accept")
+    change("accept")
+    assert page()["dialog"]["send_block_reason"] == "widget_reply_identity_missing"
     assert [c["note"] for c in page()["internal_comments"]] == ["internal only"]
     assert not any(m["body"] == "internal only" for m in page()["messages"])
     cur.execute(
@@ -159,6 +169,8 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     owned = queue.history(recipient, params)
     assert owned["internal_comments"][0]["note"] == "internal only"
     assert owned["dialog"]["crm_company_id"] is None
+    assert owned["dialog"]["company_status"] == "denied"
+    assert "company_details" not in owned["dialog"]
     assert owned["dialog"]["dialog_company_name"] == account
     # The provider sender is distinct from both the CRM owner and the operator.
     from cryptography.fernet import Fernet
@@ -217,6 +229,8 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
             assert queue.cards(cur,restricted,"active",queue.guard(cur,A))[0] == []
             with pytest.raises(TenantLinearError):
                 queue.history(recipient,params)
+            with pytest.raises(TenantLinearError):
+                comments.save(recipient,{**note,"request_id":str(uuid.uuid4())})
         receipt = lifecycle.mutate(recipient,accept)
         assert receipt["lifecycle"]["operator_id"] == 33
         assert lifecycle.mutate(recipient,accept) == receipt
@@ -225,6 +239,29 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
         with pytest.raises(TenantLinearError):
             page()
         assert queue.history(recipient,params)["dialog"]["can_send"]
+        close_cmd = {**accept, "action":"close", "request_id":str(uuid.uuid4()),
+            "expected_revision":queue.history(recipient,params)["dialog"]["lifecycle"]["revision"]}
+        lifecycle.mutate(recipient, close_cmd)
+        closed = queue.history(recipient,params)
+        assert closed["dialog"]["lifecycle"]["can_start"] and not closed["dialog"]["can_send"]
+        assert closed["dialog"]["can_add_internal_comment"]
+        assert queue.cards(cur,restricted,"completed",queue.guard(cur,A))[0][0]["lead_id"] == 15
+        with patch.context() as view_only:
+            view_only.setattr(TenantPolicy,"action_scope",lambda self,module,action:
+                "none" if module=="dialogs" and action=="update" else scope_for_actor(self,module,action))
+            assert not queue.history(recipient,params)["dialog"]["can_add_internal_comment"]
+            with pytest.raises(TenantLinearError):
+                comments.save(recipient,{**note,"request_id":str(uuid.uuid4())})
+        start_cmd = {**close_cmd, "action":"start", "request_id":str(uuid.uuid4()),
+            "expected_revision":closed["dialog"]["lifecycle"]["revision"]}
+        with patch.context() as upstream_closed:
+            upstream_closed.setattr(widget,"_post",lambda *_:[{**assigned, "status":"closed"}])
+            with pytest.raises(TenantLinearError):
+                lifecycle.mutate(recipient,start_cmd)
+        restart = lifecycle.mutate(recipient,start_cmd)
+        assert lifecycle.mutate(recipient,start_cmd) == restart
+        assert restart["operator_event"]["kind"] == "start"
+        assert not sent
         staff = {**PROFILE, **recipient,"role":"operator","permissions":["dialogs","operator_data","operator_api"]}
         command = {"action":"reply","chat_id":"15","revision":routes[15][1],
                    "request_id":str(uuid.uuid4()),"text":"synthetic reply"}
@@ -292,7 +329,8 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     dialog = page()["dialog"]
     assert dialog["lifecycle"]["can_close"]
     assert not dialog["can_send"] and not dialog["lifecycle"]["can_transfer"]
-    assert not dialog["can_add_internal_comment"] and not dialog["lifecycle"]["can_dismiss"]
+    assert dialog["can_add_internal_comment"] and not dialog["lifecycle"]["can_dismiss"]
+    assert dialog["send_block_reason"] == "widget_assigned_elsewhere"
     assert queue.cards(cur, policy, "active", queue.guard(cur, A))[0][0]["lifecycle"]["can_close"]
     with pytest.raises(TenantLinearError):
         lifecycle.mutate(recipient, {**params, "action": "close", "request_id": str(uuid.uuid4()),
@@ -300,6 +338,21 @@ def test_queue_lifecycle_replay_filter_and_delivery_boundary(db, monkeypatch):
     with pytest.raises(TenantLinearError):
         change("transfer", target_employee_id=33)
     change("close")
+    closed_upstream = {**foreign, "status":"closed"}
+    sync.snapshot(cur,A,CREDENTIALS,widget._routes([closed_upstream],CREDENTIALS),"integration")
+    db.commit()
+    closed = page()["dialog"]
+    assert closed["lifecycle"]["action_block_reason"] == "widget_session_closed"
+    assert not closed["lifecycle"]["can_start"]
+    closed_note = {**note,"request_id":str(uuid.uuid4()),"note":"after close"}
+    comments.save(PROFILE,closed_note)
+    assert [n["note"] for n in page()["internal_comments"]] == ["internal only", "after close"]
+    # An absent provider row still has the local closed history and its notes.
+    sync.snapshot(cur,A,CREDENTIALS,{},"integration")
+    db.commit()
+    assert page()["dialog"]["lifecycle"]["action_block_reason"] == "widget_session_unavailable"
+    sync.snapshot(cur,A,CREDENTIALS,routes,"integration")
+    db.commit()
     send(2, start + timedelta(seconds=1))
     assert page()["dialog"]["lifecycle"]["state"] == "closed"
     send(3, start + timedelta(seconds=5))

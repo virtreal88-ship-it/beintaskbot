@@ -77,6 +77,7 @@
       return btn;
     });
     function paint() {
+      if(!allowed&&state.active==='comment')state.active=source;
       const comment = state.active === 'comment';
       panel.classList.toggle('dialog-channel-muted',comment); form.hidden = !comment;
       if(noteActions){
