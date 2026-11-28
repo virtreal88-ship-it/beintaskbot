@@ -2,6 +2,7 @@
 import asyncio
 import json
 from functools import partial
+from uuid import UUID
 from aiohttp import web
 from tenant_ai_agents_api import _expected, _origin
 from tenant_linear_policy import TenantLinearError
@@ -85,6 +86,12 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     from tenant_dialog_message_revision import read_revision
                     if not scope_verified:
                         _expected(query,profile)
+                    channel,conversation=query.get('channel_id',''),query.get('conversation_id','')
+                    selected=None
+                    if channel or conversation:
+                        if not channel or not 0<len(conversation)<=180:
+                            raise ValueError('Invalid selected dialog')
+                        selected=(str(UUID(channel)),conversation)
                     initial = True
 
                     async def read_message_revision():
@@ -95,7 +102,7 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                             raise TenantLinearError('Нет доступа.',403)
                         _expected({'expected_tenant_id':profile['tenant_id'],
                                    'expected_user_id':profile['telegram_id']},current)
-                        return await dialog_revision_io.run(read_revision,current)
+                        return await dialog_revision_io.run(read_revision,current,selected)
 
                     known=query.get('revision','')
                     if message_updates and 0<len(known)<=80:

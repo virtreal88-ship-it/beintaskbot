@@ -5,7 +5,7 @@ from threading import Barrier
 import psycopg
 from psycopg.rows import dict_row
 from test_connect_channel_multiprocess import database
-from test_tenant_support_inbox import A, B, CA, PROFILE, db
+from test_tenant_support_inbox import A, B, CA, CB, PROFILE, db
 from test_call_recordings import pilot
 from test_browser_calls import gateway
 from test_call_sources import managed
@@ -22,9 +22,11 @@ def test_browser_message_revision_is_fenced_by_tenant_and_active_source(db,monke
     monkeypatch.setattr(dialogs,'_connect',connect)
     first=updates.read_revision(PROFILE)
     assert dialogs.listing(PROFILE,include_message_revision=True)['message_revision']==first['revision']
+    assert updates.read_revision(PROFILE,(CA,'client'))=={**first,'selected_latest':True}
     db.execute("UPDATE saas_connect_conversations SET updated_at=now()+interval '1 hour' WHERE tenant_id=%s",(B,))
     db.commit()
     assert updates.read_revision(PROFILE)==first
+    assert updates.read_revision(PROFILE,(CB,'client'))=={**first,'selected_latest':False}
     db.execute("UPDATE saas_connect_conversations SET updated_at=now()+interval '1 minute' WHERE tenant_id=%s",(A,))
     db.commit()
     assert updates.read_revision(PROFILE)!=first

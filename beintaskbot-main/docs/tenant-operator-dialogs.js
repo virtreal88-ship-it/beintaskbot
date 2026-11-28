@@ -318,13 +318,24 @@
     let retry=1000;
     try{
       const query=new URLSearchParams({revision:messageRevision});
+      const selected=currentDialog?.provider==='connect'&&currentPage?currentDialog:null;
+      if(selected){
+        query.set('channel_id',selected.channel_id);
+        query.set('conversation_id',selected.conversation_id);
+      }
       const {result}=await rawApi(endpoint+'dialogs/updates?'+query,{signal:controller.signal},{optionalScopedRead:true});
       if(!current()||typeof result?.revision!=='string')return;
       if(result.revision!==messageRevision){
+        let liveHistory=null;
+        if(result.selected_latest&&selected&&sameDialog(selected,currentDialog)&&!pendingDialogRoute){
+          const promise=selected.lifecycle_enabled||selected.wecall||historyMergeId(currentPage)
+            ?openDialog(selected,true):appendNewMessages(selected);
+          liveHistory={route:selected,promise};
+        }
         // A list started before the commit can have a stale snapshot.
         await listFlight?.promise;
         if(!current())return;
-        if(await refresh(false,false,{messageChangeOnly:true}))messageRevision=result.revision;
+        if(await refresh(false,false,{messageChangeOnly:true,liveHistory})&&current())messageRevision=result.revision;
       }
     }catch{retry=10000;}
     finally{
@@ -1605,6 +1616,13 @@
       const selectedChanged=observeLatestMessages(result.dialogs);rows=append?[...new Map(rows.concat(result.dialogs).map(row=>[row.group_sources?.length?'connect-group:'+row.conversation_id:dialogKey(row),row])).values()]:result.dialogs;nextOffset=result.next_offset;
       reconcileLifecycleRows();lastListKey=key;lastListAt=Date.now();
       $('operatorResultsCount').textContent=t('dialogResultCount').replace('{count}',String(result.total_count||0));badge(result.unread_count);setOptions('operatorChannel',result.channels,'allChannels');setOptions('operatorAgent',result.agents,'allAgents');renderRows();notice('');
+      const liveHistory=options.liveHistory;
+      const historyUpdated=liveHistory&&sameDialog(liveHistory.route,currentDialog)&&await liveHistory.promise;
+      if(version!==epoch||revision!==listRevision)return;
+      if(historyUpdated&&sameDialog(liveHistory.route,currentDialog)){
+        const listed=(result.dialogs||[]).flatMap(row=>row.group_sources||[row]).find(row=>sameDialog(row,currentDialog));
+        if(!listed?.last_message_id||String(listed.last_message_id)===String(currentPage?.dialog?.last_message_id))return result;
+      }
       const nameHint=(result.dialogs||[]).find(row=>isDirectConnectDialog(row)&&sameDialog(row,currentDialog));
       const nameOnly=Boolean(!selectedChanged&&!options.revalidateSelected&&nameHint&&currentPage?.dialog&&
         sameDialog(nameHint,currentPage.dialog)&&nameHint.customer_name!==currentPage.dialog.customer_name);
@@ -1705,7 +1723,7 @@
     try{
       const latest=await api('dialogs/history?'+timelineHistoryQuery(route,page));
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog)||!sameDialog(latest.dialog,route)||!chat.isConnected)return;
-      if(applyHistoryMergeChange(route,latest))return;
+      if(applyHistoryMergeChange(route,latest))return true;
       if(route.provider==='operator_widget'){
         for(const snapshot of new Set([currentDialog,page.dialog])){
           Object.assign(snapshot,{operator_account:latest.dialog.operator_account,crm_company_id:latest.dialog.crm_company_id,dialog_company_name:latest.dialog.dialog_company_name});
@@ -1730,7 +1748,7 @@
         }
         setTimelineScroll(chat,follow?(placed?chat.scrollHeight:top):timelineScrollTop(top,anchor),true);
         rememberDialogPage(route,page);
-        return;
+        return true;
       }
       reconcileGroupCopies(page,latest,chat,route);
       patchDirectDialogNames(latest,page,chat);
@@ -1742,7 +1760,7 @@
       retainOperatorEvents(currentPage,latest);
       if(Array.isArray(latest.group_read_targets))currentPage.group_read_targets=latest.group_read_targets;
       else delete currentPage.group_read_targets;
-      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return;}
+      if(!added.length){const follow=atBottom(chat),top=chat.scrollTop;if(Array.isArray(latest.operator_events)||Array.isArray(latest.shared_reminder_events)||Array.isArray(latest.internal_comments)){const anchor=follow?null:timelineViewportAnchor(chat),placed=placeOperatorEvents(chat,currentPage);setTimelineScroll(chat,follow?chat.scrollHeight:timelineScrollTop(top,anchor),placed);}if(Object.prototype.hasOwnProperty.call(latest,'read_through_message_id'))currentPage.read_through_message_id=latest.read_through_message_id;else delete currentPage.read_through_message_id;currentPage.dialog=latest.dialog||currentPage.dialog;rememberDialogPage(route,currentPage);if(!suppressRead&&atBottom(chat))void markDialogReadIfVisible(currentPage);return true;}
       const follow=atBottom(chat),oldTop=chat.scrollTop,anchor=follow?null:timelineViewportAnchor(chat);
       const empty=chat.textContent.trim()===t('emptyHistory');if(empty)chat.replaceChildren();
       chat.insertAdjacentHTML('beforeend',dialogMessageMarkup(added,route));
@@ -1753,6 +1771,7 @@
       if(follow){setTimelineScroll(chat,chat.scrollHeight,timelinePlaced);if(!suppressRead)void markDialogReadIfVisible(currentPage);}
       else {setTimelineScroll(chat,timelineScrollTop(oldTop,anchor),timelinePlaced);const button=$('operatorNewMessages');if(button)button.hidden=false;}
       const error=$('operatorChatError');if(error)error.textContent='';
+      return true;
     }catch(error){
       if(serial!==historyUpdateSerial||version!==epoch||revision!==openRevision||readSerial!==dialogReadSerial||page!==currentPage||!sameDialog(route,currentDialog))return;
       if(lifecycleUnavailable(error,route))return;

@@ -1222,7 +1222,7 @@ def listing(profile,search='',channel='',agent='',state='',offset=0,*,all_rows=F
                 from tenant_dialog_message_revision import visible_revision
                 # Seed the watch before reading the list. A concurrent commit can
                 # cause an extra refresh, but cannot be skipped on startup.
-                message_revision=visible_revision(cur,tenant,policy)
+                message_revision=visible_revision(cur,tenant,policy)['revision']
             restricted_ai = _scoped_ai_documents(policy)
             if restricted_ai and (agent or state):
                 raise TenantLinearError('ai_shared_filter_requires_unscoped_management',403)
