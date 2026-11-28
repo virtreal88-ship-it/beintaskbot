@@ -61,13 +61,14 @@ def test_acceptance_wakes_the_peer_card_on_its_authorized_source(collaboration):
     async def verify():
         origin='https://fixture.invalid'
         updates=GroupWorkUpdates(timeout=5)
+        list_updates=GroupWorkUpdates(timeout=5)
         app=web.Application()
         def member(request):
             return profile(int(request.headers['X-Fixture-Actor']))
         logger=logging.getLogger(__name__)
-        for method,resource in [('GET','history'),('POST','dialogs_lifecycle')]:
+        for method,resource in [('GET','history'),('GET','message_updates'),('POST','dialogs_lifecycle')]:
             app.router.add_route(method,'/'+resource,handler(
-                member,origin,logger,resource,group_work_updates=updates))
+                member,origin,logger,resource,group_work_updates=updates,message_updates=list_updates))
         async with TestClient(TestServer(app)) as client:
             channel,lead,_=SOURCES[44]
             query={'provider':'connect','channel_id':channel,'conversation_id':GROUP,
@@ -79,10 +80,15 @@ def test_acceptance_wakes_the_peer_card_on_its_authorized_source(collaboration):
             forbidden=await client.get('/history',params={**watch,'channel_id':CA,'lead_id':1001},headers=peer)
             assert forbidden.status in (403,404)
             assert not updates.waiters
+            scope={'expected_tenant_id':A,'expected_user_id':44}
+            initial_list=await client.get('/message_updates',params=scope,headers=peer)
+            list_revision=(await initial_list.json())['result']['revision']
             pending=asyncio.create_task(client.get('/history',params=watch,headers=peer))
+            pending_list=asyncio.create_task(client.get('/message_updates',
+                params={**scope,'revision':list_revision},headers=peer))
             try:
                 async def subscribed():
-                    while not updates.waiters:
+                    while not (updates.waiters and list_updates.waiters):
                         await asyncio.sleep(.01)
                 await asyncio.wait_for(subscribed(),timeout=2)
                 updates.publish({'tenant_id':str(uuid.uuid4())},GROUP)
@@ -97,6 +103,8 @@ def test_acceptance_wakes_the_peer_card_on_its_authorized_source(collaboration):
                 response=await asyncio.wait_for(pending,timeout=2)
                 assert response.status==200
                 assert (await response.json())['result']['revision']!=known
+                list_response=await asyncio.wait_for(pending_list,timeout=2)
+                assert (await list_response.json())['result']['revision']!=list_revision
                 updated=await client.get('/history',params={**query,'operator_events':'1',
                     'group_work_refresh':'1'},headers=peer)
                 page=(await updated.json())['result']
@@ -104,10 +112,11 @@ def test_acceptance_wakes_the_peer_card_on_its_authorized_source(collaboration):
                 assert not page['dialog']['can_send']
                 assert page['operator_events']==[receipt['operator_event']]
             finally:
-                if not pending.done():
-                    pending.cancel()
-                    await asyncio.gather(pending,return_exceptions=True)
-        assert not updates.waiters
+                for task in (pending,pending_list):
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task,return_exceptions=True)
+        assert not updates.waiters and not list_updates.waiters
 
     asyncio.run(verify())
 
@@ -156,11 +165,12 @@ def collaboration(episodes, monkeypatch):
     import tenant_whatsapp_native_rollout as native_rollout
     import tenant_whatsapp_native_transport as native
     import tenant_dialog_presence as presence
+    import tenant_dialog_message_revision as message_revision
 
     def connection():
         return psycopg.connect(episodes.dsn,row_factory=dict_row)
 
-    for module in (tenant_platform,dialogs,sends,transport,native):
+    for module in (tenant_platform,dialogs,sends,transport,native,message_revision):
         monkeypatch.setattr(module,'_connect',connection)
     monkeypatch.setenv('TENANT_SCOPED_ACCESS_ENABLED','true')
     monkeypatch.setenv('BEINTASKBOT_UNIFIED_WHATSAPP_SEND','1')
@@ -346,9 +356,17 @@ def test_two_sources_share_episode_and_only_leader_can_transfer_or_close(collabo
         handoff(database,33,44,episode)
     assert row(database,33)['operator_id']==33
     set_status(profile(44),{'status':'online'})
+    from tenant_dialog_message_revision import visible_revision
+    from tenant_operator_access import access
+    def revision():
+        with database, database.cursor() as cur:
+            tenant,_,policy=access(cur,profile(44),'dialogs')
+            return visible_revision(cur,tenant,policy)['revision']
+    previous=revision()
     command=dict(request_id=str(uuid.uuid4()),expected_revision=row(database,33)['revision'])
     result=handoff(database,33,44,episode,**command)
     assert handoff(database,33,44,episode,**command)==result
+    assert revision()!=previous
     assert card(44,lifecycle='working')['lifecycle']['group_work']['role']=='leader'
     assert not card(33)['can_send']
     event=history(44,include_operator_events=True)['operator_events'][-1]

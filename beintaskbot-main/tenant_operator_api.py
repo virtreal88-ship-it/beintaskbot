@@ -290,8 +290,11 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     result=await asyncio.to_thread(quick_replies,profile,payload)
                     return web.json_response({'success':True,'result':result},headers=headers)
                 result=await asyncio.to_thread(presence_set_status if resource=='presence' else dialog_view_preferences if resource=='view_preferences' else company_panel_preferences if resource=='company_panel_preferences' else dialog_lifecycle if resource=='dialogs_lifecycle' else dialog_sources if resource=='sources' else mark_read if resource=='dialogs_read' else mark_all_read if resource=='dialogs_read_all' else run_copilot if resource=='copilot' else assignment_bulk_apply if resource=='agent_assignment_bulk' else grant_continuation if resource=='legacy_continuation' else recover_legacy if resource=='legacy_recovery' else register_employee if resource=='group_staff' else configure_group if resource=='group_coordination' else assign_agent if resource=='agent_assignment' else save_display_name,profile,payload)
-                if group_work_updates and resource=='dialogs_lifecycle' and result.get('group_changed'):
-                    group_work_updates.publish(profile,payload.get('conversation_id'))
+                if resource=='dialogs_lifecycle' and result.get('group_changed'):
+                    if group_work_updates:
+                        group_work_updates.publish(profile,payload.get('conversation_id'))
+                    if message_updates:
+                        message_updates.publish(profile,'')
             return web.json_response({'success':True,'result':result},headers=headers)
         except CapacityUnavailable:
             return web.json_response({'success':False,'error':'Диалоги временно недоступны.'}, status=503, headers=headers)
