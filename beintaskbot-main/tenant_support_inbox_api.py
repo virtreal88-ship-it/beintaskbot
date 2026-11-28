@@ -4,7 +4,7 @@ import json
 from aiohttp import web
 from tenant_ai_agents_api import _origin, _expected, _json_dumps
 from tenant_linear_policy import TenantLinearError
-from tenant_support_inbox_store import listing, detail, create, update, complete, attach_case_media, available_case_media, attach_case_messages, available_case_messages
+from tenant_support_inbox_store import listing, detail, create, update, delete, complete, attach_case_media, available_case_media, attach_case_messages, available_case_messages
 from tenant_support_inbox_summary import regenerate
 
 
@@ -68,6 +68,8 @@ def handler(member_from_request, origin, logger, resource):
                     result = await asyncio.to_thread(create,profile,payload)
                 elif resource=='ticket' and request.method=='PATCH':
                     result = await asyncio.to_thread(update,profile,request.match_info['ticket_id'],payload)
+                elif resource=='ticket' and request.method=='DELETE' and not payload:
+                    result = await asyncio.to_thread(delete,profile,request.match_info['ticket_id'])
                 elif resource=='sla_policy' and request.method=='PUT':
                     from tenant_support_copilot import save_sla_policy
                     result=await asyncio.to_thread(save_sla_policy,profile,payload)

@@ -6,6 +6,7 @@ function installCaseTabsFixture(){
  const f=window.notificationCaseFixture,base=window.fetch;
  f.holdPrepare=false;f.pendingPrepare=[];f.historyCalls=[];f.prepared=[];f.dispatched=[];f.mediaCalls=[];f.pendingHistory=[];f.holdHistory=false;f.wrongHistory=false;f.consultations=[];f.replies=[];
  f.caseReplies=[];f.sends=[];f.sendChecks=[];f.replyAllowed=true;f.sendOutcome='accepted';
+ f.removals=[];
  f.material={id:'20000000-0000-4000-8000-000000000601',external_id:'connect:material',provider_message_id:'material',source:'connect',author_type:'customer',author_name:'Aysel',direction:'incoming',body:'Printer is offline. Can you help?',message_type:'text',happened_at:'2026-11-02T10:00:00Z'};
  f.history=[{...f.material,id:'outside-case',provider_message_id:'older-question',body:'Earlier dialogue message outside this case',happened_at:'2026-11-01T09:00:00Z'},f.material,{...f.material,id:'operator-answer',external_id:'connect:answer',provider_message_id:'answer',direction:'outgoing',author_type:'operator',body:'Please check the printer cable.',happened_at:'2026-11-02T10:01:00Z'},{...f.material,id:'history-photo',external_id:'connect:photo',body:'Printer display',message_type:'image',media_filename:'printer.png'},{...f.material,id:'history-audio',external_id:'connect:audio',body:'',message_type:'audio',media_filename:'message.ogg'}];
  f.history=f.history.map(m=>({...m,source_lead_id:41,source_channel_id:f.channel,source_conversation_id:f.route.conversation_id}));
@@ -13,6 +14,13 @@ function installCaseTabsFixture(){
  const response=(result,status=200)=>new Response(JSON.stringify(status<400?{success:true,result}:{success:false,error:result}),{status,headers:{'Content-Type':'application/json'}});
  window.fetch=async(input,options={})=>{
   const url=new URL(String(input),location),p=url.pathname,body=options.body?JSON.parse(options.body):null;
+  if(p.startsWith('/api/platform/ai/support-tickets/')&&options.method==='DELETE'){
+   const id=p.split('/').at(-1);
+   if(f.profile.member.role!=='owner'||body?.expected_tenant_id!==f.tenant||body?.expected_user_id!==11)return response('Denied',403);
+   f.removals.push(id);
+   f.tickets=f.tickets.filter(row=>row.id!==id);
+   return response({id,deleted:true});
+  }
   if(p.startsWith('/api/platform/ai/support-tickets/')&&url.searchParams.get('reply_context')==='1'){
    const id=p.split('/').at(-1),ticket=f.tickets.find(row=>row.id===id);
    if(!ticket||url.searchParams.get('expected_tenant_id')!==f.tenant||url.searchParams.get('expected_user_id')!=='11')return response('Denied',403);
@@ -36,7 +44,7 @@ function installCaseTabsFixture(){
   if(p.endsWith('/consult-one/dispatch')){f.dispatched.push(body);f.consultations[0].state='pending';f.consultations[0].can_dispatch=false;return response({state:'pending'});}
   if(p.endsWith('/chat/attachment')){f.mediaCalls.push(Object.fromEntries(url.searchParams));return new Response(Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9WQAAAAASUVORK5CYII='),c=>c.charCodeAt(0)),{headers:{'Content-Type':'image/png'}});}
   const result=await base(input,options);
-  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.messages=url.searchParams.has('before')?[{...f.material,id:'oldest',body:'Oldest accepted-interval message'}]:(f.caseMessages||f.history.filter(row=>row.id!=='outside-case'));data.result.next_before=url.searchParams.has('before')?null:'case-cursor';data.result.history_context={boundary_status:'accepted_interval',accepted_at:'2026-11-02T09:00:00Z',created_at:'2026-11-02T12:00:00Z'};data.result.scope={message_count:data.result.messages.length,media_count:data.result.messages.filter(row=>row.message_type!=='text').length,has_earlier_source:true};}if(f.holdHistory&&url.searchParams.has('before')){f.holdHistory=false;return new Promise(resolve=>f.pendingHistory.push(()=>resolve(response(data.result))))}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
+  if(p.startsWith('/api/platform/ai/support-tickets/')&&result.ok){const data=await result.json();if(data.result?.ticket){data.result.capabilities={delete:f.profile.member.role==='owner'};data.result.messages=url.searchParams.has('before')?[{...f.material,id:'oldest',body:'Oldest accepted-interval message'}]:(f.caseMessages||f.history.filter(row=>row.id!=='outside-case'));data.result.next_before=url.searchParams.has('before')?null:'case-cursor';data.result.history_context={boundary_status:'accepted_interval',accepted_at:'2026-11-02T09:00:00Z',created_at:'2026-11-02T12:00:00Z'};data.result.scope={message_count:data.result.messages.length,media_count:data.result.messages.filter(row=>row.message_type!=='text').length,has_earlier_source:true};}if(f.holdHistory&&url.searchParams.has('before')){f.holdHistory=false;return new Promise(resolve=>f.pendingHistory.push(()=>resolve(response(data.result))))}return new Response(JSON.stringify(data),{headers:{'Content-Type':'application/json'}});}
   return result;
  };
 }
@@ -53,6 +61,24 @@ function installCaseTabsFixture(){
   await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());await page.goto(origin+'/app?view=support&lang=ru'+query);await page.locator('[data-support-id]').first().waitFor();return {context,page,errors};
  }
  try{
+  for(const width of [390,1280]){
+   const {context,page,errors}=await mount(width);
+   try{
+    const id=await page.locator('[data-support-id]').first().getAttribute('data-support-id');
+    const row=page.locator('[data-support-id="'+id+'"]');
+    await row.click();await showData(page);
+    const remove=page.getByRole('button',{name:'Удалить',exact:true});
+    await page.evaluate(()=>{window.confirm=()=>false;});
+    await remove.click();assert.equal(await page.evaluate(()=>notificationCaseFixture.removals.length),0);
+    await page.evaluate(()=>{window.confirm=()=>true;});
+    await remove.evaluate(button=>{button.click();button.click();});
+    await page.locator('#supportDetail').waitFor({state:'hidden'});
+    await row.waitFor({state:'detached'});
+    assert.deepEqual(await page.evaluate(()=>notificationCaseFixture.removals),[id]);
+    assert.deepEqual(errors,[]);
+    console.log('PASS owner deletes a case with confirmation at '+width+'px');
+   }finally{await context.close();}
+  }
   for(const width of [320,390,1280]){const {context,page,errors}=await mount(width);try{
    await page.locator('[data-support-id]').first().click();await page.locator('#supportHistory').waitFor();
    assert.equal(await active(page),'history');

@@ -200,10 +200,14 @@ def listing(profile,case_id):
     with _connect() as conn:
         require_schema(conn,'internal')
         with conn.cursor() as cur:
-            tenant,_,_=require(cur,profile,case_id)
+            tenant,_,policy=policy_access(cur,profile)
+            if policy.action_scope('support','view') is not None:
+                require(cur,profile,case_id)
             cur.execute('''SELECT c.id,c.case_id,c.reason,c.evidence,c.status,c.delivery_state,c.created_at,c.answered_at,c.response,c.response_kind,
               c.recipient_id,COALESCE(m.display_name,c.recipient_id::text) AS recipient_name
-              FROM saas_internal_consultations c LEFT JOIN saas_tenant_members m ON m.tenant_id=c.tenant_id AND m.telegram_id=c.recipient_id
+              FROM saas_internal_consultations c JOIN saas_support_tickets t
+                 ON t.tenant_id=c.tenant_id AND t.id=c.case_id AND t.deleted_at IS NULL
+              LEFT JOIN saas_tenant_members m ON m.tenant_id=c.tenant_id AND m.telegram_id=c.recipient_id
               WHERE c.tenant_id=%s::uuid AND c.case_id=%s::uuid ORDER BY c.created_at DESC''',(tenant,case_id))
             return {'consultations':[dict(row) for row in cur.fetchall()]}
 

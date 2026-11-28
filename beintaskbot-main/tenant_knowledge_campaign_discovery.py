@@ -75,7 +75,7 @@ def discover(cur, profile, campaign):
 def discover_resolved(cur, profile, campaign):
     """Only explicit resolved tickets, stable for 30 minutes. Silence is not resolution."""
     cur.execute('''SELECT t.* FROM saas_support_tickets t WHERE t.tenant_id=%s::uuid
-      AND t.channel_id=ANY(%s::uuid[]) AND t.status='resolved' AND t.resolved_at IS NOT NULL
+      AND t.channel_id=ANY(%s::uuid[]) AND t.status='resolved' AND t.resolved_at IS NOT NULL AND t.deleted_at IS NULL
       AND t.updated_at<now()-interval '30 minutes'
       AND NOT EXISTS(SELECT 1 FROM saas_connect_conversations c JOIN saas_crm_messages m
         ON m.tenant_id=c.tenant_id AND m.kommo_lead_id=c.lead_id AND m.channel='connect:'||c.connect_channel_id::text

@@ -208,7 +208,7 @@ _SCHEMA_COLUMNS = {
     ).split(),
     'saas_support_tickets': (
         'access_responsible_id assigned_developer_channel_id assigned_developer_conversation_id assigned_to '
-        'channel_id completion_note completion_outcome conversation_id created_at created_by '
+        'channel_id completion_note completion_outcome conversation_id created_at created_by deleted_at '
         'description history_scope dialog_episode_id history_started_at history_frozen_at id knowledge_candidate_requested next_steps reason '
         'risk_assessment reply_draft priority priority_suggestion priority_reason response_due_at response_due_manual '
         'resolved_at source status suggestions summary summary_agent_binding '

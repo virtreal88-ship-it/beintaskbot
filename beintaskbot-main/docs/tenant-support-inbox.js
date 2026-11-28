@@ -17,6 +17,7 @@
   function organizeTicketWorkspace(){
     const primary=document.createElement('div');primary.className='support-primary-actions';primary.setAttribute('aria-label',workspaceText('work'));
     primary.append($('supportSave'),$('supportTake'),$('supportResolve'),$('supportCreateTask'));$('supportPanel-details').append(primary);
+    const remove=$('supportDelete');if(remove)primary.append(remove);
     const close=$('supportClose');close.textContent='×';close.title=t('close');close.setAttribute('aria-label',t('close'));
   }
   function installWorkspaceStyle(){
@@ -167,6 +168,11 @@
     az:{history:'Söhbət',details:'Məlumat',developer:'Lent',dialog:'Dialoq',tabs:'Müraciət',contact:'Əlaqə',name:'Ad',phone:'Telefon',compose:'Mesaj yazın',noDialog:'Əlaqəli dialoq əlçatan deyil.'},
     en:{history:'Chat',details:'Data',developer:'Activity',dialog:'Dialogue',tabs:'Case',contact:'Contact',name:'Name',phone:'Phone',compose:'Message the customer',noDialog:'The linked conversation is unavailable.'}
   }[i18n.language]||{})[key]||key;
+  const deleteCopy=key=>({
+    ru:{button:'Удалить',confirm:'Удалить это обращение? Переписка WhatsApp сохранится, а ссылки на обращение станут недоступны.',done:'Обращение удалено.'},
+    az:{button:'Sil',confirm:'Bu müraciət silinsin? WhatsApp yazışması saxlanacaq, müraciətin keçidləri isə əlçatan olmayacaq.',done:'Müraciət silindi.'},
+    en:{button:'Delete',confirm:'Delete this request? WhatsApp history will be kept and request links will stop working.',done:'Request deleted.'}
+  }[i18n.language]||{})[key]||'';
   const casePanes=['history','details','developer','dialog'];
   const desktopCase=()=>window.matchMedia?.('(min-width: 900px)').matches??window.innerWidth>=900;
   const scrollPanel=name=>name==='history'?$('supportHistoryScroll'):$('supportPanel-'+name);
@@ -475,6 +481,7 @@
     <button type="button" class="outline" id="supportOpenChat" ${canOpen?'':'hidden disabled'}>${t('openChat')}</button>
     <button type="button" class="outline" id="supportResolve">${t('resolve')}</button>
     <button type="button" class="outline" id="supportCreateTask">${t('caseCreateTask')}</button>
+    ${result.capabilities?.delete===true?`<button type="button" class="outline" id="supportDelete">${deleteCopy('button')}</button>`:''}
     <button type="button" class="outline" id="supportEarlier" ${nextBefore?'':'hidden'}>${t('earlier')}</button>
     <div id="supportHistory">${messages(result.messages,ticket)||t('emptyHistory')}</div>`;
     installCaseTabs(ticket);
@@ -483,6 +490,7 @@
     $('supportSave').onclick=()=>{drafts.delete(ticket.id);mutate(ticket.id,{status:$('supportEditStatus').value,assigned_to:$('supportEditAssignee').value||null,description:$('supportDescription').value,next_steps:$('supportNextSteps').value});};
     $('supportTake').onclick=()=>mutate(ticket.id,{status:'in_progress',assigned_to:member.telegram_id});
     $('supportResolve').onclick=()=>mutate(ticket.id,{status:'resolved'});
+    const remove=$('supportDelete');if(remove)remove.onclick=()=>removeTicket(ticket.id,remove);
     $('supportOpenChat').onclick=()=>openCustomerChat(ticket);
     $('supportCreateTask').onclick=async()=>{const button=$('supportCreateTask');if(operatorWorkspaceAvailable){button.disabled=true;return;}button.disabled=true;try{const tasks=window.tenantExternalTasks;if(!tasks?.open)throw Error('unavailable');const issue=String(ticket.description||ticket.summary||'').replace(/\s+/g,' ').trim().slice(0,900),prefix=({ru:'Поддержка',az:'Dəstək',en:'Support'}[i18n.language]||'Support');const taskText=`${prefix} · #${ticket.id.slice(0,8)}${issue?` · ${issue}`:''}`.slice(0,3500);const opened=await tasks.open({initial:{text:taskText,lead_id:ticket.lead_id}});if(!opened)throw Error('unavailable');}catch{notice(t('caseTaskUnavailable'));}finally{if(button.isConnected)button.disabled=false;}};
     $('supportEarlier').onclick=()=>void loadDialogueHistory(true);
@@ -616,6 +624,23 @@
   }
   async function action(id,path,method,data){const revision=++detailRevision,version=epoch,host=$('supportDetail');host?.querySelectorAll('button').forEach(button=>button.disabled=true);try{const result=await api('/'+encodeURIComponent(id)+path,method,data);if(revision!==detailRevision)return;if(result.readable===false){closeTicketModal();await load();return;}renderDetail(result);await load();}catch(error){if(version===epoch){await open(id);notice(error.message);}}}
   const mutate=(id,data)=>action(id,'','PATCH',data);
+  async function removeTicket(id,button){
+    if(selected!==id||button.disabled||!window.confirm(deleteCopy('confirm')))return;
+    const state=detailData,version=epoch;
+    const current=()=>state===detailData&&version===epoch&&selected===id;
+    button.disabled=true;
+    try{
+      await api('/'+encodeURIComponent(id),'DELETE',{});
+      if(!current()){if(version===epoch)void load();return;}
+      closeTicketModal();
+      drafts.delete(id);
+      caseTabs.delete(identity(member)+':'+id);
+      rows=rows.filter(ticket=>ticket.id!==id);
+      $('supportRows')?.querySelector(`[data-support-id="${id}"]`)?.closest('.support-row')?.remove();
+      await load();
+      if(version===epoch&&!modalOpen)notice(deleteCopy('done'));
+    }catch(error){if(current()){notice(error.message);button.disabled=false;}}
+  }
   document.addEventListener('tenant-chat-open',event=>{
     const lead=event.detail.lead_id,version=epoch;if(!member||!allowed())return;
     const host=$('modalContent');if(!host||$('supportCreateFromChat')||event.detail.surface==='operator'||event.detail.surface==='native-deal')return;

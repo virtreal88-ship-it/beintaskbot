@@ -125,7 +125,7 @@ AI_API = tuple((method, '/api/platform/ai/' + path) for path, methods in [
     ('dialogs/group-coordination', ('POST',)), ('dialogs/group-staff', ('POST',)),
     ('agent-reports', ('GET',)), ('night-report', ('GET',)), ('night-report/dialog', ('GET',)),
     ('night-report/tickets/{ticket_id}', ('GET',)),
-    ('support-tickets', ('GET','POST')), ('support-tickets/complete', ('POST',)), ('support-tickets/{ticket_id}', ('GET','PATCH')),
+    ('support-tickets', ('GET','POST')), ('support-tickets/complete', ('POST',)), ('support-tickets/{ticket_id}', ('GET','PATCH','DELETE')),
     ('support-tickets/{ticket_id}/attachments', ('GET','POST')),
     ('support-tickets/{ticket_id}/messages', ('GET','POST')),
     ('support-tickets/{ticket_id}/recommendations', ('GET',)),
