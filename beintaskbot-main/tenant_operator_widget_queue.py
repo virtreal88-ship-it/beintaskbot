@@ -14,11 +14,11 @@ from tenant_operator_access import access
 from tenant_operator_widget_sync import KEY, PROVIDER, SOURCE, enabled, scope
 
 
-def source(cur, profile, action="view"):
+def source(cur, profile, action="view", *, provider_action=True):
     if (
         str(profile.get("tenant_id")) != enabled()
         or not widget_allowed(profile, assigned=True)
-        or not widget_allowed(profile, action, assigned=True)
+        or not widget_allowed(profile, action, assigned=True, provider_action=provider_action)
     ):
         return None
     row = operator._operator_row(cur, str(profile["tenant_id"]))
@@ -26,16 +26,16 @@ def source(cur, profile, action="view"):
     if not row or row["status"] != "connected" or not instance:
         return None
     cur.execute(
-        """SELECT 1 FROM saas_widget_sources WHERE tenant_id=%s AND instance=%s AND generation=%s
-        AND refreshed_at > now()-interval '2 minutes'""",
+        """SELECT refreshed_at > now()-interval '2 minutes' AS fresh FROM saas_widget_sources
+        WHERE tenant_id=%s AND instance=%s AND generation=%s""",
         (str(profile["tenant_id"]), instance, generation),
     )
-    return instance if cur.fetchone() else None
+    snapshot = cur.fetchone()
+    return (instance, snapshot["fresh"] is True) if snapshot else None
 
 
-def _allow_provider_assignment(cur, tenant, instance, rows):
-    owned = [r for r in rows if not r["writable"] and r.get("open_operator_login")]
-    if not owned:
+def _allow_provider_assignment(cur, tenant, instance, rows, fresh):
+    if not rows:
         return
     cur.execute("""SELECT l.operator_login || '@' || l.operator_account AS login
                    FROM saas_beinsystems_operator_employee_links l JOIN saas_widget_sources s
@@ -45,84 +45,130 @@ def _allow_provider_assignment(cur, tenant, instance, rows):
                        WHERE m.tenant_id=l.tenant_id AND m.telegram_id=l.member_telegram_id AND m.active)
                    AND l.widget_reply_ciphertext IS NOT NULL FOR SHARE OF l""", (tenant, instance))
     link = cur.fetchone()
-    if link:
-        for row in owned:
-            row["writable"] = row["open_operator_login"] == link["login"]
+    for row in rows:
+        row["reply_sender"] = bool(link)
+        row["provider_block"] = ""
+        if not fresh:
+            row["provider_block"] = "widget_sync_stale"
+        elif not row["visible"]:
+            row["provider_block"] = "widget_session_unavailable"
+        elif row["upstream_status"] == "closed":
+            row["provider_block"] = "widget_session_closed"
+        elif row["upstream_status"] != "open":
+            row["provider_block"] = "widget_session_unavailable"
+        elif row["open_operator_login"] and not (
+            row["open_operator_login"] == link["login"] if link else row["writable"]
+        ):
+            row["provider_block"] = "widget_assigned_elsewhere"
+        row["writable"] = not row["provider_block"]
 
 
 def _unassigned(row):
     return row["state"] == "waiting" and row["operator_id"] is None
 
 
-def authorized(cur, profile, params, *, update=False, lock=False, replay=False, waiting=False, require_provider_write=True):
+def _within_work_scope(row, actor):
+    return _unassigned(row) or row["state"] in {"accepted", "closed"} and row["operator_id"] == actor
+
+
+def _may_comment(profile, row, actor):
+    within_scope = _within_work_scope(row, actor)
+    return widget_allowed(profile, assigned=within_scope) and widget_allowed(
+        profile, "update", assigned=within_scope, provider_action=False)
+
+
+def authorized(cur, profile, params, *, update=False, lock=False, replay=False, waiting=False,
+               require_provider_write=True, local_comment=False):
     tenant, actor, policy = access(cur, profile, "dialogs", action="update" if update else "view")
-    instance = source(cur, policy.profile, "update" if update else "view")
-    if not instance or instance != str(params.get("channel_id")) or params.get("provider") != PROVIDER:
+    binding = source(cur, policy.profile, "update" if update else "view", provider_action=not local_comment)
+    if not binding or binding[0] != str(params.get("channel_id")) or params.get("provider") != PROVIDER:
         raise TenantLinearError("Источник недоступен.", 403)
+    instance, fresh = binding
     if not guard(cur, tenant).enforced:
         raise TenantLinearError("Очередь недоступна.", 409)
     key = (tenant, instance, int(params["lead_id"]), str(params["conversation_id"]))
     cur.execute(
         "SELECT * FROM saas_widget_dialogs WHERE "
         + KEY
-        + " AND visible AND latest_in IS NOT NULL"
+        + " AND latest_in IS NOT NULL"
         + (" FOR UPDATE" if lock else " FOR SHARE"),
         key,
     )
     row = cur.fetchone()
     if not row or not replay and row["state"] == "accepted" and row["operator_id"] != actor:
         raise TenantLinearError("Диалог недоступен.", 403)
-    if not widget_allowed(policy.profile) or (update and not widget_allowed(policy.profile, "update")):
-        own = row["state"] == "accepted" and row["operator_id"] == actor
-        if not own and not (waiting and _unassigned(row) and widget_allowed(policy.profile, "update", assigned=True)):
+    if not widget_allowed(policy.profile) or (
+        update and not widget_allowed(policy.profile, "update", provider_action=not local_comment)
+    ):
+        own = row["state"] in {"accepted", "closed"} and row["operator_id"] == actor
+        if not own and not (waiting and _unassigned(row) and _may_comment(policy.profile, row, actor)):
             raise TenantLinearError("Диалог недоступен.", 403)
-    _allow_provider_assignment(cur, tenant, instance, [row])
+    _allow_provider_assignment(cur, tenant, instance, [row], fresh)
     if update and require_provider_write and not row["writable"]:
         raise TenantLinearError("Operator ограничил действия в этом чате.", 403)
     return row, actor, policy
 
 
-def attach_companies(cur, policy, instance, rows):
+def attach_companies(cur, policy, instance, rows, *, details=False):
     """Read confirmed links in one query under the same CRM company ACL as the company card."""
     accounts = sorted({row["operator_account"] for row in rows if row["operator_account"]})
-    if not accounts or not policy.allows_action("companies", "view"):
+    if not accounts:
         return
-    where, params = scoped_sql(policy.profile, "companies", "view", "c")
+    where, params = (scoped_sql(policy.profile, "companies", "view", "c")
+                     if policy.allows_action("companies", "view") else ("FALSE", []))
+    fields = ",c.phone,c.email,c.description" if details else ""
     cur.execute(
-        f"""SELECT l.external_id, c.id::text AS company_id, c.name
+        f"""SELECT l.external_id, c.id::text AS company_id, c.name {fields}
             FROM saas_widget_sources s JOIN saas_beinsystems_operator_links l
               ON l.tenant_id=s.tenant_id AND l.connection_instance_id=s.instance
               AND l.connection_generation=s.generation
-            JOIN saas_crm_native_companies c ON c.tenant_id=l.tenant_id AND c.id=l.local_entity_id
+            LEFT JOIN saas_crm_native_companies c ON c.tenant_id=l.tenant_id AND c.id=l.local_entity_id
+              AND c.archived_at IS NULL AND ({where})
             WHERE s.tenant_id=%s AND s.instance=%s AND l.external_id=ANY(%s::text[])
               AND l.local_entity_type='company' AND l.external_entity_type='account'
-              AND l.external_scope_id='' AND l.revoked_at IS NULL AND c.archived_at IS NULL AND ({where})""",
-        [str(policy.profile["tenant_id"]), instance, accounts, *params],
+              AND l.external_scope_id='' AND l.revoked_at IS NULL""",
+        [*params, str(policy.profile["tenant_id"]), instance, accounts],
     )
     # A unique index enforces one active CRM company per account and generation.
     companies = {c["external_id"]: c for c in cur.fetchall()}
     for row in rows:
-        if company := companies.get(row["operator_account"]):
+        company = companies.get(row["operator_account"])
+        if company and company["company_id"]:
             row["crm_company_id"] = company["company_id"]
             row["crm_company_name"] = company["name"]
+        if details:
+            row["company_status"] = "linked" if row.get("crm_company_id") else "denied" if company else "unlinked"
+            if row["company_status"] == "linked":
+                row["company_details"] = {field: company[field] for field in ("phone", "email", "description")}
 
 
-def card(row, actor, can_update, rollout, online):
+def card(row, actor, can_update, rollout, online, *, can_comment=False):
     state = row["state"]
     local_own = state == "accepted" and row["operator_id"] == actor and can_update and rollout.enforced
     writable = can_update and row["writable"]
     own = local_own and writable
     inbound = str(row["latest_in"] or "")
     marked = bool(inbound and row["marked_in"] == row["latest_in"])
+    admission = can_update and online and rollout.admission_enabled and bool(inbound)
+    action_block = row["provider_block"]
+    if not action_block:
+        if not can_update:
+            action_block = "widget_read_only"
+        elif not rollout.admission_enabled:
+            action_block = "widget_admission_paused"
+        elif not online:
+            action_block = "widget_staff_offline"
+        elif state in {"archive", "closed"} and not row["reply_sender"]:
+            action_block = "widget_reply_identity_missing"
     lifecycle = {
         "state": "closed" if state == "archive" else state,
         "revision": row["version"],
         "operator_id": row["operator_id"],
         "last_inbound_id": inbound,
         "has_inbound": bool(inbound),
-        "can_accept": bool(
-            _unassigned(row) and writable and online and rollout.admission_enabled and inbound
-        ),
+        "can_accept": bool(_unassigned(row) and row["writable"] and admission),
+        "can_start": bool(state in {"archive", "closed"} and row["writable"] and row["reply_sender"] and admission),
+        "action_block_reason": action_block,
         "can_transfer": own,
         # Completion only changes the CRM queue, not the provider chat.
         "can_close": local_own,
@@ -141,14 +187,15 @@ def card(row, actor, can_update, rollout, online):
         "operator_account": row["operator_account"],
         "dialog_company_name": row.get("crm_company_name") or row["operator_account"],
         "crm_company_id": row.get("crm_company_id"),
+        **({field: row[field] for field in ("company_status", "company_details") if field in row}),
         "can_use_copilot": False,
         "controls_allowed": False,
         "lifecycle_enabled": True,
         "lifecycle": lifecycle,
         "available_actions": [],
         "can_send": False,
-        "send_block_reason": "dialog_accept_required" if not own else "widget_socket_unavailable",
-        "can_add_internal_comment": own,
+        "send_block_reason": row["provider_block"] or ("widget_socket_unavailable" if own else "dialog_accept_required"),
+        "can_add_internal_comment": can_comment,
         "widget_revision": row["revision"],
         "last_message_at": str(row["latest_at"] or ""),
         "read_through_message_id": inbound or None,
@@ -168,12 +215,13 @@ def card(row, actor, can_update, rollout, online):
 
 def cards(cur, policy, mode, rollout):
     profile = policy.profile
-    instance = source(cur, profile)
-    if not instance or not rollout.enforced:
+    binding = source(cur, profile)
+    if not binding or not rollout.enforced:
         return [], None
+    instance, fresh = binding
     tenant, actor = str(profile["tenant_id"]), int(profile["telegram_id"])
     full_view = widget_allowed(profile)
-    can_work = widget_allowed(profile, "update", assigned=True)
+    can_work = widget_allowed(profile, "update", assigned=True, provider_action=False)
     cur.execute(
         """SELECT d.*,
        (SELECT count(*) FROM saas_widget_messages m WHERE
@@ -186,24 +234,22 @@ def cards(cur, policy, mode, rollout):
            WHERE (m.tenant_id,m.instance,m.chat_id,m.identity)=(d.tenant_id,d.instance,d.chat_id,d.identity)
            AND (%s OR d.state<>'waiting' OR m.mid=d.latest_in)
            ORDER BY m.mid DESC LIMIT 1) last ON true
-       WHERE d.tenant_id=%s AND d.instance=%s AND d.visible AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
+       WHERE d.tenant_id=%s AND d.instance=%s AND (d.visible OR state='closed') AND d.latest_in IS NOT NULL AND (state<>'accepted' OR operator_id=%s)
          AND NOT EXISTS(SELECT 1 FROM saas_operator_dialog_removals removal
            WHERE removal.provider='operator_widget' AND removal.tenant_id=d.tenant_id
              AND removal.channel_id=d.instance AND removal.conversation_id=d.identity
              AND removal.lead_id=d.chat_id AND removal.widget_inbound_id=d.latest_in)
-         AND (%s OR (state='accepted' AND operator_id=%s) OR (%s AND state='waiting' AND operator_id IS NULL))
+         AND (%s OR (state IN ('accepted','closed') AND operator_id=%s) OR (%s AND state='waiting' AND operator_id IS NULL))
          AND (%s='all' OR (state IN ('archive','closed'))=(%s='completed'))
        ORDER BY latest_at DESC NULLS LAST,chat_id DESC""",
         (actor, full_view, tenant, instance, actor, full_view, actor, can_work, mode, mode),
     )
     rows = cur.fetchall()
-    _allow_provider_assignment(cur, tenant, instance, rows)
+    _allow_provider_assignment(cur, tenant, instance, rows, fresh)
     attach_companies(cur, policy, instance, rows)
-    writable = widget_allowed(profile, "update")
     online = is_online(cur, tenant, actor, source_channel=instance)
-    return [card(row, actor, writable or
-                 can_work and (_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor),
-                 rollout, online) for row in rows], {
+    return [card(row, actor, widget_allowed(profile, "update", assigned=_within_work_scope(row, actor)),
+                 rollout, online, can_comment=_may_comment(profile, row, actor)) for row in rows], {
         "id": PROVIDER + ":" + instance,
         "name": SOURCE,
     }
@@ -225,8 +271,40 @@ def merge_order(rows):
     return list(merge(native, widget, key=timestamp, reverse=True))
 
 
-def history(profile, params, before=None):
+def _reply_block(cur, row, *, confirm_session=False, require_reply=True):
     from tenant_operator_widget_transport import socket_block_reason
+    from tenant_operator_widget_sender import widget_sender
+
+    tenant, instance, chat, identity = scope(row)
+    try:
+        credentials = operator._credentials(tenant)
+        if credentials["connection_instance_id"] != instance:
+            return "widget_session_unavailable"
+        sender = widget_sender(cur, tenant, credentials)
+        if confirm_session:
+            from tenant_operator_widget import _post, _routes, _hash, _can_reply
+            snapshot = _routes(_post("/chat/getActiveChats", {}, credentials), credentials).get(chat)
+            if not snapshot or snapshot[1] != row["revision"] or _hash([snapshot[0]["client_id"]]) != identity:
+                return "widget_session_unavailable"
+            upstream = snapshot[0]
+            if upstream.get("status") == "closed":
+                return "widget_session_closed"
+            login = sender["widget_login"] if sender else operator._connected_login(
+                operator._operator_row(cur, tenant), tenant)
+            if not _can_reply(upstream, login):
+                return "widget_assigned_elsewhere"
+        if not require_reply:
+            return ""
+        if not sender:
+            return "widget_reply_identity_missing"
+        if not confirm_session and row["open_operator_login"] and sender["widget_login"] != row["open_operator_login"]:
+            return "widget_assigned_elsewhere"
+        return socket_block_reason(sender)
+    except operator.OperatorError as exc:
+        return "widget_socket_auth_denied" if exc.status in (401, 403, 409) else "widget_socket_unavailable"
+
+
+def history(profile, params, before=None):
     from tenant_dialog_internal_comments import _event
 
     with operator._connect() as db, db.cursor() as cur:
@@ -235,14 +313,14 @@ def history(profile, params, before=None):
         rollout = guard(cur, key[0])
         if not rollout.enforced:
             raise TenantLinearError("Очередь недоступна.", 409)
-        attach_companies(cur, policy, key[1], [row])
+        attach_companies(cur, policy, key[1], [row], details=True)
         dialog = card(
             row,
             actor,
-            widget_allowed(policy.profile, "update",
-                assigned=_unassigned(row) or row["state"] == "accepted" and row["operator_id"] == actor),
+            widget_allowed(policy.profile, "update", assigned=_within_work_scope(row, actor)),
             rollout,
             is_online(cur, key[0], actor, source_channel=key[1]),
+            can_comment=_may_comment(policy.profile, row, actor),
         )
         from tenant_operator_dialog_removal import can_remove
         dialog["can_remove_dialog"] = can_remove(policy, dialog)
@@ -259,8 +337,8 @@ def history(profile, params, before=None):
         cur.execute(
             """SELECT id,author_name,note,created_at FROM saas_dialog_internal_comments WHERE
             tenant_id=%s AND provider=%s AND channel_id=%s AND conversation_id=%s AND lead_id=%s
-            AND NOT %s ORDER BY created_at DESC LIMIT 60""",
-            (key[0], PROVIDER, key[1], key[3], key[2], admission_preview),
+            AND (NOT %s OR actor_id=%s) ORDER BY created_at DESC LIMIT 60""",
+            (key[0], PROVIDER, key[1], key[3], key[2], admission_preview, actor),
         )
         comments = [_event(n) for n in reversed(cur.fetchall())]
         cur.execute(
@@ -270,18 +348,13 @@ def history(profile, params, before=None):
         )
         events = [e["payload"]["event"] for e in reversed(cur.fetchall())]
         db.commit()
-    if dialog["lifecycle"]["can_close"] and row["writable"]:
-        credentials = operator._credentials(key[0])
-        if credentials["connection_instance_id"] == key[1]:
-            from tenant_operator_widget_sender import widget_sender
-            try:
-                with operator._connect() as db, db.cursor() as cur:
-                    sender = widget_sender(cur, key[0], credentials)
-                reason = ("widget_socket_unavailable" if not sender else "widget_socket_auth_denied"
-                          if row["open_operator_login"] and sender["widget_login"] != row["open_operator_login"]
-                          else socket_block_reason(sender))
-            except operator.OperatorError:
-                reason = "widget_socket_auth_denied"
+    life = dialog["lifecycle"]
+    if row["writable"] and (life["can_close"] or life["can_start"]):
+        with operator._connect() as db, db.cursor() as cur:
+            reason = _reply_block(cur, row)
+        if life["can_start"] and reason:
+            life.update(can_start=False, action_block_reason=reason)
+        if life["can_close"]:
             dialog.update(can_send=not reason, send_block_reason=reason)
     directions = {"client": "incoming", "system": "system", "operator": "outgoing"}
     authors = {"client": "customer", "system": "system", "operator": "operator"}
@@ -367,7 +440,7 @@ def event_key(key):
 
 def mutate(profile, params):
     action = params["action"]
-    if action not in {"accept", "transfer", "close", "dismiss"}:
+    if action not in {"accept", "start", "transfer", "close", "dismiss"}:
         raise TenantLinearError("Действие недоступно.", 400)
     req = str(uuid.UUID(str(params["request_id"])))
     digest = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
@@ -375,7 +448,7 @@ def mutate(profile, params):
         rollout = guard(cur, str(profile["tenant_id"]))
         row, actor, policy = authorized(
             cur, profile, params, update=True, lock=True, replay=True, waiting=action == "accept",
-            require_provider_write=action != "close",
+            require_provider_write=action in {"transfer", "dismiss"},
         )
         key = scope(row)
         cur.execute(
@@ -393,6 +466,15 @@ def mutate(profile, params):
         life = card(row, actor, True, rollout, online)["lifecycle"]
         if params.get("expected_revision") != row["version"] or not life["can_" + action]:
             raise TenantLinearError("Обновите диалог.", 409)
+        if action in {"accept", "start"}:
+            reason = _reply_block(cur, row, confirm_session=True, require_reply=action == "start")
+            if reason:
+                message = {
+                    "widget_session_closed": "Сессия закрыта в Operator. Дождитесь нового сообщения клиента.",
+                    "widget_assigned_elsewhere": "В Operator этот чат назначен другому оператору.",
+                    "widget_socket_auth_denied": "Operator отклонил авторизацию чата.",
+                }.get(reason, "Operator не подтвердил доступ к этой сессии. Обновите историю.")
+                raise TenantLinearError(message, 409)
         assignee = actor
         target_name = None
         if action == "transfer":
@@ -416,7 +498,8 @@ def mutate(profile, params):
             + " RETURNING *,clock_timestamp() AS event_at",
             (state, assignee, action, action, *key),
         )
-        updated = cur.fetchone()
+        updated = {**row, **cur.fetchone()}
+        updated["writable"] = row["writable"]
         event = {
             "id": req,
             "kind": "no_reply" if action == "dismiss" else action,

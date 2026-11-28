@@ -66,9 +66,8 @@ def save(profile, data):
         if not note or len(note)>MAX_LENGTH or '\x00' in note or any(0xD800<=ord(c)<=0xDFFF for c in note):
             raise TenantLinearError('Укажите корректный комментарий до 2000 символов.',400)
         with _connect() as conn, conn.cursor() as cur:
-            row,actor,policy=authorized(cur,profile,data,update=True,lock=True)
-            if row['state']!='accepted' or row['operator_id']!=actor:
-                raise TenantLinearError('Сначала примите диалог.',409)
+            row,actor,policy=authorized(cur,profile,data,update=True,lock=True,waiting=True,
+                                        require_provider_write=False,local_comment=True)
             keys=(str(row['tenant_id']),provider,str(row['instance']),row['identity'],row['chat_id'])
             name=str(policy.profile.get('display_name') or '').strip()[:120]
             return {'comment':save_authorized(cur,keys,ident,actor,name,note)}

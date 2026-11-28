@@ -42,12 +42,12 @@ def dialogue_chooser_enabled(tenant_id: object) -> bool:
             and is_operator_workspace(tenant_id))
 
 
-def widget_allowed(profile, action="view", *, assigned=False):
+def widget_allowed(profile, action="view", *, assigned=False, provider_action=True):
     from tenant_policy import TenantPolicy
 
     if (not is_operator_workspace(profile.get("tenant_id")) or profile.get("active") is not True
             or profile.get("tenant_status") != "active"
-            or (action == "update" and not operator_api_allowed(profile))):
+            or (action == "update" and provider_action and not operator_api_allowed(profile))):
         return False
     policy = TenantPolicy(profile)
     # Only callers proving exact local widget assignment can honor a self scope.

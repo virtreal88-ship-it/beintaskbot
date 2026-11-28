@@ -21,25 +21,27 @@ const wait = async predicate => {
   const site={provider:'operator_widget',channel_id:'instance',conversation_id:'verified-route',lead_id:15,
     channel_name:'Чат сайта BeinSystems',customer_name:'Widget Test',customer_kind:'contact',
     operator_account:'test',dialog_company_name:'test',
-    widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
+    company_status:'unlinked',widget_revision:'a'.repeat(64),available_actions:[],can_send:false,lifecycle_enabled:true,
+    can_add_internal_comment:true,
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'2',can_accept:true}};
   assert.equal(d.getElementById('operatorWidget'),null,'there is one inbox in Dialogues');
-  const calls=[];let outcome='unknown',denyClosedHistory=false,removed=false;
+  const calls=[];let outcome='unknown',removed=false;
   w.fetch=async(url,opt={})=>{
     url=String(url);const data=opt.body&&JSON.parse(opt.body);
     calls.push({url,data});let result;
     if(url.endsWith('/me'))return {ok:true,json:async()=>profile};
     if(url.includes('dialogs_lifecycle')){
       if(data.action==='close'){
-        site.lifecycle={state:'closed',operator_id:11,revision:3,can_close:false,last_inbound_id:'2'};
-        Object.assign(site,{can_add_internal_comment:false,can_send:false,archive_read_only:true});
+        site.lifecycle={state:'closed',operator_id:11,revision:3,can_close:false,can_start:false,last_inbound_id:'2',
+          action_block_reason:'widget_session_closed'};
+        Object.assign(site,{can_add_internal_comment:true,can_send:false,archive_read_only:true});
       }else{
         site.lifecycle={state:'accepted',operator_id:11,revision:2,can_close:true,can_dismiss:true,last_inbound_id:'2'};
+        if(data.action==='start'){site.lifecycle.revision=4;site.archive_read_only=false;}
         site.can_add_internal_comment=true;site.send_block_reason='widget_socket_unavailable';
       }
       result={lifecycle:site.lifecycle};
     }else if(url.includes('dialogs/history')){
-      if(denyClosedHistory&&site.lifecycle.state==='closed')return {ok:false,status:403,json:async()=>({error:'Only assigned active dialogues are visible'})};
       result={dialog:{...site},messages:[{id:'2',body:'test',direction:'incoming'}]};
     }
     else if(url.includes('dialogs?'))result={dialogs:removed?[]:[site],channels:[{id:'operator_widget:instance',name:site.channel_name}],agents:[],total_count:removed?0:1};
@@ -62,8 +64,21 @@ const wait = async predicate => {
   assert.equal(selected().textContent,'Чат');
   const closeControl=()=>d.querySelector('[data-operator-lifecycle=close]');
   assert(!closeControl(),'waiting dialogue cannot be completed');
+  assert(!d.querySelector('.dialog-source-tabs button:last-child').disabled,'waiting dialogue permits private notes');
+  d.getElementById('operatorCompanyPanelOpen').click();
+  assert(d.getElementById('operatorCompanyPanel').open);
+  assert.match(d.getElementById('operatorClientCompanyHost').textContent,/нет подтверждённой привязки/);
+  site.company_status='denied';
+  await w.tenantOperator.openDialog(site);
+  assert.match(d.getElementById('operatorClientCompanyHost').textContent,/недоступны по вашим правам/);
+  Object.assign(site,{company_status:'linked',crm_company_id:'confirmed-company',dialog_company_name:'Verified Company',
+    company_details:{email:'synthetic@example.invalid'}});
+  await w.tenantOperator.openDialog(site);
+  assert.match(d.getElementById('operatorClientCompanyHost').textContent,/Verified Company.*synthetic@example.invalid/);
+  Object.assign(site,{company_status:'unlinked',crm_company_id:null,dialog_company_name:'test',company_details:undefined});
+  await w.tenantOperator.openDialog(site);
   d.querySelector('[data-operator-lifecycle=accept]').click();
-  await wait(()=>d.querySelector('.dialog-source-tabs button:last-child')?.disabled===false);
+  await wait(()=>!!closeControl());
   assert.equal(selected().textContent,'Чат');
   assert.equal(d.getElementById('operatorDialogCompanyName').textContent,'Компания (Operator) · test');
   assert(!d.getElementById('operatorDialogCompanyName').hidden);
@@ -119,22 +134,27 @@ const wait = async predicate => {
   const reply=calls.filter(c=>c.url.endsWith('/operator/widget')).at(-1).data;
   assert.deepEqual([reply.chat_id,reply.text,reply.revision,reply.action],['15','test reply',site.widget_revision,'reply']);
   assert(!calls.some(c=>c.url.includes('/crm/chat/send')));
-  denyClosedHistory=true;
   const cutoff=calls.length;
   d.querySelector('.dialog-source-tabs button:last-child').click();
   closeControl().click();
-  await wait(()=>d.getElementById('operatorNotice').textContent==='Диалог завершён');
-  assert(!w.tenantOperator.currentDialog);
+  await wait(()=>d.querySelector('[data-widget-action-reason]')?.textContent.includes('Сессия закрыта'));
+  assert.equal(w.tenantOperator.currentDialog.lead_id,15);
   assert(!closeControl());
+  assert(!d.querySelector('.dialog-source-tabs button:last-child').disabled,'completed dialogue permits private notes');
+  assert(d.querySelector('#chatRows [data-message-id="2"]'),'closed history remains visible');
   const afterClose=calls.slice(cutoff);
   assert.deepEqual(afterClose.filter(c=>c.url.includes('dialogs_lifecycle')).map(c=>[
     c.data.action,c.data.provider,c.data.channel_id,c.data.conversation_id,c.data.lead_id,c.data.expected_revision
   ]),[['close','operator_widget','instance','verified-route',15,2]]);
-  assert(!afterClose.some(c=>c.url.includes('dialogs/history')||c.url.endsWith('/operator/widget')),
-    'completion neither reloads inaccessible history nor sends a provider message');
-  denyClosedHistory=false;
+  assert(!afterClose.some(c=>c.url.endsWith('/operator/widget')),'completion does not send a provider message');
+  site.lifecycle={...site.lifecycle,can_start:true,action_block_reason:''};
   await w.tenantOperator.openDialog(site);
-  assert(!closeControl(),'archive has no close control');
+  const start=d.querySelector('[data-operator-lifecycle=start]');
+  assert(start,'a still-open Operator session can resume in the same CRM card');
+  start.click();
+  await wait(()=>!!closeControl());
+  assert.equal(w.tenantOperator.currentDialog.lead_id,15);
+  assert.equal(calls.slice(cutoff).filter(c=>c.url.endsWith('/operator/widget')).length,0);
   Object.assign(site,{provider:'connect',archive_read_only:false,channel_id:'wa',conversation_id:'994123456789@s.whatsapp.net',
     lead_id:29,can_send:false,can_add_internal_comment:false,send_block_reason:'dialog_accept_required',
     lifecycle:{state:'waiting',revision:1,last_inbound_id:'5',can_accept:true}});
