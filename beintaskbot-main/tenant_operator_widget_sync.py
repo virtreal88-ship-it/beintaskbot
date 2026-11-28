@@ -162,6 +162,14 @@ def _safe_failure(exc):
     return "internal_error"
 
 
+def _observe_auth(tenant, credentials, *, blocked):
+    try:
+        from tenant_operator_auth_notice import observe
+        observe(tenant, credentials, blocked=blocked)
+    except Exception:
+        logging.getLogger(__name__).warning("Operator 401 notice checkpoint failed")
+
+
 def sync_once(tenant, *, stage=None):
     if stage is None:
         stage = lambda _: None
@@ -177,7 +185,12 @@ def sync_once(tenant, *, stage=None):
         db.commit()
         try:
             stage("active_chats")
-            routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
+            try:
+                routes = _routes(_post("/chat/getActiveChats", {}, credentials), credentials)
+            except operator.OperatorError as exc:
+                if _safe_failure(exc) == "operator_http_401":
+                    _observe_auth(tenant, credentials, blocked=True)
+                raise
             stage("snapshot")
             connection = operator._operator_row(cur, tenant)
             if (
@@ -188,6 +201,8 @@ def sync_once(tenant, *, stage=None):
                 return
             snapshot(cur, tenant, credentials, routes, operator._connected_login(connection, tenant))
             db.commit()
+            if isinstance(connection.get("metadata"), dict) and connection["metadata"].get("widget_auth_401_notice"):
+                _observe_auth(tenant, credentials, blocked=False)
             cur.execute(
                 """SELECT * FROM saas_widget_dialogs WHERE tenant_id=%s AND instance=%s AND visible
                 AND (checked_at IS NULL OR before_id IS NOT NULL OR fetched_at IS DISTINCT FROM upstream_at

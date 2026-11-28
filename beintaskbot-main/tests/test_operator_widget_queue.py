@@ -394,3 +394,63 @@ def test_sync_failure_diagnostics_do_not_include_sensitive_exception_text(db, mo
     assert sync._safe_failure(invalid) == "operator_invalid_response"
     other = RuntimeError("customer text must never enter logs")
     assert sync._safe_failure(other) == "internal_error"
+
+
+def test_owner_alert_only_once_per_current_401_and_rearms_after_success(monkeypatch):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    import asyncio
+    import tenant_operator_auth_notice as alerts
+    import tenant_connect_health
+    import tenant_operator_widget_sync
+
+    row = {'status': 'connected', 'secrets': b'credential-one', 'metadata': {}}
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=cursor)
+
+    @contextmanager
+    def cursor():
+        yield object()
+
+    def save(_cur, _tenant, state):
+        if state is None:
+            row['metadata'].pop(alerts.KEY, None)
+        else:
+            row['metadata'][alerts.KEY] = state
+
+    monkeypatch.setattr(alerts, '_alert_db', connection)
+    monkeypatch.setattr(alerts, '_operator_row', lambda *a, **kw: row)
+    monkeypatch.setattr(alerts, '_link_connection_scope', lambda row: ('generation', 'instance'))
+    monkeypatch.setattr(alerts, '_fernet', lambda: SimpleNamespace(
+        decrypt=lambda data: b'{"token":"current"}' if data == b'credential-one' else b'{"token":"new"}'))
+    monkeypatch.setattr(alerts, '_save', save)
+    monkeypatch.setattr(tenant_operator_widget_sync, 'enabled', lambda: 'tenant')
+    monkeypatch.setattr(tenant_connect_health, '_owner', lambda *args: 17)
+    credentials = {'generation': 'generation', 'connection_instance_id': 'instance', 'token': 'current'}
+
+    alerts.observe('tenant', {**credentials, 'token': 'obsolete'}, blocked=True)
+    assert alerts._state(row) == {}
+    alerts.observe('tenant', credentials, blocked=True)
+    first = alerts._state(row)['id']
+    alerts.observe('tenant', credentials, blocked=True)
+    assert alerts._state(row)['id'] == first
+
+    bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=1)))
+    logger = SimpleNamespace(warning=lambda *_: None)
+    asyncio.run(alerts.deliver(bot, logger))
+    asyncio.run(alerts.deliver(bot, logger))
+    bot.send_message.assert_awaited_once()
+    assert bot.send_message.call_args.kwargs['chat_id'] == 17
+    assert '401' in bot.send_message.call_args.kwargs['text']
+    assert 'current' not in bot.send_message.call_args.kwargs['text']
+
+    alerts.observe('tenant', credentials, blocked=False)
+    assert alerts._state(row) == {}
+    alerts.observe('tenant', credentials, blocked=True)
+    assert alerts._state(row)['id'] != first
+    row['secrets'] = b'renewed'
+    asyncio.run(alerts.deliver(bot, logger))
+    bot.send_message.assert_awaited_once()
