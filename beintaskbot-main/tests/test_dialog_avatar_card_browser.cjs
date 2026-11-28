@@ -42,10 +42,10 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     return route.fulfill({json:{success:true,result}});
    });
    try{
-    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);await page.locator('.operator-row').first().click();await page.locator('#dialogDeveloperMarker').waitFor({state:'attached'});await page.waitForFunction(()=>document.querySelector('#dialogDeveloperMarker')?.disabled===false);
+    await page.goto('https://crm.test/app?view=dialogs');await selectAppLanguage(page,language);await page.locator('.operator-row').first().click();await page.locator('#dialogDeveloperBadge').waitFor({state:'attached'});
     const avatar=page.locator('#operatorClientCardOpen'),card=page.locator('#operatorClientCard'),field=page.locator('#operatorConversationNameInput'),menu=page.locator('#operatorMoreActions');
     assert.equal(await page.locator('#operatorEditConversationName').count(),0);assert.equal(await card.isVisible(),false);assert.equal(await menu.locator('.operator-menu-agent').count(),0,'agent details have one home in the avatar card');
-    assert.equal(await page.locator('#operatorClientDeveloperHost #dialogDeveloperMarker').count(),1);assert.equal(await page.locator('#operatorClientDeveloperStatus #dialogDeveloperBadge').count(),1);assert.equal(await page.locator('#operatorDialogTitleSlot #dialogDeveloperBadge').count(),0);
+    assert.equal(await page.locator('#operatorClientDeveloperHost #dialogDeveloperMarker').count(),0);assert.equal(await page.locator('#operatorClientDeveloperStatus #dialogDeveloperBadge').count(),1);assert.equal(await page.locator('#operatorDialogTitleSlot #dialogDeveloperBadge').count(),0);
     assert.equal(await page.locator('#operatorClientDeveloperHost').evaluate(node=>getComputedStyle(node).marginTop),'4px');
     const bell=page.locator('#dialogConsultationBell');assert.equal(await bell.count(),1,'global bell remains in place');assert.equal(await page.locator('#dialogConsultationMobileBell,#operatorDialogNotificationsHost').count(),0,'no duplicate global bell or new scoped bell is inserted in the dialogue');
     // Measure settled layout, not the 170ms conversation entrance translation.
@@ -135,7 +135,7 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
     await page.keyboard.press('Escape');assert.equal(await card.isVisible(),false);assert.equal(await avatar.evaluate(n=>n===document.activeElement),true);assert.equal(await page.locator('#operatorDialogBody').count(),1,'Escape closes the panel first');
     await avatar.click();nameFailure=true;await field.fill('Keep this value');await blurName();await card.locator('[data-client-card-error]').filter({hasText:'Synthetic name save failure'}).waitFor();assert.equal(await field.inputValue(),'Keep this value');assert(!await saveMark.isVisible());nameFailure=false;
     await field.fill('Saved customer');await blurName();await page.waitForFunction(()=>document.querySelector('#operatorDialogTitleText')?.textContent==='Saved customer');await saveMark.waitFor();assert.equal(await card.isVisible(),true);const savedCall=calls.filter(c=>c.path.endsWith('/dialogs/display-name')).at(-1),body=JSON.parse(savedCall.body);assert.equal(body.kind,'conversation');assert.equal(body.channel_id,channel);assert.equal(body.conversation_id,dialog.conversation_id);assert.equal(body.expected_tenant_id,tenant);
-    await page.locator('#dialogDeveloperMarker').click();await page.waitForFunction(()=>!document.querySelector('#dialogDeveloperBadge'));assert.equal(marker,false,'existing marker handler receives the same explicit toggle');await page.locator('#operatorCancelConversationName').click();
+    assert.equal(await page.locator('#dialogDeveloperMarker').count(),0,'non-owner cannot change the marker');assert.equal(marker,true);assert.equal(calls.filter(c=>c.path.endsWith('/developer-marker')&&typeof JSON.parse(c.body).enabled==='boolean').length,0);await page.locator('#operatorCancelConversationName').click();
     nameGate=new Promise(resolve=>{releaseName=resolve;});await avatar.click();await field.fill('Saved after same-source refresh');await blurName();await page.waitForFunction(()=>document.querySelector('#operatorConversationNameInput')?.readOnly);await page.evaluate(()=>window.tenantOperator.openDialog(window.tenantOperator.currentDialog,true));releaseName();nameGate=null;await saveMark.waitFor();assert.equal(await page.locator('#operatorDialogTitleText').innerText(),'Saved after same-source refresh','late success refreshes the connected current source');
     await page.locator('#operatorCancelConversationName').click();
     await revealAccountControl(page,'#dialogConsultationBell');const beforeBell=calls.filter(c=>c.method==='POST').length;await bell.click();await page.locator('#dialogConsultationMenu').waitFor();assert.equal(calls.filter(c=>c.method==='POST').length,beforeBell,'opening the retained global bell does not mark read automatically');await page.locator('#notificationClose').click();if(!await avatar.isVisible())await page.locator('.operator-row').first().click();
@@ -150,3 +150,4 @@ const profile={success:true,member:{tenant_id:tenant,telegram_id:33,role:'worker
   }
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
+

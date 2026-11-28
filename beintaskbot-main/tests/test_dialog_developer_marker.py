@@ -85,3 +85,20 @@ def test_marker_api_identity_origin_and_boolean_payload(monkeypatch):
             assert response.status==200
             service.assert_called_once_with(PROFILE,marker(False))
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('role',['operator','admin'])
+def test_accessible_dialog_marker_is_readable_but_owner_only_to_change(ready,role):
+    db,_,sender=ready
+    db.execute("UPDATE saas_tenant_members SET role=%s WHERE tenant_id=%s::uuid AND telegram_id=33",(role,A))
+    db.commit()
+    employee={'tenant_id':A,'telegram_id':33}
+    assert flow.developer_marker(employee,marker())=={'enabled':True}
+    assert [item['conversation_id'] for item in flow.destinations(employee)['destinations']]==[TARGET]
+    for payload in (marker(False),marker(True,conversation='client')):
+        with pytest.raises(TenantLinearError) as error:
+            flow.developer_marker(employee,payload)
+        assert error.value.status==403
+    assert flow.developer_marker(PROFILE,marker())=={'enabled':True}
+    assert flow.developer_marker(PROFILE,marker(conversation='client'))=={'enabled':False}
+    assert not sender.called
