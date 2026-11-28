@@ -1865,11 +1865,11 @@ def history(profile,provider,lead_id,channel='',conversation='',before=None,anch
                   channel_ids=group_channels,transcript_only=shared_archive)
                 for message in messages:
                     message['source_conversation_id']=conversation
-                if group_dialog:
+                if group_dialog and group_dialog['id']:
                     group_work.attach_senders(cur,tenant,actor,conversation,messages[:50])
-                    if not shared_archive and not before and not anchor:
-                        from tenant_connect_group_history import read_targets
-                        group_read_targets=read_targets(cur,tenant,conversation,messages[:50])
+                if group_dialog and not shared_archive and not before and not anchor:
+                    from tenant_connect_group_history import read_targets
+                    group_read_targets=read_targets(cur,tenant,conversation,messages[:50])
             elif history_merge:
                 from tenant_dialog_history_merge_projection import page as merged_page
                 messages=merged_page(cur,tenant,channel,history_merge,before=identifier(before) if before else None,
