@@ -123,5 +123,46 @@ class PostgresSamples(unittest.TestCase):
             self.assertEqual(alerts._count(cur,str(tenant),'sync'),1)
 
 
+    def test_checkpoint_claim_ack_and_recovery_use_private_storage(self):
+        import os
+        import sys
+        from contextlib import nullcontext
+        from uuid import uuid4
+        dsn = os.environ.get('TEST_POSTGRES_DSN')
+        if not dsn:
+            self.skipTest('Disposable Postgres fixture only')
+        import psycopg
+        from psycopg.rows import dict_row
+        from tenant_platform_schema_operations import migrate_operations_schema
+        class Capture:
+            sql = ()
+            def execute(self, sql, *args):
+                self.sql += (sql,)
+        capture = Capture()
+        migrate_operations_schema(capture)
+        (ddl,) = [sql for sql in capture.sql
+                  if 'CREATE TABLE IF NOT EXISTS saas_owner_operational_alert_checkpoints' in sql]
+        tenant = str(uuid4())
+        with psycopg.connect(dsn, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute("CREATE TEMP TABLE saas_tenants(id UUID PRIMARY KEY) ON COMMIT DROP")
+                cur.execute("INSERT INTO saas_tenants VALUES (%s::uuid)", (tenant,))
+                cur.execute(ddl.replace("CREATE TABLE IF NOT EXISTS", "CREATE TEMP TABLE") + " ON COMMIT DROP")
+            owner = SimpleNamespace(_owner=lambda cur, tenant: 123)
+            with patch.dict(sys.modules,{'tenant_connect_health':owner}), patch.object(
+                alerts,'_db',side_effect=lambda: nullcontext(conn)
+            ), patch.object(alerts,'_count',side_effect=[4,4,4,0,0,0]):
+                self.assertIsNone(alerts._step(tenant,'send',0))
+                down = alerts._step(tenant,'send',60)
+                self.assertEqual(down['kind'],'down')
+                self.assertIsNone(alerts._step(tenant,'send',120))
+                alerts._confirm(tenant,'send',down)
+                self.assertIsNone(alerts._step(tenant,'send',180))
+                up = alerts._step(tenant,'send',240)
+                self.assertEqual(up['kind'],'up')
+                self.assertEqual(up['incident'],down['incident'])
+                self.assertIsNone(alerts._step(tenant,'send',300))
+
+
 if __name__ == '__main__':
     unittest.main()
