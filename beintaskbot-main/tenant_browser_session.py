@@ -2,6 +2,9 @@
 import hashlib
 import hmac
 import time
+
+import psycopg
+from worker_crm_capacity import CapacityUnavailable, db_scope
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -77,6 +80,10 @@ class TenantBrowserSession:
                 try:
                     if not self.legacy_session_allowed(actor_id=chat_id):
                         return None
+                except psycopg.OperationalError as exc:
+                    if db_scope.get():
+                        raise CapacityUnavailable() from exc
+                    return None
                 except Exception:
                     return None
             if chat_id <= 0 and not self.identity_allowed(tenant_id, chat_id):
@@ -85,6 +92,10 @@ class TenantBrowserSession:
                 try:
                     if not self.session_active(session_id=sid, tenant_id=tenant_id, actor_id=chat_id):
                         return None
+                except psycopg.OperationalError as exc:
+                    if db_scope.get():
+                        raise CapacityUnavailable() from exc
+                    return None
                 except Exception:
                     # A failed status/revocation lookup cannot fall back to a
                     # signed-cookie identity or expose backend error details.

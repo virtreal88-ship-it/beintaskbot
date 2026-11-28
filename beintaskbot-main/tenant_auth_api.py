@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
 from aiohttp import web
+from worker_crm_capacity import session_io, CapacityUnavailable
 
 
 def telegram_display_name(payload: dict) -> str:
@@ -53,7 +54,7 @@ def _credential_fingerprint(context: AuthApiContext, credentials: dict) -> str:
     return fingerprint
 
 
-def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int,
+async def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str, chat_id: int,
                  *, credentials: dict | None = None, source_session: dict | None = None,
                  revoke_source: bool = False) -> None:
     session_options = ({'credential_fingerprint': _credential_fingerprint(context, credentials)}
@@ -63,7 +64,7 @@ def _set_session(response: web.Response, context: AuthApiContext, tenant_id: str
     if revoke_source:
         session_options['revoke_source'] = True
     response.set_cookie(
-        context.cookie_name, context.issue_session(str(tenant_id), chat_id, **session_options),
+        context.cookie_name, await session_io.run(context.issue_session, str(tenant_id), chat_id, **session_options),
         max_age=context.cookie_ttl, httponly=True, secure=True, samesite="Lax", path="/",
     )
 
@@ -180,7 +181,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         try:
             data = await request.json(); result = await asyncio.to_thread(context.email_auth.complete_confirmation, token=(data or {}).get('token'), password=(data or {}).get('password'))
             response = web.json_response({'success': True, 'redirect': _product_destination(result.get('destination_product'))})
-            _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
+            await _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -189,20 +190,20 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if context.email_auth is None: return web.json_response({'success': False}, status=503)
         try:
             data = await request.json(); data = data if isinstance(data, dict) else {}
-            result = await asyncio.to_thread(context.email_auth.login, email=data.get('email'), password=data.get('password'), request_ip=request_ip(request))
+            result = await session_io.run(context.email_auth.login, email=data.get('email'), password=data.get('password'), request_ip=request_ip(request))
             if not result: return web.json_response({'success': False, 'error': 'Email və ya parol düzgün deyil.'}, status=401)
             credential_fingerprint = _credential_fingerprint(context, result)
-            companies = await asyncio.to_thread(context.tenants_for_user, int(result['actor_id']))
+            companies = await session_io.run(context.tenants_for_user, int(result['actor_id']))
             requested_tenant = str(data.get('tenant_id') or '').strip()
             invite_accepted = False
             if data.get('invite_token') and context.accept_email_invite and context.account_profile:
-                account=await asyncio.to_thread(context.account_profile,actor_id=int(result['actor_id']))
-                invitation=await asyncio.to_thread(context.accept_email_invite,token=str(data.get('invite_token')),
+                account=await session_io.run(context.account_profile,actor_id=int(result['actor_id']))
+                invitation=await session_io.run(context.accept_email_invite,token=str(data.get('invite_token')),
                     actor_id=int(result['actor_id']),email=str(account.get('email') or ''),
                     display_name=str(account.get('display_name') or ''), credential_fingerprint=credential_fingerprint)
                 requested_tenant=str(invitation['tenant_id'])
                 invite_accepted = True
-                companies=await asyncio.to_thread(context.tenants_for_user,int(result['actor_id']))
+                companies=await session_io.run(context.tenants_for_user,int(result['actor_id']))
             if requested_tenant:
                 tenant = next((item for item in companies if str(item.get('id')) == requested_tenant), None)
                 if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
@@ -216,8 +217,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                 'redirect': '/auth/password/change' if password_change_required else '/app',
                 'password_change_required': password_change_required,
                 'invite_accepted': invite_accepted})
-            if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=int(result['actor_id']))
-            _set_session(response, context, str(tenant['id']), result['actor_id'], credentials=result)
+            if context.record_login: await session_io.run(context.record_login, tenant_id=str(tenant['id']), actor_id=int(result['actor_id']))
+            await _set_session(response, context, str(tenant['id']), result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -323,7 +324,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             result = await asyncio.to_thread(context.email_auth.complete_email_link,
                 token=(data or {}).get('token'), password=(data or {}).get('password'))
             response = web.json_response({'success': True, 'redirect': '/app'})
-            _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
+            await _set_session(response, context, result['tenant_id'], result['actor_id'], credentials=result)
             return response
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=400)
@@ -352,19 +353,19 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             context.logger.exception("Platform tenant registration failed")
             return web.json_response({"success": False, "error": "Qeydiyyat zamanı xəta baş verdi."}, status=500)
         response = web.json_response({"success": True, "tenant": tenant, "redirect": "/setup"})
-        _set_session(response, context, tenant["id"], chat_id)
+        await _set_session(response, context, tenant["id"], chat_id)
         return response
 
     async def me(request: web.Request) -> web.Response:
-        profile = context.member(request)
+        profile = await session_io.run(context.member, request)
         if not profile:
             return web.json_response({"success": False, "error": "Platforma girişi tələb olunur."}, status=401)
         try:
             telegram_id = int(profile["telegram_id"])
-            integrations = await asyncio.to_thread(
+            integrations = await session_io.run(
                 context.list_integrations, tenant_id=profile["tenant_id"], telegram_id=telegram_id)
-            companies = await asyncio.to_thread(context.tenants_for_user, telegram_id)
-            capabilities = context.capabilities(profile)
+            companies = await session_io.run(context.tenants_for_user, telegram_id)
+            capabilities = await session_io.run(context.capabilities, profile)
             from tenant_dialog_company_binding import feature_for as dialog_company_feature_for
             from tenant_beinsystems_operator_access import widget_allowed
             if widget_allowed(profile) and any(r.get("provider") == "beinsystems_operator" and
@@ -376,7 +377,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
             if deal_company_feature_for(profile):
                 capabilities["deal_operator_company"] = True
             from tenant_dialog_history_merge_jobs import available as history_merge_available, enabled as history_merge_enabled
-            if history_merge_enabled() and await asyncio.to_thread(history_merge_available, profile):
+            if history_merge_enabled() and await session_io.run(history_merge_available, profile):
                 from tenant_dialog_history_merge_scope import source_for
                 merge_source=source_for(profile['tenant_id'])
                 if merge_source:
@@ -384,15 +385,17 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
                     capabilities['dialog_history_merge_source_id'] = merge_source
             if context.dialog_reply_templates_ready:
                 try:
-                    capabilities["dialog_reply_templates"] = await asyncio.to_thread(
+                    capabilities["dialog_reply_templates"] = await session_io.run(
                         context.dialog_reply_templates_ready, profile)
                 except Exception as error:
                     context.logger.warning("Reply template readiness probe failed (%s)", type(error).__name__)
                     capabilities["dialog_reply_templates"] = False
-            members = await asyncio.to_thread(
+            members = await session_io.run(
                 context.list_members, tenant_id=profile["tenant_id"], owner_id=telegram_id,
             ) if capabilities.get('can_view_employees', capabilities.get('can_manage_employees', profile.get('role') in {'owner', 'admin'})) else []
-            account = await asyncio.to_thread(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
+            account = await session_io.run(context.account_profile, actor_id=telegram_id) if context.account_profile else {}
+        except CapacityUnavailable:
+            raise
         except Exception:
             context.logger.exception("Platform session lookup failed")
             return web.json_response({"success": False, "error": "Platforma məlumatı yüklənmədi."}, status=500)
@@ -414,7 +417,7 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if not chat_id:
             return web.json_response({"success": False, "error": "Telegram təsdiqi etibarlı deyil."}, status=401)
         try:
-            companies = await asyncio.to_thread(context.tenants_for_user, chat_id)
+            companies = await session_io.run(context.tenants_for_user, chat_id)
         except context.platform_error as exc:
             return web.json_response({"success": False, "error": str(exc)}, status=503)
         if not companies:
@@ -432,8 +435,8 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         destination = "/app" if str(tenant.get("status") or "") not in {"", "onboarding"} else "/setup"
         response = web.json_response({"success": True, "redirect": destination,
                                       "tenant": {"id": tenant["id"], "name": tenant["name"]}})
-        if context.record_login: await asyncio.to_thread(context.record_login, tenant_id=str(tenant['id']), actor_id=chat_id)
-        _set_session(response, context, tenant["id"], chat_id)
+        if context.record_login: await session_io.run(context.record_login, tenant_id=str(tenant['id']), actor_id=chat_id)
+        await _set_session(response, context, tenant["id"], chat_id)
         return response
 
     async def logout(request: web.Request) -> web.Response:
@@ -514,13 +517,13 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         if not tenant: return web.json_response({'success': False, 'error': 'Bu şirkət üçün giriş icazəniz yoxdur.'}, status=403)
         response = web.json_response({'success': True, 'tenant': {'id': tenant['id'], 'name': tenant['name']}, 'redirect': '/app'})
         try:
-            _set_session(response, context, str(tenant['id']), int(profile['telegram_id']),
+            await _set_session(response, context, str(tenant['id']), int(profile['telegram_id']),
                          source_session=source, revoke_source=True)
         except context.platform_error as exc:
             return web.json_response({'success': False, 'error': str(exc)}, status=401)
         return response
 
-    return {
+    routes = {
         "register": register, "me": me, "login": login, "logout": logout,
         'sso_authorize': sso_authorize, 'sso_token': sso_token,
         'email_register': email_register, 'email_confirm': email_confirm,
@@ -539,3 +542,16 @@ def handlers(context: AuthApiContext) -> dict[str, Callable]:
         'connector_logout_page': connector_logout_page,
         "app_page": lambda request: _page(context, "tenant-app.html", "Tenant CRM page not found"),
     }
+
+    def bounded_response(handler):
+        async def handle(request):
+            try:
+                return await handler(request)
+            except CapacityUnavailable:
+                return web.json_response({'success': False, 'error': 'CRM müvəqqəti əlçatan deyil.'},
+                                         status=503, headers={'Cache-Control':'no-store'})
+        return handle
+
+    for name in ('register', 'me', 'login', 'email_login', 'email_confirm', 'email_link_confirm', 'switch_workspace'):
+        routes[name] = bounded_response(routes[name])
+    return routes

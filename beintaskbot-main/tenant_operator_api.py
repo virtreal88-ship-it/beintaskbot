@@ -14,6 +14,7 @@ from tenant_operator_copilot import run as run_copilot
 from tenant_connect_avatars import get_avatar
 from tenant_group_participants import get_participants
 from tenant_read_timing import ReadTiming
+from worker_crm_capacity import avatar_auth_io, session_io, dialog_io, CapacityUnavailable
 from tenant_operator_access import observed_operator
 from tenant_dialog_access import sources as dialog_sources
 from tenant_dialog_lifecycle import mutate as dialog_lifecycle
@@ -61,7 +62,11 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
         revision_read=resource=='history' and request.query.get('group_work_revision')=='1'
         timing=ReadTiming(1 if resource=='dialogs' else 2,logger) if request.method=='GET' and resource in {'dialogs','history'} and not revision_read else None
         try:
-            profile=timing.authenticate(member_from_request,request) if timing else member_from_request(request)
+            if timing:
+                profile = await session_io.run(timing.authenticate, member_from_request, request)
+            else:
+                pool = avatar_auth_io if resource == 'avatar' else session_io
+                profile = await pool.run(member_from_request, request)
             if not profile:raise TenantLinearError('Нет доступа.',403)
             query=request.query
             if request.method=='GET':
@@ -147,17 +152,17 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                     from tenant_dialog_group_work import read_revision
                     conversation=query.get('conversation_id')
                     async def read_group_revision():
-                        current=member_from_request(request)
+                        current=await session_io.run(member_from_request, request)
                         if not current:
                             raise TenantLinearError('Нет доступа.',403)
                         _expected(query,current)
-                        return await asyncio.to_thread(read_revision,current,query.get('channel_id'),
+                        return await dialog_io.run(read_revision,current,query.get('channel_id'),
                             conversation,query.get('lead_id'))
                     known=query.get('known_group_work_revision','')
                     if group_work_updates and 0<len(known)<=80:
                         result=await group_work_updates.read(profile,conversation,known,read_group_revision)
                     else:
-                        result=await asyncio.to_thread(read_revision,profile,query.get('channel_id'),
+                        result=await dialog_io.run(read_revision,profile,query.get('channel_id'),
                             conversation,query.get('lead_id'))
                 elif resource=='history':
                     colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
@@ -255,6 +260,8 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                 if group_work_updates and resource=='dialogs_lifecycle' and result.get('group_changed'):
                     group_work_updates.publish(profile,payload.get('conversation_id'))
             return web.json_response({'success':True,'result':result},headers=headers)
+        except CapacityUnavailable:
+            return web.json_response({'success':False,'error':'Диалоги временно недоступны.'}, status=503, headers=headers)
         except TenantLinearError as error:
             return web.json_response({'success':False,'error':str(error),
                 **({'keep_request':error.keep_request} if resource=='copilot' and type(getattr(error,'keep_request',None)) is bool else {}),

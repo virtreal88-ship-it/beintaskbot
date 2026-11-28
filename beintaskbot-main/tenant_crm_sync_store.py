@@ -140,7 +140,8 @@ class SyncPageStore:
 
     @classmethod
     def claim(cls):
-        conn = _connect()
+        conn = _connect(connect_timeout=3, application_name='crm-sync',
+                        options='-c lock_timeout=2000 -c statement_timeout=30000')
         try:
             ensure_sync_schema(conn)
             with conn.cursor() as cur:

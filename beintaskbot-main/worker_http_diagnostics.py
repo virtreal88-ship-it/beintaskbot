@@ -82,6 +82,7 @@ class HTTPWitness:
     def observe(self):
         next_baseline = 0.0
         was_healthy = True
+        probe_failed = False
         while not self.stop.wait(15):
             try:
                 data = self.sample()
@@ -89,6 +90,18 @@ class HTTPWitness:
                     return
                 healthy = data["local"] == "ok" and data["tick_age_s"] < 5
                 now = time.monotonic()
+                # This observer is independent of aiohttp and its shared pool.
+                # Collect lock edges even when a bulkhead keeps HTTP responsive.
+                try:
+                    from worker_crm_health import lock_snapshot
+                    locks = lock_snapshot()
+                    if locks:
+                        self.logger.warning("worker_db_lock_wait %s", json.dumps(locks, separators=(",", ":")))
+                    probe_failed = False
+                except Exception:
+                    if not probe_failed:
+                        self.logger.warning("worker_db_lock_sample_unavailable")
+                    probe_failed = True
                 if healthy and was_healthy and now < next_baseline:
                     continue
                 was_healthy = healthy
