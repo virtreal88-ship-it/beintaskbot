@@ -271,7 +271,7 @@ def test_gateway_database_auth_is_off_loop_and_bounded(monkeypatch):
     monkeypatch.setattr(calls,'gateway_auth',slow_auth)
     monkeypatch.setattr(calls,'sync',lambda *_:{})
     async def run():
-        monkeypatch.setattr(api,'SLOTS',asyncio.Semaphore(4))
+        monkeypatch.setattr(api,'GATEWAY_SYNC_SLOTS',asyncio.Semaphore(4))
         app=web.Application();app.router.add_post('/sync',api.handler(lambda _:None,'https://example.invalid',Mock(),'sync'))
         async with TestClient(TestServer(app)) as client:
             tasks=[asyncio.create_task(client.post('/sync',headers={'Authorization':'Bearer '+'a'*40},json={})) for _ in range(4)]
@@ -324,7 +324,7 @@ def test_live_call_status_and_commands_have_capacity_during_background_load(monk
     monkeypatch.setattr(calls, 'action', lambda _, data: {'op': data['op']})
 
     async def run():
-        for name, limit in [('SLOTS', 4), ('BROWSER_POLL_SLOTS', 2), ('BROWSER_LIVE_SLOTS', 3),
+        for name, limit in [('GATEWAY_SYNC_SLOTS', 4), ('BROWSER_POLL_SLOTS', 2), ('BROWSER_LIVE_SLOTS', 3),
                             ('BROWSER_COMMAND_SLOTS', 2), ('BROWSER_WAIT_SLOTS', 4)]:
             monkeypatch.setattr(api, name, asyncio.Semaphore(limit))
         app = web.Application()

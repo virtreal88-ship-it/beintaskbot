@@ -53,7 +53,8 @@ def checked(data, source):
     audio={key:None for key in ('frames','gaps_over_200ms','max_gap_ms','last_gap_at_ms','last_frame_at_ms')}
     rtp={key:None for key in ('frames','silence_frames','srtp_rejected_packets','gaps_over_200ms',
                               'max_gap_ms','last_gap_at_ms','missing_sequences','reordered_frames',
-                              'late_frames','buffer_dropped_frames','max_playout_hold_ms')}
+                              'late_frames','buffer_dropped_frames','max_playout_hold_ms',
+                              'timestamp_gaps_without_missing_sequence')}
     schemas={
         'gateway': {'version':None,'at_ms':None,'end':{'origin':END_ORIGINS,'code':END_CODES,'at_ms':None},
                     'stream':{'code':STREAM_CODES,'input_frames':None,'output_frames':None,'at_ms':None},

@@ -11,7 +11,7 @@ from tenant_call_recording_bundle import MAX_BUNDLE, MAX_MANAGED_BUNDLE
 import tenant_browser_calls as store
 
 HEADERS={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'}
-SLOTS=asyncio.Semaphore(4)
+GATEWAY_SYNC_SLOTS=asyncio.Semaphore(4)
 RECORDING_SLOTS=asyncio.Semaphore(1)
 BROWSER_POLL_SLOTS=asyncio.Semaphore(2)
 BROWSER_LIVE_SLOTS=asyncio.Semaphore(3)
@@ -25,7 +25,7 @@ class CallServiceBusy(TenantLinearError):
 
 
 @asynccontextmanager
-async def browser_slot(slots, *, live=False):
+async def _browser_slot(slots, *, live=False):
     # Background polls and optional diagnostics cannot occupy the slots used
     # by call heartbeats or commands. Bound both the queue and the time in it.
     if slots.locked():
@@ -63,7 +63,7 @@ def handler(member,origin,logger,resource='browser'):
         try:
             if resource in {'sync','recording'}:
                 if request.headers.get('Origin') or request.headers.get('Cookie'):raise TenantLinearError('gateway_access_denied',403)
-                slots=RECORDING_SLOTS if resource=='recording' else SLOTS
+                slots=RECORDING_SLOTS if resource=='recording' else GATEWAY_SYNC_SLOTS
                 if slots.locked():raise TenantLinearError('Звонки заняты. Повторите позже.',429)
                 async with slots:
                     cfg=await asyncio.to_thread(store.gateway_auth,request.headers.get('Authorization',''))
@@ -83,7 +83,7 @@ def handler(member,origin,logger,resource='browser'):
                     if request_id is not None and str(UUID(request_id))!=request_id:
                         raise TenantLinearError('call_identity_invalid',400)
                     slots=BROWSER_LIVE_SLOTS if request_id else BROWSER_POLL_SLOTS
-                    async with browser_slot(slots,live=bool(request_id)):
+                    async with _browser_slot(slots,live=bool(request_id)):
                         result=await asyncio.to_thread(store.status,profile,request_id,request.query.get('heartbeat')!='0')
                 else:
                     _origin(request,origin)
@@ -92,7 +92,7 @@ def handler(member,origin,logger,resource='browser'):
                         raise TenantLinearError('call_request_invalid',400)
                     command=data.get('op') in ('start','accept','reject','end')
                     slots=BROWSER_COMMAND_SLOTS if command else BROWSER_POLL_SLOTS
-                    async with browser_slot(slots,live=command):
+                    async with _browser_slot(slots,live=command):
                         result=await asyncio.to_thread(store.action,profile,data)
             return web.json_response({'result':result},headers=HEADERS)
         except CallServiceBusy as error:

@@ -28,6 +28,7 @@ type PeerAudioStatistics struct {
 	MaxArrivalGapMS  int64  `json:"max_gap_ms"`
 	LastArrivalGapMS int64  `json:"last_gap_at_ms"`
 	MissingSequences uint64 `json:"missing_sequences"`
+	TimestampGaps    uint64 `json:"timestamp_gaps_without_missing_sequence"`
 	ReorderedFrames  uint64 `json:"reordered_frames"`
 	LateFrames       uint64 `json:"late_frames"`
 	DroppedFrames    uint64 `json:"buffer_dropped_frames"`
@@ -159,10 +160,11 @@ func (b *peerAudioBuffer) pop(now time.Time) *media.RtpPacket {
 	frame := b.queue[0]
 	header := frame.packet.Header
 	due := b.initialAt.Add(peerPlayoutDelay)
+	var advance time.Duration
 	if !b.playedAt.IsZero() {
-		advance := time.Duration(header.Timestamp-b.playedTS) * time.Second / peerClockRate
+		advance = time.Duration(header.Timestamp-b.playedTS) * time.Second / peerClockRate
 		due = b.playedAt.Add(max(peerFrameDuration, advance))
-		if due.Before(frame.at) || due.After(frame.at.Add(peerMaxHold)) {
+		if due.Before(frame.at) || due.After(frame.at.Add(peerMaxHold-peerPlayoutTick)) {
 			// Rebuild runway after a long pause or timestamp discontinuity.
 			due = maxTime(frame.at.Add(peerPlayoutDelay), b.playedAt.Add(peerFrameDuration))
 		}
@@ -171,7 +173,11 @@ func (b *peerAudioBuffer) pop(now time.Time) *media.RtpPacket {
 		return nil
 	}
 	if !b.playedAt.IsZero() {
-		b.stats.MissingSequences += uint64(uint16(header.SequenceNumber-b.playedSeq) - 1)
+		skipped := uint16(header.SequenceNumber-b.playedSeq) - 1
+		b.stats.MissingSequences += uint64(skipped)
+		if skipped == 0 && advance > 200*time.Millisecond {
+			b.stats.TimestampGaps++
+		}
 	}
 	b.playedAt = due
 	b.playedSeq = header.SequenceNumber

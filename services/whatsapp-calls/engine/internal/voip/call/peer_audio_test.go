@@ -70,7 +70,7 @@ func TestPeerAudioPreservesSilenceAndCountsActualSequenceGap(t *testing.T) {
 	expectPlayout(t, &buffer, now.Add(540*time.Millisecond), 53)
 	buffer.push(audioPacket(52, 1000+4800, 123), now.Add(570*time.Millisecond))
 	got := buffer.snapshot()
-	if got.MissingSequences != 1 || got.SilenceFrames != 1 || got.LateFrames != 1 {
+	if got.MissingSequences != 1 || got.TimestampGaps != 1 || got.SilenceFrames != 1 || got.LateFrames != 1 {
 		t.Fatalf("failed to distinguish silence, packet loss and late arrivals: %+v", got)
 	}
 }
