@@ -15,7 +15,8 @@ CONNECT_VISIBLE_SQL = """NOT EXISTS(
       AND r.lead_id=c.lead_id AND NOT EXISTS(
         SELECT 1 FROM saas_crm_messages m
         WHERE m.tenant_id=c.tenant_id AND m.channel='connect:'||c.connect_channel_id::text
-          AND m.direction='incoming' AND m.created_at>r.removed_at
+          AND (m.direction='incoming' OR (m.direction='system' AND m.message_type='call_missed'))
+          AND m.created_at>r.removed_at
           AND COALESCE(m.happened_at,m.created_at)>=date_trunc('second',r.removed_at)
           AND m.kommo_lead_id IN (SELECT c.lead_id UNION ALL
             SELECT l.source_lead FROM saas_connect_dialog_links l
