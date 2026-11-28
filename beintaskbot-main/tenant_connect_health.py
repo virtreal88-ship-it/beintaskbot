@@ -339,6 +339,12 @@ def revalidate(item):
 
 
 async def deliver(bot, logger):
+    # The same scheduler supplies the bot, but Operator is not a WhatsApp health incident.
+    try:
+        from tenant_operator_auth_notice import deliver as deliver_operator_auth
+        await deliver_operator_auth(bot, logger)
+    except Exception:
+        logger.warning('Operator 401 owner Telegram notice unavailable')
     # Explicit rollout gate. Observation ingestion is safe while delivery is off.
     if os.environ.get('CONNECT_HEALTH_ALERTS_ENABLED', '').lower() != 'true' or not allowed_tenants():
         return
