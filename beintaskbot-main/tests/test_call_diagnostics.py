@@ -81,6 +81,74 @@ def test_relay_persistence_is_bound_to_original_call_authority(gateway,monkeypat
     assert database.execute('SELECT diagnostics FROM saas_browser_calls')[0]['diagnostics']['relay']==evidence
 
 
+def test_browser_heartbeat_timeout_persists_relay_diagnostics(gateway, monkeypatch):
+    import asyncio
+    from unittest.mock import Mock
+
+    from aiohttp import WSMsgType, web
+    from aiohttp.test_utils import TestClient, TestServer
+    import tenant_call_sources_api as api
+    import tenant_platform
+
+    class RelayTestServer(TestServer):
+        async def _make_runner(self, **kwargs):
+            # Match the production AppRunner on an abrupt disconnect.
+            return web.AppRunner(self.app, **{**kwargs, 'handler_cancellation': False})
+
+    database, _, config = gateway
+    monkeypatch.setattr(tenant_platform, '_connect', lambda: database)
+    incoming = provider()
+    calls.sync(config, snapshot(2, active=[incoming]))
+    call_id = calls.status(PROFILE)['calls'][0]['id']
+    accept = command('accept', call_id=call_id)
+    calls.action(PROFILE, accept)
+    work = calls.sync(config, snapshot(3, active=[incoming]))['commands'][0]
+    calls.sync(config, snapshot(4, active=[{**incoming, 'state': 'connected'}], results=[
+        {'id': work['id'], 'ok': True, 'provider_id': incoming['provider_id']},
+    ]))
+    authority = (GATEWAY, incoming['provider_id'], call_id)
+    monkeypatch.setattr(api.store, 'audio_authority', lambda *args: authority)
+    logger = Mock()
+
+    async def run():
+        ws_response = web.WebSocketResponse
+
+        async def engine(request):
+            socket = ws_response()
+            await socket.prepare(request)
+            async for message in socket:
+                await socket.send_bytes(message.data)
+            return socket
+
+        def short_heartbeat(**kwargs):
+            return ws_response(**{**kwargs, 'heartbeat': 0.5})
+
+        upstream = web.Application()
+        upstream.router.add_get('/v1/sources/{source}/audio/{provider}/{call}', engine)
+        app = web.Application()
+        origin = 'https://app.invalid'
+        app.router.add_get('/calls/{call_id}/audio', api.handler(lambda _: PROFILE, origin, logger, 'audio'))
+        monkeypatch.setattr(api.web, 'WebSocketResponse', short_heartbeat)
+        async with TestServer(upstream) as server:
+            monkeypatch.setattr(api.store, 'service', lambda: (str(server.make_url('')).rstrip('/'), 'x' * 48))
+            async with TestClient(RelayTestServer(app)) as client:
+                url = f"/calls/{call_id}/audio?expected_tenant_id={A}&expected_user_id=11&request_id={accept['request_id']}"
+                async with client.ws_connect(url, headers={'Origin': origin}, autoping=False) as socket:
+                    await socket.send_bytes(bytes(320))
+                    assert (await asyncio.wait_for(socket.receive(), 3)).type == WSMsgType.BINARY
+                    assert (await asyncio.wait_for(socket.receive(), 3)).type == WSMsgType.PING
+                    # Withhold PONG to exercise aiohttp's actual abnormal close.
+                    assert (await asyncio.wait_for(socket.receive(), 3)).type == WSMsgType.CLOSED
+
+    asyncio.run(run())
+    row = database.execute('SELECT diagnostics FROM saas_browser_calls WHERE id=%s', (call_id,))[0]
+    relay = row['diagnostics']['relay']
+    assert relay['code'] == 'browser_closed'
+    assert relay['browser_close'] == {'close_code': 1006, 'error': 'timeout'}
+    assert relay['browser_to_worker']['frames'] == relay['engine_to_worker']['frames'] == 1
+    logger.warning.assert_not_called()
+
+
 def test_invalid_optional_telemetry_cannot_block_hangup(gateway):
     database,_,_=gateway
     cmd=command()
