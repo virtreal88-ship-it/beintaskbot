@@ -448,9 +448,13 @@ def test_owner_alert_only_once_per_current_401_and_rearms_after_success(monkeypa
     assert 'current' not in bot.send_message.call_args.kwargs['text']
 
     alerts.observe('tenant', credentials, blocked=False)
+    assert alerts._state(row)['status'] == 'recovered_pending'
+    asyncio.run(alerts.deliver(bot, logger))
+    assert bot.send_message.await_count == 2
+    assert 'снова принимает' in bot.send_message.call_args.kwargs['text']
     assert alerts._state(row) == {}
     alerts.observe('tenant', credentials, blocked=True)
     assert alerts._state(row)['id'] != first
     row['secrets'] = b'renewed'
     asyncio.run(alerts.deliver(bot, logger))
-    bot.send_message.assert_awaited_once()
+    assert bot.send_message.await_count == 2
