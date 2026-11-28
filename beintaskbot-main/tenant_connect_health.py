@@ -345,6 +345,11 @@ async def deliver(bot, logger):
         await deliver_operator_auth(bot, logger)
     except Exception:
         logger.warning('Operator 401 owner Telegram notice unavailable')
+    try:
+        from tenant_owner_error_digest import deliver as deliver_error_digest
+        await deliver_error_digest(bot, logger)
+    except Exception:
+        logger.warning('Owner CRM error digest unavailable')
     # Explicit rollout gate. Observation ingestion is safe while delivery is off.
     if os.environ.get('CONNECT_HEALTH_ALERTS_ENABLED', '').lower() != 'true' or not allowed_tenants():
         return

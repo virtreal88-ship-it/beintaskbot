@@ -152,3 +152,19 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
             prepare.assert_not_called();bot.send_message.assert_not_called()
 
 if __name__=='__main__':unittest.main()
+
+
+def test_owner_error_digest_baku_boundary_and_fixed_safe_payload():
+    from datetime import datetime, timezone
+    import tenant_owner_error_digest as digest
+
+    assert digest.window(datetime(2026, 11, 28, 13, 59, tzinfo=timezone.utc)) is None
+    day, start, end = digest.window(datetime(2026, 11, 28, 14, 0, tzinfo=timezone.utc))
+    assert day == "2026-11-28"
+    assert start == datetime(2026, 11, 27, 14, 0, tzinfo=timezone.utc)
+    assert end == datetime(2026, 11, 28, 14, 0, tzinfo=timezone.utc)
+    assert digest.window(datetime(2026, 11, 28, 19, 59, tzinfo=timezone.utc))[0] == day
+    text = digest._text({'day': day, 'items': [('Ошибки синхронизации', '100+')],
+                         'recipient_id': 12345678, 'raw_log': 'SECRET_CUSTOMER_DATA'})
+    assert '100+' in text and '18:00' in text
+    assert 'SECRET_CUSTOMER_DATA' not in text and '12345678' not in text

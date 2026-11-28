@@ -49,10 +49,15 @@ def observe(tenant, credentials, *, blocked):
             return
         state = _state(row)
         if blocked:
-            if state.get('credential_revision') == revision:
+            if state.get('credential_revision') == revision and state.get('status') not in {'recovered_pending', 'recovered_sending'}:
                 return
             _save(cur, tenant, {'id': str(uuid.uuid4()), 'credential_revision': revision, 'status': 'pending'})
-        elif state:
+        elif state.get('status') == 'delivered':
+            _save(cur, tenant, {**state, 'credential_revision': revision, 'status': 'recovered_pending'})
+        elif state.get('status') == 'sending':
+            # A success can reach us before Telegram's accepted response.
+            _save(cur, tenant, {**state, 'recovered_revision': revision})
+        elif state and state.get('status') not in {'recovered_pending', 'recovered_sending'}:
             _save(cur, tenant, None)
 
 
@@ -61,13 +66,15 @@ def _claim(tenant):
     with _alert_db() as conn, conn.cursor() as cur:
         row = _operator_row(cur, tenant, lock=True)
         state = _state(row)
-        if state.get('status') != 'pending' or state.get('credential_revision') != _revision(row):
+        status = state.get('status')
+        if status not in {'pending', 'recovered_pending'} or state.get('credential_revision') != _revision(row):
             return None
         owner = _owner(cur, tenant)
         if owner is None:
             return None
-        item = {**state, 'status': 'sending', 'recipient_id': owner, 'send': True}
-        _save(cur, tenant, {**state, 'status': 'sending'})
+        sending = 'sending' if status == 'pending' else 'recovered_sending'
+        item = {**state, 'status': sending, 'recipient_id': owner, 'send': True}
+        _save(cur, tenant, {**state, 'status': sending})
     return item
 
 
@@ -76,12 +83,30 @@ def _still_current(tenant, item):
     with _alert_db() as conn, conn.cursor() as cur:
         row = _operator_row(cur, tenant)
         state = _state(row)
-        return (state.get('status') == 'sending' and state.get('id') == item['id']
+        return (state.get('status') == item['status'] and state.get('id') == item['id']
                 and _revision(row) == item['credential_revision']
                 and _owner(cur, tenant) == item['recipient_id'])
 
 
-def _notice(_):
+def _finish(tenant, item, delivered):
+    with _alert_db() as conn, conn.cursor() as cur:
+        row = _operator_row(cur, tenant, lock=True)
+        state = _state(row)
+        if state.get('id') != item['id'] or state.get('status') != item['status']:
+            return
+        if item['status'] == 'recovered_sending' or (state.get('recovered_revision') and not delivered):
+            _save(cur, tenant, None)
+        elif delivered and state.get('recovered_revision'):
+            _save(cur, tenant, {**state, 'status': 'recovered_pending',
+                  'credential_revision': state['recovered_revision']})
+        else:
+            _save(cur, tenant, {**state, 'status': 'delivered' if delivered else 'unknown'})
+
+
+def _notice(item):
+    if item['status'] == 'recovered_sending':
+        return ('BeinSystems Operator снова принимает авторизацию CRM. '
+                'Получение новых сообщений из виджета проверяется отдельно.\nhttps://crm.pro.az/app')
     return ('BeinSystems Operator отклонил авторизацию CRM (401). '
             'Новые сообщения из виджета могут не поступать. '
             'Откройте «Интеграции → BeinSystems Operator» и обновите подключение.\n'
@@ -97,5 +122,6 @@ async def deliver(bot, logger):
     if item is None or not await asyncio.to_thread(_still_current, tenant, item):
         return
     result = await attempt(item, 'telegram', bot, text=_notice, parts=lambda text: [text])
+    await asyncio.to_thread(_finish, tenant, item, result.status == 'delivered')
     if result.status != 'delivered':
         logger.warning('Operator 401 owner Telegram notice outcome unknown; no automatic replay')
