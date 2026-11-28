@@ -23,7 +23,16 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
   const route = {provider:'connect', channel_id:channel,
     conversation_id:phoneInChat?'994555000103@s.whatsapp.net':'15550101010@s.whatsapp.net',
     lead_id:77, can_send:true, last_message_at:'2026-11-25T16:00:00Z'};
-  const whatsapp = {...route,customer_kind:'contact',channel_name:'Test · …101',customer_name:'Test buyer'};
+  const scopedAuto=autoLink==='scoped';
+  const whatsapp = {...route,customer_kind:'contact',channel_name:scopedAuto?'Test · …5105':'Test · …101',customer_name:'Test buyer'};
+  const sourceOptions=[
+    {id:channel,name:'Test source',phone_suffix:'5105'},
+    {id:'10000000-0000-4000-8000-000000000341',name:'Other source',phone_suffix:'5101'},
+    {id:'10000000-0000-4000-8000-000000000342',name:'Other source',phone_suffix:'5102'}
+  ];
+  let selectedSource=sessionStorage.getItem('fixture-auto-whatsapp-source');
+  const autoSettings=()=>({channel_id:selectedSource,sources:sourceOptions,
+    revision:selectedSource?'b'.repeat(64):'a'.repeat(64),locked:dealProof.linked});
   const tiktokRoute = {provider:'kommo',lead_id:7,channel_id:'TikTok',conversation_id:'',channel_name:'TikTok'};
   const phoneMessage = {id:'synthetic-phone-first',direction:'outgoing',author_type:'operator',
     source:'connect',body:'First WhatsApp reply from the phone',message_type:'text',
@@ -110,10 +119,18 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/crm/deal-board-preferences')return json({catalog:[]});
     if(p==='/api/platform/ai/dialogs/deal-link'&&pilot){
       const data=JSON.parse(options.body);
+      if(data.auto_source===true&&scopedAuto){
+        if(data.deal_id!=='7'||data.channel_id!==channel||data.expected_revision!==autoSettings().revision)
+          return json({},409);
+        selectedSource=channel;
+        sessionStorage.setItem('fixture-auto-whatsapp-source',channel);
+        return json({result:{channel_id:channel,revision:autoSettings().revision}});
+      }
       if(data.auto_phone===true){
         if(method!=='POST'||data.deal_id!=='7')return json({},400);
-        if(!autoLink)return json({result:{linked:false}});
+        if(!autoLink||scopedAuto&&selectedSource!==channel)return json({result:{linked:false}});
         dealProof.linked=true;
+        if(scopedAuto)sessionStorage.setItem('fixture-deal-dialog-link','saved');
         return json({result:{linked:true,link_id:'test-link'}});
       }
       if(method!=='POST'||data.deal_id!=='7'||data.context_id!=='first-message'||
@@ -136,7 +153,7 @@ function installDealResponses({native, linking, limited, operatorCompany, longDe
     if(p==='/api/platform/ai/dialogs/for-deal'){
       if(linking==='denied')return json({error:'Forbidden'},403);
       if(pilot)return json({result:{dialogs:[tiktokRoute,...(dealProof.linked?[{...whatsapp,deal_link_id:'test-link'}]:[])],
-        can_find_whatsapp:phoneInChat===true}});
+        can_find_whatsapp:phoneInChat===true,...(scopedAuto?{auto_whatsapp:autoSettings()}: {})}});
       const selected={...route,provider:native?'connect':'kommo',lead_id:native?77:7,customer_name:'Тестовый клиент',channel_name:'Тестовый источник'};
       return json({result:{dialogs:['linked','empty'].includes(linking)?[selected]:[]}});
     }
@@ -297,6 +314,7 @@ async function checkMultichannelPilot(browser,width) {
 }
 
 async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={}) {
+  const scopedAuto=autoLink==='scoped';
   const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
   page.setDefaultTimeout(7000);
   page.on('pageerror',error=>errors.push(error.message));
@@ -307,7 +325,15 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
   const modal=await open(page,false);
   await modal.getByRole('tab',{name:'Диалог',exact:true}).click();
   if(autoLink){
-    const linked=modal.getByRole('button',{name:'WhatsApp · Test · …101',exact:true});
+    if(scopedAuto){
+      const sources=modal.getByRole('combobox',{name:'Источник WhatsApp для автопривязки'});
+      await sources.waitFor();
+      assert.equal(await sources.locator('option').count(),4);
+      await page.waitForFunction(()=>dealProof.requests.some(r=>r.body?.auto_phone===true));
+      assert.equal(await page.evaluate(()=>dealProof.linked),false);
+      await sources.selectOption({label:'Test source · …5105'});
+    }
+    const linked=modal.getByRole('button',{name:scopedAuto?'WhatsApp · Test · …5105':'WhatsApp · Test · …101',exact:true});
     await linked.waitFor();
     assert(await modal.getByText('055 500 01 03',{exact:true}).isVisible());
     await linked.click();
@@ -322,7 +348,20 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
   await modal.getByText('First WhatsApp reply from the phone',{exact:true}).waitFor();
   assert.equal(await modal.getByText('055 500 01 03',{exact:true}).count(),0);
   const requests=await page.evaluate(()=>dealProof.requests.filter(r=>r.method==='POST'&&r.p.includes('deal')));
-  if(autoLink)assert.deepEqual(requests.map(r=>[r.body.auto_phone,r.body.deal_id]),[[true,'7']]);
+  if(scopedAuto){
+    assert.deepEqual(requests.map(r=>[r.body.auto_phone||false,r.body.auto_source||false,r.body.deal_id]),
+      [[true,false,'7'],[false,true,'7'],[true,false,'7']]);
+    assert.equal(await modal.locator('.deal-linked-transcript article').count(),1);
+    assert.equal(await page.evaluate(()=>dealProof.requests.some(r=>r.method==='POST'&&r.p.endsWith('/send'))),false);
+    await page.reload();
+    const reopened=await open(page,false);
+    await reopened.getByRole('tab',{name:'Диалог',exact:true}).click();
+    const sources=reopened.getByRole('combobox',{name:'Источник WhatsApp для автопривязки'});
+    await sources.waitFor();
+    assert.equal(await sources.locator('option:checked').textContent(),'Test source · …5105');
+    assert(await sources.isDisabled());
+    assert.equal(await page.evaluate(()=>dealProof.requests.filter(r=>r.body?.auto_phone).length),0);
+  }else if(autoLink)assert.deepEqual(requests.map(r=>[r.body.auto_phone,r.body.deal_id]),[[true,'7']]);
   else assert.deepEqual(requests.filter(r=>!r.body.auto_phone).map(r=>r.body.phone_message_id),['number-message']);
   assert.deepEqual(errors,[]);
   await page.close();
@@ -533,7 +572,10 @@ async function checkNumberInTikTokMessage(browser, {width=1300,autoLink=false}={
     }
     for(const width of [1440,390])await checkMultichannelPilot(browser,width);
     await checkNumberInTikTokMessage(browser);
-    for(const width of [1300,390])await checkNumberInTikTokMessage(browser,{width,autoLink:true});
+    for(const width of [1300,390]){
+      await checkNumberInTikTokMessage(browser,{width,autoLink:true});
+      await checkNumberInTikTokMessage(browser,{width,autoLink:'scoped'});
+    }
     for(const width of [1440,390])await checkCreateDealFromDialog(browser,{width});
     await checkCreateDealFromDialog(browser,{width:1440,limited:true});
     console.log('PASS deal card: Chromium native + Kommo, scoped WhatsApp linkage, responsive layout, stage/edit, lazy related data, authorised and missing routes');
