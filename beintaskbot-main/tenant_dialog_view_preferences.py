@@ -8,7 +8,7 @@ from tenant_connect_transport import _schema as ensure_connect_schema
 
 DEFAULTS = {'channel': '', 'agent': '', 'state': '', 'lifecycle': 'all'}
 STATES = {'', 'automatic', 'manual', 'needs_assignment', 'attention', 'no_agent'}
-LIFECYCLES = {'all', 'active', 'completed'}
+LIFECYCLES = {'all', 'active', 'working', 'completed'}
 _AGENT = re.compile(r'(?:unassigned|[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})\Z')
 
 

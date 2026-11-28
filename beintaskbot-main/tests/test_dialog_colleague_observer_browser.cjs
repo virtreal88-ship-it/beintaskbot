@@ -23,7 +23,7 @@ const original={id:'voice-row',direction:'incoming',source:'connect',message_typ
    const req=route.request(),url=new URL(req.url()),p=url.pathname,q=url.searchParams;
    if(p==='/app')return route.fulfill({path:path.join(root,'docs/tenant-app.html')});
    if(p.startsWith('/assets/')){const file=path.join(root,'docs',path.basename(p));return fs.existsSync(file)?route.fulfill({path:file}):route.fulfill({status:404,body:''});}
-   requests.push({path:p,method:req.method(),observed:q.get('observed_operator_id')});
+   requests.push({path:p,method:req.method(),observed:q.get('observed_operator_id'),lifecycle:q.get('lifecycle'),channel:q.get('channel')});
    if(p==='/api/platform/me')return route.fulfill({json:{success:true,member:{tenant_id:tenant,telegram_id:33,role:'operator',
      permissions:['dialogs'],active:true},capabilities:{modules:{dialogs:true}}}});
    let result={};
@@ -50,7 +50,19 @@ const original={id:'voice-row',direction:'incoming',source:'connect',message_typ
    await page.locator('#operatorFiltersToggle').click();
    const selector=page.locator('#operatorColleague');await selector.waitFor();
    assert.equal(await selector.inputValue(),'');
+   const state=page.locator('#operatorLifecycle');
+   const sourceSelect=page.locator('#operatorChannel');
+   await sourceSelect.selectOption('connect:'+source);
+   await state.selectOption('completed');
+   const completed=page.waitForRequest(r=>{const q=new URL(r.url()).searchParams;return q.get('observed_operator_id')==='44'&&q.get('lifecycle')==='completed';});
    await selector.selectOption('44');
+   await page.waitForFunction(()=>document.querySelector('#operatorLifecycle')?.value==='completed');
+   assert.equal(new URL((await completed).url()).searchParams.get('channel'),'connect:'+source);
+   for(const mode of ['working','all']){
+     const request=page.waitForRequest(r=>{const q=new URL(r.url()).searchParams;return q.get('observed_operator_id')==='44'&&q.get('lifecycle')===mode;});
+     await state.selectOption(mode);
+     assert.equal(new URL((await request).url()).searchParams.get('channel'),'connect:'+source);
+   }
    await page.keyboard.press('Escape');
    await page.locator('.operator-row').first().click();
    await page.locator('[data-colleague-read-only]').waitFor();

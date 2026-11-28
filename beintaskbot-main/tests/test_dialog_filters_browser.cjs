@@ -17,7 +17,7 @@ else if(name.endsWith('/developer-marker'))result={enabled:false};
 return route.fulfill({json:{success:true,result}});});
 await page.goto('https://crm.test/app?view=dialogs');await page.waitForFunction(()=>document.querySelector('#operatorChannel')?.value==='connect:c1'&&!document.querySelector('#operatorChannel').disabled);await page.evaluate(theme=>document.documentElement.dataset.appTheme=theme,theme);
 assert.equal(await page.locator('#operatorAdvanced').isVisible(),false,'filters collapsed on every viewport');
-const list=requests.find(r=>r.name.endsWith('/dialogs'));assert(list.query.includes('channel=connect%3Ac1')&&list.query.includes('lifecycle=active'),'first list uses restored server selection');
+const list=requests.find(r=>r.name.endsWith('/dialogs'));assert(list.query.includes('channel=connect%3Ac1')&&list.query.includes('lifecycle=working'),'first list uses restored server selection');
 const toggle=page.locator('#operatorFiltersToggle');await toggle.click();await page.locator('#operatorAdvanced').waitFor();assert.equal(await page.locator('#operatorAdvanced select').count(),4);
 const box=await page.locator('#operatorAdvanced').boundingBox();assert(box.x>=7&&box.x+box.width<=width-7&&box.y>=7&&box.y+box.height<=793,JSON.stringify(box));
 const icons=await page.locator('#operatorToolsMenu,#operatorFiltersToggle').evaluateAll(nodes=>nodes.map(n=>{const r=n.getBoundingClientRect();return{x:r.x,y:r.y,h:r.height};}));assert(Math.abs(icons[0].y-icons[1].y)<2&&icons[1].x>icons[0].x,'filter next to ellipsis');
@@ -35,9 +35,9 @@ if(width===390&&theme==='light'){
   const query=new URL((await ownerRequest).url()).searchParams;
   assert.equal(query.get('lifecycle'),'all');assert.equal(query.get('expected_user_id'),String(user));assert(!query.has('lifecycle_state'));
   await toggle.click();assert.equal(await page.locator('#operatorAdvanced select').count(),4,'owner All uses exactly the existing four filters');
-  assert.deepEqual(await page.locator('#operatorLifecycle option').evaluateAll(items=>items.map(item=>item.value)),['all','active','completed']);
-  const personal=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/dialogs')&&new URL(request.url()).searchParams.get('lifecycle')==='active');
-  await page.locator('#operatorLifecycle').selectOption('active');
+  assert.deepEqual(await page.locator('#operatorLifecycle option').evaluateAll(items=>items.map(item=>item.value)),['all','working','completed']);
+  const personal=page.waitForRequest(request=>new URL(request.url()).pathname.endsWith('/dialogs')&&new URL(request.url()).searchParams.get('lifecycle')==='working');
+  await page.locator('#operatorLifecycle').selectOption('working');
   assert(!new URL((await personal).url()).searchParams.has('owner_overview'));
 }
 await page.close();

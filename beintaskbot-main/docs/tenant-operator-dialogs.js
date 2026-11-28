@@ -63,7 +63,7 @@
   }
   let embeddedConversation=null;
   const colleagueId=()=>embeddedConversation?'':$('operatorColleague')?.value||'';
-  const colleagueText=key=>({ru:{label:'Оператор',self:'Мои диалоги',read:'Только просмотр'},az:{label:'Operator',self:'Dialoqlarım',read:'Yalnız baxış'},en:{label:'Operator',self:'My chats',read:'Read only'}}[i18n.language]||{})[key]||'';
+  const colleagueText=key=>({ru:{label:'Оператор',self:'Все операторы',read:'Только просмотр'},az:{label:'Operator',self:'Bütün operatorlar',read:'Yalnız baxış'},en:{label:'Operator',self:'All operators',read:'Read only'}}[i18n.language]||{})[key]||'';
   let colleagueChoicesFlight=null;
   function changeColleague(){
       const viewing=!!colleagueId();
@@ -103,7 +103,7 @@
     if(filterPreferencesLoaded)return;if(filterPreferencesFlight)return filterPreferencesFlight;
     const version=epoch,controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),8000);filterIds.forEach(id=>{if($(id))$(id).disabled=true;});
     const flight=(async()=>{try{const saved=(await rawApi(endpoint+'dialogs/preferences',{signal:controller.signal})).result;if(version!==epoch)return;
-      filterIds.forEach((id,i)=>{const node=$(id),value=saved?.[filterKeys[i]]||(i===3?'all':'');if(!node)return;if(value&&![...node.options].some(option=>option.value===value)&&i<2)node.add(new Option(value,value));node.value=value;});
+      filterIds.forEach((id,i)=>{const node=$(id),value=saved?.[filterKeys[i]]||(i===3?'all':'');if(!node)return;if(value&&![...node.options].some(option=>option.value===value)&&i<2)node.add(new Option(value,value));node.value=id==='operatorLifecycle'&&value==='active'?'working':value;});
       filterPreferencesLoaded=true;rememberOwnerOverviewMode();updateFilterIndicator();
     }catch(error){if(version===epoch){filterPreferencesLoaded=true;if($('operatorFilterSaveStatus'))$('operatorFilterSaveStatus').textContent=filterCopy('loadFailed');}}
     finally{clearTimeout(timeout);if(version===epoch){filterPreferencesFlight=null;filterIds.forEach(id=>{if($(id))$(id).disabled=false;});}}})();filterPreferencesFlight=flight;return flight;
@@ -262,7 +262,7 @@
   }
   function canRefreshGroupWork(route){
     return groupWorkVisible()&&member?.active===true&&route?.group_work_revision&&
-      !route.archive_read_only&&!route.search_overview_read_only&&!route.colleague_read_only&&!route.source_message_id;
+      !route.search_overview_read_only&&!route.colleague_read_only&&!route.source_message_id;
   }
   function scheduleGroupWorkRefresh(delay=0){
     if(!canRefreshGroupWork(currentDialog)){stopGroupWorkRefresh();return;}
@@ -486,7 +486,7 @@
   const ownerOverviewMode=()=>member?.role==='owner'&&(!!embeddedConversation||queueMode()==='all');
   let ownerOverviewWasActive=false;
   const rememberOwnerOverviewMode=()=>{ownerOverviewWasActive=ownerOverviewMode();};
-  function setQueueModes(){const select=$('operatorLifecycle');if(!select)return;const value=select.value||'all';select.innerHTML=['all','active','completed'].map(key=>`<option value="${key}">${({all:{ru:'Все диалоги',az:'Bütün dialoqlar',en:'All dialogues'},active:{ru:'В работе',az:'İşdə',en:'Active'},completed:{ru:'Завершённые',az:'Tamamlanmış',en:'Completed'}})[key][i18n.language]||key}</option>`).join('');select.value=value;select.setAttribute('aria-label',({ru:'Состояние очереди',az:'Növbənin vəziyyəti',en:'Queue state'})[i18n.language]||'Queue state');rememberOwnerOverviewMode();}
+  function setQueueModes(){const select=$('operatorLifecycle');if(!select)return;const value=select.value||'all';select.innerHTML=['all','working','completed'].map(key=>`<option value="${key}">${({all:{ru:'Все состояния',az:'Bütün vəziyyətlər',en:'All states'},working:{ru:'В работе',az:'İşdə',en:'In progress'},completed:{ru:'Завершённые',az:'Tamamlanmış',en:'Completed'}})[key][i18n.language]||key}</option>`).join('');select.value=value==='active'?'working':value;select.setAttribute('aria-label',({ru:'Состояние диалога',az:'Dialoqun vəziyyəti',en:'Dialogue state'})[i18n.language]||'Dialogue state');rememberOwnerOverviewMode();}
   function reconcileLifecycleRows(){
     const reconcile=route=>{
       rememberLifecycleListState(route,route.lifecycle);
@@ -497,7 +497,9 @@
         ...(['accepted','closed'].includes(state.state)?{missed_call_pending:false}:{})};
     };
     rows=rows.map(row=>row.group_sources?.length?{...reconcile(row),group_sources:row.group_sources.map(reconcile)}:reconcile(row));
-    const mode=queueMode(),matches=route=>mode==='all'||(mode==='completed'?['closed','dismissed'].includes(route.lifecycle?.state):!['closed','dismissed'].includes(route.lifecycle?.state)&&!(route.lifecycle_enabled&&route.lifecycle?.state==='waiting'&&route.lifecycle.has_inbound===false));
+    const mode=queueMode(),matches=route=>mode==='all'
+      || (mode==='working'&&route.lifecycle?.state==='accepted')
+      || (mode==='completed'&&['closed','dismissed'].includes(route.lifecycle?.state));
     rows=rows.flatMap(row=>{
       if(!row.group_sources?.length)return matches(row)?[row]:[];
       const sources=row.group_sources.filter(matches);if(!sources.length)return [];if(sources.length===row.group_sources.length)return [row];
@@ -741,13 +743,13 @@
     renderDialog(currentPage,{suppressRead:true});
     if(accepted)window.tenantDialogueCompany?.refresh?.();
   }
-  async function lifecycleAction(route,action,button,target,episodeId){
+  async function lifecycleAction(route,action,button,target,episodeId,transferChannel){
     if(button.disabled||!sameDialog(route,currentDialog))return;
     const groupId=route.lifecycle?.group_work?.id||route.lifecycle?.group_restart_episode_id;
-    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'');
+    const version=epoch,view=openRevision,key=contextKey('lifecycle',route)+'.'+version+'.'+route.lifecycle?.revision+'.'+action+'.'+(target||'')+'.'+(episodeId||'')+'.'+(transferChannel||'');
     if(lifecycleInFlight.has(key))return;
     let payload=lifecycleRequests.get(key);
-    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{}),...(groupId?{expected_group_episode_id:groupId}:{})};lifecycleRequests.set(key,payload);}
+    if(!payload){payload={provider:route.provider,channel_id:route.channel_id,conversation_id:route.conversation_id,lead_id:route.lead_id,action,expected_revision:route.lifecycle?.revision,request_id:crypto.randomUUID(),...(target?{target_employee_id:Number(target)}:{}),...(transferChannel?{transfer_channel_id:transferChannel}:{}),...(action==='dismiss'?{message_id:route.lifecycle?.last_inbound_id,individual_no_reply:true}:{}),...(episodeId?{episode_id:episodeId}:{}),...(action==='close'?{company_choice:'unchanged'}:{}),...(groupId?{expected_group_episode_id:groupId}:{})};lifecycleRequests.set(key,payload);}
     lifecycleInFlight.add(key);button.disabled=true;
     const confirmingGroup=route.lifecycle?.group_available&&['accept','start'].includes(action);
     if(confirmingGroup){
@@ -763,7 +765,7 @@
       closeLifecycleModal();dialogPageCache.delete(pageCacheKey(route));
       if(result.group_changed){
         if(result.controls&&['accept','start'].includes(action))applyLifecycleReceipt(route,action,result);
-        if(['leave_group','close'].includes(action)){
+        if(['transfer_group','close'].includes(action)){
           if($('sendChat'))$('sendChat').disabled=true;
           if($('chatText'))$('chatText').disabled=true;
         }
@@ -837,25 +839,24 @@
     }
   }
   const groupWorkText=key=>({
-    ru:{join:'Присоединиться',leave:'Выйти',transfer:'Передать ведение',accepting:'Принимаем…',starting:'Начинаем…',leader:'Ведущий',participant:'Участник',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
-    az:{join:'Qoşul',leave:'Çıx',transfer:'Rəhbərliyi ötür',accepting:'Qəbul edilir…',starting:'Başladılır…',leader:'Aparıcı',participant:'İştirakçı',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
-    en:{join:'Join',leave:'Leave',transfer:'Transfer lead',accepting:'Accepting…',starting:'Starting…',leader:'Lead',participant:'Participant',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
+    ru:{transfer:'Передать',owner:'Диалог ведёт',review:'Проверьте ответственного за группу.',noTargets:'Нет сотрудников в сети с доступом к номерам этой группы.',accepting:'Принимаем…',starting:'Начинаем…',number:'Номер отправки',offline:'Установите статус «В сети», чтобы ответить.',join_group:'Подключился к диалогу',leave_group:'Завершил участие',transfer_group:'Ведение передано'},
+    az:{transfer:'Ötür',owner:'Dialoqu aparır',review:'Qrupu aparan əməkdaşı yoxlayın.',noTargets:'Bu qrupun nömrələrinə çıxışı olan onlayn əməkdaş yoxdur.',accepting:'Qəbul edilir…',starting:'Başladılır…',number:'Göndərən nömrə',offline:'Cavab vermək üçün «Onlayn» statusunu seçin.',join_group:'Dialoqa qoşuldu',leave_group:'İştirakı bitirdi',transfer_group:'Rəhbərlik ötürüldü'},
+    en:{transfer:'Transfer',owner:'Handled by',review:'Review the group assignment.',noTargets:'No online employees have access to this group’s numbers.',accepting:'Accepting…',starting:'Starting…',number:'Sending number',offline:'Go online to reply.',join_group:'Joined the conversation',leave_group:'Left the conversation',transfer_group:'Lead transferred'}
   }[i18n.language]||{})[key];
   function openGroupWorkModal(route){
     closeLifecycleModal();
-    const peers=route.lifecycle?.group_work?.colleagues||[];
-    if(!peers.length)return;
+    if(!route.lifecycle?.group_work?.can_transfer)return;
     const modal=document.createElement('div');modal.id='operatorLifecycleModal';modal.className='operator-complete-modal';
     modal.innerHTML=`<section class="operator-complete-card" role="dialog" aria-modal="true" aria-labelledby="operatorLifecycleTitle">
       <h2 id="operatorLifecycleTitle">${esc(groupWorkText('transfer'))}</h2>
       <select aria-label="${esc(groupWorkText('transfer'))}"></select>
       <p id="operatorLifecycleStatus" role="status"></p>
       <div class="operator-complete-actions">
-        <button type="button" class="primary" data-group-transfer>${esc(groupWorkText('transfer'))}</button>
+        <button type="button" class="primary" data-group-transfer disabled>${esc(groupWorkText('transfer'))}</button>
         <button type="button" class="outline" data-cancel>${esc(lifecycleText('cancel'))}</button>
       </div></section>`;
     const select=modal.querySelector('select');
-    for(const peer of peers)select.append(new Option(peer.name||clientCardText('staff'),peer.employee_id));
+    let targets=[];
     const events=['tenant-chat-close','tenant-auth-invalid','tenant-profile','tenant-view'];
     const close=()=>{modal.remove();document.removeEventListener('keydown',key,true);for(const name of events)document.removeEventListener(name,close);closeLifecycleModal=()=>{};};
     const key=event=>{if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();close();}};
@@ -863,7 +864,24 @@
     closeLifecycleModal=close;
     modal.querySelector('[data-cancel]').onclick=close;
     modal.onclick=event=>{if(event.target===modal)close();};
-    modal.querySelector('[data-group-transfer]').onclick=event=>void lifecycleAction(route,'transfer_group',event.currentTarget,select.value);
+    const transfer=modal.querySelector('[data-group-transfer]'),status=modal.querySelector('[role="status"]');
+    transfer.onclick=event=>{
+      const selected=targets[Number(select.value)];
+      if(selected)void lifecycleAction(route,'transfer_group',event.currentTarget,selected.employee_id,null,selected.channel_id);
+    };
+    const query=new URLSearchParams({provider:route.provider,channel_id:route.channel_id,
+      conversation_id:route.conversation_id,lead_id:route.lead_id,expected_revision:route.lifecycle.revision,
+      expected_tenant_id:member.tenant_id,expected_user_id:member.telegram_id});
+    status.textContent=t('loading');
+    void api('dialogs/transfer-candidates?'+query).then(result=>{
+      if(!modal.isConnected||!sameDialog(route,currentDialog))return;
+      targets=result.targets||[];
+      for(const [index,peer] of targets.entries()){
+        select.append(new Option([peer.name,peer.number].filter(Boolean).join(' · '),String(index)));
+      }
+      transfer.disabled=!targets.length;
+      status.textContent=targets.length?'':groupWorkText('noTargets');
+    }).catch(error=>{if(modal.isConnected)status.textContent=error.message||t('error');});
     document.body.append(modal);select.focus();
   }
   const transferSidebarText=key=>({
@@ -1536,7 +1554,7 @@
     $('operatorSearch').oninput=()=>{clearTimeout(timer);timer=setTimeout(()=>refresh(),250);};
     setOptions('operatorChannel',[],'allChannels');setOptions('operatorAgent',[],'allAgents');setStates();setQueueModes();
   }
-  function setStates(){const select=$('operatorState'),value=select.value;select.innerHTML='<option value="">'+t('allStates')+'</option>'+['automatic','manual','needs_assignment','attention','no_agent'].map(key=>`<option value="${key}">${t(key==='automatic'?'filterAiAutomatic':key==='manual'?'filterAiManual':key==='needs_assignment'?'filterNeedsAssignment':key==='attention'?'filterNeedsReview':'filterNoAgent')}</option>`).join('');select.value=[...select.options].some(option=>option.value===value)?value:'';}
+  function setStates(){const select=$('operatorState'),value=select.value,label=({ru:'Статус AI',az:'AI statusu',en:'AI status'})[i18n.language]||'AI status';select.setAttribute('aria-label',label);select.innerHTML='<option value="">'+label+'</option>'+['automatic','manual','needs_assignment','attention','no_agent'].map(key=>`<option value="${key}">${t(key==='automatic'?'filterAiAutomatic':key==='manual'?'filterAiManual':key==='needs_assignment'?'filterNeedsAssignment':key==='attention'?'filterNeedsReview':'filterNoAgent')}</option>`).join('');select.value=[...select.options].some(option=>option.value===value)?value:'';}
   const bulkText=key=>({preview:{ru:'Предпросмотр массового назначения',az:'Kütləvi təyinatın önizləməsi',en:'Preview bulk assignment'},title:{ru:'Проверка назначений',az:'Təyinatların yoxlanması',en:'Assignment review'},confirm:{ru:'Назначить подходящих агентов',az:'Uyğun agentləri təyin et',en:'Assign eligible agents'},summary:{ru:'Диалогов: {total}; уже назначено: {assigned}; один кандидат: {one}; несколько: {multiple}; нет кандидатов: {none}; группы: {groups}; подходят: {groupEligible}; handoff: {handoff}.',az:'Dialoqlar: {total}; artıq təyin edilib: {assigned}; bir namizəd: {one}; bir neçə: {multiple}; namizəd yoxdur: {none}; qruplar: {groups}; uyğun qruplar: {groupEligible}; handoff: {handoff}.',en:'Dialogues: {total}; already assigned: {assigned}; one candidate: {one}; multiple: {multiple}; none: {none}; groups: {groups}; eligible groups: {groupEligible}; handoffs: {handoff}.'},confirmPrompt:{ru:'Назначить единственного подходящего агента во всех показанных подходящих диалогах и группах? Автоответы останутся выключенными; существующие handoff и состояния сохраняются.',az:'Göstərilən uyğun dialoq və qruplarda yeganə uyğun agent təyin edilsin? Avtomatik cavablar söndürülmüş qalacaq; mövcud handoff və vəziyyətlər saxlanılır.',en:'Assign the only eligible agent to every shown eligible dialogue and group? Automatic replies remain off; existing handoffs and states are preserved.'},done:{ru:'Назначение завершено: {assigned}; пропущено из-за изменений или ошибок: {skipped}.',az:'Təyinat tamamlandı: {assigned}; dəyişiklik və ya xətalara görə buraxıldı: {skipped}.',en:'Assignment complete: {assigned}; skipped due to changes or errors: {skipped}.'}}[key]?.[i18n.language]||'');
   function bulkCopy(key,params={}){let value=bulkText(key);for(const [name,text]of Object.entries(params))value=value.replaceAll('{'+name+'}',String(text));return value;}
   const bulkField=(key)=>({ru:{channel:'Номер WhatsApp / канал',chooseChannel:'Выберите канал',agent:'AI-агент',chooseAgent:'Выберите агента',review:'Проверить подходящие диалоги',missing:'Выберите канал и агента.',noChannels:'Нет активных привязанных WhatsApp-каналов.',warning:'Назначение не включает автоматические ответы. Существующие назначения и handoff не меняются.'},az:{channel:'WhatsApp nömrəsi / kanal',chooseChannel:'Kanal seçin',agent:'AI agent',chooseAgent:'Agent seçin',review:'Uyğun dialoqları yoxla',missing:'Kanal və agent seçin.',noChannels:'Aktiv qoşulmuş WhatsApp kanalı yoxdur.',warning:'Təyinat avtomatik cavabları aktivləşdirmir. Mövcud təyinatlar və handoff dəyişmir.'},en:{channel:'WhatsApp number / channel',chooseChannel:'Choose a channel',agent:'AI agent',chooseAgent:'Choose an agent',review:'Review eligible dialogues',missing:'Select a channel and agent.',noChannels:'No active linked WhatsApp channels.',warning:'Assignment does not enable automatic replies. Existing assignments and handoffs remain unchanged.'}}[i18n.language]||{})[key]||key;
@@ -2132,7 +2150,8 @@
     if(!Array.isArray(fresh.operator_events))return;
     noteOperatorEventOmission(page,fresh.operator_events_omitted_at);
     const updates=fresh.operator_events.filter(validOperatorEvent).map(event=>({id:event.id,kind:event.kind,at:event.at,
-      employee_name:typeof event.employee_name==='string'?event.employee_name:''}));
+      employee_name:typeof event.employee_name==='string'?event.employee_name:'',
+      from_name:typeof event.from_name==='string'?event.from_name:''}));
     page.operator_events=boundedOperatorEvents(page,[...(page.operator_events||[]),...updates]);
     // An older response must not suppress a new lifecycle revision in polling.
     if(!older&&Number.isSafeInteger(fresh.operator_events_revision))page.operator_events_revision=fresh.operator_events_revision;
@@ -2221,8 +2240,8 @@
         if(!body){body=document.createElement('p');body.dataset.internalCommentBody='';node.insertBefore(body,node.lastElementChild);}
         body.textContent=event.note;
       }else node.firstElementChild.textContent=event.kind==='shared_reminder'?reminderLabel+': '+event.note:
-        statusLabel?(statusLabel[i18n.language]||statusLabel.en):
-        event.kind.endsWith('_group')?[groupWorkText(event.kind),name].filter(Boolean).join(' · '):
+        statusLabel?[statusLabel[i18n.language]||statusLabel.en,event.kind==='close'&&name].filter(Boolean).join(' · '):
+        event.kind.endsWith('_group')?[groupWorkText(event.kind),event.from_name&&name?event.from_name+' → '+name:name].filter(Boolean).join(' · '):
         name?text[event.kind]+': '+name:text[event.kind+'Unknown'];
       node.lastElementChild.dateTime=event.at;node.lastElementChild.textContent=i18n.date(event.at);existing.set(event.id,node);
       const next=messages.find(message=>messageTimes.get(message.dataset.messageId)>at);
@@ -2350,47 +2369,23 @@
     const group=rows.find(row=>row.group_sources?.some(source=>sameDialog(source,currentDialog)));
     const work=currentDialog?.lifecycle?.group_work;
     slot.classList.toggle('operator-group-composer-source',!!work);
-    let sources=activeGroupSources(group);
-    if(work){
-      sources=work.sources?[...work.sources]:sources.filter(source=>source.lifecycle?.group_work?.id===work.id&&source.lifecycle.group_work.can_join);
-      if(work.can_join&&!sources.some(source=>sameDialog(source,currentDialog)))sources.push(currentDialog);
-    }
+    const sources=activeGroupSources(group);
     const currentAvailable=sources.some(source=>sameDialog(source,currentDialog));
-    slot.replaceChildren();slot.hidden=!sources.length||(sources.length<2&&currentAvailable);
-    if(work?.role||work?.can_join){
+    slot.replaceChildren();
+    if(work||currentDialog?.lifecycle?.group_review_required||currentDialog?.lifecycle?.group_owner_name){
       slot.hidden=false;
-      if(work.number){
-        const number=document.createElement('span');number.className='sub';
-        number.textContent=[work.role?groupWorkText(work.role):null,groupWorkText('number'),work.number].filter(Boolean).join(' · ');
-        number.dataset.groupSendingNumber='true';slot.append(number);
+      if(work?.number){
+        const number=document.createElement('span');number.className='sub';number.dataset.groupSendingNumber='true';
+        number.textContent=groupWorkText('number')+' · '+work.number;slot.append(number);
       }
-      const actions=work.can_join?['join_group']:[];
-      if(work.can_leave)actions.push('leave_group');
-      if(work.role==='leader'&&work.colleagues?.length)actions.push('transfer_group');
-      for(const action of actions){
-        const button=document.createElement('button');button.type='button';button.className=work.can_join?'primary':'outline';
-        button.textContent=groupWorkText(action.replace('_group',''));button.dataset.operatorLifecycle=action;
-        button.onclick=()=>action==='transfer_group'?openGroupWorkModal(currentDialog):void lifecycleAction(currentDialog,action,button);
-        slot.append(button);
+      if(work?.can_transfer){
+        const button=document.createElement('button');button.type='button';button.className='outline';
+        button.textContent=groupWorkText('transfer');button.dataset.operatorLifecycle='transfer_group';
+        button.onclick=()=>openGroupWorkModal(currentDialog);slot.append(button);
       }
-      if(work.role||sources.length<2&&currentAvailable)return;
-    }
-    if(work&&!work.role&&!currentAvailable&&sources.length===1){
-      const original=currentDialog, source=sources[0];
-      const button=document.createElement('button');button.type='button';button.className='primary';
-      button.textContent=[groupWorkText('join'),source.number].filter(Boolean).join(' · ');
-      button.dataset.groupJoinSource='true';
-      button.onclick=async()=>{
-        if(!sameDialog(original,currentDialog)||button.disabled)return;
-        button.disabled=true;
-        if(!await openDialog(source))return;
-        const action=$('operatorComposerSource')?.querySelector('[data-operator-lifecycle="join_group"]');
-        if(action&&sameDialog(source,currentDialog)&&currentDialog.lifecycle?.group_work?.can_join)
-          await lifecycleAction(currentDialog,'join_group',action);
-      };
-      slot.append(button);
       return;
     }
+    slot.hidden=!sources.length||(sources.length<2&&currentAvailable);
     if(slot.hidden)return;
     const label=document.createElement('label');
     label.textContent=({ru:'Ответить через',az:'Cavab mənbəyi',en:'Reply via'})[i18n.language]||'Reply via';
@@ -2613,7 +2608,9 @@
       renderDialogSkeleton(route);renderRows();
     }
     const query=historyQuery(route);
-    query.set('observed_operator_id',target);query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
+    query.set('observed_operator_id',target);
+    if(route.provider==='connect'&&route.customer_kind==='group')query.set('operator_events','1');
+    query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
     try{
       const fresh=await api('dialogs/history?'+query);
       if(!valid())return false;
@@ -2622,7 +2619,9 @@
       const old=currentPage;
       fresh.dialog={...fresh.dialog,colleague_read_only:true,observed_operator_id:target};
       currentDialog=fresh.dialog;
-      if(revalidate&&old&&JSON.stringify(fresh.messages||[])===JSON.stringify(old.colleagueLatest||old.messages||[]))return true;
+      if(revalidate&&old&&JSON.stringify(fresh.messages||[])===JSON.stringify(old.colleagueLatest||old.messages||[])
+        &&JSON.stringify(fresh.operator_events||[])===JSON.stringify(old.operator_events||[])
+        &&groupOwnerLabel(fresh.dialog)===groupOwnerLabel(old.dialog))return true;
       currentPage={...fresh,colleagueLatest:(fresh.messages||[]).slice()};displayedPage=currentPage;
       renderColleagueHistory(currentPage,query);
       return true;
@@ -2640,10 +2639,14 @@
       `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
     return `<div class="operator-media-card">${main} <a href="${esc(download)}">${esc(t('downloadAttachment'))}</a></div>`;
   }
+  function groupOwnerLabel(route){
+    const owner=route.lifecycle?.group_work?.operator_name||route.lifecycle?.group_owner_name;
+    return owner?groupWorkText('owner')+': '+owner:route.lifecycle?.group_review_required?groupWorkText('review'):'';
+  }
   function renderColleagueHistory(page,query){
     const route=page.dialog,host=$('operatorConversationContent'),header=$('operatorConversationHeader');
     const current=()=>currentPage===page&&sameDialog(currentDialog,route)&&colleagueId()===route.observed_operator_id;
-    header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><strong data-user-content>${esc(dialogTitle(route))}</strong><div class="sub">${esc(colleagueText('read'))}</div></div>`;
+    header.innerHTML=`<button type="button" class="operator-back-to-list" data-operator-back aria-label="${esc(t('backToList'))}">‹</button><div class="operator-conversation-head-copy"><strong data-user-content>${esc(dialogTitle(route))}</strong><div class="sub">${esc(colleagueText('read'))}</div>${groupOwnerLabel(route)?`<div class="sub" data-group-operator>${esc(groupOwnerLabel(route))}</div>`:''}</div>`;
     header.querySelector('[data-operator-back]').onclick=()=>closeDialog(false,true);
     host.innerHTML=`<section class="operator-dialog-shell" data-colleague-read-only><div class="operator-dialog-body"><section class="operator-chat-main"><div class="operator-chat-scrollarea"><div class="operator-history-tools"><button type="button" id="operatorColleagueEarlier" class="outline" ${page.next_before?'':'hidden'}>${esc(t('earlier'))}</button></div><div id="chatRows" class="operator-chat-history"></div></div></section></div><p id="operatorChatError" role="status"></p></section>`;
     const chat=$('chatRows'),older=$('operatorColleagueEarlier');
@@ -2654,6 +2657,7 @@
       return `<article class="operator-message" data-direction="${esc(item.direction)}" data-message-id="${esc(item.id||'')}">${caption?`<div data-user-content>${esc(caption)}</div>`:''}${colleagueMediaMarkup(item,route)}<footer class="operator-message-meta"><span data-user-content>${esc(messageAuthor(item))}</span><time>${esc(i18n.date(item.happened_at||item.created_at))}</time></footer></article>`;
     }).join('');
     chat.innerHTML=markup(page.messages)||esc(t('emptyHistory'));chat.scrollTop=chat.scrollHeight;
+    placeOperatorEvents(chat,page);
     bindHistoryMessages(chat,page.messages,current);
     older.onclick=async()=>{
       if(!current()||!page.next_before)return;
@@ -2665,7 +2669,8 @@
         if(!sameDialog(previous.dialog,route)||previous.dialog.colleague_read_only!==true)throw Error(t('error'));
         const fresh=(previous.messages||[]).filter(item=>!page.messages.some(m=>m.id===item.id));
         const height=chat.scrollHeight;chat.insertAdjacentHTML('afterbegin',markup(fresh));
-        page.messages.unshift(...fresh);chat.scrollTop+=chat.scrollHeight-height;
+        page.messages.unshift(...fresh);retainOperatorEvents(page,previous,{older:true});
+        placeOperatorEvents(chat,page);chat.scrollTop+=chat.scrollHeight-height;
         page.next_before=previous.next_before;older.hidden=!page.next_before;
       }catch(error){if(current()){closeDialog(false,true);notice(error.message||t('error'));}}
       finally{if(current())older.disabled=false;}
@@ -2994,7 +2999,7 @@
     const dealCreate=window.tenantDealCreate;
     const canCreateDeal=()=>!embeddedConversation&&!route.archive_read_only&&!route.owner_overview_read_only
       &&!route.search_overview_read_only&&!route.case_attachment&&dealCreate?.canCreate()===true;
-    const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route);
+    const hasTransfer=canSidebarTransfer(route),canScheduleReminder=hasReminder(route),groupOwner=groupOwnerLabel(route);
     const panelTitle=hasCompany()||(!hasTransfer&&!canCreateDeal()&&canScheduleReminder)?clientCardText('companyPanel'):clientCardText('dialog');
     const editable=route.provider==='connect'&&!route.archive_read_only,group=route.customer_kind==='group'||route.conversation_kind==='group';
     const name=visualDialogTitle(route),phone=visualDialogPhone(route),channel=route.channel_name||'',scope=contextKey('client-card',route),owner=identity(member),oldCard=$('operatorClientCard');
@@ -3038,14 +3043,14 @@
     card.innerHTML=`<header class="operator-client-panel-header"><h2 id="operatorClientCardTitle">${esc(clientCardText('title'))}</h2><button type="button" id="operatorCancelConversationName" aria-label="${esc(clientCardText('close'))}" autofocus>×</button></header><div class="operator-client-panel-content"><div class="operator-client-panel-block">${display}${nameForm}${phoneRow}${widgetCompanyRow}</div>${conversation}<div data-client-support-case hidden></div>${roster}</div>`;
     layout.append(card);
     const historyToolbar=$('operatorConversationContent')?.querySelector('.operator-history-tools');
-    if(hasCompany()||hasTransfer||canScheduleReminder||canCreateDeal())historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);
+    if(hasCompany()||hasTransfer||canScheduleReminder||canCreateDeal()||groupOwner)historyToolbar?.insertAdjacentHTML('beforeend',`<button type="button" class="operator-icon-button" id="operatorCompanyPanelOpen" aria-controls="operatorCompanyPanel" aria-expanded="false" aria-label="${esc(panelTitle)}" title="${esc(panelTitle)}"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M14.5 4.5v15m2.5-10.5h1m-1 3h1"/></svg></button>`);
     const companyTrigger=$('operatorCompanyPanelOpen');
     const companyPanel=companyTrigger?document.createElement('dialog'):null;
     const companyPanelResize=companyPanel?document.createElement('button'):null;
     if(companyPanel){
       companyPanel.id='operatorCompanyPanel';companyPanel.setAttribute('aria-label',panelTitle);
       const createDealRow=dealCreate?`<div id="operatorSidebarDealCreate" class="operator-client-panel-row"${canCreateDeal()?'':' hidden'}><button type="button" class="outline" id="operatorCreateDeal">${esc(dealCreate.label())}</button></div>`:'';
-      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${createDealRow}${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
+      companyPanel.innerHTML=`<header class="operator-client-panel-header">${hasCompany()?'':`<h2>${esc(panelTitle)}</h2>`}<button type="button" id="operatorCompanyPanelClose" aria-label="${esc(clientCardText('close'))}">×</button></header><div class="operator-client-panel-content"><div id="operatorClientCompanyHost"></div>${groupOwner?`<div class="operator-client-panel-row" data-group-operator><span data-user-content>${esc(groupOwner)}</span></div>`: ''}${createDealRow}${hasTransfer?`<section id="operatorSidebarTransfer"><strong>${esc(clientCardText('dialog'))}</strong><details><summary data-operator-lifecycle="transfer">${esc(lifecycleText('transfer'))}</summary><div data-transfer-targets></div><p role="status"></p><button type="button" data-transfer-retry hidden>${esc(transferSidebarText('retry'))}</button></details></section>`:'<section id="operatorSidebarDialogInfo" hidden></section>'}${reminder}</div>`;
       companyPanelResize.id='operatorCompanyPanelResize';companyPanelResize.type='button';companyPanelResize.setAttribute('role','separator');companyPanelResize.setAttribute('aria-orientation','vertical');companyPanelResize.setAttribute('aria-label',clientCardText('resize'));companyPanelResize.setAttribute('aria-controls',companyPanel.id);companyPanelResize.setAttribute('tabindex','0');
       layout.append(companyPanelResize,companyPanel);
       const status=document.createElement('span');status.id='operatorCompanyPanelSaveStatus';status.className='sr-only';
@@ -3210,7 +3215,7 @@
     trigger.onclick=()=>open(trigger);title.onclick=()=>open(title);
     $('operatorCancelConversationName').onclick=()=>close();
     card.addEventListener('cancel',event=>{event.preventDefault();close();});
-    const companyAllowed=()=>current()&&(hasCompany()||canSidebarTransfer(currentDialog)||hasReminder(currentDialog)||canCreateDeal());
+    const companyAllowed=()=>current()&&(hasCompany()||canSidebarTransfer(currentDialog)||hasReminder(currentDialog)||canCreateDeal()||groupOwnerLabel(currentDialog));
     const openCompany=(restore=false)=>{
       if(!companyAllowed()||!companyPanel||companyPanel.open)return;
       companyPanel.setAttribute('open','');companyTrigger?.setAttribute('aria-expanded','true');resizePanel();
@@ -3694,6 +3699,7 @@
     scheduleGroupWorkRefresh();
     if(route.colleague_read_only){
       const query=historyQuery(route);query.set('observed_operator_id',route.observed_operator_id);
+      if(route.provider==='connect'&&route.customer_kind==='group')query.set('operator_events','1');
       query.set('expected_tenant_id',member.tenant_id);query.set('expected_user_id',member.telegram_id);
       if(colleagueId()===route.observed_operator_id)renderColleagueHistory(page,query);
       return;

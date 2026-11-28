@@ -200,7 +200,7 @@ def handler(member_from_request,origin,logger,resource, *, group_work_updates=No
                 elif resource=='history':
                     colleague=observed_operator(query,incompatible=('search_overview','owner_overview',
                         'support_case_only','paired_history','paired_history_redirect','anchor',
-                        'operator_events','shared_reminder_events','internal_comments'))
+                        'shared_reminder_events','internal_comments'))
                     if colleague is not None:
                         _expected(query,profile)
                     case_only=query.get('support_case_only')=='1'

@@ -107,23 +107,27 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
           SELECT 1 FROM saas_dialog_group_participants p
           WHERE p.tenant_id=a.tenant_id AND p.episode_id::text=a.entity_id
             AND p.channel_id=%s::uuid AND p.actor_id=%s))""" if group_actor is not None else ""
+        transfer_destination = """ OR (a.action='dialog_transfer_group' AND a.payload->>'target_channel_id'=ANY(%s::text[]))""" if group_actor is not None else ""
         group_opening = """ OR (a.payload->>'group_work'='true' AND a.entity_id=%s
           AND a.action IN ('dialog_accept','dialog_start'))""" if group_acceptance else ""
         cur.execute("""SELECT a.id::text AS id,a.created_at,m.display_name,
+            CASE WHEN a.action='dialog_transfer_group' THEN sender.display_name END AS from_name,
             CASE WHEN a.action='dialog_transfer' AND a.payload->>'takeover'='true'
                  THEN 'dialog_takeover' ELSE a.action END AS action
           FROM saas_tenant_audit_events a
           LEFT JOIN saas_tenant_members m ON m.tenant_id=a.tenant_id
             AND m.telegram_id::text=a.payload->>'operator_id'
+          LEFT JOIN saas_tenant_members sender ON sender.tenant_id=a.tenant_id AND sender.telegram_id=a.actor_telegram_id
           WHERE a.tenant_id=%s::uuid AND a.entity_type='dialog_episode'
             AND a.action IN ('dialog_accept','dialog_start','dialog_transfer','dialog_no_reply','dialog_close',
                              'dialog_join_group','dialog_leave_group','dialog_transfer_group')
-            AND a.payload->>'conversation_id'=%s AND (a.payload->>'channel_id'=%s"""+group_events+group_opening+""")
+            AND a.payload->>'conversation_id'=%s AND (a.payload->>'channel_id'=%s"""+group_events+transfer_destination+group_opening+""")
             AND (a.action IN ('dialog_transfer','dialog_transfer_group') OR a.actor_telegram_id::text=a.payload->>'operator_id')
             AND (%s::timestamptz IS NULL OR a.created_at>=%s::timestamptz)
             AND (%s::timestamptz IS NULL OR a.created_at<%s::timestamptz)
           ORDER BY a.created_at DESC,a.id DESC LIMIT %s""",
             (tenant,conversation,channel,*((channel,group_actor) if group_actor is not None else ()),
+             *((group_channels or [channel],) if group_actor is not None else ()),
              *((group_acceptance,) if group_acceptance else ()),lower,lower,upper,upper,_PAGE_LIMIT+1))
         rows=cur.fetchall()
         cur.execute("SELECT set_config('statement_timeout',%s,true)", (timeout,))
@@ -132,7 +136,8 @@ def _read_window(conn, cur, tenant, channel, conversation, *, messages, before,
            "dialog_leave_group":"leave_group","dialog_transfer_group":"transfer_group"}
     shown=rows[:_PAGE_LIMIT]
     result={"operator_events": [{"id":row["id"],"kind":kinds[row["action"]],"at":row["created_at"].isoformat(),
-                                "employee_name":str(row["display_name"] or "").strip()[:120]}
+                                "employee_name":str(row["display_name"] or "").strip()[:120],
+                                **({"from_name":str(row["from_name"]).strip()[:120]} if row["from_name"] else {})}
                                for row in reversed(shown)]}
     if len(rows)>_PAGE_LIMIT:
         result["operator_events_omitted_at"]=shown[-1]["created_at"].isoformat()

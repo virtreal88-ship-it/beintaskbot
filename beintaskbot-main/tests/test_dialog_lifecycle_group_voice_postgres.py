@@ -20,7 +20,7 @@ import tenant_whatsapp_native_transport as native
 from tenant_connect_group_history import page as group_history
 from test_dialog_lifecycle_group_work_postgres import (
     A, CB, GROUP, LIDS, SOURCES, GatewayResponse, action, collaboration, database,
-    add_shared_source_operator, db, episodes, history, join, profile, row,
+    add_shared_source_operator, allow_source, db, episodes, handoff, history, profile, row,
 )
 
 ORIGIN = 'http://localhost'
@@ -39,7 +39,7 @@ def voice_group(collaboration, monkeypatch, request):
         assert connection.execute('SELECT count(*) AS n FROM saas_dialog_group_participants')[0]['n'] == 0
         connection.commit()
     else:
-        join(connection)
+        action(33 if getattr(request, 'param', 'second') == 'first' else 44, 'accept')
     for module in (voice, consumer):
         monkeypatch.setattr(module, '_connect', lambda: psycopg.connect(connection.dsn, row_factory=dict_row))
     monkeypatch.setenv('CUSTOMER_VOICE_ENABLED', 'true')
@@ -117,10 +117,16 @@ def project_echo(monkeypatch, actor, provider, *, sender, from_me):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('voice_group', ['first'], indirect=True)
 async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_group, monkeypatch):
     database, _, gateway = voice_group
     replays = []
+    episode=str(row(database,33)['id'])
+    database.commit()
     for actor, other in ((33, 44), (44, 33)):
+        if actor==44:
+            allow_source(database,33,CB)
+            handoff(database,33,44,episode)
         data = command(actor)
         async with app_client(actor) as client:
             capability = await client.get('/capability', params={key: str(data[key]) for key in
@@ -143,7 +149,7 @@ async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_
         assert len(messages) == 2
         assert {(message['author_name'], message['sending_number']) for message in messages} == {
             ('Operator A', '+994500000111'), ('Operator B', '+994500000112')}
-        assert {source['channel_id'] for message in messages for source in message['sources']} == {SOURCES[actor][0]}
+        assert {source['channel_id'] for message in messages for source in message['sources']} <= ({SOURCES[33][0],CB} if actor==33 else {CB})
     channels = [route[0] for route in SOURCES.values()]
     with database.cursor() as cur:
         combined = [message for message in group_history(cur, A, GROUP, channel_ids=channels)
@@ -154,19 +160,24 @@ async def test_two_operator_voices_use_exact_sources_and_reconcile_echoes(voice_
     for actor, data, message_id in replays:
         async with app_client(actor) as client:
             replay_status, replay = await upload(client, data)
-        assert replay_status == 200 and replay['message_id'] == message_id
+        if actor==44:
+            assert replay_status == 200 and replay['message_id'] == message_id
+        else:
+            assert replay_status == 403  # Previous handler has lost send permission.
     assert len(gateway['attempts']) == 2
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('voice_group', ['first'], indirect=True)
 async def test_group_voice_keeps_employee_attribution_on_a_shared_number(voice_group, monkeypatch):
     database, _, gateway = voice_group
     add_shared_source_operator(database,monkeypatch,55)
     workflow=row(database,33)
     database.commit()
-    action(55,'join_group',workflow['revision'],expected_group_episode_id=str(workflow['id']))
     account=SOURCES[33][2]
     for actor in (33,55):
+        if actor==55:
+            handoff(database,33,55,str(workflow['id']))
         async with app_client(actor) as client:
             status, result=await upload(client,command(actor))
         assert status==200 and result['provider_accepted'] and result['participant_jid']==account

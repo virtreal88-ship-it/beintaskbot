@@ -1,8 +1,5 @@
-"""Shared operator episodes for an exact tenant and WhatsApp group.
-
-Each participant is authorized on an exact physical route. Multiple employees
-may share that route. The dialogue lock serializes changes on the group JID.
-"""
+"""One operator episode per exact tenant and WhatsApp group."""
+import hashlib
 import os
 import re
 import uuid
@@ -11,7 +8,7 @@ from tenant_ai_group_coordination import group_jid
 from tenant_linear_policy import TenantLinearError
 
 
-MEMBER_ACTIONS = {'join_group', 'leave_group', 'transfer_group'}
+MEMBER_ACTIONS = {'transfer_group'}
 
 
 def migrate(cur):
@@ -58,8 +55,7 @@ def source_available(mode):
 
 
 def source_selection(modes):
-    return {'sources': [channel for channel, mode in modes.items() if source_available(mode)],
-            'native_markers': list(modes)}
+    return {'sources': [channel for channel, mode in modes.items() if source_available(mode)]}
 
 
 def ready(cur):
@@ -67,18 +63,17 @@ def ready(cur):
     return cur.fetchone()['ready']
 
 
-def snapshots(cur, tenant, conversations, *, sources=(), native_markers=()):
+def snapshots(cur, tenant, conversations, *, sources=()):
     groups = sorted({chat for chat in conversations if group_jid(chat)})
     if not groups or not ready(cur):
         return {}
     cur.execute("""SELECT requested.chat,latest.id::text AS id,latest.operator_id,
-        latest.group_leader_channel_id::text AS leader_source,latest.closed_at,
+        latest.group_leader_channel_id::text AS leader_source,latest.closed_at,leader.display_name AS leader_name,
+        EXISTS(SELECT 1 FROM saas_dialog_workflows w WHERE w.tenant_id=latest.tenant_id
+          AND w.conversation_id=requested.chat AND w.id=latest.id AND w.state='accepted'
+          AND w.channel_id=latest.group_leader_channel_id AND w.operator_id=latest.operator_id) AS leader_confirmed,
         EXISTS(SELECT 1 FROM saas_connect_conversations c WHERE c.tenant_id=%s::uuid
-          AND c.conversation_id=requested.chat AND c.connect_channel_id=ANY(%s::uuid[]))
-        AND NOT EXISTS(SELECT 1 FROM saas_connect_conversations c
-          JOIN saas_connect_channels ch USING(tenant_id,connect_channel_id)
-          WHERE c.tenant_id=%s::uuid AND c.conversation_id=requested.chat AND ch.active
-            AND NOT (c.connect_channel_id=ANY(%s::uuid[]))) AS configured,
+          AND c.conversation_id=requested.chat AND c.connect_channel_id=ANY(%s::uuid[])) AS configured,
         CASE WHEN latest.closed_at IS NULL THEN (
           SELECT jsonb_agg(jsonb_build_object('id',p.id,'channel_id',p.channel_id,
             'actor_id',p.actor_id,'account_jid',p.account_jid,'generation',p.generation,
@@ -87,18 +82,32 @@ def snapshots(cur, tenant, conversations, *, sources=(), native_markers=()):
           JOIN saas_tenant_members m ON m.tenant_id=p.tenant_id AND m.telegram_id=p.actor_id
           WHERE p.tenant_id=%s::uuid AND p.episode_id=latest.id AND p.left_at IS NULL
         ) END AS participants,
-        EXISTS(SELECT 1 FROM saas_dialog_workflows w
+        (SELECT count(*) FROM saas_dialog_workflows w
           WHERE w.tenant_id=%s::uuid AND w.conversation_id=requested.chat
-            AND w.state='accepted' AND w.id IS DISTINCT FROM latest.id) AS legacy_active
+            AND w.state='accepted' AND w.id IS DISTINCT FROM latest.id) AS legacy_count,
+        legacy.operator_id AS legacy_owner,legacy.channel_id::text AS legacy_source,
+        legacy.display_name AS legacy_name
       FROM unnest(%s::text[]) AS requested(chat)
       LEFT JOIN LATERAL (
-        SELECT id,operator_id,group_leader_channel_id,closed_at FROM saas_dialog_episodes
+        SELECT tenant_id,id,operator_id,group_leader_channel_id,closed_at FROM saas_dialog_episodes
         WHERE tenant_id=%s::uuid AND conversation_id=requested.chat AND group_leader_channel_id IS NOT NULL
         ORDER BY (closed_at IS NULL) DESC,accepted_at DESC,id DESC LIMIT 1
-      ) latest ON TRUE""",(tenant, list(sources), tenant, list(native_markers), tenant, tenant, groups, tenant))
+      ) latest ON TRUE
+      LEFT JOIN saas_tenant_members leader ON leader.tenant_id=%s::uuid AND leader.telegram_id=latest.operator_id
+      LEFT JOIN LATERAL (
+        SELECT w.operator_id,w.channel_id,m.display_name
+        FROM saas_dialog_workflows w
+        JOIN saas_dialog_episodes e USING(tenant_id,id,conversation_id)
+        JOIN saas_tenant_members m ON m.tenant_id=w.tenant_id AND m.telegram_id=w.operator_id
+        WHERE w.tenant_id=%s::uuid AND w.conversation_id=requested.chat AND w.state='accepted'
+          AND e.channel_id=w.channel_id AND e.closed_at IS NULL AND e.operator_id=w.operator_id
+          AND w.id IS DISTINCT FROM latest.id
+        ORDER BY w.channel_id LIMIT 1
+      ) legacy ON TRUE""",(tenant, list(sources), tenant, tenant, groups, tenant, tenant, tenant))
     result={}
     for row in cur.fetchall():
-        if row['id'] or row['configured']:
+        row['legacy_active'] = bool(row['legacy_count'])
+        if row['id'] or row['configured'] or row['legacy_active']:
             result[row['chat']]=row
     return result
 
@@ -112,7 +121,9 @@ def active(group):
 
 
 def revision(group, workflow):
-    return f"{group['id'] or '-'}:{int(active(group))}:{int(group['legacy_active'])}:{(workflow or {}).get('revision', 0)}"
+    values = (group['id'], active(group), group['legacy_count'], group['operator_id'],
+              group['leader_source'], requires_review(group), (workflow or {}).get('revision',0))
+    return hashlib.sha256(repr(values).encode()).hexdigest()
 
 
 def read_revision(profile, channel, conversation, lead_id):
@@ -166,7 +177,7 @@ def keeps_assignment(cur, tenant, conversation, workflow):
     if not workflow or workflow['state'] != 'accepted' or not group_jid(conversation):
         return False
     group = snapshot(cur, tenant, conversation)
-    return active(group) and group['id'] == str(workflow['id'])
+    return bool(group and (group['legacy_active'] or active(group) and group['id'] == str(workflow['id'])))
 
 
 def ensure_online(cur, tenant, actor, policy, channel):
@@ -223,102 +234,101 @@ def require_permissions(cur, tenant, policy, channel):
         require_source(cur,tenant,policy,'connect',channel,action)
 
 
-def prepare_transfer(cur, tenant, group, target):
-    from tenant_scoped_access_store import read_access_profile
-    from tenant_policy import TenantPolicy
-
-    peer = participant(group or {}, target) if type(target) is int and 0 < target < 2**63 else None
-    if not active(group) or not peer:
-        raise TenantLinearError('Этот сотрудник больше не подключён к группе.',409)
-    member = read_access_profile(cur, tenant, target, lock=True)
-    if not member or member['active'] is not True:
-        raise TenantLinearError('Этот сотрудник больше не имеет доступа к группе.',403)
-    policy = TenantPolicy({**member,'tenant_id':tenant})
-    channel = peer['channel_id']
-    require_permissions(cur,tenant,policy,channel)
-    ensure_online(cur,tenant,target,policy,channel)
-    return peer
+def requires_review(group):
+    if not group:
+        return False
+    if active(group):
+        return (group['legacy_active'] or not group['leader_confirmed']
+                or not participant(group, group['operator_id'], group['leader_source']))
+    return group['legacy_count'] > 1 or group['legacy_active'] and group['legacy_owner'] is None
 
 
-def transition(cur, *, tenant, actor, policy, channel, conversation, lead, workflow, group, payload, peer):
-    """Apply one transition under the existing group lock and route grants."""
-    from tenant_dialog_lifecycle import require_access
+def owner_route(group, actor, channel):
+    return bool(active(group) and not requires_review(group)
+                and group['operator_id'] == actor and group['leader_source'] == channel)
 
-    action = payload['action']
-    if not active(group) or payload.get('expected_group_episode_id') != group['id']:
-        raise TenantLinearError('Работа в группе изменилась. Обновите диалог.',409)
+
+def can_mark_read(group, actor):
+    if requires_review(group):
+        return False
+    if active(group):
+        return group['operator_id'] == actor
+    return not (group and group['legacy_active']) or group['legacy_owner'] == actor
+
+
+def transfer_routes(cur, tenant, policy, conversation):
+    from tenant_dialog_access import require_source
+    from tenant_whatsapp_native_rollout import modes
+    sources = modes(cur, tenant, conversation=conversation)
+    eligible = [channel for channel, mode in sources.items() if source_available(mode)]
+    cur.execute("""SELECT c.connect_channel_id::text AS channel_id,c.lead_id,ch.name AS channel_name
+      FROM saas_connect_conversations c JOIN saas_connect_channels ch USING(tenant_id,connect_channel_id)
+      WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s AND ch.active
+        AND c.connect_channel_id=ANY(%s::uuid[])
+      ORDER BY c.connect_channel_id""", (tenant, conversation, eligible))
+    routes = {}
+    for route in cur.fetchall():
+        channel = route['channel_id']
+        try:
+            require_source(cur, tenant, policy, 'connect', channel, 'view')
+        except TenantLinearError:
+            continue
+        route['number'] = '+' + sources[channel]['account_jid'].split('@', 1)[0]
+        routes[channel] = route
+    return routes
+
+
+def transfer_options(cur, tenant, actor, policy, conversation, group):
+    from tenant_dialog_lifecycle import _targets
+    routes = transfer_routes(cur, tenant, policy, conversation)
+    result = []
+    for channel, route in routes.items():
+        for target in _targets(cur, tenant, policy, channel, actor, online_only=True, lock=False):
+            result.append({**route, **target})
+    return sorted(result, key=lambda target: (target['name'].casefold(),
+                 target['channel_id'] != group['leader_source'], target['channel_name']))
+
+
+def prepare_transfer(cur, tenant, actor, policy, conversation, target, channel):
+    from tenant_dialog_lifecycle import _targets
+
+    if type(target) is not int or not 0 < target < 2**63 or target == actor:
+        raise TenantLinearError('Выберите сотрудника для передачи.',400)
+    route = transfer_routes(cur, tenant, policy, conversation).get(channel)
+    if not route or target not in {m['employee_id'] for m in
+            _targets(cur, tenant, policy, channel, actor, online_only=True)}:
+        raise TenantLinearError('Сотрудник недоступен для передачи на выбранный номер.',409)
+    return {**route, 'actor_id': target}
+
+
+def transition(cur, *, tenant, actor, channel, conversation, workflow, group, payload, peer):
+    """Move authority while the tenant/group transaction lock is held."""
+    if (not owner_route(group, actor, channel) or not accepted_route(group, workflow)
+            or group['id'] != payload.get('expected_group_episode_id')):
+        raise TenantLinearError('Ведение группы изменилось. Обновите диалог.',409)
     episode = group['id']
-    own = participant(group, actor, channel)
-    leader = actor == group['operator_id'] and channel == group['leader_source']
-    successor = None
-    if action == 'join_group':
-        require_access(cur,tenant,actor,'connect',channel,conversation,'view',
-                       allow_closed_archive=True,owner=policy.profile.get('role')=='owner')
-        if participant(group,actor):
-            raise TenantLinearError('Вы уже подключены к группе.',409)
-        existing_route = accepted_route(group, workflow)
-        if workflow and workflow['state']=='accepted' and not existing_route:
-            raise TenantLinearError('Сначала выберите доступный источник группы.',409)
-        if existing_route:
-            cur.execute("""SELECT to_regclass('saas_dialog_group_active_channel_id_idx') IS NULL
-              AND to_regclass('saas_dialog_group_active_account_jid_idx') IS NULL AS ready""")
-            if not cur.fetchone()['ready']:
-                raise TenantLinearError('Работа с общим номером будет доступна после обновления CRM.',409)
-        binding = verified_route(cur,tenant,actor,policy,channel,conversation,lead)
-        if not join_source_matches(group,channel,binding['scope']['account']):
-            raise TenantLinearError('Связь номера WhatsApp с источником группы изменилась.',409)
-        for member in group['participants']:
-            if member['channel_id']==channel:
-                check_binding(member, {'native':binding})
-        enroll(cur,tenant,episode,actor,channel,conversation,binding)
-        if not existing_route:
-            cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
-              VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',%s,0)
-              ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET id=EXCLUDED.id,
-              state='accepted',operator_id=EXCLUDED.operator_id,closed_at=NULL""",(tenant,channel,conversation,episode,actor))
-    else:
-        if not own or not workflow or workflow['state']!='accepted' or str(workflow['id'])!=episode:
-            raise TenantLinearError('Вы не подключены к этому эпизоду группы.',403)
-        if action == 'leave_group':
-            if len(group['participants']) == 1:
-                raise TenantLinearError('Вы остались последним участником. Завершите диалог.',409)
-            cur.execute("""UPDATE saas_dialog_group_participants SET left_at=clock_timestamp()
-              WHERE tenant_id=%s::uuid AND id=%s::uuid AND left_at IS NULL RETURNING left_at""",(tenant,own['id']))
-            left_at=cur.fetchone()['left_at']
-            remaining = [p for p in group['participants'] if p['id']!=own['id']]
-            same_route = next((p for p in remaining if p['channel_id']==channel), None)
-            if not same_route:
-                cur.execute("""UPDATE saas_dialog_workflows SET state='closed', closed_at=%s,
-                  revision=revision+1,updated_at=%s
-                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
-                  (left_at,left_at,tenant,channel,conversation))
-            elif workflow['operator_id']==actor:
-                cur.execute("""UPDATE saas_dialog_workflows SET operator_id=%s
-                  WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s""",
-                  (same_route['actor_id'],tenant,channel,conversation))
-            if leader:
-                successor=same_route or remaining[0]
-        elif action == 'transfer_group':
-            if not leader or peer['actor_id']==actor or participant(group,peer['actor_id'])!=peer:
-                raise TenantLinearError('Ведение группы или подключение коллеги изменилось. Обновите диалог.',409)
-            cur.execute("""SELECT lead_id FROM saas_connect_conversations WHERE tenant_id=%s::uuid
-              AND connect_channel_id=%s::uuid AND conversation_id=%s""",(tenant,peer['channel_id'],conversation))
-            peer_route = cur.fetchone()
-            binding = native_route(cur,tenant,peer['channel_id'],conversation,peer_route['lead_id']) if peer_route else None
-            check_binding(peer,binding)
-            from tenant_whatsapp_native_groups import require_membership
-            require_membership(binding)
-            successor=peer
-    if successor:
-        cur.execute("""UPDATE saas_dialog_episodes SET operator_id=%s,group_leader_channel_id=%s::uuid
-          WHERE tenant_id=%s::uuid AND id=%s::uuid""",(successor['actor_id'],successor['channel_id'],tenant,episode))
-        cur.execute("""UPDATE saas_dialog_workflows SET operator_id=%s
-          WHERE tenant_id=%s::uuid AND channel_id=%s::uuid AND conversation_id=%s AND id=%s::uuid AND state='accepted'""",
-          (successor['actor_id'],tenant,successor['channel_id'],conversation,episode))
-    cur.execute("""UPDATE saas_dialog_workflows SET revision=revision+1,updated_at=clock_timestamp()
+    target, target_channel = peer['actor_id'], peer['channel_id']
+    binding = native_route(cur, tenant, target_channel, conversation, peer['lead_id'])
+    from tenant_whatsapp_native_groups import require_membership
+    native = {**binding['native'], 'account_lid': require_membership(binding)}
+    cur.execute("""UPDATE saas_dialog_group_participants SET left_at=clock_timestamp()
+      WHERE tenant_id=%s::uuid AND episode_id=%s::uuid AND left_at IS NULL""", (tenant, episode))
+    enroll(cur, tenant, episode, target, target_channel, conversation, native)
+    cur.execute("""UPDATE saas_dialog_episodes SET operator_id=%s,group_leader_channel_id=%s::uuid
+      WHERE tenant_id=%s::uuid AND id=%s::uuid""", (target, target_channel, tenant, episode))
+    cur.execute("""UPDATE saas_dialog_workflows SET operator_id=%s,revision=revision+1,updated_at=clock_timestamp()
       WHERE tenant_id=%s::uuid AND conversation_id=%s AND id=%s::uuid AND state='accepted'""",
-      (tenant,conversation,episode))
-    return successor if action == 'leave_group' else None
+      (target, tenant, conversation, episode))
+    if target_channel != channel:
+        cur.execute("""INSERT INTO saas_dialog_workflows(tenant_id,channel_id,conversation_id,id,state,operator_id,revision)
+          VALUES(%s::uuid,%s::uuid,%s,%s::uuid,'accepted',%s,1)
+          ON CONFLICT(tenant_id,channel_id,conversation_id) DO UPDATE SET id=EXCLUDED.id,
+            state='accepted',operator_id=EXCLUDED.operator_id,closed_at=NULL,
+            revision=saas_dialog_workflows.revision+1,updated_at=clock_timestamp()
+          WHERE saas_dialog_workflows.id=EXCLUDED.id OR saas_dialog_workflows.state<>'accepted'
+          RETURNING id""", (tenant, target_channel, conversation, episode, target))
+        if cur.fetchone() is None:
+            raise TenantLinearError('На выбранном источнике уже есть другой активный диалог.',409)
 
 
 def close_episode(cur, tenant, group, conversation, closed_at):
@@ -334,7 +344,7 @@ def check_binding(member, route):
     binding = route.get('native') if route else None
     if not binding or (binding['scope']['account'],binding['scope']['generation'],binding['gateway_id']) != (
             member['account_jid'],member['generation'],member['gateway_id']):
-        raise TenantLinearError('Подключение номера WhatsApp изменилось. Выйдите и подключитесь заново.',409)
+        raise TenantLinearError('Подключение номера WhatsApp изменилось. Обновите диалог.',409)
 
 
 def send_context(cur, tenant, actor, policy, route):
@@ -344,21 +354,15 @@ def send_context(cur, tenant, actor, policy, route):
     channel = route['channel_id']
     require_permissions(cur,tenant,policy,channel)
     own = participant(group,actor,channel)
-    if not own:
-        raise TenantLinearError('Подключитесь к группе со своего номера.',409)
+    if not owner_route(group,actor,channel) or not own:
+        raise TenantLinearError('Отвечать может только сотрудник, который ведёт группу.',403)
     check_binding(own,route)
     ensure_online(cur,tenant,actor,policy,channel)
     return {'group_participant_id':own['id'],'group_channel_id':channel}
 
 
-def join_source_matches(group, channel, account):
-    # The same account can be shared only through its existing exact route.
-    return all((p['channel_id']==channel)==(p['account_jid']==account)
-               for p in group['participants'])
-
-
-def decorate(dialog, actor, group, workflow, *, source, admission, can_update, online, allow_archive_join=False):
-    """Only expose an operator's own route and the names of joined colleagues."""
+def decorate(dialog, actor, group, workflow, *, source, admission, can_update, online, allow_closed_archive=False):
+    """Project the confirmed handler without exposing other operators' routes."""
     if not group:
         return
     state = dialog['lifecycle']
@@ -369,13 +373,25 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
         # collaborative group, including a source-local episode still draining.
         state['can_takeover'] = False
     archive = bool(dialog.get('archive_read_only'))
-    if archive and not allow_archive_join:
-        return
-    if ready_source and (group['configured'] or shared):
+    if ready_source or shared:
         dialog['group_work_revision'] = revision(group, workflow)
+    if requires_review(group):
+        state.update(can_accept=False, can_start=False, can_takeover=False, can_transfer=False,
+                     can_close=False, can_submit_case=False, can_dismiss=False, group_review_required=True)
+        dialog.update(archive_read_only=True, can_send=False, can_use_copilot=False,
+                      can_edit_display_name=False, controls_allowed=False, available_actions=[], resume_allowed=False)
+        return
     if group['legacy_active']:
-        if ready_source and group['configured']:
-            state['can_accept'] = state['can_start'] = False
+        state.update(state='accepted', operator_id=group['legacy_owner'],
+                     can_accept=False, can_start=False, can_takeover=False)
+        state['group_owner_name'] = group['legacy_name'] or ''
+        if (actor, dialog['channel_id']) != (group['legacy_owner'], group['legacy_source']):
+            state.update(can_transfer=False, can_close=False, can_submit_case=False, can_dismiss=False)
+            dialog.update(archive_read_only=True, can_send=False, can_use_copilot=False,
+                          can_edit_display_name=False, controls_allowed=False, available_actions=[],
+                          resume_allowed=False, read_through_message_id=None)
+        return
+    if archive and not shared and not allow_closed_archive:
         return
     if not shared and not ready_source:
         return
@@ -395,64 +411,24 @@ def decorate(dialog, actor, group, workflow, *, source, admission, can_update, o
         return
     channel = dialog['channel_id']
     own = participant(group,actor,channel)
-    leader = bool(own and actor==group['operator_id'] and channel==group['leader_source'])
-    others = [{'employee_id':str(p['actor_id']),'name':p['name'] or ''}
-              for p in group['participants'] if int(p['actor_id']) != actor]
-    alone = len(group['participants']) == 1
-    left = bool(workflow and str(workflow['id'])==group['id'] and workflow['state']=='closed'
-                and workflow['operator_id']==actor)
-    state.update(can_accept=False,can_start=False,can_takeover=False,can_transfer=False,
-                 can_close=bool(leader and alone and can_update),can_dismiss=bool(leader and state['can_dismiss']))
-    if left:
-        state['can_submit_case'] = False
-    if own:
-        state['operator_id'] = actor
+    leader = bool(own and owner_route(group,actor,channel))
+    can_act = bool(leader and can_update and not archive)
+    state.update(state='accepted', operator_id=group['operator_id'], can_accept=False, can_start=False,
+                 can_takeover=False, can_transfer=False, can_close=can_act,
+                 can_dismiss=bool(can_act and state['can_dismiss']))
     state['group_work'] = {
-        'id':group['id'], 'role':'leader' if leader else 'participant' if own else None,
-        'can_join':bool(admission and can_update and online and ready_source and not participant(group,actor)
-                        and (state['state'] in {'waiting','closed','dismissed'} or accepted_route(group,workflow))
-                        and join_source_matches(group,channel,source['account_jid'])),
-        'can_leave':bool(own and not alone and can_update),
-        'left':left,
-        'colleagues':others if own else [],
+        'id': group['id'], 'role': 'leader' if leader else None,
+        'operator_name': group['leader_name'] or '', 'can_transfer': can_act,
     }
-    if not own:
-        dialog.update(can_use_copilot=False,can_edit_display_name=False,controls_allowed=False,
-                      available_actions=[],resume_allowed=False)
-    if own or state['group_work']['can_join']:
-        state['group_work']['number'] = '+'+(own or source)['account_jid'].split('@',1)[0]
-    dialog['can_send'] = bool(not archive and own and can_update and online and ready_source
-                              and state['state']=='accepted')
-    if own and not dialog['can_send']:
+    if not can_act:
+        state['can_submit_case'] = False
+        dialog.update(archive_read_only=True, can_use_copilot=False, can_edit_display_name=False,
+                      controls_allowed=False, available_actions=[], resume_allowed=False, read_through_message_id=None)
+    if leader:
+        state['group_work']['number'] = '+' + own['account_jid'].split('@',1)[0]
+    dialog['can_send'] = bool(can_act and online and ready_source)
+    if leader and not dialog['can_send']:
         dialog['send_block_reason'] = 'group_offline' if not online else 'channel_inactive'
-
-
-def join_options(cur, tenant, actor, policy, conversation, group, modes):
-    from tenant_dialog_presence import is_online
-
-    remaining = [channel for channel,source in modes.items()
-                 if source_available(source) and join_source_matches(group,channel,source['account_jid'])]
-    if not remaining or participant(group,actor):
-        return []
-    cur.execute("""SELECT c.connect_channel_id::text AS channel_id,c.lead_id,c.conversation_id,ch.name AS channel_name
-      FROM saas_connect_conversations c JOIN saas_connect_channels ch USING(tenant_id,connect_channel_id)
-      LEFT JOIN saas_dialog_workflows w ON w.tenant_id=c.tenant_id AND w.channel_id=c.connect_channel_id
-        AND w.conversation_id=c.conversation_id
-      WHERE c.tenant_id=%s::uuid AND c.conversation_id=%s AND c.connect_channel_id=ANY(%s::uuid[])
-        AND (w.state IS NULL OR w.state IN ('waiting','closed','dismissed')
-             OR (w.state='accepted' AND w.id=%s::uuid))
-      ORDER BY ch.name,c.connect_channel_id""",(tenant,conversation,remaining,group['id']))
-    result=[]
-    for route in cur.fetchall():
-        channel=route['channel_id']
-        try:
-            require_permissions(cur,tenant,policy,channel)
-        except TenantLinearError:
-            continue
-        if policy.profile.get('role')=='owner' or is_online(cur,tenant,actor,source_channel=channel):
-            result.append({**route,'provider':'connect','channel_active':True,
-                           'number':'+'+modes[channel]['account_jid'].split('@',1)[0]})
-    return result
 
 
 def record_provider_id(cur, tenant, request, result):
